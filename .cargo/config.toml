@@ -1,0 +1,21 @@
+# gMath Cargo Configuration
+#
+# Incremental compilation is DISABLED because build.rs emits different
+# cargo:rustc-cfg values depending on GMATH_PROFILE (q64_64/q128_128/q256_256).
+# These cfg changes alter type layouts (ComputeStorage = I256 vs I512 vs I1024)
+# but rustc's incremental cache doesn't properly invalidate when cfg values
+# change via build.rs, causing core dumps from stale cached artifacts with
+# wrong struct sizes.
+#
+# Trade-off: Slightly slower rebuilds (~3-5s instead of ~1s for small changes)
+# but zero core dumps. Table regeneration time (20-30 min) is unaffected since
+# that's in build.rs, not rustc.
+
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[profile.release]
+incremental = false
