@@ -12,4 +12,4 @@ pub use fixed_vector::FixedVector;
 pub use fixed_matrix::FixedMatrix;
 
 // Re-export the underlying storage type for from_raw()/raw() interop
-pub use crate::fixed_point::universal::zasc::stack_evaluator::BinaryStorage;
+pub use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;

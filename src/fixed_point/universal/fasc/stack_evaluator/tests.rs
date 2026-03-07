@@ -1,5 +1,5 @@
 use super::*;
-use crate::fixed_point::universal::zasc::lazy_expr::gmath;
+use crate::fixed_point::universal::fasc::lazy_expr::gmath;
 use crate::fixed_point::universal::tier_types::{CompactShadow, ShadowConstantId};
 
 #[test]
@@ -958,7 +958,7 @@ fn test_gmath_parse_loop_accumulation() {
 
 #[test]
 fn test_gmath_parse_mode_routing() {
-    use crate::fixed_point::universal::zasc::mode::{set_mode, reset_mode, GmathMode, ComputeMode, OutputMode};
+    use crate::fixed_point::universal::fasc::mode::{set_mode, reset_mode, GmathMode, ComputeMode, OutputMode};
 
     // Parse under symbolic mode
     set_mode(GmathMode { compute: ComputeMode::Symbolic, output: OutputMode::Auto });

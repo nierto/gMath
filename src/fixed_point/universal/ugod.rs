@@ -2,7 +2,7 @@
 //!
 //! **MISSION**: Unified trait interface for tiered overflow delegation across all precision domains
 //! **ARCHITECTURE**: Universal 6-tier system aligned across all 4 domains
-//! **COORDINATION**: Automatic tier promotion with rational infinite precision fallback
+//! **COORDINATION**: Automatic tier promotion with rational fallback
 //!
 //! ## Universal 6-Tier System (all domains aligned)
 //!
@@ -18,7 +18,7 @@
 //! ## Overflow Behavior
 //!
 //! - Tiers 1-5: Overflow → promote to next tier (UGOD)
-//! - Tier 6: Overflow → rational fallback (infinite precision)
+//! - Tier 6: Overflow → rational fallback
 //!
 //! ## Implementation Status
 //!
@@ -40,7 +40,7 @@ pub use crate::fixed_point::core_types::domain_metadata::DomainType;
 /// 
 /// **ARCHITECTURE**: Each domain implements this trait with its own tier mapping strategy
 /// **COORDINATION**: Enables cross-domain operations and universal overflow delegation
-/// **FALLBACK**: Rational infinite precision provides guaranteed computation success
+/// **FALLBACK**: Rational domain provides final overflow fallback
 pub trait UniversalTieredArithmetic: Clone + Sized + Debug {
     /// Error type for overflow detection (standardized to OverflowDetected)
     type Error: From<OverflowDetected> + Debug;

@@ -1,10 +1,10 @@
-//! Domain Implementations — 4 precision domains for ZASC+UGOD pipeline
+//! Domain Implementations — 4 precision domains for FASC+UGOD pipeline
 //!
 //! Each domain provides domain-native arithmetic and type representations:
-//! - `binary_fixed`: Q64.64/Q128.128/Q256.256 binary fixed-point (0 ULP transcendentals)
+//! - `binary_fixed`: Q64.64/Q128.128/Q256.256 binary fixed-point (tier N+1 transcendentals)
 //! - `decimal_fixed`: Exact decimal arithmetic (financial)
 //! - `balanced_ternary`: Balanced ternary UGOD tier arithmetic
-//! - `symbolic`: Exact rational arithmetic (RationalNumber, infinite precision)
+//! - `symbolic`: Exact rational arithmetic (RationalNumber)
 
 // Binary Fixed-Point Domain
 pub mod binary_fixed;

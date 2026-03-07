@@ -1,5 +1,5 @@
 // ============================================================================
-// TIER N+1 ULTRA-PRECISION SQUARE ROOT
+// TIER N+1 SQUARE ROOT
 // ============================================================================
 //
 // **PRINCIPLE**: Compute at tier N+1, downscale to tier N with ZERO precision loss

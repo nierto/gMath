@@ -1,4 +1,4 @@
-//! Canonical ZASC Entry Point
+//! Canonical FASC Entry Point
 //!
 //! **THIS IS THE PRIMARY API FOR gMath.**
 //!
@@ -63,8 +63,8 @@
 //! - **gmath_parse()**: Entry point for runtime strings — eager parsing
 //! - **LazyExpr::from(StackValue)**: Chain results into new expressions (zero precision loss)
 
-// Re-export the complete ZASC API
-pub use super::universal::zasc::{
+// Re-export the complete FASC API
+pub use super::universal::fasc::{
     LazyExpr,
     gmath,
     gmath_parse,
@@ -83,11 +83,11 @@ pub use super::universal::tier_types::{CompactShadow, ShadowConstantId};
 /// Set compute:output mode. Examples: "binary:ternary", "auto:auto", "decimal:binary"
 pub fn set_gmath_mode(mode_str: &str) -> Result<(), &'static str> {
     let mode = GmathMode::from_str(mode_str)?;
-    super::universal::zasc::mode::set_mode(mode);
+    super::universal::fasc::mode::set_mode(mode);
     Ok(())
 }
 
 /// Reset to default Auto:Auto mode
 pub fn reset_gmath_mode() {
-    super::universal::zasc::mode::reset_mode();
+    super::universal::fasc::mode::reset_mode();
 }

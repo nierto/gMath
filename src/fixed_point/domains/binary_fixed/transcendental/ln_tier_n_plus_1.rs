@@ -1,5 +1,5 @@
 // ============================================================================
-// TIER N+1 ULTRA-PRECISION NATURAL LOGARITHM
+// TIER N+1 NATURAL LOGARITHM
 // ============================================================================
 //
 // **PRINCIPLE**: Compute at tier N+1, downscale to tier N with ZERO precision loss
@@ -25,7 +25,7 @@
 // **PERFORMANCE COST**:
 //   - Tier N+1: 3-4x slower than native
 //   - Tier N+2: 10-15x slower than native
-//   - WORTH IT for ultra-precision applications
+//   - Acceptable cost for full storage-tier accuracy
 //
 // ============================================================================
 

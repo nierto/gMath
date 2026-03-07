@@ -47,7 +47,7 @@ pub struct BinaryTier6 {
 }
 
 // ============================================================================
-// RAW BINARY VALUE -- ZASC BOUNDARY CROSSING
+// RAW BINARY VALUE -- FASC BOUNDARY CROSSING
 // ============================================================================
 
 #[derive(Debug, Clone)]

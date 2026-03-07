@@ -319,7 +319,7 @@ impl Ord for D512 {
 /// Division with remainder for D512 by D512 (decimal-specific)
 ///
 /// ALGORITHM: Full 512-bit by 512-bit long division with exact remainder calculation
-/// PRECISION: Maintains exact arithmetic for decimal scaling operations - CRITICAL FOR 0-ULP
+/// PRECISION: Maintains exact arithmetic for decimal scaling operations
 /// DOMAIN: Pure decimal domain - optimized for base-10 operations
 pub fn divmod_d512_by_d512(dividend: D512, divisor: D512) -> (D512, D512) {
     // Handle division by zero with saturation

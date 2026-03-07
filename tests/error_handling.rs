@@ -1,6 +1,6 @@
 //! Error Handling & Input Validation Tests
 //!
-//! Validates that the ZASC pipeline gracefully handles:
+//! Validates that the FASC pipeline gracefully handles:
 //! - Malformed / empty input strings
 //! - Domain errors (ln(0), sqrt(-1), asin(2), ...)
 //! - Division by zero

@@ -1,6 +1,6 @@
 //! # Rational Arithmetic Domain
 //!
-//! Pure rational arithmetic (a/b) with infinite precision, tiered storage
+//! Pure rational arithmetic (a/b) with tiered storage (i8 to I512, optional BigInt)
 //! optimization, and exact fraction arithmetic for the symbolic domain.
 //!
 //! ## Core Components
@@ -18,7 +18,7 @@
 //! ## Integration Points
 //!
 //! - **UGOD**: Automatic tier escalation on overflow
-//! - **ZASC**: Zero-allocation stack computation integration
+//! - **FASC**: Zero-allocation stack computation integration
 
 pub mod rational_number;
 pub mod rational_conversion;

@@ -1,4 +1,4 @@
-//! Lazy Expression Tree - Zero Allocation Design
+//! Lazy Expression Tree - Fixed Allocation Design
 //!
 //! **MISSION**: Build expression trees without heap allocation until evaluation
 //! **ARCHITECTURE**: Recursive enum with operator overloading for natural syntax
@@ -67,7 +67,7 @@ pub enum LazyExpr {
     /// Power function (binary): x^y = exp(y × ln(x))
     Pow(Box<LazyExpr>, Box<LazyExpr>),
 
-    // Hyperbolic functions (ZASC-composed from exp/ln/sqrt)
+    // Hyperbolic functions (FASC-composed from exp/ln/sqrt)
     Sinh(Box<LazyExpr>),
     Cosh(Box<LazyExpr>),
     Tanh(Box<LazyExpr>),
@@ -243,7 +243,7 @@ impl LazyExpr {
         LazyExpr::Sqrt(Box::new(self))
     }
 
-    // Hyperbolic functions — ZASC-composed from exp/ln/sqrt
+    // Hyperbolic functions — FASC-composed from exp/ln/sqrt
 
     /// Hyperbolic sine: sinh(x) = (exp(x) - exp(-x)) / 2
     pub fn sinh(self) -> Self {
@@ -289,7 +289,7 @@ impl LazyExpr {
         LazyExpr::Cos(Box::new(self))
     }
 
-    /// Tangent function: tan(x) = sin(x) / cos(x) (ZASC-composed)
+    /// Tangent function: tan(x) = sin(x) / cos(x) (FASC-composed)
     pub fn tan(self) -> Self {
         LazyExpr::Tan(Box::new(self))
     }

@@ -1,5 +1,5 @@
 // ============================================================================
-// TIER N+1 ULTRA-PRECISION SINE AND COSINE
+// TIER N+1 SINE AND COSINE
 // ============================================================================
 //
 // **PRINCIPLE**: Compute at native tier using build.rs-generated constants

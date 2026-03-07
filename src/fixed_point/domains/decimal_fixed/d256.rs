@@ -379,7 +379,7 @@ pub fn negate_d256(value: D256) -> D256 {
 /// Division with remainder for D256 by i128 (decimal-specific)
 /// 
 /// ALGORITHM: Full 256-bit long division with exact remainder calculation for decimal scaling
-/// PRECISION: Maintains exact arithmetic for decimal scaling operations - CRITICAL FOR 0-ULP
+/// PRECISION: Maintains exact arithmetic for decimal scaling operations
 pub fn divmod_d256_by_i128(dividend: D256, divisor: i128) -> (i128, i128) {
     if divisor == 0 {
         return (if dividend.words[3] as i64 >= 0 { i128::MAX } else { i128::MIN }, 0);
@@ -454,7 +454,7 @@ pub fn divmod_d256_by_i128(dividend: D256, divisor: i128) -> (i128, i128) {
 /// Division with remainder for D256 by D256 (decimal-specific)
 ///
 /// ALGORITHM: Full 256-bit by 256-bit long division with exact remainder calculation
-/// PRECISION: Maintains exact arithmetic for decimal scaling operations - CRITICAL FOR 0-ULP
+/// PRECISION: Maintains exact arithmetic for decimal scaling operations
 /// DOMAIN: Pure decimal domain - optimized for base-10 operations
 pub fn divmod_d256_by_d256(dividend: D256, divisor: D256) -> (D256, D256) {
     // Handle division by zero with saturation

@@ -15,7 +15,6 @@ use crate::fixed_point::domains::symbolic::rational::RationalNumber;
 #[cfg(not(feature = "embedded"))]
 use crate::fixed_point::domains::binary_fixed::I256;
 #[allow(unused_imports)]
-#[cfg(feature = "multi-precision")]
 use crate::fixed_point::domains::binary_fixed::I512;
 
 // Include the build-generated constants database
@@ -51,31 +50,10 @@ impl SymbolicConstants {
     /// **SOURCE**: Verified 100+ decimal string from OEIS A000796
     /// **ARCHITECTURE**: Scaled-integer rational (numerator / 10^decimals)
     pub fn pi_high_precision() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::PI();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::PI();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            let num = I256::from_words(num_arr_4);
-            let den = I256::from_words(den_arr_4);
-            RationalNumber::from_i256_pair(num, den)
-        }
-
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::PI();
-            let num = I512::from_words(num_words);
-            let den = I512::from_words(den_words);
-            RationalNumber::from_i512_pair(num, den)
-        }
+        let (num_words, den_words) = MathematicalConstants::PI();
+        let num = I512::from_words(num_words);
+        let den = I512::from_words(den_words);
+        RationalNumber::from_i512_pair(num, den)
     }
 
     /// High-precision e using build-generated rational approximation
@@ -83,31 +61,10 @@ impl SymbolicConstants {
     /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
     /// **SOURCE**: Verified 100+ decimal string from OEIS A001113
     pub fn e_high_precision() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::E();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::E();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            let num = I256::from_words(num_arr_4);
-            let den = I256::from_words(den_arr_4);
-            RationalNumber::from_i256_pair(num, den)
-        }
-
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::E();
-            let num = I512::from_words(num_words);
-            let den = I512::from_words(den_words);
-            RationalNumber::from_i512_pair(num, den)
-        }
+        let (num_words, den_words) = MathematicalConstants::E();
+        let num = I512::from_words(num_words);
+        let den = I512::from_words(den_words);
+        RationalNumber::from_i512_pair(num, den)
     }
 
     /// High-precision √2 using build-generated rational approximation
@@ -115,31 +72,10 @@ impl SymbolicConstants {
     /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
     /// **SOURCE**: Verified 100+ decimal string from OEIS A002193
     pub fn sqrt_2_high_precision() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::SQRT_2();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::SQRT_2();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            let num = I256::from_words(num_arr_4);
-            let den = I256::from_words(den_arr_4);
-            RationalNumber::from_i256_pair(num, den)
-        }
-
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::SQRT_2();
-            let num = I512::from_words(num_words);
-            let den = I512::from_words(den_words);
-            RationalNumber::from_i512_pair(num, den)
-        }
+        let (num_words, den_words) = MathematicalConstants::SQRT_2();
+        let num = I512::from_words(num_words);
+        let den = I512::from_words(den_words);
+        RationalNumber::from_i512_pair(num, den)
     }
 
     /// High-precision natural logarithm of 2
@@ -147,31 +83,10 @@ impl SymbolicConstants {
     /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
     /// **SOURCE**: Verified 100+ decimal string from OEIS A002162
     pub fn ln_2_high_precision() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::LN_2();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::LN_2();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            let num = I256::from_words(num_arr_4);
-            let den = I256::from_words(den_arr_4);
-            RationalNumber::from_i256_pair(num, den)
-        }
-
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::LN_2();
-            let num = I512::from_words(num_words);
-            let den = I512::from_words(den_words);
-            RationalNumber::from_i512_pair(num, den)
-        }
+        let (num_words, den_words) = MathematicalConstants::LN_2();
+        let num = I512::from_words(num_words);
+        let den = I512::from_words(den_words);
+        RationalNumber::from_i512_pair(num, den)
     }
 
     /// High-precision golden ratio φ = (1 + √5)/2
@@ -179,31 +94,10 @@ impl SymbolicConstants {
     /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
     /// **SOURCE**: Verified 100+ decimal string from OEIS A001622
     pub fn golden_ratio_high_precision() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::GOLDEN_RATIO();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::GOLDEN_RATIO();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            let num = I256::from_words(num_arr_4);
-            let den = I256::from_words(den_arr_4);
-            RationalNumber::from_i256_pair(num, den)
-        }
-
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::GOLDEN_RATIO();
-            let num = I512::from_words(num_words);
-            let den = I512::from_words(den_words);
-            RationalNumber::from_i512_pair(num, den)
-        }
+        let (num_words, den_words) = MathematicalConstants::GOLDEN_RATIO();
+        let num = I512::from_words(num_words);
+        let den = I512::from_words(den_words);
+        RationalNumber::from_i512_pair(num, den)
     }
 
     /// High-precision √3 using build-generated rational approximation
@@ -211,53 +105,15 @@ impl SymbolicConstants {
     /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
     /// **SOURCE**: Verified 100+ decimal string from OEIS A002194
     pub fn sqrt_3_high_precision() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::SQRT_3();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::SQRT_3();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            let num = I256::from_words(num_arr_4);
-            let den = I256::from_words(den_arr_4);
-            RationalNumber::from_i256_pair(num, den)
-        }
-
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::SQRT_3();
-            let num = I512::from_words(num_words);
-            let den = I512::from_words(den_words);
-            RationalNumber::from_i512_pair(num, den)
-        }
+        let (num_words, den_words) = MathematicalConstants::SQRT_3();
+        let num = I512::from_words(num_words);
+        let den = I512::from_words(den_words);
+        RationalNumber::from_i512_pair(num, den)
     }
 
     /// ln(10) - computed from ln(2) relationship
     pub fn ln_10() -> RationalNumber {
-        #[cfg(all(not(feature = "multi-precision"), feature = "embedded"))]
-        {
-            let (num_arr, den_arr) = MathematicalConstants::LN_10();
-            let num = MathematicalConstants::extract_i128_from_u64_8(num_arr);
-            let den = MathematicalConstants::extract_i128_from_u64_8(den_arr);
-            RationalNumber::new(num, den as u128)
-        }
-        #[cfg(all(not(feature = "multi-precision"), not(feature = "embedded")))]
-        {
-            let (num_arr_8, den_arr_8) = MathematicalConstants::LN_10();
-            let num_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(num_arr_8);
-            let den_arr_4 = MathematicalConstants::extract_u64_4_from_u64_8(den_arr_8);
-            RationalNumber::from_i256_pair(I256::from_words(num_arr_4), I256::from_words(den_arr_4))
-        }
-        #[cfg(feature = "multi-precision")]
-        {
-            let (num_words, den_words) = MathematicalConstants::LN_10();
-            RationalNumber::from_i512_pair(I512::from_words(num_words), I512::from_words(den_words))
-        }
+        let (num_words, den_words) = MathematicalConstants::LN_10();
+        RationalNumber::from_i512_pair(I512::from_words(num_words), I512::from_words(den_words))
     }
 }

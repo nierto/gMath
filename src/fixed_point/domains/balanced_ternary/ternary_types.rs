@@ -10,7 +10,7 @@
 //! - Tier-specific storage types (TernaryTier1-6)
 //! - Scale factor constants (powers of 3)
 //! - TernaryTier enum and UniversalTernaryFixed struct
-//! - Constructors, promotion, alignment, ZASC boundary helpers
+//! - Constructors, promotion, alignment, FASC boundary helpers
 //! - Ternary-specific div3/mul3 operations
 //!
 //! Arithmetic UGOD methods (add, subtract, multiply, divide, negate) live in
@@ -90,7 +90,7 @@ pub struct TernaryTier6 {
 }
 
 /// Raw ternary value -- preserves full precision for all tiers when crossing
-/// the ZASC boundary (avoids i128 truncation for Tier 4+).
+/// the FASC boundary (avoids i128 truncation for Tier 4+).
 #[derive(Debug, Clone)]
 pub enum TernaryRaw {
     /// Tiers 1-3: value fits in i128
@@ -751,7 +751,7 @@ impl UniversalTernaryFixed {
         (aligned_self, aligned_other)
     }
 
-    /// Create UniversalTernaryFixed from tier and i128 value (for ZASC integration)
+    /// Create UniversalTernaryFixed from tier and i128 value (for FASC integration)
     ///
     /// **PURPOSE**: Convert StackValue::Ternary(tier, value) back to UniversalTernaryFixed
     /// **WARNING**: Tier 4+ truncates to i128 - use from_tier_raw() for full precision
@@ -802,7 +802,7 @@ impl UniversalTernaryFixed {
         }
     }
 
-    /// Extract tier and i128 value for ZASC storage (legacy -- truncates Tier 4+)
+    /// Extract tier and i128 value for FASC storage (legacy -- truncates Tier 4+)
     ///
     /// **WARNING**: Use to_tier_raw() for full precision.
     pub fn to_tier_value(&self) -> (u8, i128) {
@@ -818,7 +818,7 @@ impl UniversalTernaryFixed {
 
     /// Create UniversalTernaryFixed from tier and raw value -- NO truncation
     ///
-    /// **PURPOSE**: Full-precision ZASC boundary crossing for all tiers
+    /// **PURPOSE**: Full-precision FASC boundary crossing for all tiers
     pub fn from_tier_raw(tier: u8, raw: TernaryRaw) -> Result<Self, OverflowDetected> {
         match (tier, raw) {
             (1, TernaryRaw::Small(v)) => Ok(Self {
@@ -851,7 +851,7 @@ impl UniversalTernaryFixed {
 
     /// Extract tier and raw value -- NO truncation for any tier
     ///
-    /// **PURPOSE**: Full-precision ZASC boundary crossing for all tiers
+    /// **PURPOSE**: Full-precision FASC boundary crossing for all tiers
     pub fn to_tier_raw(&self) -> (u8, TernaryRaw) {
         match &self.value {
             TernaryValue::Tier1(tier1) => (1, TernaryRaw::Small(tier1.raw() as i128)),

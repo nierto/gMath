@@ -1,6 +1,6 @@
 //! Transcendental function evaluation — 18 functions with BinaryCompute chain persistence
 //!
-//! 5 dedicated (exp, ln, sqrt, pow, atan2) + 13 ZASC-composed from core functions.
+//! 5 dedicated (exp, ln, sqrt, pow, atan2) + 13 FASC-composed from core functions.
 //! All return BinaryCompute for chain persistence — single downscale at materialization.
 //! Also contains mode routing (parse_literal_with_mode, apply_output_mode)
 //! and conversion helpers (to_compute_storage, to_binary_storage).
@@ -60,7 +60,7 @@ impl StackEvaluator {
         }
     }
 
-    /// Evaluate exponential function on stack value with TIER N+1 ULTRA-PRECISION
+    /// Evaluate exponential function on stack value at tier N+1
     ///
     /// All inputs are upscaled to compute tier (tier N+1) before computation.
     /// Returns BinaryCompute for transcendental chain persistence.
@@ -103,7 +103,7 @@ impl StackEvaluator {
         }
     }
 
-    /// Evaluate natural logarithm function on stack value with TIER N+1 ULTRA-PRECISION
+    /// Evaluate natural logarithm on stack value at tier N+1
     ///
     /// All inputs are upscaled to compute tier (tier N+1) before computation.
     /// Returns BinaryCompute for transcendental chain persistence.
@@ -137,11 +137,11 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// pow(x, y) = exp(y × ln(x)) — ZASC-composed at compute tier
+    /// pow(x, y) = exp(y × ln(x)) — FASC-composed at compute tier
     ///
     /// The entire chain (ln → multiply → exp) stays at compute tier via BinaryCompute propagation.
     pub(crate) fn evaluate_pow(&mut self, base: StackValue, exponent: StackValue) -> Result<StackValue, OverflowDetected> {
-        // Fast path: integer exponent via shadow → exponentiation-by-squaring (0 ULP)
+        // Fast path: integer exponent via shadow → exponentiation-by-squaring (exact)
         if let Some((exp_num, exp_den)) = exponent.shadow().as_rational() {
             if exp_den == 1 && exp_num.unsigned_abs() <= 1000 {
                 return self.pow_integer(base, exp_num as i64);
@@ -158,7 +158,7 @@ impl StackEvaluator {
 
     /// Integer exponentiation-by-squaring: x^n using multiply_values
     ///
-    /// Produces 0 ULP for integer exponents. Negative exponents handled
+    /// Exact for integer exponents. Negative exponents handled
     /// via 1/x^|n| using binary_divide.
     pub(crate) fn pow_integer(&mut self, base: StackValue, exp: i64) -> Result<StackValue, OverflowDetected> {
         let negative = exp < 0;
@@ -191,7 +191,7 @@ impl StackEvaluator {
     }
 
     // ============================================================================
-    // HYPERBOLIC FUNCTIONS (ZASC-composed from exp/ln/sqrt)
+    // HYPERBOLIC FUNCTIONS (FASC-composed from exp/ln/sqrt)
     // ============================================================================
 
     /// Create a Q-format binary constant from an integer value
@@ -429,7 +429,7 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// tan(x) = sin(x) / cos(x) — ZASC-composed at compute tier
+    /// tan(x) = sin(x) / cos(x) — FASC-composed at compute tier
     pub(crate) fn evaluate_tan(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         // Both sin and cos return BinaryCompute — division stays at compute tier
         let sin_val = self.evaluate_sin(value.clone())?;
@@ -443,7 +443,7 @@ impl StackEvaluator {
         self.binary_divide(sin_val, cos_val)
     }
 
-    /// asin(x) = atan(x / sqrt(1 - x²)) — ZASC-composed at compute tier
+    /// asin(x) = atan(x / sqrt(1 - x²)) — FASC-composed at compute tier
     /// Domain: |x| <= 1
     pub(crate) fn evaluate_asin(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         // Domain check: |x| <= 1
@@ -477,7 +477,7 @@ impl StackEvaluator {
         self.evaluate_atan(ratio)
     }
 
-    /// acos(x) = π/2 - asin(x) — ZASC-composed at compute tier
+    /// acos(x) = π/2 - asin(x) — FASC-composed at compute tier
     /// Domain: |x| <= 1
     pub(crate) fn evaluate_acos(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let asin_val = self.evaluate_asin(value)?;
@@ -632,7 +632,7 @@ impl StackEvaluator {
 
     /// Parse literal with mode override (Auto delegates to parse_literal unchanged)
     pub(crate) fn parse_literal_with_mode(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
-        use crate::fixed_point::universal::zasc::mode::{ComputeMode, get_mode};
+        use crate::fixed_point::universal::fasc::mode::{ComputeMode, get_mode};
         let mode = get_mode();
         match mode.compute {
             ComputeMode::Auto => self.parse_literal(s),
@@ -823,7 +823,7 @@ impl StackEvaluator {
 
     /// Apply output mode conversion after evaluation
     pub(crate) fn apply_output_mode(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
-        use crate::fixed_point::universal::zasc::mode::{OutputMode, get_mode};
+        use crate::fixed_point::universal::fasc::mode::{OutputMode, get_mode};
         let mode = get_mode();
         match mode.output {
             OutputMode::Auto => Ok(value),

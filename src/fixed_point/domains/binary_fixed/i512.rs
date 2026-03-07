@@ -1,4 +1,4 @@
-//! 512-bit Integer Arithmetic for Ultra-Precision Fixed-Point
+//! 512-bit Integer Arithmetic
 //! 
 //! PRODUCTION-READY: Extended precision arithmetic for Q256.256 format
 //! ARCHITECTURE: Based on proven I128 pattern, optimized for fixed-point operations
@@ -8,7 +8,7 @@ use std::ops::{Add, Sub, Mul, Shl, Shr, BitOr, BitAnd, Neg};
 use std::cmp::{Ord, PartialOrd, Ordering};
 use crate::fixed_point::i256::I256;
 
-/// 512-bit integer type for ultra-precision intermediate calculations
+/// 512-bit signed integer for Q128.128 compute-tier arithmetic
 /// 
 /// ARCHITECTURE: Array of 8 × 64-bit words (little-endian)
 /// USAGE: Enables Q256.256 fixed-point format with ~77 decimal places

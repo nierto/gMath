@@ -108,9 +108,6 @@ fn detect_deployment_profile() -> DeploymentProfile {
     // Cargo sets CARGO_FEATURE_<NAME> env vars for enabled features at build time.
     //
     // IMPORTANT: Check EXPLICIT profile features first, in order of precision (highest to lowest)!
-    // Note: multi-precision is enabled by tiered-arithmetic, which is included in all profiles,
-    // so we cannot use it to detect Scientific profile.
-    //
     // Order: embedded → scientific → balanced → default
     if env::var("CARGO_FEATURE_EMBEDDED_MINIMAL").is_ok() || env::var("CARGO_FEATURE_EMBEDDED").is_ok() {
         DeploymentProfile::Embedded
@@ -121,8 +118,8 @@ fn detect_deployment_profile() -> DeploymentProfile {
     } else if env::var("CARGO_FEATURE_FAST").is_ok() {
         DeploymentProfile::Custom
     } else {
-        // Default to balanced profile
-        DeploymentProfile::Balanced
+        // Default to embedded profile (Q64.64, 19 decimals, fastest)
+        DeploymentProfile::Embedded
     }
 }
 
@@ -464,7 +461,7 @@ fn exp_rational(x: &BigRational, terms: usize) -> BigRational {
 }
 
 /// Compute e^x for x >= 0 using Taylor series
-/// CRITICAL: For ultra-precision tiers (Q256.256, Q512.512), we need more than 300 bits!
+/// For wide tiers (Q256.256, Q512.512), we need more than 300 bits!
 /// - Tier 5 Q256.256: needs 384 bits (256 frac + 128 comp)
 /// - Tier 6 Q512.512: needs 768 bits (512 frac + 256 comp)
 fn exp_rational_positive(x: &BigRational, terms: usize) -> BigRational {

@@ -1,4 +1,4 @@
-//! Zero-Allocation Stack Computation (ZASC)
+//! Fixed-Allocation Stack Computation (FASC)
 //!
 //! **MISSION**: Universal lazy evaluation without heap allocation
 //! **ARCHITECTURE**: Stack-based computation with UGOD integration

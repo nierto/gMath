@@ -1,4 +1,4 @@
-//! 2048-bit Integer Arithmetic for Ultra-Precision Fixed-Point
+//! 2048-bit Integer Arithmetic
 //!
 //! PRODUCTION-READY: Maximum precision arithmetic for Q512.512 multiplication
 //! ARCHITECTURE: Based on proven I128/I256/I512/I1024 pattern
@@ -13,7 +13,7 @@ use crate::fixed_point::domains::binary_fixed::i1024::I1024;
 use crate::fixed_point::domains::binary_fixed::i512::I512;
 use crate::fixed_point::domains::binary_fixed::i256::I256;
 
-/// 2048-bit integer type for ultra-precision intermediate calculations
+/// 2048-bit signed integer for extended intermediate arithmetic
 ///
 /// ARCHITECTURE: Array of 32 × 64-bit words (little-endian)
 /// USAGE: Enables I1024 × I1024 → I2048 native multiplication

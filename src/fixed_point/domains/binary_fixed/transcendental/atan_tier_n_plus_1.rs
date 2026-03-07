@@ -1,5 +1,5 @@
 // ============================================================================
-// TIER N+1 ULTRA-PRECISION ARCTANGENT
+// TIER N+1 ARCTANGENT
 // ============================================================================
 //
 // **ALGORITHM**: Argument reduction + Taylor series

@@ -9,7 +9,7 @@ use crate::fixed_point::domains::decimal_fixed::{D256, D512};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
-// DECIMAL RAW ENUM -- ZASC BOUNDARY TYPE
+// DECIMAL RAW ENUM -- FASC BOUNDARY TYPE
 // ============================================================================
 
 #[derive(Debug, Clone, Copy)]
@@ -146,7 +146,7 @@ pub enum DecimalValueTiered {
 }
 
 // ============================================================================
-// UNIVERSAL DECIMAL TIERED -- ZASC + UGOD COMPATIBLE TYPE
+// UNIVERSAL DECIMAL TIERED -- FASC + UGOD COMPATIBLE TYPE
 // ============================================================================
 
 #[derive(Debug, Clone, Copy)]

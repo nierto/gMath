@@ -1,7 +1,7 @@
 //! DecimalFixed: Exact Decimal Arithmetic for Financial and User-Facing Calculations
 //!
 //! MISSION: Solves fundamental decimal representation limitation in binary fixed-point
-//! PRECISION: 0 ULP for exactly representable decimals (0.1, 0.01, etc.)
+//! PRECISION: Exact for representable decimals (0.1, 0.01, etc.) via scaled-integer arithmetic
 //! ARCHITECTURE: Scaled integer arithmetic with deterministic rounding
 
 // Import domain-specific decimal integer types
@@ -12,7 +12,7 @@ use std::str::FromStr;
 /// Exact decimal fixed-point arithmetic with configurable precision
 /// 
 /// REPRESENTATION: Scaled integer (value * 10^DECIMALS)
-/// PRECISION: 0 ULP for exactly representable decimals
+/// Exact for representable decimals via scaled-integer arithmetic
 /// DETERMINISM: Bit-identical results across all platforms
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DecimalFixed<const DECIMALS: u8> {
@@ -225,7 +225,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// Pure decimal multiplication using base-10 arithmetic (eliminates binary contamination)
     /// 
     /// ALGORITHM: Extract decimal digits, perform traditional long multiplication, reassemble
-    /// PRECISION: Exact decimal arithmetic - 0 ULP for all representable results
+    /// PRECISION: Exact decimal arithmetic for all representable results
     /// PURITY: 100% base-10 operations - no binary I256 contamination
     pub fn pure_decimal_multiply_decimal(self, other: Self) -> Self {
         // Handle zero cases early
@@ -263,7 +263,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// PRODUCTION-OPTIMIZED: Pure decimal multiplication with 20-50x performance improvement
     /// 
     /// ALGORITHM: Stack-allocated arrays, chunked processing, adaptive Karatsuba multiplication
-    /// PRECISION: Maintains exact 0-ULP decimal arithmetic
+    /// PRECISION: Maintains exact decimal arithmetic
     /// PERFORMANCE: Optimized for high-throughput decimal arithmetic
     pub fn pure_decimal_multiply_optimized_decimal(self, other: Self) -> Self {
         // Handle zero cases early
@@ -326,7 +326,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: rounded }
     }
     
-    /// 0 ULP multiplication using 256-bit intermediate precision (decimal domain)
+    /// Decimal multiplication using 256-bit intermediate to prevent truncation
     /// 
     /// ALGORITHM: Multiply with extended precision, then scale back with banker's rounding
     /// PRECISION: Exact for all results that fit in the target format
@@ -351,7 +351,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// Pure decimal addition using optimized scaled integer arithmetic
     /// 
     /// ALGORITHM: Direct scaled integer addition with comprehensive overflow handling
-    /// PRECISION: 0-ULP exactness for all representable results
+    /// PRECISION: Exact for all representable results
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
     /// DETERMINISM: Bit-identical results across all platforms
@@ -375,7 +375,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// Pure decimal subtraction using optimized scaled integer arithmetic
     /// 
     /// ALGORITHM: Direct scaled integer subtraction with comprehensive overflow handling
-    /// PRECISION: 0-ULP exactness for all representable results
+    /// PRECISION: Exact for all representable results
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
     /// DETERMINISM: Bit-identical results across all platforms
@@ -399,7 +399,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// Pure decimal negation using optimized scaled integer arithmetic
     /// 
     /// ALGORITHM: Direct scaled integer negation with overflow handling
-    /// PRECISION: 0-ULP exactness for all representable results except i128::MIN
+    /// PRECISION: Exact for all representable results except i128::MIN
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
     /// DETERMINISM: Bit-identical results across all platforms
@@ -465,7 +465,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     
     /// High-performance multiplication for batch operations
     /// 
-    /// PERFORMANCE: Uses existing 0-ULP infrastructure for optimal speed
+    /// PERFORMANCE: Uses existing scaled-integer infrastructure
     /// PRECISION: Maintains exact decimal arithmetic guarantees
     pub fn multiply_batch_decimal(inputs: &[(Self, Self)], outputs: &mut [Self]) {
         assert_eq!(inputs.len(), outputs.len());
@@ -817,12 +817,12 @@ pub const fn compile_time_power_of_10(exp: u8) -> i128 {
 /// Pure decimal arithmetic helper functions
 /// 
 /// MISSION: Eliminate binary contamination through base-10 native operations
-/// PRECISION: Maintain 0-ULP exactness within decimal representation limits
+/// PRECISION: Maintain exactness within decimal representation limits
 
 /// PRODUCTION-OPTIMIZED PURE DECIMAL ARITHMETIC
 /// 
 /// PERFORMANCE: 20-50x faster than original implementation
-/// PRECISION: Maintains exact 0-ULP decimal arithmetic
+/// PRECISION: Maintains exact decimal arithmetic
 /// ARCHITECTURE: Stack-allocated arrays, chunked processing, Karatsuba multiplication
 
 /// Maximum decimal digits for i128 (39 digits)

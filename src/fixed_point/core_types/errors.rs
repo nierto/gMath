@@ -16,9 +16,9 @@
 /// - **InvalidInput**: Invalid input format or value
 /// - **ParseError**: Parsing error (string to number conversion failed)
 /// - **Overflow**: Generic overflow (fallback for non-tiered contexts)
-/// - **StackUnderflow**: Stack underflow (ZASC VM - pop from empty stack)
-/// - **StackCorruption**: Stack corruption detected (ZASC VM - invalid state)
-/// - **InvalidStackReference**: Invalid stack reference (ZASC VM - out of bounds)
+/// - **StackUnderflow**: Stack underflow (FASC VM - pop from empty stack)
+/// - **StackCorruption**: Stack corruption detected (FASC VM - invalid state)
+/// - **InvalidStackReference**: Invalid stack reference (FASC VM - out of bounds)
 /// - **DomainError**: Domain error (e.g., ln(x) for x <= 0, sqrt(x) for x < 0)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowDetected {
@@ -36,11 +36,11 @@ pub enum OverflowDetected {
     ParseError,
     /// Generic overflow (fallback for non-tiered contexts)
     Overflow,
-    /// Stack underflow (ZASC VM - pop from empty stack)
+    /// Stack underflow (FASC VM - pop from empty stack)
     StackUnderflow,
-    /// Stack corruption detected (ZASC VM - invalid state)
+    /// Stack corruption detected (FASC VM - invalid state)
     StackCorruption,
-    /// Invalid stack reference (ZASC VM - out of bounds)
+    /// Invalid stack reference (FASC VM - out of bounds)
     InvalidStackReference,
     /// Domain error (e.g., ln(x) for x <= 0, sqrt(x) for x < 0)
     DomainError,

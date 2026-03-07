@@ -1,8 +1,8 @@
 [package]
 name = "g_math"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "Multi-domain fixed-point arithmetic library with 0 ULP transcendental functions"
+description = "Multi-domain fixed-point arithmetic library with 18 transcendental functions"
 authors = ["Niels Erik Toren"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -35,27 +35,15 @@ num-bigint = "0.4"
 num-rational = "0.4"
 
 [features]
-# Default: tiered arithmetic with SIMD acceleration
-default = ["tiered-arithmetic", "simd-acceleration"]
+default = []
 
-# Tiered arithmetic system (rational domain overflow delegation)
-tiered-arithmetic = ["multi-precision"]
-multi-precision = []       # Enables I256/I512 tiers 6-7 in RationalNumber
-infinite-precision = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]    # Enables BigInt tier 8 in RationalNumber
-
-# SIMD acceleration
-simd-acceleration = ["avx2-support", "vectorization"]
-avx2-support = []
-vectorization = []
+# Optional: BigInt tier 8 in RationalNumber (unbounded precision)
+infinite-precision = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
 
 # Deployment profiles (select compute precision via GMATH_PROFILE env var)
-# These Cargo features enable profile detection in build.rs
-embedded = ["tiered-arithmetic"]                              # Q64.64, 19 decimals, scalar
-balanced = ["tiered-arithmetic", "simd-acceleration"]         # Q128.128, 38 decimals
-scientific = ["tiered-arithmetic", "simd-acceleration"]       # Q256.256, 77 decimals
-
-# Monitoring and debugging
-performance-monitoring = []
+embedded = []      # Q64.64, 19 decimals
+balanced = []      # Q128.128, 38 decimals
+scientific = []    # Q256.256, 77 decimals
 
 # Feature gates for optional subsystems
 legacy-tests = []        # Enable compilation of legacy test suites

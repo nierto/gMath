@@ -8,7 +8,7 @@ Generates 4 files:
   - tests/data/domain_arith_refs_q256_256.rs   (binary Q256.256)
 
 Reference values computed with mpmath at 250 decimal places.
-Follows pattern from generate_zasc_ulp_references.py.
+Follows pattern from generate_fasc_ulp_references.py.
 """
 
 import os
@@ -24,7 +24,7 @@ PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 DATA_DIR = os.path.join(PROJECT_DIR, "tests", "data")
 
 # ═══════════════════════════════════════════════════════════════════
-# Q-format conversion (matches generate_zasc_ulp_references.py)
+# Q-format conversion (matches generate_fasc_ulp_references.py)
 # ═══════════════════════════════════════════════════════════════════
 
 PROFILES = [

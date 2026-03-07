@@ -87,12 +87,11 @@ pub enum RationalStorage {
     #[cfg(not(feature = "embedded"))]
     Massive { num: I256, den: I256 },
     
-    /// Tier 7: Ultra precision (advanced cryptographic applications)  
+    /// Tier 7: I512 numerator/denominator
     /// Memory: 128 bytes | Processing: Scalar operations (exceeds AVX2 capacity)
-    #[cfg(feature = "multi-precision")]
     Ultra { num: I512, den: I512 },
     
-    /// Tier 8: True infinite precision (rare edge cases)
+    /// Tier 8: BigInt numerator/denominator (requires `infinite-precision` feature)
     /// Memory: Variable | Processing: Scalar operations only
     #[cfg(feature = "infinite-precision")]
     Infinite { num: BigInt, den: BigInt },
@@ -143,7 +142,6 @@ pub enum RationalParts {
     #[cfg(not(feature = "embedded"))]
     Massive(I256, I256),
     /// Tier 7: I512 numerator and denominator
-    #[cfg(feature = "multi-precision")]
     Ultra(I512, I512),
     /// Tier 8: BigInt numerator and denominator
     #[cfg(feature = "infinite-precision")]
@@ -161,7 +159,6 @@ impl RationalParts {
             RationalParts::Huge(..) => 5,
             #[cfg(not(feature = "embedded"))]
             RationalParts::Massive(..) => 6,
-            #[cfg(feature = "multi-precision")]
             RationalParts::Ultra(..) => 7,
             #[cfg(feature = "infinite-precision")]
             RationalParts::Infinite(..) => 8,
@@ -188,7 +185,6 @@ impl RationalParts {
                     None
                 }
             },
-            #[cfg(feature = "multi-precision")]
             RationalParts::Ultra(..) => None, // Too large for i128
             #[cfg(feature = "infinite-precision")]
             RationalParts::Infinite(n, d) => {
@@ -214,7 +210,6 @@ impl RationalParts {
             RationalParts::Huge(n, d) => Some((I256::from_i128(*n), I256::from_i128(*d as i128))),
             #[cfg(not(feature = "embedded"))]
             RationalParts::Massive(n, d) => Some((*n, *d)),
-            #[cfg(feature = "multi-precision")]
             RationalParts::Ultra(..) => None, // Too large for I256
             #[cfg(feature = "infinite-precision")]
             RationalParts::Infinite(..) => None,
@@ -223,8 +218,7 @@ impl RationalParts {
 
     /// Promote to I512 pair if possible (tiers 1-7)
     ///
-    /// Widens smaller tiers to I512. Returns None for tier 8 (Infinite/BigInt).
-    #[cfg(feature = "multi-precision")]
+    /// Widens smaller tiers to I512. Returns None for tier 8 (BigInt).
     pub fn try_as_i512_pair(&self) -> Option<(I512, I512)> {
         match self {
             RationalParts::Tiny(n, d) => Some((I512::from_i128(*n as i128), I512::from_i128(*d as i128))),
@@ -234,7 +228,6 @@ impl RationalParts {
             RationalParts::Huge(n, d) => Some((I512::from_i128(*n), I512::from_i128(*d as i128))),
             #[cfg(not(feature = "embedded"))]
             RationalParts::Massive(n, d) => Some((I512::from_i256(*n), I512::from_i256(*d))),
-            #[cfg(feature = "multi-precision")]
             RationalParts::Ultra(n, d) => Some((*n, *d)),
             #[cfg(feature = "infinite-precision")]
             RationalParts::Infinite(..) => None, // BigInt cannot fit in I512
@@ -251,10 +244,8 @@ impl RationalStorage {
     #[allow(unreachable_code)]
     pub fn max_tier_for_profile() -> u8 {
         #[cfg(feature = "infinite-precision")] { return 8; }
-        #[cfg(all(feature = "multi-precision", not(feature = "infinite-precision")))] { return 7; }
-        #[cfg(all(not(feature = "embedded"), not(feature = "multi-precision")))] { return 6; }
-        #[cfg(feature = "embedded")] { return 5; }
-        5 // Default to Huge tier (i128) for balanced profile
+        #[cfg(not(feature = "infinite-precision"))] { return 7; }
+        7 // Default to Ultra tier (I512)
     }
     
     /// Get memory footprint in bytes
@@ -267,7 +258,6 @@ impl RationalStorage {
             RationalStorage::Huge { .. }     => 32,  // i128 + u128
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { .. }  => 64,  // I256 + I256
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { .. }    => 128, // I512 + I512
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { .. } => 48,  // Approximate BigInt minimum
@@ -284,7 +274,6 @@ impl RationalStorage {
             RationalStorage::Huge { .. }     => 5,
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { .. }  => 6,
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { .. }    => 7,
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { .. } => 8,
@@ -334,8 +323,7 @@ impl RationalNumber {
     ///
     /// **USE CASE**: Scientific profile (77 decimal precision)
     /// **PRECISION**: 10^77 denominators, ~256 bits of precision
-    /// **FEATURE GATE**: Only available for multi-precision profile
-    #[cfg(feature = "multi-precision")]
+    /// **AVAILABILITY**: Always available (unconditional)
     pub fn from_i512_pair(numerator: I512, denominator: I512) -> Self {
         // Verify denominator is not zero
         assert!(!denominator.is_zero(), "RationalNumber: Denominator cannot be zero");
@@ -345,7 +333,7 @@ impl RationalNumber {
             den: denominator,
         };
 
-        // Set metadata for ultra-precision constants
+        // Set metadata for wide-integer constants
         use crate::fixed_point::core_types::domain_metadata::{ShadowMetadata, DomainType, ExactnessType};
         let metadata = ShadowMetadata::new(DomainType::Symbolic, ExactnessType::Exact);
 
@@ -392,7 +380,7 @@ impl RationalNumber {
             },
             #[cfg(feature = "infinite-precision")]
             _ => {
-                // Fallback to infinite precision for deployment profile limits
+                // Fallback to BigInt for values exceeding I512 range
                 RationalStorage::Infinite {
                     num: BigInt::from(numerator),
                     den: BigInt::from(denominator),
@@ -439,7 +427,7 @@ impl RationalNumber {
     ///   Symbolic 5   (Huge, i128)           → Universal 4 (fits in I256 conceptually)
     ///   Symbolic 6   (Massive, I256)        → Universal 5
     ///   Symbolic 7   (Ultra, I512)          → Universal 6
-    ///   Symbolic 8   (Infinite, BigInt)     → Universal 6 (capped)
+    ///   Symbolic 8   (BigInt)               → Universal 6 (capped)
     pub fn universal_tier(&self) -> u8 {
         symbolic_to_universal_tier(self.tier_level())
     }
@@ -467,7 +455,7 @@ impl RationalNumber {
     /// Get numerator as i128 (RECOMMENDED for tiers 1-7)
     ///
     /// Returns None if value exceeds i128 range (tier 6-8 with large values).
-    /// For tier 8 (Infinite), use `numerator_bigint()` instead.
+    /// For tier 8 (BigInt), use `numerator_bigint()` instead.
     pub fn numerator_i128(&self) -> Option<i128> {
         match &self.storage {
             RationalStorage::Tiny { num, .. } => Some(*num as i128),
@@ -479,7 +467,6 @@ impl RationalNumber {
             RationalStorage::Massive { num, .. } => {
                 if num.fits_in_i128() { Some(num.as_i128()) } else { None }
             },
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, .. } => {
                 if num.fits_in_i128() { Some(num.as_i128()) } else { None }
             },
@@ -491,7 +478,7 @@ impl RationalNumber {
     /// Get denominator as i128 (RECOMMENDED for tiers 1-7)
     ///
     /// Returns None if value exceeds i128 range (tier 6-8 with large values).
-    /// For tier 8 (Infinite), use `denominator_bigint()` instead.
+    /// For tier 8 (BigInt), use `denominator_bigint()` instead.
     pub fn denominator_i128(&self) -> Option<i128> {
         match &self.storage {
             RationalStorage::Tiny { den, .. } => Some(*den as i128),
@@ -503,7 +490,6 @@ impl RationalNumber {
             RationalStorage::Massive { den, .. } => {
                 if den.fits_in_i128() { Some(den.as_i128()) } else { None }
             },
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { den, .. } => {
                 if den.fits_in_i128() { Some(den.as_i128()) } else { None }
             },
@@ -523,7 +509,6 @@ impl RationalNumber {
             RationalStorage::Huge { num, .. } => BigInt::from(*num),
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { num, .. } => BigInt::from(num.as_i128()),
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, .. } => BigInt::from(num.as_i128()),
             RationalStorage::Infinite { num, .. } => num.clone(),
         }
@@ -540,7 +525,6 @@ impl RationalNumber {
             RationalStorage::Huge { den, .. } => BigInt::from(*den),
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { den, .. } => BigInt::from(den.as_i128()),
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { den, .. } => BigInt::from(den.as_i128()),
             RationalStorage::Infinite { den, .. } => den.clone(),
         }
@@ -583,7 +567,6 @@ impl RationalNumber {
             RationalStorage::Huge { num, den } => RationalParts::Huge(*num, *den),
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { num, den } => RationalParts::Massive(num.clone(), den.clone()),
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, den } => RationalParts::Ultra(num.clone(), den.clone()),
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { num, den } => RationalParts::Infinite(num.clone(), den.clone()),
@@ -617,7 +600,7 @@ impl RationalNumber {
                 }
                 #[cfg(not(feature = "infinite-precision"))]
                 {
-                    // Without infinite precision, this shouldn't happen
+                    // Without BigInt tier, this shouldn't happen
                     f64::NAN
                 }
             }
@@ -692,7 +675,7 @@ impl RationalNumber {
                 Ok(Self::new(result_num, result_den))
             },
             Err(OverflowDetected::TierOverflow) => {
-                // UGOD promotion: recompute at i128 using native checked arithmetic (ZASC-compliant)
+                // UGOD promotion: recompute at i128 using native checked arithmetic (FASC-compliant)
                 let (a_num, a_den) = self.extract_i128_pair()?;
                 let (b_num, b_den) = other.extract_i128_pair()?;
                 let num = a_num.checked_mul(b_num).ok_or(OverflowDetected::TierOverflow)?;
@@ -704,18 +687,18 @@ impl RationalNumber {
         }
     }
 
-    /// Always-succeeding infinite precision multiplication (universal wrapper fallback)
+    /// Multiplication fallback using highest available tier
     /// INTEGRATION V2: Uses BigInt delegation through symbolic_arithmetic for mathematical correctness
-    pub fn multiply_infinite_precision(&self, other: &Self) -> Self {
-        // Convert both to infinite precision rationals (or highest available tier)
-        let self_infinite = self.promote_to_infinite();
-        let other_infinite = other.promote_to_infinite();
+    pub fn multiply_at_max_tier(&self, other: &Self) -> Self {
+        // Convert both to highest available tier
+        let self_promoted = self.promote_to_max_tier();
+        let other_promoted = other.promote_to_max_tier();
 
         #[cfg(feature = "infinite-precision")]
         {
             if let (RationalStorage::Infinite { num: a_num, den: a_den },
                     RationalStorage::Infinite { num: b_num, den: b_den }) =
-                   (&self_infinite.storage, &other_infinite.storage) {
+                   (&self_promoted.storage, &other_promoted.storage) {
 
                 // Delegate through i128 tier with BigInt intermediate fallback
                 let a_num_i128 = a_num.to_i128().unwrap_or(0);
@@ -744,20 +727,20 @@ impl RationalNumber {
                     }
                 }
             } else {
-                unreachable!("promote_to_infinite with feature should always return Infinite storage")
+                unreachable!("promote_to_max_tier should always return BigInt storage")
             }
         }
 
         #[cfg(not(feature = "infinite-precision"))]
         {
-            // Without infinite precision, use i128 multiplication (PURE INTEGER ARITHMETIC)
+            // Without BigInt, use i128 multiplication
             // Extract operands as i128 with saturation for values that don't fit
-            let (a_num_i128, a_den_i128) = self_infinite.extract_native().try_as_i128()
+            let (a_num_i128, a_den_i128) = self_promoted.extract_native().try_as_i128()
                 .unwrap_or((i128::MAX, 1)); // Saturate on overflow
-            let (b_num_i128, b_den_i128) = other_infinite.extract_native().try_as_i128()
+            let (b_num_i128, b_den_i128) = other_promoted.extract_native().try_as_i128()
                 .unwrap_or((i128::MAX, 1)); // Saturate on overflow
 
-            // Use i128 multiplication (best effort without infinite precision)
+            // Use i128 multiplication (best available without BigInt)
             match mul_i128_rational(a_num_i128, a_den_i128, b_num_i128, b_den_i128) {
                 Ok((result_num, result_den)) => Self::new(result_num, result_den),  // mul_i128_rational returns (i128, u128)
                 Err(_) => {
@@ -789,14 +772,13 @@ impl RationalNumber {
             5 => self.promote_both_to_huge(other).and_then(|(a, b)| a.multiply_huge_tier(&b)),
             #[cfg(not(feature = "embedded"))]
             6 => self.promote_both_to_massive(other).and_then(|(a, b)| a.multiply_massive_tier(&b)),
-            #[cfg(feature = "multi-precision")]
             7 => self.promote_both_to_ultra(other).and_then(|(a, b)| a.multiply_ultra_tier(&b)),
             #[cfg(feature = "infinite-precision")]
-            8 => Ok(self.promote_to_infinite().multiply_infinite_precision(&other.promote_to_infinite())),
+            8 => Ok(self.promote_to_max_tier().multiply_at_max_tier(&other.promote_to_max_tier())),
             _ => Err(OverflowDetected::PrecisionLimit)
         }
     }
-    
+
     /// Precision-preserving mixed-tier addition
     /// Promotes both operands to the higher tier and delegates without precision loss
     fn add_mixed_tiers(&self, other: &Self) -> Result<Self, OverflowDetected> {
@@ -818,7 +800,6 @@ impl RationalNumber {
             5 => self.promote_both_to_huge(other).and_then(|(a, b)| a.add_huge_tier(&b)),
             #[cfg(not(feature = "embedded"))]
             6 => self.promote_both_to_massive(other).and_then(|(a, b)| a.add_massive_tier(&b)),
-            #[cfg(feature = "multi-precision")]
             7 => self.promote_both_to_ultra(other).and_then(|(a, b)| a.add_ultra_tier(&b)),
             _ => Err(OverflowDetected::PrecisionLimit)
         }
@@ -842,7 +823,6 @@ impl RationalNumber {
             5 => self.promote_both_to_huge(other).and_then(|(a, b)| a.subtract_huge_tier(&b)),
             #[cfg(not(feature = "embedded"))]
             6 => self.promote_both_to_massive(other).and_then(|(a, b)| a.subtract_massive_tier(&b)),
-            #[cfg(feature = "multi-precision")]
             7 => self.promote_both_to_ultra(other).and_then(|(a, b)| a.subtract_ultra_tier(&b)),
             _ => Err(OverflowDetected::PrecisionLimit)
         }
@@ -866,7 +846,6 @@ impl RationalNumber {
             5 => self.promote_both_to_huge(other).and_then(|(a, b)| a.divide_huge_tier(&b)),
             #[cfg(not(feature = "embedded"))]
             6 => self.promote_both_to_massive(other).and_then(|(a, b)| a.divide_massive_tier(&b)),
-            #[cfg(feature = "multi-precision")]
             7 => self.promote_both_to_ultra(other).and_then(|(a, b)| a.divide_ultra_tier(&b)),
             _ => Err(OverflowDetected::PrecisionLimit)
         }
@@ -895,11 +874,11 @@ impl RationalNumber {
         a.tier_level().max(b.tier_level())
     }
     
-    /// Promote current value to infinite precision
-    fn promote_to_infinite(&self) -> Self {
+    /// Promote current value to BigInt tier
+    fn promote_to_max_tier(&self) -> Self {
         #[cfg(feature = "infinite-precision")]
         {
-            // Extract as BigInt for infinite precision tier
+            // Extract as BigInt
             let num = self.numerator();
             let den = self.denominator();
             Self {
@@ -970,7 +949,6 @@ impl RationalNumber {
     }
     
     /// Promote both operands to ultra tier
-    #[cfg(feature = "multi-precision")]
     fn promote_both_to_ultra(&self, other: &Self) -> Result<(Self, Self), OverflowDetected> {
         let a = self.promote_to_tier(7)?;
         let b = other.promote_to_tier(7)?;
@@ -1002,7 +980,6 @@ impl RationalNumber {
         }
 
         // Tier 7 (Ultra, I512): widen to I512 pair
-        #[cfg(feature = "multi-precision")]
         if target_tier == 7 {
             let (num, den) = parts.try_as_i512_pair()
                 .ok_or(OverflowDetected::PrecisionLimit)?;
@@ -1287,7 +1264,6 @@ impl RationalNumber {
 
     // ═══ Ultra tier (I512) arithmetic — uses I1024 intermediates ═══
 
-    #[cfg(feature = "multi-precision")]
     fn extract_i512_pair(&self) -> Result<(I512, I512), OverflowDetected> {
         match &self.storage {
             RationalStorage::Ultra { num, den } => Ok((*num, *den)),
@@ -1306,7 +1282,6 @@ impl RationalNumber {
         }
     }
 
-    #[cfg(feature = "multi-precision")]
     fn add_ultra_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let (an, ad) = self.extract_i512_pair()?;
         let (bn, bd) = other.extract_i512_pair()?;
@@ -1326,7 +1301,6 @@ impl RationalNumber {
         }
     }
 
-    #[cfg(feature = "multi-precision")]
     fn subtract_ultra_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let (an, ad) = self.extract_i512_pair()?;
         let (bn, bd) = other.extract_i512_pair()?;
@@ -1346,7 +1320,6 @@ impl RationalNumber {
         }
     }
 
-    #[cfg(feature = "multi-precision")]
     fn multiply_ultra_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let (an, ad) = self.extract_i512_pair()?;
         let (bn, bd) = other.extract_i512_pair()?;
@@ -1373,7 +1346,6 @@ impl RationalNumber {
         }
     }
 
-    #[cfg(feature = "multi-precision")]
     fn divide_ultra_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let (an, ad) = self.extract_i512_pair()?;
         let (bn, bd) = other.extract_i512_pair()?;
@@ -1396,7 +1368,7 @@ impl RationalNumber {
     }
 
     /// Extract exact rational as BigInt pair. Prefer `extract_native()` for tiers 1-7.
-    /// - Tier 8 (Infinite) with `#[cfg(feature = "infinite-precision")]` - ONLY valid use
+    /// - Tier 8 (BigInt) with `#[cfg(feature = "infinite-precision")]` - ONLY valid use
     /// - Fallback in mixed-tier comparisons when tier-preserving extraction fails (extremely rare)
     ///
     /// **MIGRATION**: If you're using this for tiers 1-7, switch to `extract_native()` or `try_as_i128()`.
@@ -1414,7 +1386,6 @@ impl RationalNumber {
                 // I256::as_i128() returns i128 directly (not Option)
                 (BigInt::from(num.as_i128()), BigInt::from(den.as_i128()))
             },
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, den } => {
                 (BigInt::from(num.as_i128()), BigInt::from(den.as_i128()))
             },
@@ -1486,7 +1457,7 @@ impl RationalNumber {
                 Ok(Self::new(result_num, result_den))
             },
             Err(OverflowDetected::TierOverflow) => {
-                // UGOD promotion: recompute at i128 using native checked arithmetic (ZASC-compliant)
+                // UGOD promotion: recompute at i128 using native checked arithmetic (FASC-compliant)
                 let (a_num, a_den) = self.extract_i128_pair()?;
                 let (b_num, b_den) = other.extract_i128_pair()?;
                 let b_den_s = i128::try_from(b_den).map_err(|_| OverflowDetected::TierOverflow)?;
@@ -1562,7 +1533,7 @@ impl RationalNumber {
                 Ok(Self::new(result_num, result_den))
             },
             Err(OverflowDetected::TierOverflow) => {
-                // UGOD promotion: recompute at i128 using native checked arithmetic (ZASC-compliant)
+                // UGOD promotion: recompute at i128 using native checked arithmetic (FASC-compliant)
                 let (a_num, a_den) = self.extract_i128_pair()?;
                 let (b_num, b_den) = other.extract_i128_pair()?;
                 let b_den_s = i128::try_from(b_den).map_err(|_| OverflowDetected::TierOverflow)?;
@@ -1634,7 +1605,6 @@ impl RationalNumber {
             },
 
             // Ultra ÷ Ultra operations (I512 rational division)
-            #[cfg(feature = "multi-precision")]
             (RationalStorage::Ultra { .. }, RationalStorage::Ultra { .. }) => {
                 // Delegate to mixed_tiers for I512 handling
                 return self.divide_mixed_tiers(other);
@@ -1652,7 +1622,7 @@ impl RationalNumber {
                 Ok(Self::new(result_num, result_den))
             },
             Err(OverflowDetected::TierOverflow) => {
-                // UGOD promotion: recompute at i128 using native checked arithmetic (ZASC-compliant)
+                // UGOD promotion: recompute at i128 using native checked arithmetic (FASC-compliant)
                 let (a_num, a_den) = self.extract_i128_pair()?;
                 let (b_num, b_den) = other.extract_i128_pair()?;
                 if b_num == 0 { return Err(OverflowDetected::PrecisionLoss); }
@@ -1729,7 +1699,6 @@ impl RationalNumber {
                     metadata: self.metadata,
                 })
             },
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, den } => {
                 // For I512, use Neg trait (unary minus operator)
                 Ok(Self {
@@ -1777,7 +1746,6 @@ impl fmt::Display for RationalNumber {
                 let den_i128 = den.as_i128();
                 if den_i128 == 1 { write!(f, "{}", num_i128) } else { write!(f, "{}/{}", num_i128, den_i128) }
             },
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, den } => {
                 let num_i128 = num.as_i128();
                 let den_i128 = den.as_i128();
@@ -1833,7 +1801,6 @@ impl PartialEq for RationalNumber {
                 let rhs = I512::from_i256(*b) * I512::from_i256(*ad);
                 lhs == rhs
             },
-            #[cfg(feature = "multi-precision")]
             (RationalStorage::Ultra { num: a, den: ad }, RationalStorage::Ultra { num: b, den: bd }) => {
                 // Cross-multiply: a/ad == b/bd iff a*bd == b*ad
                 // Use I1024 intermediates to prevent overflow
@@ -1872,7 +1839,7 @@ impl PartialEq for RationalNumber {
                     }
                     #[cfg(not(feature = "infinite-precision"))]
                     {
-                        // Without infinite precision, values that don't fit are unequal
+                        // Without BigInt tier, values that don't fit are unequal
                         false
                     }
                 }
@@ -1931,7 +1898,6 @@ impl Ord for RationalNumber {
                 let rhs = *b * *bd;
                 lhs.cmp(&rhs)
             },
-            #[cfg(feature = "multi-precision")]
             (RationalStorage::Ultra { num: a, den: ad }, RationalStorage::Ultra { num: b, den: bd }) => {
                 let lhs = *a * *ad;
                 let rhs = *b * *bd;
@@ -1968,7 +1934,7 @@ impl Ord for RationalNumber {
                     }
                     #[cfg(not(feature = "infinite-precision"))]
                     {
-                        // Without infinite precision, compare what we can
+                        // Without BigInt tier, compare what we can
                         Ordering::Equal // Fallback
                     }
                 }
@@ -2063,7 +2029,6 @@ impl RationalNumber {
             RationalStorage::Huge { num, .. } => *num == 0,
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { num, .. } => num.is_zero(),
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, .. } => num.is_zero(),
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { num, .. } => num == &BigInt::from(0),
@@ -2080,7 +2045,6 @@ impl RationalNumber {
             RationalStorage::Huge { den, .. } => *den == 1,
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { den, .. } => den.as_i128() == 1,
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { den, .. } => den.as_i128() == 1,
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { den, .. } => den == &BigInt::from(1),
@@ -2102,7 +2066,6 @@ impl RationalNumber {
             RationalStorage::Huge { num, den } => *num == 1 && *den == 1,
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { num, den } => num.as_i128() == 1 && den.as_i128() == 1,
-            #[cfg(feature = "multi-precision")]
             RationalStorage::Ultra { num, den } => num.as_i128() == 1 && den.as_i128() == 1,
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { num, den } => num == &BigInt::from(1) && den == &BigInt::from(1),
@@ -2214,7 +2177,6 @@ impl UniversalTieredArithmetic for RationalNumber {
         }
 
         // Tier 7 (Ultra, I512): widen to I512 pair
-        #[cfg(feature = "multi-precision")]
         if tier == 7 {
             let (num, den) = parts.try_as_i512_pair()?;
             return Some(Self::from_i512_pair(num, den));
@@ -2227,7 +2189,7 @@ impl UniversalTieredArithmetic for RationalNumber {
 
     /// Maximum tier supported by RationalNumber (all 7-8 tiers)
     fn max_tier() -> u8 {
-        8 // Full rational arithmetic tier hierarchy including infinite precision
+        8 // Full rational arithmetic tier hierarchy including BigInt
     }
 
     /// RationalNumber domain type for UGOD coordination
@@ -2249,9 +2211,9 @@ impl UniversalTieredArithmetic for RationalNumber {
     fn max_tier_for_profile(profile: DeploymentProfile) -> u8 {
         match profile {
             DeploymentProfile::Embedded => 5,        // Conservative for embedded
-            DeploymentProfile::Balanced => 7,        // Full tiers except infinite
+            DeploymentProfile::Balanced => 7,        // Full tiers except BigInt
             DeploymentProfile::Scientific => 7,      // Full tiers for research
-            DeploymentProfile::Custom => 8,          // Full infinite precision for custom
+            DeploymentProfile::Custom => 8,          // Full tier hierarchy for custom
         }
     }
 }
@@ -2271,7 +2233,7 @@ pub fn symbolic_to_universal_tier(symbolic_tier: u8) -> u8 {
         4 => 3,       // Large(i64) → Universal Tier 3
         5 => 4,       // Huge(i128) → Universal Tier 4
         6 => 5,       // Massive(I256) → Universal Tier 5
-        7 | 8 => 6,   // Ultra(I512) + Infinite(BigInt) → Universal Tier 6
+        7 | 8 => 6,   // I512 + BigInt → Universal Tier 6
         _ => 6,       // Default to max
     }
 }
@@ -2322,7 +2284,6 @@ fn gcd_i512(a: I512, b: I512) -> I512 {
 }
 
 /// GCD for I1024 values using Euclidean algorithm (operates on absolute values)
-#[cfg(feature = "multi-precision")]
 fn gcd_i1024(a: I1024, b: I1024) -> I1024 {
     let mut a = if (a.words[15] as i64) < 0 { -a } else { a };
     let mut b = if (b.words[15] as i64) < 0 { -b } else { b };
@@ -2362,9 +2323,9 @@ mod tests {
         let product = result.unwrap();
         assert_eq!(product.extract_native().try_as_i128().unwrap().0, 16129);
 
-        // multiply_infinite_precision also works, at highest available tier
-        let infinite_result = large_a.multiply_infinite_precision(&large_b);
-        assert!(infinite_result.tier_level() >= 2);  // At least Small tier
+        // multiply_at_max_tier also works, at highest available tier
+        let max_tier_result = large_a.multiply_at_max_tier(&large_b);
+        assert!(max_tier_result.tier_level() >= 2);  // At least Small tier
     }
     
     #[test]

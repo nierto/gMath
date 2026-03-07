@@ -1,7 +1,7 @@
 //! Shadow Types — Relocated from router/shadow/ for hotpath access
 //!
 //! These types are used by RationalNumber and NumberClassifier (both on the
-//! canonical ZASC hotpath). The rest of the shadow system (decision engine,
+//! canonical FASC hotpath). The rest of the shadow system (decision engine,
 //! preservation, materialization) has been archived.
 
 /// Domain classification for precision routing (future-proof for 8 domains)
@@ -14,7 +14,7 @@ pub enum DomainType {
     Decimal = 1,
     /// Balanced ternary (geometric operations)
     Ternary = 2,
-    /// Symbolic rational (infinite precision)
+    /// Symbolic rational (exact a/b)
     Symbolic = 3,
     /// Future domain 4
     Reserved4 = 4,

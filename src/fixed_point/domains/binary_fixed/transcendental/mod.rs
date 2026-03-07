@@ -1,9 +1,9 @@
 //! Transcendental Functions — Fixed-Point Implementations
 //!
-//! 18 transcendental functions across 6 engines, all at 0 ULP via tier N+1 computation.
+//! 18 transcendental functions across 6 engines, computed at tier N+1 for full storage-tier precision.
 //!
 //! Dedicated engines: `exp`, `ln`, `sqrt`, `sin_cos`, `atan`, `pow`.
-//! ZASC-composed: `tan`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `atan2`.
+//! FASC-composed: `tan`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `atan2`.
 //!
 //! | Profile    | Format    | Decimals | ULP |
 //! |------------|-----------|----------|-----|
@@ -69,5 +69,5 @@ pub use atan_tier_n_plus_1::{atan_compute_tier_i256, atan2_compute_tier_i256};
 
 // ln decomposition functions are internal to ln_tier_n_plus_1.rs (not public API)
 
-// traits.rs and exp.rs archived — ZASC uses exp_tier_n_plus_1 directly
+// traits.rs and exp.rs archived — FASC uses exp_tier_n_plus_1 directly
 

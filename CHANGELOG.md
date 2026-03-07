@@ -11,7 +11,7 @@ Initial open-source release.
 
 ### Core
 
-- **ZASC** (Zero-Allocation Stack Computation) pipeline: `LazyExpr` tree builder with operator overloading, thread-local `StackEvaluator` with fixed-size workspace (4KB-64KB)
+- **FASC** (Fixed-Allocation Stack Computation) pipeline: `LazyExpr` tree builder with operator overloading, thread-local `StackEvaluator` with fixed-size workspace (4KB-64KB)
 - **UGOD** (Universal Graceful Overflow Delegation): automatic 6-tier promotion across all domains, with symbolic rational as guaranteed-success fallback
 - **Tier N+1** precision strategy: all transcendentals compute one tier above storage, single downscale at materialization
 - **BinaryCompute chain persistence**: chained transcendentals stay at compute tier throughout, preventing cumulative precision loss
@@ -19,15 +19,15 @@ Initial open-source release.
 
 ### Domains
 
-- **Binary fixed-point**: Q64.64 / Q128.128 / Q256.256 with 0 ULP across all 18 transcendental functions
+- **Binary fixed-point**: Q64.64 / Q128.128 / Q256.256 with 18 transcendental functions via tier N+1 computation
 - **Decimal fixed-point**: exact base-10 arithmetic (0.1 + 0.2 = 0.3), 6-tier UGOD
-- **Symbolic rational**: infinite-precision a/b arithmetic with 7-tier storage hierarchy (i8 to I512)
+- **Symbolic rational**: exact a/b arithmetic with 7-tier storage hierarchy (i8 to I512)
 - **Balanced ternary**: base-3 fixed-point with 6-tier UGOD
 
-### Transcendental Functions (18 total, 0 ULP)
+### Transcendental Functions (18 total)
 
 - **Dedicated algorithms**: exp, ln, sqrt, sin/cos, atan — each with tier N+1 table-driven implementations
-- **ZASC-composed**: tan, pow, asin, acos, atan2, sinh, cosh, tanh, asinh, acosh, atanh
+- **FASC-composed**: tan, pow, asin, acos, atan2, sinh, cosh, tanh, asinh, acosh, atanh
 - **AVX2 SIMD**: Q64.64 multiply hotpath with scalar fallback
 
 ### Mode Routing

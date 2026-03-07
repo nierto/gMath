@@ -1,14 +1,14 @@
 //! 256-bit Integer Arithmetic Foundation
 //! 
 //! PRODUCTION-READY: Core 256-bit integer type supporting the entire transcendental suite
-//! PRECISION: Foundation for 0 ULP arithmetic across all fixed-point operations
+//! PRECISION: I256 intermediate used by Q64.64 tier N+1 computations
 
 use std::ops::{Mul, Shr, Neg};
 use std::convert::From;
 
 /// Custom 256-bit integer type for intermediate calculations
 /// 
-/// CRITICAL: This type is the foundation for 0 ULP precision across all operations
+/// 256-bit signed integer for Q64.64 compute-tier arithmetic
 /// Used by multiplication, division, exponential, and future transcendental functions
 #[derive(Clone, Copy, Debug)]
 pub struct I256 {

@@ -2,11 +2,11 @@
 //!
 //! Core systems shared across all domains:
 //! - `ugod`: Universal Graceful Overflow Delegation (tier management)
-//! - `zasc`: Zero-Allocation Stack Computation (lazy evaluation)
+//! - `fasc`: Fixed-Allocation Stack Computation (lazy evaluation)
 //! - `tier_types`: Universal 6-tier type system shared by all domains
 
 pub mod ugod;
-pub mod zasc;
+pub mod fasc;
 pub mod tier_types;
 
 // UGOD exports
@@ -15,8 +15,8 @@ pub use ugod::{
     DomainType
 };
 
-// ZASC exports
-pub use zasc::{
+// FASC exports
+pub use fasc::{
     LazyExpr,
     gmath,
     ConstantId,

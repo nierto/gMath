@@ -1,9 +1,9 @@
 //! # gMath — Multi-Domain Fixed-Point Arithmetic Library
 //!
-//! Zero-float, pure-Rust, consensus-safe precision arithmetic with 0 ULP
-//! accuracy across 18 transcendental functions on all computation profiles.
+//! Zero-float, pure-Rust, consensus-safe fixed-point arithmetic with
+//! 18 transcendental functions computed at tier N+1 for full storage-tier precision.
 //!
-//! ## Canonical API (ZASC Pipeline)
+//! ## Canonical API (FASC Pipeline)
 //!
 //! ```rust,no_run
 //! use g_math::canonical::{gmath, evaluate};
@@ -14,11 +14,10 @@
 //!
 //! ## Profiles
 //!
-//! Set via `GMATH_PROFILE` environment variable:
-//! - `embedded` — Q64.64, scalar (19 guaranteed decimals)
-//! - `performance` — Q64.64, AVX2-optimized (19 guaranteed decimals)
-//! - `balanced` — Q128.128 (38 guaranteed decimals)
-//! - `scientific` — Q256.256 (77 guaranteed decimals)
+//! Default is `embedded`. Set `GMATH_PROFILE` for higher precision:
+//! - `embedded` (default) — Q64.64, 19 decimals
+//! - `balanced` — Q128.128, 38 decimals
+//! - `scientific` — Q256.256, 77 decimals
 
 // Internal modules
 #[doc(hidden)] pub mod deployment_profiles;

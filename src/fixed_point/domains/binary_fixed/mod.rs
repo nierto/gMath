@@ -1,7 +1,7 @@
 //! Binary Fixed-Point Arithmetic Domain
 //!
-//! ARCHITECTURE: Q64.64 / Q128.128 / Q256.256 binary fixed-point with 0 ULP precision
-//! DOMAIN: Binary fractions, transcendental functions, ultra-precision constants
+//! ARCHITECTURE: Q64.64 / Q128.128 / Q256.256 binary fixed-point arithmetic
+//! DOMAIN: Binary fractions, transcendental functions, wide-integer constants
 
 // UGOD tier types and operations
 pub mod binary_types;
@@ -19,7 +19,7 @@ pub mod i512;
 pub mod i1024;
 pub mod i2048;
 
-// Re-export core binary multiplication (0 ULP, AVX2-accelerated)
+// Re-export core binary multiplication (AVX2-accelerated with scalar fallback)
 pub use binary_multiplication::{
     multiply_binary_i128, multiply_binary_i128_scalar,
 };

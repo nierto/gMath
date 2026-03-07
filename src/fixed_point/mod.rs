@@ -1,10 +1,10 @@
-//! Fixed-Point Arithmetic Module — Canonical ZASC+UGOD Pipeline
+//! Fixed-Point Arithmetic Module — Canonical FASC+UGOD Pipeline
 //!
 //! **Public API**: [`canonical`] module — `use g_math::canonical::{gmath, evaluate};`
 //!
 //! All other modules are internal implementation details.
 
-/// Canonical ZASC entry point — the public API for gMath.
+/// Canonical FASC entry point — the public API for gMath.
 pub mod canonical;
 
 /// Imperative numeric types — `FixedPoint`, `FixedVector`, `FixedMatrix`.

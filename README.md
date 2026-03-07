@@ -1,381 +1,309 @@
-# gMath — Multi-Domain Fixed-Point Arithmetic Library
+# g_math | gMath
 
-Zero-float, pure-Rust, consensus-safe precision arithmetic achieving **0 ULP** accuracy across all 18 transcendental functions on all computation profiles.
+**Author**: Niels Erik Toren
 
-## Why gMath?
+Multi-domain fixed-point arithmetic for Rust.
 
-Most math libraries pick one number representation and accept its limitations. gMath routes each value to its **optimal domain** automatically: decimals stay exact in decimal, fractions stay exact in symbolic, powers of 2 stay exact in binary, and transcendentals compute at double-width precision. The result: **0 ULP** (Units in Last Place) across every operation, every profile.
+`g_math` is a pure-Rust arithmetic crate built around a canonical expression pipeline:
 
-I started building this because I was working on an idea which needed a reliable, robust and preferable precise fixedpoint library in Rust for high throughput. And because I believe that parts of the knowledge we already possess currently sits in the shade of our human comprehension. This is ground - already uncovered - yet to be explored by people and AI, often in close collaboration.
+`gmath(...) -> LazyExpr -> evaluate(...) -> StackValue`
 
-LLMs flipped the script for millions of people - including myself, no longer is technical expertise a barrier to creation, today it can be overcome. AI enables everyone, of every creed and background, to study faster, iterate and prototype continuously and find solutions quicker than ever before. 
+Under that API, the crate routes values and operations across four numeric domains:
 
-I have caused my family considerable stress while developing this library - allnighters and generally obsessively bothering my wife with intricate math insights -  if you wish to help me atone for that, consider donating to any of the addresses I listed at the bottom of this README.
+* Binary fixed-point
+* Decimal fixed-point
+* Balanced ternary fixed-point
+* Symbolic rational
 
-If you are more interested in the development story, I suggest you give my blogpost on it a read on nierto.com. I prioritize delivering this opensource software over finishing the story of how it came to be, so check back in in a fortnight and it will be available.
+It also exposes imperative types such as `FixedPoint`, `FixedVector`, and `FixedMatrix`, but the canonical API is the primary public entry point.
 
-## THE VIBE IS STRONG WITH THIS ONE
+## What g_math is trying to do
 
-Claude helped me provide substance to the vision I had for this library and I am forever grateful that it allowed me to build something that I can now share with the world. It is by no means finished, and there might be flawed, but it is only I and a legion of transformer-based LLMs that built this. All feedback and input is welcome!
+Most numeric systems are good at some things and bad at others.
 
-## Quick Start
+* Binary fixed-point is fast and natural for many low-level operations.
+* Decimal fixed-point is often preferable for decimal-facing arithmetic.
+* Ternary is available as a first-class domain rather than a curiosity.
+* Symbolic rational provides an exact fallback for values that should not be collapsed into an approximation too early.
+
+`g_math` is an attempt to let those domains coexist in one library instead of forcing everything through a single representation.
+
+## Current architecture
+
+### 1. Canonical API
+
+The primary API is the canonical expression pipeline:
 
 ```rust
 use g_math::canonical::{gmath, evaluate};
 
-// Arithmetic — auto-routes to optimal domain
-let sum = evaluate(&(gmath("1.5") + gmath("2.5"))).unwrap();           // 4.0 (exact)
-let product = evaluate(&(gmath("1/3") * gmath("3"))).unwrap();         // 1.0 (exact — symbolic)
-let decimal = evaluate(&(gmath("0.1") + gmath("0.2"))).unwrap();       // 0.3 (exact — decimal domain)
-
-// 18 transcendental functions — all at 0 ULP
-let e = evaluate(&gmath("1.0").exp()).unwrap();                        // 2.7182818284590452353...
-let root2 = evaluate(&gmath("2.0").sqrt()).unwrap();                   // 1.4142135623730950488...
-let pi_sin = evaluate(&gmath("3.14159265358979323846").sin()).unwrap(); // ~0
+let expr = gmath("1.5") + gmath("2.5");
+let value = evaluate(&expr).unwrap();
+println!("{}", value);
 ```
 
-## Runtime Strings
+There is also `gmath_parse(...)` for runtime strings and `LazyExpr::from(...)` for feeding an evaluated value back into a new expression without reparsing.
 
-`gmath()` accepts `&'static str` (string literals) for zero-cost deferred parsing. For runtime/dynamic strings, use `gmath_parse()`:
+### 2. FASC
+
+FASC stands for **Fixed Allocation Stack Computation**.
+
+In practical terms, it means:
+
+* expressions are built as `LazyExpr` trees
+* evaluation is deferred until `evaluate(...)`
+* evaluation runs through a thread-local `StackEvaluator`
+* the evaluator uses a fixed-size value stack and domain-aware dispatch
+
+The important consequence is that the **evaluation engine** is stack-oriented and built around fixed workspace structures rather than a growable runtime evaluator.
+
+This is the path the crate is organized around, and the one new users should start with.
+
+### 3. UGOD — Universal Graceful Overflow Delegation
+
+UGOD is the tiered overflow model.
+
+Each major domain is aligned to a shared tier system. Operations are attempted at the current tier, and when a result cannot be represented there, the computation can promote upward. At the top end, symbolic rational is the exact fallback.
+
+The current universal tier model is:
+
+| Tier | Bits | Binary   | Decimal  | Ternary   | Symbolic  |
+| ---- | ---- | -------- | -------- | --------- | --------- |
+| 1    | 32   | Q16.16   | D16.16   | TQ8.8     | i16/u16   |
+| 2    | 64   | Q32.32   | D32.32   | TQ16.16   | i32/u32   |
+| 3    | 128  | Q64.64   | D64.64   | TQ32.32   | i64/u64   |
+| 4    | 256  | Q128.128 | D128.128 | TQ64.64   | i128/u128 |
+| 5    | 512  | Q256.256 | D256.256 | TQ128.128 | I256/U256 |
+| 6    | 1024 | Q512.512 | D512.512 | TQ256.256 | I512/U512 |
+
+At the architecture level:
+
+* tiers 1-5 promote upward on overflow
+* tier 6 overflows can fall back to rational arithmetic
+* optional unbounded precision can extend symbolic arithmetic beyond the bounded native tiers
+
+The goal is not to avoid overflow by pretending it never happens. The goal is to overflow **gracefully** into a larger or exact representation instead of failing silently.
+
+### 4. Shadow system
+
+`g_math` includes a compact shadow system for preserving exactness metadata alongside approximated values.
+
+The public `CompactShadow` type can store:
+
+* no shadow
+* small rational shadows in progressively larger compact forms (2 to 32 bytes)
+* a full rational shadow (i128/u128 numerator-denominator pair)
+* references to known constants: pi, e, sqrt(2), phi, ln2, ln10, Euler's gamma
+
+This lets an inexact domain value carry a compact rational companion when one exists.
+
+Example idea:
+
+* if a value is stored in a fixed-point domain as an approximation of `1/3`,
+* a compact rational shadow can still preserve that exact fractional identity for later use.
+
+In the current implementation, shadow arithmetic is propagated where possible. It is best understood as **exactness retention infrastructure**, not magical infinite memory.
+
+### 5. Wider-tier transcendental computation
+
+The crate implements 18 transcendental functions:
+
+`exp`, `ln`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `atan`, `atan2`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
+
+The current implementation computes each at a wider tier than the active storage tier and then rounds back down. Because the intermediate has more fractional bits than the storage format can represent, the final rounding step produces the nearest representable value at the storage tier.
+
+The profile mapping is:
+
+| Profile    | Storage   | Compute tier |
+| ---------- | --------- | ------------ |
+| Embedded   | Q64.64    | Q128.128     |
+| Balanced   | Q128.128  | Q256.256     |
+| Scientific | Q256.256  | Q512.512     |
+
+That wider-tier strategy is one of the central design decisions in the crate.
+
+## Profiles
+
+Build profile selection is driven by `GMATH_PROFILE`. The default is **embedded** (Q64.64, 19 decimal digits).
+
+| Profile      | Format    | Storage | Compute | Decimal digits |
+| ------------ | --------- | ------- | ------- | -------------- |
+| `embedded`   | Q64.64    | i128    | I256    | 19             |
+| `balanced`   | Q128.128  | I256    | I512    | 38             |
+| `scientific` | Q256.256  | I512    | I1024   | 77             |
+
+```bash
+cargo build                             # embedded (default)
+GMATH_PROFILE=balanced cargo build      # 38-digit precision
+GMATH_PROFILE=scientific cargo build    # 77-digit precision
+```
+
+**Important**: clear the incremental cache when switching profiles. Each profile compiles entirely different code paths via `cfg` flags. Stale artifacts cause build failures or runtime crashes.
+
+```bash
+rm -rf target/debug/incremental/        # Run BEFORE switching profiles
+GMATH_PROFILE=scientific cargo build    # Now safe to build a different profile
+```
+
+Pre-built lookup tables are checked into the repository. A default build completes in about 2 seconds. To regenerate tables from scratch (about 20 minutes):
+
+```bash
+cargo build --features rebuild-tables
+```
+
+## Feature flags
+
+| Flag | Default | Effect |
+| ---- | ------- | ------ |
+| `infinite-precision` | off | Adds BigInt tier 8 to the symbolic rational domain. Pulls in `num-bigint`, `num-traits`, `num-integer` as runtime dependencies. Without this flag, the rational domain caps at tier 7 (I512 numerator/denominator). |
+| `rebuild-tables` | off | Regenerates all lookup tables (exp, ln, trig) from `build.rs` instead of using the checked-in pre-built tables. Takes about 20 minutes. |
+| `legacy-tests` | off | Enables compilation of legacy test suites from earlier development phases. |
+| `embedded` | off | Selects embedded profile via Cargo feature instead of environment variable. |
+| `balanced` | off | Selects balanced profile via Cargo feature instead of environment variable. |
+| `scientific` | off | Selects scientific profile via Cargo feature instead of environment variable. |
+
+All other arithmetic — including transcendental functions, SIMD acceleration (AVX2 runtime-detected on x86_64), tiered overflow, and I256/I512/I1024 wide integer types — is always compiled. There are no feature gates around core functionality.
+
+## Quick start
+
+Add the crate:
+
+```toml
+[dependencies]
+g_math = "0.1.1"
+```
+
+Basic use:
 
 ```rust
-use g_math::canonical::{gmath, gmath_parse, evaluate, LazyExpr};
+use g_math::canonical::{gmath, evaluate};
 
-// Static strings — zero-cost, parsing deferred until evaluate()
-let a = gmath("1.5");
-
-// Runtime strings — eagerly parsed, full mode routing support
-let user_input = String::from("3.14");
-let b = gmath_parse(&user_input).unwrap();
-
-// Both work identically in expressions
-let result = evaluate(&(a + b)).unwrap();
-
-// Read values from files, databases, user input, etc.
-let values: Vec<String> = vec!["1.1".into(), "2.2".into(), "3.3".into()];
-let mut sum = gmath_parse(&values[0]).unwrap();
-for v in &values[1..] {
-    sum = sum + gmath_parse(v).unwrap();
+fn main() {
+    let expr = (gmath("100") + gmath("50")) / gmath("3");
+    let value = evaluate(&expr).unwrap();
+    println!("{}", value);
 }
-let total = evaluate(&sum).unwrap();
 ```
 
-## The auto:auto Advantage
-
-gMath's default mode (`auto:auto`) combines the strength of four computation domains to deliver results no single domain can match:
-
-```
-Input "0.1"  → Decimal domain  → 0.1 is EXACT (not 0.100000000000000001)
-Input "1/3"  → Symbolic domain → 1/3 is EXACT (infinite precision rational)
-Input "1024" → Binary domain   → power-of-2, exact in binary
-Input "exp()" → Binary compute → Tier N+1 strategy, 0 ULP
-```
-
-Forcing all inputs through a single domain produces **approximate results** — our comprehensive benchmark proves this across 288 mode routing test points:
-
-| Mode | Exact | Approx | Lossy | Why |
-|------|-------|--------|-------|-----|
-| **auto:auto** | **24** | **0** | **0** | Each input routed to its natural domain |
-| symbolic:symbolic | 24 | 0 | 0 | Infinite precision (but no transcendentals) |
-| binary:binary | 17 | 7 | 0 | 1/3 is approximate in binary |
-| decimal:decimal | 14 | 10 | 0 | 1/3 is 0.333...333 (truncated) |
-| ternary:ternary | 20 | 4 | 0 | Ternary representation limits |
-| ternary:decimal | 16 | 8 | 0 | Double conversion loss |
-
-## Canonical API
-
-### Entry Points
+Runtime parsing:
 
 ```rust
-use g_math::canonical::{gmath, gmath_parse, evaluate, LazyExpr};
+use g_math::canonical::{gmath_parse, evaluate};
 
-// Static strings (compile-time literals) — zero-cost, deferred parsing
-let expr = gmath("1.5");
-
-// Runtime strings — eager parsing, returns Result
-let expr = gmath_parse(&some_string)?;
+fn main() {
+    let input = "3.14159265358979323846";
+    let parsed = gmath_parse(input).unwrap();
+    let result = evaluate(&(parsed * gmath("2"))).unwrap();
+    println!("{}", result);
+}
 ```
 
-### Input Formats
-
-gMath recognizes several input syntaxes and routes each to the optimal domain:
-
-| Syntax | Domain | Examples | Description |
-|--------|--------|---------|-------------|
-| `"1/3"`, `"22/7"` | Symbolic | `gmath("1/3")` | Fractions — exact rational arithmetic |
-| `"0.333..."` | Symbolic | `gmath("0.142857...")` | Repeating decimals — converted to exact rational (1/7) |
-| `"0x"`, `"0b"` | Binary | `gmath("0xFF")`, `gmath("0b1010")` | Hex and binary integer literals |
-| `"0t"` | Ternary | `gmath("0t1.5")` | Balanced ternary fixed-point |
-| `"1.5"`, `"0.001"` | Decimal | `gmath("19.99")` | Decimal point — exact in decimal domain |
-| `"pi"`, `"e"`, `"sqrt2"` | Symbolic | `gmath("phi")`, `gmath("ln2")` | Named mathematical constants |
-| `"42"`, `"1024"` | Binary | `gmath("1000000")` | Integers — binary fixed-point |
-
-Named constants: `pi`, `e`, `sqrt2`, `sqrt3`, `phi`, `ln2`, `ln10`, `gamma` (also accepts uppercase and Unicode: `PI`, `π`, `φ`, `√2`, `√3`, `γ`).
-
-### Arithmetic (operator overloading)
-
-```rust
-let a = gmath("1.5") + gmath("2.5");   // Addition
-let b = gmath("3") * gmath("7");       // Multiplication
-let c = gmath("10") - gmath("4");      // Subtraction
-let d = gmath("22") / gmath("7");      // Division
-let e = -gmath("42");                  // Negation
-
-let result = evaluate(&a);  // Triggers computation
-println!("{}", result.unwrap());  // Display with guaranteed decimals
-```
-
-### Transcendental Functions (18 total, 0 ULP)
-
-```rust
-// Exponential family
-gmath("1.0").exp()          // e^x
-gmath("2.0").ln()           // ln(x)
-gmath("2.0").sqrt()         // √x
-gmath("2.0").pow(gmath("3")) // x^y
-
-// Trigonometric
-gmath("0.5").sin()           // sin(x)
-gmath("0.5").cos()           // cos(x)
-gmath("0.5").tan()           // tan(x)
-
-// Inverse trigonometric
-gmath("0.5").atan()          // atan(x)
-gmath("0.5").asin()          // asin(x)
-gmath("0.5").acos()          // acos(x)
-gmath("1.0").atan2(gmath("1.0"))  // atan2(y, x)
-
-// Hyperbolic
-gmath("1.0").sinh()          // sinh(x)
-gmath("1.0").cosh()          // cosh(x)
-gmath("0.5").tanh()          // tanh(x)
-
-// Inverse hyperbolic
-gmath("1.0").asinh()         // asinh(x)
-gmath("2.0").acosh()         // acosh(x)
-gmath("0.5").atanh()         // atanh(x)
-```
-
-### Chaining Results (zero precision loss)
+Feeding values back into the expression system:
 
 ```rust
 use g_math::canonical::{gmath, evaluate, LazyExpr};
 
-// Feed previous results back in — full precision preserved
-let rate = gmath("1.05");
-let mut balance = evaluate(&gmath("1000.00")).unwrap();
-
-for year in 1..=5 {
-    balance = evaluate(&(LazyExpr::from(balance) * gmath("1.05"))).unwrap();
-    println!("Year {}: {}", year, balance);
+fn main() {
+    let year0 = evaluate(&gmath("1000")).unwrap();
+    let year1 = evaluate(&(LazyExpr::from(year0) * gmath("1.05"))).unwrap();
+    println!("{}", year1);
 }
 ```
 
-### Mode Routing (compute:output control)
+## Domain routing and mode control
+
+The crate exposes a compute and output mode system.
+
+You can set modes such as:
+
+* `auto:auto` (default — routes each value to its natural domain)
+* `binary:ternary` (compute in binary, output in ternary)
+* `decimal:symbolic` (compute in decimal, output as symbolic rational)
+
+Available domains: `auto`, `binary`, `decimal`, `symbolic`, `ternary` — any combination as `compute:output`.
+
+Example:
 
 ```rust
 use g_math::canonical::{set_gmath_mode, reset_gmath_mode, gmath, evaluate};
 
-// Force specific compute and output domains
-set_gmath_mode("binary:decimal").unwrap();   // Compute in binary, output as decimal
-let result = evaluate(&(gmath("1.5") + gmath("2.5")));
-
-// Auto compute, specific output format
-set_gmath_mode("auto:ternary").unwrap();     // Best compute domain, ternary output
-
-// Reset to default (recommended)
-reset_gmath_mode();  // Back to auto:auto
-```
-
-Available modes: `auto`, `binary`, `decimal`, `symbolic`, `ternary` — any combination as `compute:output`.
-
-### Result Extraction
-
-```rust
-let val = evaluate(&(gmath("1/3") + gmath("2/3"))).unwrap();
-
-// Display — guaranteed decimals per profile
-println!("{}", val);           // "1.0000000000000000000" (19 digits on embedded)
-
-// Exact rational form
-let rational = val.to_rational().unwrap();
-
-// Decimal string with custom precision
-let s = val.to_decimal_string(10);  // "1.0000000000"
-
-// Domain inspection
-val.domain_type();  // Some(DomainType::Symbolic)
-val.is_error();     // false
-val.tier();         // precision tier (1-8)
-```
-
-### Error Handling
-
-All fallible operations return `Result<_, OverflowDetected>`:
-
-```rust
-use g_math::canonical::{gmath, gmath_parse, evaluate};
-
-match evaluate(&gmath("1.0").ln()) {
-    Ok(value) => println!("{}", value),
-    Err(e) => eprintln!("Error: {:?}", e),
-}
-
-// gmath_parse returns Result too — handles invalid input gracefully
-match gmath_parse("not_a_number") {
-    Ok(expr) => { /* use expr */ },
-    Err(e) => eprintln!("Parse error: {:?}", e),
+fn main() {
+    set_gmath_mode("binary:ternary").unwrap();
+    let value = evaluate(&(gmath("3") + gmath("7"))).unwrap();
+    println!("{}", value);
+    reset_gmath_mode();
 }
 ```
 
-## Precision Profiles
+## Canonical API surface
 
-| Profile | Format | Storage | Compute | Guaranteed Decimals | Transcendentals |
-|---------|--------|---------|---------|--------------------|--------------------|
-| Embedded | Q64.64 | `i128` | `I256` | **19** | 18/18 at 0 ULP |
-| Balanced | Q128.128 | `I256` | `I512` | **38** | 18/18 at 0 ULP |
-| Scientific | Q256.256 | `I512` | `I1024` | **77** | 18/18 at 0 ULP |
+The primary public interface lives in `g_math::canonical`:
 
-Select via environment variable before compilation:
+| Item | Purpose |
+| ---- | ------- |
+| `gmath("...")` | Build a `LazyExpr` from a string literal (deferred parsing) |
+| `gmath_parse(&str)` | Build a `LazyExpr` from a runtime string (eager parsing, returns `Result`) |
+| `evaluate(&LazyExpr)` | Evaluate an expression tree, returns `Result<StackValue, _>` |
+| `LazyExpr` | Expression tree node — supports operator overloading and transcendental methods |
+| `LazyExpr::from(StackValue)` | Feed a previous result back into a new expression |
+| `StackValue` | Domain-tagged result — implements `Display`, carries shadow metadata |
+| `set_gmath_mode("compute:output")` | Set compute and output domain routing |
+| `reset_gmath_mode()` | Reset to `auto:auto` |
 
-```bash
-GMATH_PROFILE=embedded cargo build      # IoT, embedded systems
-GMATH_PROFILE=balanced cargo build      # Web services, general purpose
-GMATH_PROFILE=scientific cargo build    # Research, ultra-precision
-```
+The imperative API (`FixedPoint`, `FixedVector`, `FixedMatrix`) is also available via `g_math::fixed_point` for mutable arithmetic workflows. Transcendentals on `FixedPoint` route through the FASC evaluator internally.
 
-**Important: clear the incremental cache when switching profiles.** Each profile compiles entirely different code paths via `cfg` flags. Rust's incremental compilation cache can retain stale artifacts from the previous profile, causing build failures or crashes at runtime.
+If you are new to the crate, start with `g_math::canonical`.
 
-```bash
-rm -rf target/debug/incremental/    # Run this BEFORE switching profiles
-GMATH_PROFILE=scientific cargo build # Now safe to build a different profile
-```
+## Validation and tests
 
-This is a one-time step per switch — rebuilds within the same profile are fine.
+The published crate includes test suites for:
 
-## Architecture
+* arithmetic sweep validation (4 domains, 4 operations, 60k+ reference points)
+* boundary stress testing
+* compound operations (chained arithmetic, iterative accumulation)
+* domain arithmetic validation
+* error handling
+* FASC ULP validation (18 transcendentals, validated against mpmath at 250+ digit precision)
+* mode routing validation (12 modes x 24 test cases)
+* transcendental ULP validation
 
-### ZASC — Zero-Allocation Stack Computation
-
-Expressions build lazily as trees, then evaluate on a fixed-size stack workspace. No heap allocation on the hot path.
-
-```
-gmath("value") → LazyExpr (tree builder, operator overloading)
-              → StackEvaluator (thread-local, 4KB-64KB workspace)
-              → StackValue (domain-tagged result)
-```
-
-### UGOD — Universal Graceful Overflow Delegation
-
-Automatic tier promotion on overflow. Operations start at the minimum required tier and promote upward as needed:
-
-```
-i8 → i16 → i32 → i64 → i128 → I256 → I512 → Symbolic Rational
-```
-
-Symbolic rational is the guaranteed-success fallback — no operation ever fails silently. For unbounded precision, enable the optional `infinite-precision` feature for BigInt tier 8.
-
-### Tier N+1 Precision Strategy
-
-All transcendentals compute at **one tier above storage**, then downscale:
-
-```
-Embedded:   Q64.64 (i128)  → compute at Q128.128 (I256)  → downscale to i128
-Balanced:   Q128.128 (I256) → compute at Q256.256 (I512)  → downscale to I256
-Scientific: Q256.256 (I512) → compute at Q512.512 (I1024) → downscale to I512
-```
-
-Result: the closest possible fixed-point integer to the true mathematical value — 0 ULP.
-
-### BinaryCompute Chain Persistence
-
-Chained transcendentals like `sin(ln(exp(x)))` stay at compute tier throughout — only one downscale at final materialization, preventing cumulative precision loss.
-
-### Four Computation Domains
-
-| Domain | Best For | Exactness | Example |
-|--------|----------|-----------|---------|
-| **Binary Fixed** | Transcendentals, integers, powers of 2 | 19-77 decimals | `42`, `1024`, `exp(1.0)` |
-| **Decimal Fixed** | Financial, exact decimals | 0 ULP exact | `0.1`, `19.99`, `0.001` |
-| **Balanced Ternary** | Base-3 computation, geometric symmetry | Exact in base 3 | `0t1.0`, `0t0.111` |
-| **Symbolic Rational** | Fractions, repeating decimals, constants | Infinite precision | `1/7`, `0.333...`, `pi` |
-
-## Performance (Q64.64 embedded, x86_64)
-
-| Category | Operation | Throughput | Latency (avg) |
-|----------|-----------|------------|---------------|
-| Arithmetic | binary add | 3.9M ops/s | 255ns |
-| Arithmetic | symbolic add | 4.4M ops/s | 228ns |
-| Arithmetic | decimal mul | 3.6M ops/s | 274ns |
-| Transcendental | exp | 1.0M ops/s | 980ns |
-| Transcendental | sin / cos | 820K ops/s | 1.2us |
-| Transcendental | ln | 1.0M ops/s | 971ns |
-| Transcendental | sqrt | 46K ops/s | 21.7us |
-| Transcendental | atan | 34K ops/s | 29.3us |
-| Mode routing | auto:* | 4.0M ops/s | 246ns |
-
-## Validation
-
-The comprehensive benchmark suite validates across **60,000+ mpmath-verified reference points**:
+Run the comprehensive suite:
 
 ```bash
-GMATH_PROFILE=embedded cargo test --release --test comprehensive_benchmark -- --nocapture --test-threads=1
+cargo test --release --test comprehensive_benchmark -- --nocapture --test-threads=1
 ```
 
-Coverage:
-- **60,860 arithmetic points** across 4 domains x 4 operations (decimal, symbolic, binary, ternary, cross-domain)
-- **16,974 transcendental points** across 18 functions x 1,000+ reference values, validated against mpmath at 250-digit precision
-- **288 mode routing points** across 12 compute:output combinations x 24 test cases
-- **0 lossy results** across all mode combinations — domain limitations produce approximations, never data loss
+This README intentionally avoids broad numerical slogans. Stronger correctness claims belong in a dedicated validation document with exact definitions, scope, corpus size, and methodology.
 
-## Dependencies
+## Design notes
 
-**Zero runtime dependencies** by default. All arithmetic — including 18 transcendental functions — is implemented in pure Rust using native integers and custom wide types (I256, I512, I1024).
+This crate is opinionated.
 
-Optional: enable `--features infinite-precision` to activate BigInt tier 8 (pulls in `num-bigint`, `num-traits`, `num-integer`).
+It does not pretend all arithmetic should collapse into one representation. It does not assume floating point is the only practical route. It tries to preserve exactness when possible, promote gracefully when necessary, and keep the main API compact.
 
-## Build System
+That is the wager.
 
-Pre-built lookup tables are included in the crate — builds complete in **~2 seconds**. No table generation required.
+## Author note
 
-If you want to verify or regenerate the tables from scratch:
+I write software like a builder from first principles, not a committee. This is a library I built because I needed a precise and deterministic fixed-point library.
 
-```bash
-cargo build --features rebuild-tables   # ~20-30 minutes, pure-Rust generation
-```
+Instead of focusing on front-end apps, I prefer to rebuild from first principles keystone libraries so these are future-proof and allow me to build software and paradigms that didn't exist before.
 
-Tables are generated algorithmically by `build.rs` with zero external data files:
+So yes, some of this project carries personal style, philosophy, and a slightly stubborn tone. That is intentional.
 
-- **Pi**: Machin's formula at 580-bit rational precision
-- **Exp/Ln tables**: 3-stage x 1024 entries per tier
-- **Trig coefficients**: Taylor series at arbitrary precision
-- **Prime table**: 1,145 primes up to 10,000 (sieve of Eratosthenes)
+If this crate is useful to you, then use it, stress it, break it, and tell me where it fails. It could contain flaws but I have not found them myself. I validated all operations against mpmath — run the comprehensive test to see for yourself.
 
-## Cross-Platform Determinism
-
-- **Bit-identical** results across all architectures (x86, ARM, RISC-V)
-- **Zero floating-point contamination** — f32/f64 forbidden in all internal logic
-- **Consensus-safe** for blockchain, financial auditing, scientific reproducibility
-
-## Contributing
-
-Contributions are welcome! Fork the repo, create a branch, and open a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code standards, and guidelines.
-
-Bug reports and feature requests go to [GitHub Issues](https://github.com/nierto/gMath/issues).
-
-## Author
-
-Niels Erik Toren
-
-## Support the Project
-
-If gMath is useful to you, consider supporting its single dev by donating:
+If you want to support the work:
 
 | Currency | Address |
 |----------|---------|
 | Bitcoin (BTC) | bc1qwf78fjgapt2gcts4mwf3gnfkclvqgtlg4gpu4d |
-| Ethereum (ETH) | 0xf38b517Dd2005d93E0BDc1e9807665074c5eC731 | nierto.eth |
+| Ethereum (ETH) | 0xf38b517Dd2005d93E0BDc1e9807665074c5eC731 / nierto.eth |
 | Monero (XMR) | 8BPaSoq1pEJH4LgbGNQ92kFJA3oi2frE4igHvdP9Lz2giwhFo2VnNvGT8XABYasjtoVY2Qb3LVHv6CP3qwcJ8UnyRtjWRZ5 |
+
+Please star the project on GitHub if it was useful to you. Thank you sincerely.
+
+I am building this in the middle of life, work, pressure, family, and limited time. That does not make the project weaker. It is the reason it exists at all. We don't do things because they are easy, but because they are hard.
 
 ## Disclaimer
 
@@ -387,7 +315,7 @@ See the license texts for the full legal terms.
 
 Licensed under either of
 
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
+* [Apache License, Version 2.0](LICENSE-APACHE)
+* [MIT License](LICENSE-MIT)
 
 at your option.

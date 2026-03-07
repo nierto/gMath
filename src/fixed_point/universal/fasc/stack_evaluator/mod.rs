@@ -315,7 +315,7 @@ impl StackValue {
             StackValue::BinaryCompute(t, _, _) => *t,
             StackValue::Decimal(t, _, _) => *t,
             StackValue::Ternary(t, _, _) => *t,
-            StackValue::Symbolic(_) => 8, // Symbolic = infinite precision tier
+            StackValue::Symbolic(_) => 8, // Symbolic = rational tier
             StackValue::Error(_) => 0,
         }
     }

@@ -1,7 +1,7 @@
 //! FixedPoint — Copy-able binary fixed-point numeric type for imperative computation.
 //!
 //! Wraps the raw `BinaryStorage` Q-format integer, providing direct arithmetic
-//! operators and transcendental methods (routed through ZASC).
+//! operators and transcendental methods (routed through FASC).
 
 use std::fmt;
 use std::ops::{Add, Sub, Mul, Div, Neg, AddAssign, SubAssign, MulAssign, DivAssign};
@@ -9,7 +9,7 @@ use std::ops::{Add, Sub, Mul, Div, Neg, AddAssign, SubAssign, MulAssign, DivAssi
 use crate::fixed_point::canonical::{
     LazyExpr, StackValue, evaluate, gmath_parse, CompactShadow,
 };
-use crate::fixed_point::universal::zasc::stack_evaluator::BinaryStorage;
+use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 #[cfg(table_format = "q64_64")]
 use crate::fixed_point::multiply_binary_i128;
@@ -60,7 +60,7 @@ const MAX_DECIMAL_DIGITS: usize = 77;
 /// - `scientific` (Q256.256): 64 bytes (I512)
 ///
 /// Arithmetic is performed directly on the raw Q-format values.
-/// Transcendentals route through ZASC for 0-ULP precision.
+/// Transcendentals route through FASC at tier N+1.
 #[derive(Clone, Copy, Debug)]
 pub struct FixedPoint {
     raw: BinaryStorage,
@@ -252,9 +252,9 @@ impl FixedPoint {
 
     /// Parse from a decimal string (e.g., "3.14159").
     ///
-    /// Routes through ZASC with forced binary mode for correct conversion.
+    /// Routes through FASC with forced binary mode for correct conversion.
     pub fn from_str(s: &str) -> Self {
-        use crate::fixed_point::universal::zasc::mode;
+        use crate::fixed_point::universal::fasc::mode;
 
         // Temporarily set binary:binary mode to force binary domain parsing
         let old_mode = mode::get_mode();
@@ -273,7 +273,7 @@ impl FixedPoint {
     }
 
     // ========================================================================
-    // Transcendentals — route through ZASC for 0-ULP precision
+    // Transcendentals — route through FASC at tier N+1
     // ========================================================================
 
     /// e^x
@@ -419,7 +419,7 @@ impl Default for FixedPoint {
 }
 
 // ============================================================================
-// Arithmetic operators — direct Q-format integer ops (no ZASC overhead)
+// Arithmetic operators — direct Q-format integer ops (no FASC overhead)
 // ============================================================================
 
 impl Add for FixedPoint {

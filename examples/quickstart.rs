@@ -1,4 +1,4 @@
-//! gMath Quickstart — Zero-float fixed-point arithmetic with 0 ULP precision
+//! gMath Quickstart — Zero-float fixed-point arithmetic
 //!
 //! Run: GMATH_PROFILE=embedded cargo run --example quickstart
 
@@ -15,7 +15,7 @@ fn main() {
     println!("7 * 6      = {}", evaluate(&product).unwrap());
     println!("150 / 3    = {}", evaluate(&compound).unwrap());
 
-    // ── Transcendental functions (all 18, all 0 ULP) ────────────────────
+    // ── Transcendental functions (18 total, tier N+1 computation) ───────
     let e       = evaluate(&gmath("1").exp()).unwrap();       // e^1
     let ln2     = evaluate(&gmath("2").ln()).unwrap();        // ln(2)
     let sqrt2   = evaluate(&gmath("2").sqrt()).unwrap();      // sqrt(2)

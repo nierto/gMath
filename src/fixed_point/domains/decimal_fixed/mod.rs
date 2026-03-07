@@ -2,7 +2,7 @@
 //!
 //! DOMAIN-SPECIFIC: Decimal arithmetic components separated from binary domain
 //! ARCHITECTURE: D128/D256/D512 integer types optimized for base-10 operations
-//! PRECISION: Powers of 10 scaling with 0-ULP decimal arithmetic
+//! PRECISION: Powers of 10 scaling for exact decimal arithmetic
 
 // Core DecimalFixed implementation (public API: DecimalFixed, Currency)
 pub mod decimal_fixed;
@@ -26,7 +26,7 @@ pub use decimal_fixed::{
     Currency, HighPrecisionCurrency, ParseError, compile_time_power_of_10
 };
 
-// Universal 6-tier decimal types for ZASC + UGOD
+// Universal 6-tier decimal types for FASC + UGOD
 pub use decimal_types::{
     DecimalRaw, DecimalValueTiered, UniversalDecimalTiered,
     DecimalTier1 as DecimalTierType1, DecimalTier2 as DecimalTierType2,

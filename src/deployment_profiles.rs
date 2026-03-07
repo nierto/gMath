@@ -1,4 +1,4 @@
-//! Deployment profile definitions for the ZASC+UGOD multi-domain architecture
+//! Deployment profile definitions for the FASC+UGOD multi-domain architecture
 
 /// Deployment profiles with precise precision limits
 ///

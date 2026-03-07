@@ -964,7 +964,7 @@ struct TranscendentalResult {
 #[cfg(table_format = "q64_64")]
 mod trans_q64_64 {
     use super::*;
-    include!("data/zasc_ulp_refs_q64_64.rs");
+    include!("data/fasc_ulp_refs_q64_64.rs");
 
     fn eval_unary(input: &'static str, expected: i128, f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
         let expr = f(gmath_safe(input));
@@ -1008,24 +1008,24 @@ mod trans_q64_64 {
 
     pub fn run() -> Vec<TranscendentalResult> {
         vec![
-            run_unary("exp",   ZASC_EXP_REFS,   5, 0, LazyExpr::exp),
-            run_unary("ln",    ZASC_LN_REFS,    5, 0, LazyExpr::ln),
-            run_unary("sqrt",  ZASC_SQRT_REFS,  5, 0, LazyExpr::sqrt),
-            run_unary("sin",   ZASC_SIN_REFS,   5, 0, LazyExpr::sin),
-            run_unary("cos",   ZASC_COS_REFS,   5, 0, LazyExpr::cos),
-            run_unary("tan",   ZASC_TAN_REFS,   5, 0, LazyExpr::tan),
-            run_unary("atan",  ZASC_ATAN_REFS,  5, 0, LazyExpr::atan),
-            run_unary("asin",  ZASC_ASIN_REFS,  5, 0, LazyExpr::asin),
-            run_unary("acos",  ZASC_ACOS_REFS,  5, 0, LazyExpr::acos),
-            run_unary("sinh",  ZASC_SINH_REFS,  5, 0, LazyExpr::sinh),
-            run_unary("cosh",  ZASC_COSH_REFS,  5, 0, LazyExpr::cosh),
-            run_unary("tanh",  ZASC_TANH_REFS,  5, 0, LazyExpr::tanh),
-            run_unary("asinh", ZASC_ASINH_REFS, 5, 0, LazyExpr::asinh),
-            run_unary("acosh", ZASC_ACOSH_REFS, 5, 0, LazyExpr::acosh),
-            run_unary("atanh", ZASC_ATANH_REFS, 5, 0, LazyExpr::atanh),
-            run_binary_fn("atan2",    ZASC_ATAN2_REFS,          5, |a, b| a.atan2(b)),
-            run_binary_fn("pow_int",  ZASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b)),
-            run_binary_fn("pow_frac", ZASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b)),
+            run_unary("exp",   FASC_EXP_REFS,   5, 0, LazyExpr::exp),
+            run_unary("ln",    FASC_LN_REFS,    5, 0, LazyExpr::ln),
+            run_unary("sqrt",  FASC_SQRT_REFS,  5, 0, LazyExpr::sqrt),
+            run_unary("sin",   FASC_SIN_REFS,   5, 0, LazyExpr::sin),
+            run_unary("cos",   FASC_COS_REFS,   5, 0, LazyExpr::cos),
+            run_unary("tan",   FASC_TAN_REFS,   5, 0, LazyExpr::tan),
+            run_unary("atan",  FASC_ATAN_REFS,  5, 0, LazyExpr::atan),
+            run_unary("asin",  FASC_ASIN_REFS,  5, 0, LazyExpr::asin),
+            run_unary("acos",  FASC_ACOS_REFS,  5, 0, LazyExpr::acos),
+            run_unary("sinh",  FASC_SINH_REFS,  5, 0, LazyExpr::sinh),
+            run_unary("cosh",  FASC_COSH_REFS,  5, 0, LazyExpr::cosh),
+            run_unary("tanh",  FASC_TANH_REFS,  5, 0, LazyExpr::tanh),
+            run_unary("asinh", FASC_ASINH_REFS, 5, 0, LazyExpr::asinh),
+            run_unary("acosh", FASC_ACOSH_REFS, 5, 0, LazyExpr::acosh),
+            run_unary("atanh", FASC_ATANH_REFS, 5, 0, LazyExpr::atanh),
+            run_binary_fn("atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b)),
+            run_binary_fn("pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b)),
+            run_binary_fn("pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b)),
         ]
     }
 }
@@ -1039,7 +1039,7 @@ fn run_transcendental_validation() -> Vec<TranscendentalResult> {
 mod trans_q128_128 {
     use super::*;
     use g_math::fixed_point::domains::binary_fixed::i256::I256;
-    include!("data/zasc_ulp_refs_q128_128.rs");
+    include!("data/fasc_ulp_refs_q128_128.rs");
 
     fn ulp_i256(actual: I256, expected: I256) -> u128 {
         let diff = actual - expected;
@@ -1091,24 +1091,24 @@ mod trans_q128_128 {
 
     pub fn run() -> Vec<TranscendentalResult> {
         vec![
-            run_unary("exp",   ZASC_EXP_REFS,   5, 0, LazyExpr::exp),
-            run_unary("ln",    ZASC_LN_REFS,    5, 0, LazyExpr::ln),
-            run_unary("sqrt",  ZASC_SQRT_REFS,  5, 0, LazyExpr::sqrt),
-            run_unary("sin",   ZASC_SIN_REFS,   5, 0, LazyExpr::sin),
-            run_unary("cos",   ZASC_COS_REFS,   5, 0, LazyExpr::cos),
-            run_unary("tan",   ZASC_TAN_REFS,   5, 0, LazyExpr::tan),
-            run_unary("atan",  ZASC_ATAN_REFS,  5, 0, LazyExpr::atan),
-            run_unary("asin",  ZASC_ASIN_REFS,  5, 0, LazyExpr::asin),
-            run_unary("acos",  ZASC_ACOS_REFS,  5, 0, LazyExpr::acos),
-            run_unary("sinh",  ZASC_SINH_REFS,  5, 0, LazyExpr::sinh),
-            run_unary("cosh",  ZASC_COSH_REFS,  5, 0, LazyExpr::cosh),
-            run_unary("tanh",  ZASC_TANH_REFS,  5, 0, LazyExpr::tanh),
-            run_unary("asinh", ZASC_ASINH_REFS, 5, 0, LazyExpr::asinh),
-            run_unary("acosh", ZASC_ACOSH_REFS, 5, 0, LazyExpr::acosh),
-            run_unary("atanh", ZASC_ATANH_REFS, 5, 530, LazyExpr::atanh),
-            run_binary_fn("atan2",    ZASC_ATAN2_REFS,          5, |a, b| a.atan2(b)),
-            run_binary_fn("pow_int",  ZASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b)),
-            run_binary_fn("pow_frac", ZASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b)),
+            run_unary("exp",   FASC_EXP_REFS,   5, 0, LazyExpr::exp),
+            run_unary("ln",    FASC_LN_REFS,    5, 0, LazyExpr::ln),
+            run_unary("sqrt",  FASC_SQRT_REFS,  5, 0, LazyExpr::sqrt),
+            run_unary("sin",   FASC_SIN_REFS,   5, 0, LazyExpr::sin),
+            run_unary("cos",   FASC_COS_REFS,   5, 0, LazyExpr::cos),
+            run_unary("tan",   FASC_TAN_REFS,   5, 0, LazyExpr::tan),
+            run_unary("atan",  FASC_ATAN_REFS,  5, 0, LazyExpr::atan),
+            run_unary("asin",  FASC_ASIN_REFS,  5, 0, LazyExpr::asin),
+            run_unary("acos",  FASC_ACOS_REFS,  5, 0, LazyExpr::acos),
+            run_unary("sinh",  FASC_SINH_REFS,  5, 0, LazyExpr::sinh),
+            run_unary("cosh",  FASC_COSH_REFS,  5, 0, LazyExpr::cosh),
+            run_unary("tanh",  FASC_TANH_REFS,  5, 0, LazyExpr::tanh),
+            run_unary("asinh", FASC_ASINH_REFS, 5, 0, LazyExpr::asinh),
+            run_unary("acosh", FASC_ACOSH_REFS, 5, 0, LazyExpr::acosh),
+            run_unary("atanh", FASC_ATANH_REFS, 5, 530, LazyExpr::atanh),
+            run_binary_fn("atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b)),
+            run_binary_fn("pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b)),
+            run_binary_fn("pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b)),
         ]
     }
 }
@@ -1122,7 +1122,7 @@ fn run_transcendental_validation() -> Vec<TranscendentalResult> {
 mod trans_q256_256 {
     use super::*;
     use g_math::fixed_point::domains::binary_fixed::i512::I512;
-    include!("data/zasc_ulp_refs_q256_256.rs");
+    include!("data/fasc_ulp_refs_q256_256.rs");
 
     fn ulp_i512(actual: I512, expected: I512) -> u128 {
         let diff = actual - expected;
@@ -1174,24 +1174,24 @@ mod trans_q256_256 {
 
     pub fn run() -> Vec<TranscendentalResult> {
         vec![
-            run_unary("exp",   ZASC_EXP_REFS,   5, 0, LazyExpr::exp),
-            run_unary("ln",    ZASC_LN_REFS,    5, 0, LazyExpr::ln),
-            run_unary("sqrt",  ZASC_SQRT_REFS,  5, 0, LazyExpr::sqrt),
-            run_unary("sin",   ZASC_SIN_REFS,   5, 0, LazyExpr::sin),
-            run_unary("cos",   ZASC_COS_REFS,   5, 0, LazyExpr::cos),
-            run_unary("tan",   ZASC_TAN_REFS,  15, 0, LazyExpr::tan),
-            run_unary("atan",  ZASC_ATAN_REFS,  5, 0, LazyExpr::atan),
-            run_unary("asin",  ZASC_ASIN_REFS,  5, 0, LazyExpr::asin),
-            run_unary("acos",  ZASC_ACOS_REFS,  5, 0, LazyExpr::acos),
-            run_unary("sinh",  ZASC_SINH_REFS,  5, 0, LazyExpr::sinh),
-            run_unary("cosh",  ZASC_COSH_REFS,  5, 0, LazyExpr::cosh),
-            run_unary("tanh",  ZASC_TANH_REFS,  5, 0, LazyExpr::tanh),
-            run_unary("asinh", ZASC_ASINH_REFS, 5, 0, LazyExpr::asinh),
-            run_unary("acosh", ZASC_ACOSH_REFS, 5, 0, LazyExpr::acosh),
-            run_unary("atanh", ZASC_ATANH_REFS, 5, 530, LazyExpr::atanh),
-            run_binary_fn("atan2",    ZASC_ATAN2_REFS,          5, |a, b| a.atan2(b)),
-            run_binary_fn("pow_int",  ZASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b)),
-            run_binary_fn("pow_frac", ZASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b)),
+            run_unary("exp",   FASC_EXP_REFS,   5, 0, LazyExpr::exp),
+            run_unary("ln",    FASC_LN_REFS,    5, 0, LazyExpr::ln),
+            run_unary("sqrt",  FASC_SQRT_REFS,  5, 0, LazyExpr::sqrt),
+            run_unary("sin",   FASC_SIN_REFS,   5, 0, LazyExpr::sin),
+            run_unary("cos",   FASC_COS_REFS,   5, 0, LazyExpr::cos),
+            run_unary("tan",   FASC_TAN_REFS,  15, 0, LazyExpr::tan),
+            run_unary("atan",  FASC_ATAN_REFS,  5, 0, LazyExpr::atan),
+            run_unary("asin",  FASC_ASIN_REFS,  5, 0, LazyExpr::asin),
+            run_unary("acos",  FASC_ACOS_REFS,  5, 0, LazyExpr::acos),
+            run_unary("sinh",  FASC_SINH_REFS,  5, 0, LazyExpr::sinh),
+            run_unary("cosh",  FASC_COSH_REFS,  5, 0, LazyExpr::cosh),
+            run_unary("tanh",  FASC_TANH_REFS,  5, 0, LazyExpr::tanh),
+            run_unary("asinh", FASC_ASINH_REFS, 5, 0, LazyExpr::asinh),
+            run_unary("acosh", FASC_ACOSH_REFS, 5, 0, LazyExpr::acosh),
+            run_unary("atanh", FASC_ATANH_REFS, 5, 530, LazyExpr::atanh),
+            run_binary_fn("atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b)),
+            run_binary_fn("pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b)),
+            run_binary_fn("pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b)),
         ]
     }
 }

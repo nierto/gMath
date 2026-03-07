@@ -1,7 +1,7 @@
-//! Domain Arithmetic UGOD-ZASC Validation Suite
+//! Domain Arithmetic UGOD-FASC Validation Suite
 //!
 //! Validates basic arithmetic operations (add, sub, mul, div) across ALL domains
-//! and ALL UGOD tiers through the full ZASC pipeline, with performance profiling.
+//! and ALL UGOD tiers through the full FASC pipeline, with performance profiling.
 //!
 //! Domains tested:
 //! - Binary:       Integer inputs → as_binary_storage() → ULP compare
@@ -24,7 +24,7 @@ use std::time::Instant;
 // ════════════════════════════════════════════════════════════════════
 
 /// Build a LazyExpr from an input string, correctly handling negative values.
-/// Mirrors gmath_safe from zasc_ulp_validation.rs.
+/// Mirrors gmath_safe from fasc_ulp_validation.rs.
 fn gmath_safe(input: &'static str) -> LazyExpr {
     if input.starts_with('-') {
         let positive: &'static str = unsafe {
@@ -72,7 +72,7 @@ fn rationals_equal(
     }
 }
 
-/// ULP statistics tracker (reused from zasc_ulp_validation pattern).
+/// ULP statistics tracker (reused from fasc_ulp_validation pattern).
 struct UlpStats {
     name: String,
     max_ulp: u128,
@@ -397,7 +397,7 @@ const ACTIVE_PROFILE: &str = "Q256.256";
 // Decimal domain tests (all profiles — cross-multiply rational compare)
 // ════════════════════════════════════════════════════════════════════
 
-// Decimal arithmetic through ZASC: result may be Decimal or Symbolic.
+// Decimal arithmetic through FASC: result may be Decimal or Symbolic.
 // Cross-multiplication handles unreduced fractions (40/10 == 4/1).
 // Mixed decimal places may route through rational (→ PrecisionLimit).
 // Known issues:

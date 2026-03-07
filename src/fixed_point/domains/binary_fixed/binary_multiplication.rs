@@ -166,7 +166,7 @@ impl UniversalBinaryFixed {
 // RAW Q64.64 MULTIPLY: Transcendental hotpath (NOT UGOD-managed)
 // ============================================================================
 
-/// Multiply two I128 binary fixed-point values with 0 ULP precision
+/// Multiply two Q64.64 binary fixed-point values using I256 intermediate to prevent truncation
 ///
 /// Auto-detecting SIMD acceleration with guaranteed fallback to scalar implementation.
 #[inline(always)]
@@ -186,7 +186,7 @@ pub fn multiply_binary_i128(a: i128, b: i128) -> i128 {
     }
 }
 
-/// Scalar implementation with 0 ULP precision guarantee
+/// Scalar implementation using I256 intermediate
 ///
 /// Reference implementation, also used as SIMD equivalence baseline.
 #[inline(always)]
@@ -205,7 +205,7 @@ pub fn multiply_binary_i128_scalar(a: i128, b: i128) -> i128 {
     }
 }
 
-/// AVX2-accelerated multiplication with identical 0 ULP precision
+/// AVX2-accelerated multiplication using 256-bit SIMD registers
 ///
 /// CRITICAL: Must produce bit-identical results to multiply_binary_i128_scalar.
 #[cfg(target_arch = "x86_64")]
