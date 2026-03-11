@@ -69,6 +69,32 @@ The current API is scalar — one expression at a time. A batch API that process
 
 If demand materializes for 4-decimal-digit fixed-point (retro gamedev, very constrained embedded), a `minimal` profile using Q16.16 (i32 storage, i64 compute) could be added. The pattern established by the compact profile would make this straightforward. Deferred because the value proposition at 4 decimals is thin — most users needing Q16.16 hand-roll it in 20 lines.
 
+### Imperative geometry methods — UGOD + FASC integration
+
+gNode's g_math integration (0.1.1) required an extension trait (`gmath_ext.rs`) to cover geometry methods that the imperative `FixedPoint`/`FixedVector`/`FixedMatrix` types don't natively provide. These should be upstreamed into g_math as first-class UGOD-dispatched, FASC-computed methods — following the same 3-tier pattern as the binary transcendentals.
+
+**Methods to upstream** (currently in gNode's `gmath_ext.rs`, ~300 LOC):
+
+| Method | Type | Current impl | Target |
+| ------ | ---- | ------------ | ------ |
+| `square()` | FixedPoint | `self * self` | Tier 1 UGOD (inline) |
+| `reciprocal()` | FixedPoint | `one() / self` | FASC BinaryCompute chain |
+| `powi(i32)` | FixedPoint | binary exponentiation loop | FASC BinaryCompute chain |
+| `euclidean_distance()` | FixedVector | sum-of-squares + sqrt | FASC chain (compute at Q128.128, single downscale) |
+| `manhattan_distance()` | FixedVector | sum-of-abs | Tier 1 UGOD (no upscale needed) |
+| `ensure_normalized()` | FixedVector | clamp 0.0–1.0 per element | Tier 1 UGOD |
+| `from_f32_slice()` | FixedMatrix | loop + from_f32 | convenience constructor |
+| `mul_vector()` | FixedMatrix | dot-product per row | FASC chain (accumulate at Q128.128) |
+
+**Why FASC matters here**: `euclidean_distance()` and `mul_vector()` accumulate intermediate products. Without FASC, each multiply-then-add introduces a rounding boundary. With BinaryCompute chain persistence, the entire sum-of-squares computation stays at Q128.128 and only rounds once at materialization — identical to how transcendentals work today.
+
+**Tier mapping** (following existing transcendental pattern):
+- Tier 1 (UGOD inline): `square`, `manhattan_distance`, `ensure_normalized` — no precision benefit from upscaling
+- Tier 2 (FASC BinaryCompute): `reciprocal`, `powi`, `euclidean_distance`, `mul_vector` — benefit from compute-tier intermediate precision
+- Convenience: `from_f32_slice` — no arithmetic, just construction
+
+**Estimated effort**: ~800 lines (methods + UGOD dispatch + FASC wiring + ULP validation tests against mpmath).
+
 ### Public API stabilization
 
 Pre-1.0 cleanup: audit public exports, ensure `StackValue` methods are sufficient for all extraction needs, consider whether `FixedPoint`/`FixedVector`/`FixedMatrix` should remain public or be feature-gated.
