@@ -721,6 +721,25 @@ pub fn cos_compute_tier_i256(x: I256) -> I256 {
     cos_q128_128_for_embedded(x)
 }
 
+/// Fused sin+cos at compute tier (single shared range reduction).
+/// Returns (sin, cos) — saves one range reduction vs calling sin + cos separately.
+#[cfg(table_format = "q256_256")]
+pub fn sincos_compute_tier_i1024(x: I1024) -> (I1024, I1024) {
+    sincos_q512_512(x)
+}
+
+/// Fused sin+cos at compute tier for balanced profile (Q256.256 on I512).
+#[cfg(table_format = "q128_128")]
+pub fn sincos_compute_tier_i512(x: I512) -> (I512, I512) {
+    sincos_q256_256_impl(x)
+}
+
+/// Fused sin+cos at compute tier for embedded profile (Q128.128 on I256).
+#[cfg(table_format = "q64_64")]
+pub fn sincos_compute_tier_i256(x: I256) -> (I256, I256) {
+    sincos_q128_128_impl(x)
+}
+
 // ============================================================================
 // CROSS-PROFILE IMPLEMENTATIONS (tier N+1 compute functions)
 // ============================================================================

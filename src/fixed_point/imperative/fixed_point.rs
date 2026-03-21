@@ -10,6 +10,7 @@ use crate::fixed_point::canonical::{
     LazyExpr, StackValue, evaluate, gmath_parse, CompactShadow,
 };
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+pub use crate::fixed_point::core_types::errors::OverflowDetected;
 
 #[cfg(table_format = "q64_64")]
 use crate::fixed_point::multiply_binary_i128;
@@ -309,20 +310,73 @@ impl FixedPoint {
 
     /// x^y = exp(y * ln(x))
     pub fn pow(self, exponent: Self) -> Self {
-        let sv1 = self.to_stack_value();
-        let sv2 = exponent.to_stack_value();
-        let expr = LazyExpr::from(sv1).pow(LazyExpr::from(sv2));
-        let result = evaluate(&expr).expect("pow failed");
-        Self::from_stack_value(result)
+        self.try_pow(exponent).expect("pow: overflow or domain error")
     }
 
     /// atan2(self=y, x) — angle of point (x, y)
     pub fn atan2(self, x: Self) -> Self {
+        self.try_atan2(x).expect("atan2 failed")
+    }
+
+    // ========================================================================
+    // UGOD-aware try_* transcendentals — return Result instead of panicking
+    // ========================================================================
+
+    /// Fallible e^x — returns `Err(TierOverflow)` if result exceeds storage tier.
+    pub fn try_exp(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::exp) }
+    /// Fallible ln(x) — returns `Err(DomainError)` if x <= 0.
+    pub fn try_ln(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::ln) }
+    /// Fallible sqrt(x) — returns `Err(DomainError)` if x < 0.
+    pub fn try_sqrt(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::sqrt) }
+    /// Fallible sin(x).
+    pub fn try_sin(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::sin) }
+    /// Fallible cos(x).
+    pub fn try_cos(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::cos) }
+    /// Fused sin+cos — single shared range reduction at compute tier.
+    /// Returns (sin(x), cos(x)). More efficient than separate try_sin + try_cos.
+    pub fn try_sincos(self) -> Result<(Self, Self), OverflowDetected> {
+        use super::linalg::{upscale_to_compute, round_to_storage, sincos_at_compute_tier};
+        let compute_val = upscale_to_compute(self.raw());
+        let (sin_c, cos_c) = sincos_at_compute_tier(compute_val);
+        Ok((Self::from_raw(round_to_storage(sin_c)), Self::from_raw(round_to_storage(cos_c))))
+    }
+    /// Fallible tan(x).
+    pub fn try_tan(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::tan) }
+    /// Fallible atan(x).
+    pub fn try_atan(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::atan) }
+    /// Fallible asin(x) — returns `Err(DomainError)` if |x| > 1.
+    pub fn try_asin(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::asin) }
+    /// Fallible acos(x) — returns `Err(DomainError)` if |x| > 1.
+    pub fn try_acos(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::acos) }
+    /// Fallible sinh(x).
+    pub fn try_sinh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::sinh) }
+    /// Fallible cosh(x).
+    pub fn try_cosh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::cosh) }
+    /// Fallible tanh(x).
+    pub fn try_tanh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::tanh) }
+    /// Fallible asinh(x).
+    pub fn try_asinh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::asinh) }
+    /// Fallible acosh(x) — returns `Err(DomainError)` if x < 1.
+    pub fn try_acosh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::acosh) }
+    /// Fallible atanh(x) — returns `Err(DomainError)` if |x| >= 1.
+    pub fn try_atanh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::atanh) }
+
+    /// Fallible x^y = exp(y * ln(x)).
+    pub fn try_pow(self, exponent: Self) -> Result<Self, OverflowDetected> {
+        let sv1 = self.to_stack_value();
+        let sv2 = exponent.to_stack_value();
+        let expr = LazyExpr::from(sv1).pow(LazyExpr::from(sv2));
+        let result = evaluate(&expr)?;
+        Self::try_from_stack_value(result)
+    }
+
+    /// Fallible atan2(self=y, x).
+    pub fn try_atan2(self, x: Self) -> Result<Self, OverflowDetected> {
         let sv_y = self.to_stack_value();
         let sv_x = x.to_stack_value();
         let expr = LazyExpr::from(sv_y).atan2(LazyExpr::from(sv_x));
-        let result = evaluate(&expr).expect("atan2 failed");
-        Self::from_stack_value(result)
+        let result = evaluate(&expr)?;
+        Self::try_from_stack_value(result)
     }
 
     // ========================================================================
@@ -335,25 +389,33 @@ impl FixedPoint {
     }
 
     fn from_stack_value(sv: StackValue) -> Self {
+        Self::try_from_stack_value(sv).expect("FixedPoint: domain conversion failed")
+    }
+
+    fn try_from_stack_value(sv: StackValue) -> Result<Self, OverflowDetected> {
         match sv.as_binary_storage() {
-            Some(raw) => Self { raw },
+            Some(raw) => Ok(Self { raw }),
             None => {
                 // Non-binary domain — force conversion by adding binary zero
                 let zero_sv = StackValue::Binary(STORAGE_TIER, Self::ZERO.raw, CompactShadow::None);
                 let expr = LazyExpr::from(sv) + LazyExpr::from(zero_sv);
-                let result = evaluate(&expr).expect("binary domain conversion failed");
-                Self {
-                    raw: result.as_binary_storage().expect("expected binary after conversion"),
-                }
+                let result = evaluate(&expr)?;
+                result.as_binary_storage()
+                    .map(|raw| Self { raw })
+                    .ok_or(OverflowDetected::InvalidInput)
             }
         }
     }
 
     fn apply_unary(self, f: fn(LazyExpr) -> LazyExpr) -> Self {
+        self.try_apply_unary(f).expect("transcendental: overflow or domain error")
+    }
+
+    fn try_apply_unary(self, f: fn(LazyExpr) -> LazyExpr) -> Result<Self, OverflowDetected> {
         let sv = self.to_stack_value();
         let expr = f(LazyExpr::from(sv));
-        let result = evaluate(&expr).expect("transcendental evaluation failed");
-        Self::from_stack_value(result)
+        let result = evaluate(&expr)?;
+        Self::try_from_stack_value(result)
     }
 
     /// Shift a non-negative mantissa into Q-format raw storage.

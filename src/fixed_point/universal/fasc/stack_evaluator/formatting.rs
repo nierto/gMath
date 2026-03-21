@@ -182,7 +182,11 @@ pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String 
         let integer_part = abs_val / divisor;
         let fractional_part = abs_val % divisor;
         let sign = if is_negative { "-" } else { "" };
-        format!("{}{}.{}", sign, i256_to_decimal_string(integer_part), i256_to_padded_decimal_string(fractional_part, dp))
+        if dp == 0 {
+            format!("{}{}", sign, i256_to_decimal_string(integer_part))
+        } else {
+            format!("{}{}.{}", sign, i256_to_decimal_string(integer_part), i256_to_padded_decimal_string(fractional_part, dp))
+        }
     }
 
     #[cfg(table_format = "q128_128")]
@@ -194,7 +198,11 @@ pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String 
         let integer_part = abs_val / divisor;
         let fractional_part = abs_val % divisor;
         let sign = if is_negative { "-" } else { "" };
-        format!("{}{}.{}", sign, i256_to_decimal_string(integer_part), i256_to_padded_decimal_string(fractional_part, dp))
+        if dp == 0 {
+            format!("{}{}", sign, i256_to_decimal_string(integer_part))
+        } else {
+            format!("{}{}.{}", sign, i256_to_decimal_string(integer_part), i256_to_padded_decimal_string(fractional_part, dp))
+        }
     }
 
     #[cfg(table_format = "q256_256")]
@@ -209,7 +217,11 @@ pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String 
             let integer_part = abs_val / divisor;
             let fractional_part = abs_val % divisor;
             let sign = if is_negative { "-" } else { "" };
-            format!("{}{}.{}", sign, i512_to_decimal_string(integer_part), i512_to_padded_decimal_string(fractional_part, dp))
+            if dp == 0 {
+                format!("{}{}", sign, i512_to_decimal_string(integer_part))
+            } else {
+                format!("{}{}.{}", sign, i512_to_decimal_string(integer_part), i512_to_padded_decimal_string(fractional_part, dp))
+            }
         } else {
             // dp > 154: promote to I1024
             let v1024 = I1024::from_i512(abs_val);
@@ -217,7 +229,11 @@ pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String 
             let integer_part = v1024 / divisor;
             let fractional_part = v1024 % divisor;
             let sign = if is_negative { "-" } else { "" };
-            format!("{}{}.{}", sign, i1024_to_decimal_string(integer_part), i1024_to_padded_decimal_string(fractional_part, dp))
+            if dp == 0 {
+                format!("{}{}", sign, i1024_to_decimal_string(integer_part))
+            } else {
+                format!("{}{}.{}", sign, i1024_to_decimal_string(integer_part), i1024_to_padded_decimal_string(fractional_part, dp))
+            }
         }
     }
 }

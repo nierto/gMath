@@ -60,7 +60,7 @@ pub struct TernaryTier3 {
 ///
 /// **STORAGE**: I256 (256 bits for ~202.9 bits of information)
 /// **RANGE**: ±(3^64-1)/2 ≈ ±1.7×10^30
-/// **USE CASE**: Research-grade geometric computations, cryptographic precision
+/// **USE CASE**: Research-grade geometric computations, high-precision applications
 #[derive(Debug, Clone)]
 pub struct TernaryTier4 {
     /// Raw value: actual_value × 3^64

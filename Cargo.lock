@@ -242,6 +242,7 @@ dependencies = [
  "num-rational",
  "num-traits",
  "proptest",
+ "serde",
 ]
 
 [[package]]

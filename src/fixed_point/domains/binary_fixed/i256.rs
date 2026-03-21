@@ -105,6 +105,27 @@ impl I256 {
         (self.words[3] & 0x8000_0000_0000_0000) != 0
     }
     
+    /// Convert to bytes (little-endian, 32 bytes).
+    pub fn to_bytes_le(self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(32);
+        for word in self.words.iter() {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Create from bytes (little-endian, must be exactly 32 bytes).
+    pub fn from_bytes_le(bytes: &[u8]) -> Self {
+        assert_eq!(bytes.len(), 32, "I256 requires exactly 32 bytes");
+        let mut words = [0u64; 4];
+        for i in 0..4 {
+            let start = i * 8;
+            let word_bytes: [u8; 8] = bytes[start..start + 8].try_into().unwrap();
+            words[i] = u64::from_le_bytes(word_bytes);
+        }
+        I256 { words }
+    }
+
     #[inline(always)]
     pub const fn from_u128(value: u128) -> Self {
         I256 { 

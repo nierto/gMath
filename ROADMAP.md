@@ -49,7 +49,87 @@ The stack evaluator (`src/fixed_point/universal/fasc/stack_evaluator/`) was spli
 
 ---
 
-## Future
+## Future — High Priority
+
+### FASC LazyExpr chains for matrix operations
+
+**Status:** DESIGN — high value, touches FASC evaluator core
+**Unlocks:** Long matrix operation chains (5-20 ops without intermediate materialization)
+
+Currently, `matrix_exp`, `matrix_sqrt`, `matrix_log`, and `matrix_pow` operate on `ComputeMatrix` at tier N+1 but materialize between operations. If a Lie group chain like `exp(A) * B * exp(C)` produces large intermediate matrices that shrink back after the full chain, the intermediate materialization causes `TierOverflow` even though the final result fits.
+
+**Proven for scalars:** The `BinaryCompute` chain persistence already handles this for scalar transcendentals — `sin(exp(44))` succeeds via FASC LazyExpr even though `exp(44)` alone overflows Q64.64 storage (test: `ugod_chain_persistence_test.rs`).
+
+**Proposed architecture:** `LazyMatrixExpr` — a matrix expression tree analogous to `LazyExpr`:
+
+```
+enum LazyMatrixExpr {
+    Literal(FixedMatrix),
+    Exp(Box<LazyMatrixExpr>),       // Padé [6/6] + scaling-squaring
+    Log(Box<LazyMatrixExpr>),       // inverse scaling-squaring + Taylor
+    Sqrt(Box<LazyMatrixExpr>),      // Denman-Beavers
+    Mul(Box<LazyMatrixExpr>, Box<LazyMatrixExpr>),
+    Add(Box<LazyMatrixExpr>, Box<LazyMatrixExpr>),
+    Transpose(Box<LazyMatrixExpr>),
+    Inverse(Box<LazyMatrixExpr>),
+}
+```
+
+The evaluator would keep all intermediates as `ComputeMatrix` (tier N+1) and only call `to_fixed_matrix()` (downscale) at the final `evaluate_matrix()` call. This is the matrix analog of `materialize_compute()` for scalar `BinaryCompute`.
+
+**Key constraint:** Zero heap allocation in the hot path. The `ComputeMatrix` type already uses `Vec<ComputeStorage>` (allocated once per matrix), so the chain just reuses the same allocation pattern. No new allocation model.
+
+**Scope:** ~1000 lines (LazyMatrixExpr enum, evaluate_matrix(), operator overloading for the tree builder, integration with existing matrix_functions.rs). High risk — touches the precision-critical path. Needs dedicated session with comprehensive mpmath validation.
+
+### Fused transcendental paths
+
+**Status:** DESIGN — medium effort, high throughput win
+**Unlocks:** Faster compound operations, fewer materialization boundaries
+
+Common transcendental chains should have dedicated fused evaluation paths in the FASC stack evaluator, avoiding the upscale-downscale-upscale cycle between operations:
+
+| Fused path | Operations saved | Use case |
+|-----------|-----------------|----------|
+| `sin_of_exp(x)` | 1 materialization | Lie group: sin(θ) where θ = exp(ω) |
+| `cos_of_exp(x)` | 1 materialization | Rodrigues formula |
+| `exp_of_ln(x)` | Identity → short-circuit | Roundtrip verification |
+| `ln_of_exp(x)` | Identity → short-circuit | Roundtrip verification |
+| `sin_cos(x)` | Share range reduction | Rodrigues: both sin(θ)/θ and (1-cos(θ))/θ² |
+| `exp_of_mul(x, y)` | 1 materialization | pow(x, y) = exp(y * ln(x)) inner chain |
+| `sqrt_of_sum_sq(a, b)` | 1 materialization | Norm: sqrt(a² + b²) |
+
+**Implementation:** New `LazyExpr` variants (`SinOfExp`, `SinCos`, `ExpOfLn`, etc.) or compound opcodes in the stack evaluator. Each fused path:
+1. Computes the inner operation at BinaryCompute tier (no downscale)
+2. Feeds the compute-tier result directly to the outer operation
+3. Materializes once at the end
+
+**Zero allocation impact:** These are new opcodes in the existing fixed-size stack machine (`value_stack: [Option<StackValue>; 256]`). No new allocation pattern. The workspace is already sized for the most complex single operation; fused paths reuse it.
+
+**Scope:** ~500 lines per fused path (evaluator dispatch + tests). Start with `sin_cos` (used everywhere in Rodrigues/geodesics) and `sin_of_exp`/`cos_of_exp` (Lie group hot path).
+
+### Multi-domain matrix operations
+
+Currently `FixedMatrix` is binary-only (`Vec<FixedPoint>` where `FixedPoint` wraps `BinaryStorage`). FASC already routes scalars per-domain (binary, decimal, ternary, symbolic). Extending this to matrices would enable:
+
+- **Decimal matrix arithmetic** — financial-grade: interest rate matrices, transition probabilities, portfolio correlations with exact decimal storage throughout. `matrix_exp(rate_matrix * t)` where rate entries are exact decimals (0.05, 0.03).
+- **Ternary matrix operations** — balanced ternary's sign-symmetric digits {-1, 0, +1} for geometric hashing. Ternary matmul preserves the balanced property.
+- **Cross-domain matrix chains** — a LazyMatrixExpr chain where the input is decimal but an intermediate transcendental is computed in binary (the natural domain for sin/cos), then the result converts back to decimal for output.
+
+Recommended approach: the `LazyMatrixExpr` from the FASC chain persistence work naturally extends to multi-domain. If the `Literal` entries carry a `StackValue` domain tag instead of raw `FixedPoint`, the chain evaluator dispatches per-domain automatically. This is approach B (domain-tagged) for bulk ops, approach A (lazy) for expression chains.
+
+**Dependency:** FASC chain persistence first (LazyMatrixExpr + fused transcendentals), then domain extension.
+
+### Decimal domain transcendentals
+
+The binary domain has 0-ULP transcendentals (18 functions) via tier N+1 table-lookup + Taylor remainder. The decimal domain currently routes transcendentals through binary compute (`via-binary-compute` in the COMPONENT_STATUS_MATRIX). Native decimal transcendentals would:
+
+- Eliminate the binary→decimal conversion round-trip (exact decimal inputs stay exact throughout)
+- Enable financial-grade computations where decimal exactness matters (compound interest, actuarial, amortization)
+- Support a future `g_math_finance` crate that guarantees 0-ULP decimal results for financial formulas
+
+**Scope:** New table generation in build.rs for decimal Q-format, decimal-native exp/ln/sqrt/sin/cos at tier N+1. The algorithmic patterns are identical to binary — only the base changes (10 vs 2). Estimated ~3000 lines.
+
+**Priority:** After FASC chain persistence (the chain architecture benefits decimal transcendentals too — no point building decimal transcendentals that materialize between operations).
 
 ### Fractal topology FASC integration
 
@@ -71,9 +151,9 @@ If demand materializes for 4-decimal-digit fixed-point (retro gamedev, very cons
 
 ### Imperative geometry methods — UGOD + FASC integration
 
-gNode's g_math integration (0.1.1) required an extension trait (`gmath_ext.rs`) to cover geometry methods that the imperative `FixedPoint`/`FixedVector`/`FixedMatrix` types don't natively provide. These should be upstreamed into g_math as first-class UGOD-dispatched, FASC-computed methods — following the same 3-tier pattern as the binary transcendentals.
+Downstream integrations required extension traits to cover geometry methods that the imperative `FixedPoint`/`FixedVector`/`FixedMatrix` types don't natively provide. These should be upstreamed into g_math as first-class UGOD-dispatched, FASC-computed methods — following the same 3-tier pattern as the binary transcendentals.
 
-**Methods to upstream** (currently in gNode's `gmath_ext.rs`, ~300 LOC):
+**Methods to upstream** (~300 LOC):
 
 | Method | Type | Current impl | Target |
 | ------ | ---- | ------------ | ------ |
@@ -94,6 +174,26 @@ gNode's g_math integration (0.1.1) required an extension trait (`gmath_ext.rs`) 
 - Convenience: `from_f32_slice` — no arithmetic, just construction
 
 **Estimated effort**: ~800 lines (methods + UGOD dispatch + FASC wiring + ULP validation tests against mpmath).
+
+### Tensor decompositions (L2B)
+
+Higher-order tensor decompositions for model compression and latent structure extraction:
+
+- **Truncated SVD** for rank-2 tensors (reuses L1B SVD, thin wrapper)
+- **HOSVD / Tucker decomposition**: unfold tensor along each mode, SVD each unfolding, reconstruct core tensor. FASC strategy: each mode-k SVD uses compute-tier dot products via existing `svd_decompose`. Core tensor contraction uses `compute_tier_dot_raw`.
+- **CP decomposition via ALS** (Alternating Least Squares): iterative rank-R approximation. Each ALS step is a least-squares solve (L1C `least_squares`), convergence monitored via `convergence_threshold`.
+
+These are optimization-tier features for distributed inference. Basic tensor contraction and SVD-based sharding work without them.
+
+### n-D Möbius transformations / Clifford algebra (L4B)
+
+Generalize 2D Möbius transformations to arbitrary dimensions via:
+
+- **Vahlen matrices**: 2×2 matrices over a Clifford algebra Cl(n,0,1), acting on R^n ∪ {∞}
+- **Clifford algebra representation**: geometric product, inner/outer products, versors
+- Requires implementing Cl(p,q,r) multivector arithmetic in fixed-point — a substantial algebraic system
+
+High novelty (no zero-float Clifford algebra exists in Rust). Build when conformal geometric algebra is needed for a specific application.
 
 ### Public API stabilization
 

@@ -88,37 +88,125 @@ impl StackEvaluator {
     }
 
     /// Parse decimal string
+    ///
+    /// For ≤38 fractional digits: direct i128 path (Decimal domain).
+    /// For >38 fractional digits: use two-part parsing (Q256.256 only) or
+    /// truncate to 38 digits (i128 scale factor limit).
+    ///
+    /// All profiles accept up to 38 fractional digits via the i128 path.
+    /// The decimal→binary conversion naturally rounds to the closest
+    /// representable Q-format value. Do NOT truncate to profile precision
+    /// before conversion — truncation introduces different rounding than
+    /// the mathematically correct round-to-nearest.
     pub(crate) fn parse_decimal(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
         let dot_pos = s.find('.').ok_or(OverflowDetected::ParseError)?;
-        // Reject multiple dots (e.g. "1.2.3")
         if s[dot_pos + 1..].contains('.') {
             return Err(OverflowDetected::ParseError);
         }
 
-        let integer_part = s[..dot_pos].parse::<i128>()
-            .map_err(|_| OverflowDetected::ParseError)?;
+        let is_negative = s.starts_with('-');
+        let integer_str = if is_negative { &s[1..dot_pos] } else { &s[..dot_pos] };
         let fractional_str = &s[dot_pos + 1..];
-        // Guard: fractional length must fit in u8 (max 255 decimal places)
-        // and 10^decimals must fit in i128 (max 38 digits).
-        // Beyond 38 digits, i128 cannot represent the scale factor.
         let frac_len = fractional_str.len();
-        if frac_len > 38 {
-            return Err(OverflowDetected::Overflow);
+
+        // All profiles use i128 path for ≤38 digits (10^38 fits in i128).
+        // Q256.256 extends to 76 digits via two-part parsing.
+        #[cfg(table_format = "q64_64")]
+        let max_frac: usize = 38;
+        #[cfg(table_format = "q128_128")]
+        let max_frac: usize = 38;
+        #[cfg(table_format = "q256_256")]
+        let max_frac: usize = 76; // 77 sig digits minus integer part headroom
+
+        // Truncate to what the profile can represent
+        let effective_frac_len = frac_len.min(max_frac);
+        let effective_frac_str = &fractional_str[..effective_frac_len];
+
+        // For ≤38 digits: single i128 path
+        if effective_frac_len <= 38 {
+            let integer_part = integer_str.parse::<i128>()
+                .map_err(|_| OverflowDetected::ParseError)?;
+            let integer_part = if is_negative { -integer_part } else { integer_part };
+            let decimals = effective_frac_len as u8;
+            let fractional_part = effective_frac_str.parse::<i128>()
+                .map_err(|_| OverflowDetected::ParseError)?;
+            let scale = 10_i128.pow(decimals as u32);
+            let scaled = integer_part
+                .checked_mul(scale)
+                .and_then(|v| v.checked_add(if integer_part < 0 { -fractional_part } else { fractional_part }))
+                .ok_or(OverflowDetected::Overflow)?;
+            let shadow = CompactShadow::from_rational(scaled, scale as u128);
+            Ok(StackValue::Decimal(decimals, to_binary_storage(scaled), shadow))
+        } else {
+            // >38 fractional digits (scientific profile Q256.256).
+            // Split into two 38-digit halves, parse each into i128,
+            // then combine at I512 width for BinaryStorage.
+            //
+            // Strategy: parse "7.HHHH...LLLL..." as
+            //   value = integer + high/10^38 + low/10^76
+            // Each piece fits in i128. Combine via I512 arithmetic,
+            // then convert to Q-format via I1024 shift-and-divide.
+            let high_len = 38usize.min(effective_frac_len);
+            let low_len = effective_frac_len - high_len;
+            let high_frac = &effective_frac_str[..high_len];
+            let low_frac = &effective_frac_str[high_len..];
+
+            let integer_part = integer_str.parse::<i128>()
+                .map_err(|_| OverflowDetected::ParseError)?;
+            let high_part = high_frac.parse::<i128>()
+                .map_err(|_| OverflowDetected::ParseError)?;
+            let low_part = if low_len > 0 {
+                low_frac.parse::<i128>().map_err(|_| OverflowDetected::ParseError)?
+            } else { 0i128 };
+
+            #[cfg(table_format = "q256_256")]
+            {
+                use crate::fixed_point::i1024::I1024;
+
+                // Build the numerator at I512 width:
+                // numerator = integer * 10^N + high * 10^low_len + low
+                // where N = high_len + low_len = effective_frac_len
+                let scale_high = {
+                    // 10^low_len (≤ 10^38, fits in i128)
+                    let mut s = I512::from_i128(1);
+                    for _ in 0..low_len { s = s * I512::from_i128(10); }
+                    s
+                };
+                let scale_total = {
+                    // 10^N = 10^(high_len + low_len) ≤ 10^76
+                    let mut s = I512::from_i128(1);
+                    for _ in 0..effective_frac_len { s = s * I512::from_i128(10); }
+                    s
+                };
+
+                let numerator = I512::from_i128(integer_part) * scale_total
+                    + I512::from_i128(high_part) * scale_high
+                    + I512::from_i128(low_part);
+                let numerator = if is_negative { -numerator } else { numerator };
+
+                // Convert to Q256.256: raw = numerator * 2^256 / 10^N
+                let num_wide = I1024::from_i512(numerator) << 256usize;
+                let den_wide = I1024::from_i512(scale_total);
+                // Add rounding: (num_wide + den_wide/2) / den_wide
+                let half_den = den_wide >> 1usize;
+                let rounded = if is_negative {
+                    num_wide - half_den
+                } else {
+                    num_wide + half_den
+                };
+                let q_value = (rounded / den_wide).as_i512();
+
+                let shadow = CompactShadow::None;
+                let tier = self.profile_max_binary_tier();
+                Ok(StackValue::Binary(tier, q_value, shadow))
+            }
+
+            #[cfg(not(table_format = "q256_256"))]
+            {
+                let _ = (integer_part, high_part, low_part, high_len, low_len);
+                Err(OverflowDetected::Overflow)
+            }
         }
-        let decimals = frac_len as u8;
-        let fractional_part = fractional_str.parse::<i128>()
-            .map_err(|_| OverflowDetected::ParseError)?;
-
-        // Safe: decimals <= 38, so 10^38 fits in i128 (10^38 < 2^127)
-        let scale = 10_i128.pow(decimals as u32);
-        let scaled_value_i128 = integer_part
-            .checked_mul(scale)
-            .and_then(|v| v.checked_add(if integer_part < 0 { -fractional_part } else { fractional_part }))
-            .ok_or(OverflowDetected::Overflow)?;
-
-        // Create shadow: exact rational = scaled_value / 10^decimals
-        let shadow = CompactShadow::from_rational(scaled_value_i128, scale as u128);
-        Ok(StackValue::Decimal(decimals, to_binary_storage(scaled_value_i128), shadow))
     }
 
     /// Parse decimal as rational (for inexact decimals like 0.333)
