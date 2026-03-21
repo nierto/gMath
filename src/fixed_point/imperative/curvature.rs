@@ -587,7 +587,7 @@ impl MetricProvider for HyperbolicMetric {
 // Geodesic ODE and parallel transport ODE
 // ============================================================================
 
-use super::ode::{OdeSystem, rk4_step, OdePoint};
+use super::ode::{OdeSystem, rk4_step};
 
 /// ODE system for the geodesic equation on a Riemannian manifold.
 ///

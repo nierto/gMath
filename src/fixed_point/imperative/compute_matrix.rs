@@ -7,12 +7,10 @@
 
 use super::FixedPoint;
 use super::FixedMatrix;
-use super::FixedVector;
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
     compute_halve, compute_is_zero, compute_is_negative, sqrt_at_compute_tier,
-    downscale_to_storage,
 };
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
@@ -76,6 +74,7 @@ impl ComputeMatrix {
     #[inline]
     pub fn rows(&self) -> usize { self.rows }
     #[inline]
+    #[allow(dead_code)]
     pub fn cols(&self) -> usize { self.cols }
 
     #[inline]
@@ -300,7 +299,7 @@ impl ComputeLU {
     /// Solve Ax = b at compute tier. Returns compute-tier solution vector.
     pub fn solve(&self, b: &[ComputeStorage]) -> Result<Vec<ComputeStorage>, OverflowDetected> {
         let n = self.l.rows();
-        let mut pb: Vec<ComputeStorage> = (0..n).map(|i| b[self.perm[i]]).collect();
+        let pb: Vec<ComputeStorage> = (0..n).map(|i| b[self.perm[i]]).collect();
 
         // Forward: Ly = pb
         let mut y = vec![compute_zero(); n];

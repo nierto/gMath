@@ -13,7 +13,7 @@ use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
 use super::compute_matrix::ComputeMatrix;
-use super::linalg::{compute_tier_dot_raw, upscale_to_compute};
+use super::linalg::compute_tier_dot_raw;
 use super::matrix_functions::{matrix_exp, matrix_log, matrix_sqrt};
 use super::derived::{inverse_spd, frobenius_norm};
 use super::decompose::{svd_decompose, qr_decompose};
@@ -520,6 +520,7 @@ impl Grassmannian {
 
     /// Project matrix onto the tangent space at Q: Δ - Q(QᵀΔ).
     /// Compute-tier chain — single downscale at end.
+    #[allow(dead_code)]
     fn project_tangent(q: &FixedMatrix, delta: &FixedMatrix) -> FixedMatrix {
         let q_c = ComputeMatrix::from_fixed_matrix(q);
         let delta_c = ComputeMatrix::from_fixed_matrix(delta);
@@ -884,7 +885,7 @@ impl Manifold for StiefelManifold {
 
     fn parallel_transport(
         &self,
-        base: &FixedVector,
+        _base: &FixedVector,
         target: &FixedVector,
         tangent: &FixedVector,
     ) -> Result<FixedVector, OverflowDetected> {

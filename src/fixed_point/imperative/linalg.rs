@@ -9,8 +9,6 @@
 
 use super::FixedPoint;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-use crate::fixed_point::core_types::errors::OverflowDetected;
-
 #[cfg(table_format = "q64_64")]
 use crate::fixed_point::I256;
 
@@ -22,9 +20,7 @@ use crate::fixed_point::{I512, I1024};
 
 // Re-export ComputeStorage for fused operations
 pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    downscale_to_storage, sqrt_at_compute_tier, compute_divide,
-};
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::downscale_to_storage;
 
 // Re-export fused sincos for imperative-module consumers (lie_group, etc.)
 pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::sincos_at_compute_tier;
