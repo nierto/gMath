@@ -26,15 +26,15 @@ use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i1024;
 
 #[cfg(table_format = "q256_256")]
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
-    sin_compute_tier_i1024, cos_compute_tier_i1024, pi_half_i1024,
+    sin_compute_tier_i1024, cos_compute_tier_i1024, sincos_compute_tier_i1024, pi_half_i1024,
 };
 #[cfg(table_format = "q128_128")]
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
-    sin_compute_tier_i512, cos_compute_tier_i512,
+    sin_compute_tier_i512, cos_compute_tier_i512, sincos_compute_tier_i512,
 };
 #[cfg(table_format = "q64_64")]
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
-    sin_compute_tier_i256, cos_compute_tier_i256,
+    sin_compute_tier_i256, cos_compute_tier_i256, sincos_compute_tier_i256,
 };
 
 #[cfg(table_format = "q256_256")]
@@ -71,40 +71,56 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
     }
 }
 
-/// Downscale from compute tier to storage tier with round-to-nearest
+/// Downscale from compute tier to storage tier with round-to-nearest.
 ///
-/// Shifts right by (COMPUTE_FRAC_BITS - STORAGE_FRAC_BITS) with rounding
+/// Shifts right by (COMPUTE_FRAC_BITS - STORAGE_FRAC_BITS) with rounding.
+///
+/// Returns `Err(TierOverflow)` if the compute-tier value does not fit in
+/// the storage tier — this is the UGOD overflow detection point that
+/// prevents silent truncation of large results (e.g., exp(44) in Q64.64).
 #[inline]
-pub(crate) fn downscale_to_storage(val: ComputeStorage) -> BinaryStorage {
+pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
     #[cfg(table_format = "q256_256")]
     {
         // I1024 → I512, shift right 256 with rounding
         let round_bit = (val & (I1024::from_i128(1) << 255)) != I1024::zero();
-        let mut shifted = (val >> 256).as_i512();
-        if round_bit {
-            shifted = shifted + I512::from_i128(1);
+        let shifted = val >> 256;
+        if !shifted.fits_in_i512() {
+            return Err(OverflowDetected::TierOverflow);
         }
-        shifted
+        let mut result = shifted.as_i512();
+        if round_bit {
+            result = result + I512::from_i128(1);
+        }
+        Ok(result)
     }
     #[cfg(table_format = "q128_128")]
     {
         // I512 → I256, shift right 128 with rounding
         let round_bit = (val & (I512::from_i128(1) << 127)) != I512::zero();
-        let mut shifted = (val >> 128).as_i256();
-        if round_bit {
-            shifted = shifted + I256::from_i128(1);
+        let shifted = val >> 128;
+        if !shifted.fits_in_i256() {
+            return Err(OverflowDetected::TierOverflow);
         }
-        shifted
+        let mut result = shifted.as_i256();
+        if round_bit {
+            result = result + I256::from_i128(1);
+        }
+        Ok(result)
     }
     #[cfg(table_format = "q64_64")]
     {
         // I256 → i128, shift right 64 with rounding
         let round_bit = (val & (I256::from_i128(1) << 63)) != I256::zero();
-        let mut shifted = (val >> 64).as_i128();
-        if round_bit {
-            shifted += 1;
+        let shifted = val >> 64;
+        if !shifted.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
         }
-        shifted
+        let mut result = shifted.as_i128();
+        if round_bit {
+            result += 1;
+        }
+        Ok(result)
     }
 }
 
@@ -346,6 +362,14 @@ pub(super) fn symbolic_wide_to_compute_storage(
             let d = I256::from_i128(den_i256.as_i128());
             return Ok(n / d);
         }
+        // Ultra tier (I512): mathematical constants (e, π, etc.) are stored at
+        // 77-digit precision as I512/I512 rationals. Use I1024 intermediate to
+        // convert to Q128.128 (ComputeStorage for q64_64) without overflow.
+        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
+            let n = I1024::from_i512(num_i512) << 128;
+            let d = I1024::from_i512(den_i512);
+            return Ok((n / d).as_i256());
+        }
     }
 
     Err(OverflowDetected::TierOverflow)
@@ -357,25 +381,25 @@ pub(super) fn symbolic_wide_to_compute_storage(
 
 /// Add two compute-tier values
 #[inline]
-pub(super) fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+pub(crate) fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
     a + b
 }
 
 /// Subtract two compute-tier values
 #[inline]
-pub(super) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+pub(crate) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
     a - b
 }
 
 /// Negate a compute-tier value
 #[inline]
-pub(super) fn compute_negate(a: ComputeStorage) -> ComputeStorage {
+pub(crate) fn compute_negate(a: ComputeStorage) -> ComputeStorage {
     -a
 }
 
 /// Multiply two compute-tier values (needs double-width intermediate)
 #[inline]
-pub(super) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+pub(crate) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
     #[cfg(table_format = "q256_256")]
     {
         // I1024 × I1024 → I2048 >> 512 → I1024
@@ -413,7 +437,7 @@ pub(super) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeS
 
 /// Divide two compute-tier values (needs double-width intermediate for numerator shift)
 #[inline]
-pub(super) fn compute_divide(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+pub(crate) fn compute_divide(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
     #[cfg(table_format = "q256_256")]
     {
         // (I1024 << 512) / I1024 — uses I2048 for numerator
@@ -444,13 +468,13 @@ pub(super) fn compute_divide(a: ComputeStorage, b: ComputeStorage) -> Result<Com
 
 /// Halve a compute-tier value (right shift by 1)
 #[inline]
-pub(super) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
+pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
     a >> 1
 }
 
 /// Check if a compute-tier value is zero
 #[inline]
-pub(super) fn compute_is_zero(a: &ComputeStorage) -> bool {
+pub(crate) fn compute_is_zero(a: &ComputeStorage) -> bool {
     #[cfg(table_format = "q256_256")]
     { *a == I1024::zero() }
     #[cfg(table_format = "q128_128")]
@@ -461,7 +485,7 @@ pub(super) fn compute_is_zero(a: &ComputeStorage) -> bool {
 
 /// Check if a compute-tier value is negative
 #[inline]
-pub(super) fn compute_is_negative(a: &ComputeStorage) -> bool {
+pub(crate) fn compute_is_negative(a: &ComputeStorage) -> bool {
     #[cfg(table_format = "q256_256")]
     { (a.words[15] & 0x8000_0000_0000_0000) != 0 }
     #[cfg(table_format = "q128_128")]
@@ -499,6 +523,18 @@ pub(super) fn cos_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     { cos_compute_tier_i256(x) }
 }
 
+/// Fused sin+cos at compute tier (tier N+1) — single shared range reduction.
+/// Returns (sin(x), cos(x)) saving one range reduction vs separate calls.
+#[inline]
+pub(crate) fn sincos_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, ComputeStorage) {
+    #[cfg(table_format = "q256_256")]
+    { sincos_compute_tier_i1024(x) }
+    #[cfg(table_format = "q128_128")]
+    { sincos_compute_tier_i512(x) }
+    #[cfg(table_format = "q64_64")]
+    { sincos_compute_tier_i256(x) }
+}
+
 /// Compute atan at compute tier (tier N+1)
 #[inline]
 pub(super) fn atan_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
@@ -523,7 +559,7 @@ pub(super) fn atan2_at_compute_tier(y: ComputeStorage, x: ComputeStorage) -> Com
 
 /// Compute sqrt at compute tier (tier N+1)
 #[inline]
-pub(super) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
+pub(crate) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     #[cfg(table_format = "q256_256")]
     { sqrt_binary_i1024(x) }
     #[cfg(table_format = "q128_128")]

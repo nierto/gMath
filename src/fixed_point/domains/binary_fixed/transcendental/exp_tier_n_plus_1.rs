@@ -150,10 +150,31 @@ pub fn exp_q128_128_native(x: I256) -> I256 {
     let frac_part = x.as_u128();  // Lower 128 bits
 
     // Integer part: Direct table lookup (tables are (I256, i128) in Q128.128 profile)
-    let (exp_int_main, exp_int_comp) = if int_part < -40 {
-        return I256::zero();
+    // Table covers int_part -40..40. For int_part 41..80, use range reduction:
+    // exp(n) = exp(40) * exp(n-40), where both entries are in the table.
+    // For int_part > 80 or < -80: true overflow/underflow for Q128.128.
+    let (exp_int_main, exp_int_comp) = if int_part < -80 {
+        return I256::zero(); // Underflow: exp(-81) ≈ 1.3e-36, below Q128.128 resolution
+    } else if int_part < -40 {
+        // Range reduction for negative: exp(n) = exp(-40) * exp(n+40)
+        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_4[0]; // exp(-40)
+        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_4[(int_part + 80) as usize]; // exp(n+40)
+        let a = a_main + I256::from_i128(a_comp >> 64);
+        let b = b_main + I256::from_i128(b_comp >> 64);
+        let combined = multiply_i256_q128_128(a, b);
+        // Skip the normal int * frac path — inject combined directly
+        // We still need to handle the fractional part below, so store combined
+        (combined, 0i128) // comp = 0 since already combined
+    } else if int_part > 80 {
+        return I256::from_i128(i128::MAX) << 128; // True overflow for Q128.128
     } else if int_part > 40 {
-        return I256::from_i128(i128::MAX) << 128;
+        // Range reduction for positive: exp(n) = exp(40) * exp(n-40)
+        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_4[80]; // exp(40)
+        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_4[(int_part - 40 + 40) as usize]; // exp(n-40)
+        let a = a_main + I256::from_i128(a_comp >> 64);
+        let b = b_main + I256::from_i128(b_comp >> 64);
+        let combined = multiply_i256_q128_128(a, b);
+        (combined, 0i128)
     } else {
         EXP_INTEGER_TABLE_TIER_4[(int_part + 40) as usize]
     };
@@ -221,10 +242,24 @@ pub fn exp_q256_256_native(x: I512) -> I512 {
     let frac_part = x.as_i256();  // Lower 256 bits
 
     // Integer part: Direct table lookup using tier 5 tables
-    let (exp_int_main, exp_int_comp) = if int_part < -40 {
+    // Table covers int_part -40..40. For 41..80, use range reduction:
+    // exp(n) = exp(40) * exp(n-40). For > 80 or < -80: true over/underflow.
+    let (exp_int_main, exp_int_comp) = if int_part < -80 {
         return I512::zero();
-    } else if int_part > 40 {
+    } else if int_part < -40 {
+        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_5[0]; // exp(-40)
+        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_5[(int_part + 80) as usize];
+        let a = a_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(a_comp)) >> 256).as_i512();
+        let b = b_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(b_comp)) >> 256).as_i512();
+        (multiply_i512_q256_256(a, b), I256::zero())
+    } else if int_part > 80 {
         return I512::from_i256(I256::from_i128(i128::MAX)) << 256;
+    } else if int_part > 40 {
+        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_5[80]; // exp(40)
+        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_5[(int_part - 40 + 40) as usize];
+        let a = a_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(a_comp)) >> 256).as_i512();
+        let b = b_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(b_comp)) >> 256).as_i512();
+        (multiply_i512_q256_256(a, b), I256::zero())
     } else {
         EXP_INTEGER_TABLE_TIER_5[(int_part + 40) as usize]
     };

@@ -429,11 +429,21 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// tan(x) = sin(x) / cos(x) — FASC-composed at compute tier
+    /// Fused sin+cos at compute tier — single shared range reduction.
+    /// Returns (sin_val, cos_val) both as BinaryCompute.
+    pub(crate) fn evaluate_sincos(&mut self, value: StackValue) -> Result<(StackValue, StackValue), OverflowDetected> {
+        let storage_tier = self.profile_max_binary_tier();
+        let compute_val = self.to_compute_storage(&value)?;
+        let (sin_result, cos_result) = sincos_at_compute_tier(compute_val);
+        Ok((
+            StackValue::BinaryCompute(storage_tier, sin_result, CompactShadow::None),
+            StackValue::BinaryCompute(storage_tier, cos_result, CompactShadow::None),
+        ))
+    }
+
+    /// tan(x) = sin(x) / cos(x) — uses fused sincos for single range reduction
     pub(crate) fn evaluate_tan(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
-        // Both sin and cos return BinaryCompute — division stays at compute tier
-        let sin_val = self.evaluate_sin(value.clone())?;
-        let cos_val = self.evaluate_cos(value)?;
+        let (sin_val, cos_val) = self.evaluate_sincos(value)?;
         // Check for cos == 0 at compute tier
         if let StackValue::BinaryCompute(_, c, _) = &cos_val {
             if compute_is_zero(c) {
@@ -464,6 +474,24 @@ impl StackEvaluator {
         {
             let abs_val = if binary_val < 0 { -binary_val } else { binary_val };
             if abs_val > one_bs { return Err(OverflowDetected::DomainError); }
+        }
+
+        // Boundary cases: asin(±1) = ±π/2 exactly (avoids division by sqrt(0))
+        if binary_val == one_bs {
+            let storage_tier = self.profile_max_binary_tier();
+            let pi_half = pi_half_at_compute_tier();
+            return Ok(StackValue::BinaryCompute(storage_tier, pi_half, CompactShadow::None));
+        }
+        #[cfg(table_format = "q64_64")]
+        let neg_one_bs: i128 = -one_bs;
+        #[cfg(table_format = "q128_128")]
+        let neg_one_bs = I256::zero() - one_bs;
+        #[cfg(table_format = "q256_256")]
+        let neg_one_bs = I512::zero() - one_bs;
+        if binary_val == neg_one_bs {
+            let storage_tier = self.profile_max_binary_tier();
+            let pi_half = pi_half_at_compute_tier();
+            return Ok(StackValue::BinaryCompute(storage_tier, ComputeStorage::zero() - pi_half, CompactShadow::None));
         }
 
         // asin(x) = atan(x / sqrt(1 - x²))
@@ -546,7 +574,7 @@ impl StackEvaluator {
     pub(crate) fn to_binary_storage(&self, value: &StackValue) -> Result<BinaryStorage, OverflowDetected> {
         match value {
             StackValue::Binary(_, val, _) => Ok(*val),
-            StackValue::BinaryCompute(_, val, _) => Ok(downscale_to_storage(*val)),
+            StackValue::BinaryCompute(_, val, _) => downscale_to_storage(*val),
             StackValue::Decimal(decimals, scaled, _) => {
                 #[cfg(table_format = "q256_256")]
                 {
@@ -594,7 +622,7 @@ impl StackEvaluator {
                 }
                 // Fall back to wider extraction for Massive/Ultra tier rationals
                 let cs = symbolic_wide_to_compute_storage(rational)?;
-                Ok(downscale_to_storage(cs))
+                downscale_to_storage(cs)
             }
             StackValue::Ternary(tier, value, _) => {
                 // Ternary: convert through rational (value / 3^frac_trits), then to Q-format
@@ -619,7 +647,7 @@ impl StackEvaluator {
                     }
                 } else {
                     let cs = symbolic_wide_to_compute_storage(&rational)?;
-                    Ok(downscale_to_storage(cs))
+                    downscale_to_storage(cs)
                 }
             }
             StackValue::Error(e) => Err(*e),
@@ -671,7 +699,7 @@ impl StackEvaluator {
     pub(crate) fn convert_to_binary(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match &value {
             StackValue::Binary(_, _, _) => Ok(value),
-            StackValue::BinaryCompute(_, _, _) => Ok(self.materialize_compute(value)),
+            StackValue::BinaryCompute(_, _, _) => self.materialize_compute(value),
             _ => {
                 let storage = self.to_binary_storage(&value)?;
                 let tier = self.profile_max_binary_tier();

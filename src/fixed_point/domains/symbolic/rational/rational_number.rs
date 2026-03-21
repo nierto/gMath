@@ -82,7 +82,7 @@ pub enum RationalStorage {
     /// Memory: 32 bytes | SIMD: 1× value per AVX2 register
     Huge { num: i128, den: u128 },
     
-    /// Tier 6: Extreme precision (cryptographic applications)
+    /// Tier 6: Extreme precision (scientific applications)
     /// Memory: 64 bytes | SIMD: Custom 2× AVX2 registers per value
     #[cfg(not(feature = "embedded"))]
     Massive { num: I256, den: I256 },
@@ -299,7 +299,7 @@ impl RationalNumber {
 
     /// Create from I256 numerator/denominator pair (Tier 6: Massive)
     ///
-    /// **USE CASE**: Balanced/Crypto profiles (38 decimal precision)
+    /// **USE CASE**: Balanced/Scientific profiles (38 decimal precision)
     /// **PRECISION**: 10^38 denominators, ~126 bits of precision
     /// **FEATURE GATE**: Only available for non-embedded profiles
     #[cfg(not(feature = "embedded"))]

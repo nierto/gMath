@@ -2,8 +2,10 @@
 //!
 //! All operations delegate to FixedPoint arithmetic.
 
-use std::ops::{Index, IndexMut};
+use std::ops::{Add, Sub, Neg, Mul, Index, IndexMut};
 use super::FixedPoint;
+use super::linalg::{compute_tier_dot, compute_tier_dot_raw};
+use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 /// A dynamically-sized vector of fixed-point values.
 ///
@@ -53,16 +55,13 @@ impl FixedVector {
         self.data.is_empty()
     }
 
-    /// Dot product of two vectors.
+    /// Dot product of two vectors at compute tier (tier N+1).
     ///
+    /// Accumulates at double width, single downscale at end → 1 ULP.
     /// Panics if dimensions differ.
     pub fn dot(&self, other: &FixedVector) -> FixedPoint {
         assert_eq!(self.len(), other.len(), "FixedVector::dot: dimension mismatch");
-        let mut sum = FixedPoint::ZERO;
-        for i in 0..self.len() {
-            sum += self.data[i] * other.data[i];
-        }
-        sum
+        compute_tier_dot(&self.data, &other.data)
     }
 
     /// Squared length (self . self).
@@ -109,15 +108,16 @@ impl FixedVector {
         self.data.iter_mut()
     }
 
-    /// Safe metric distance between two vectors (Euclidean).
+    /// Metric distance between two vectors (Euclidean) at compute tier.
+    ///
+    /// sum-of-squared-differences accumulated at tier N+1, single downscale → 1 ULP.
     pub fn metric_distance_safe(&self, other: &FixedVector) -> FixedPoint {
         assert_eq!(self.len(), other.len(), "FixedVector::metric_distance_safe: dimension mismatch");
-        let mut sum = FixedPoint::ZERO;
-        for i in 0..self.len() {
-            let diff = self.data[i] - other.data[i];
-            sum += diff * diff;
-        }
-        sum.sqrt()
+        let diff_raw: Vec<BinaryStorage> = (0..self.len())
+            .map(|i| (self.data[i] - other.data[i]).raw())
+            .collect();
+        let sum_sq = FixedPoint::from_raw(compute_tier_dot_raw(&diff_raw, &diff_raw));
+        sum_sq.sqrt()
     }
 }
 
@@ -139,5 +139,147 @@ impl IndexMut<usize> for FixedVector {
 impl Default for FixedVector {
     fn default() -> Self {
         Self { data: Vec::new() }
+    }
+}
+
+// ============================================================================
+// L1A: Arithmetic operators
+// ============================================================================
+
+impl Add for FixedVector {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        assert_eq!(self.len(), rhs.len(), "FixedVector::add: dimension mismatch");
+        Self {
+            data: self.data.iter().zip(rhs.data.iter())
+                .map(|(&a, &b)| a + b).collect(),
+        }
+    }
+}
+
+impl<'a, 'b> Add<&'b FixedVector> for &'a FixedVector {
+    type Output = FixedVector;
+    fn add(self, rhs: &'b FixedVector) -> FixedVector {
+        assert_eq!(self.len(), rhs.len(), "FixedVector::add: dimension mismatch");
+        FixedVector {
+            data: self.data.iter().zip(rhs.data.iter())
+                .map(|(&a, &b)| a + b).collect(),
+        }
+    }
+}
+
+impl Sub for FixedVector {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        assert_eq!(self.len(), rhs.len(), "FixedVector::sub: dimension mismatch");
+        Self {
+            data: self.data.iter().zip(rhs.data.iter())
+                .map(|(&a, &b)| a - b).collect(),
+        }
+    }
+}
+
+impl<'a, 'b> Sub<&'b FixedVector> for &'a FixedVector {
+    type Output = FixedVector;
+    fn sub(self, rhs: &'b FixedVector) -> FixedVector {
+        assert_eq!(self.len(), rhs.len(), "FixedVector::sub: dimension mismatch");
+        FixedVector {
+            data: self.data.iter().zip(rhs.data.iter())
+                .map(|(&a, &b)| a - b).collect(),
+        }
+    }
+}
+
+impl Neg for FixedVector {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self {
+            data: self.data.iter().map(|&v| -v).collect(),
+        }
+    }
+}
+
+impl Neg for &FixedVector {
+    type Output = FixedVector;
+    fn neg(self) -> FixedVector {
+        FixedVector {
+            data: self.data.iter().map(|&v| -v).collect(),
+        }
+    }
+}
+
+/// Scalar * Vector
+impl Mul<FixedVector> for FixedPoint {
+    type Output = FixedVector;
+    fn mul(self, rhs: FixedVector) -> FixedVector {
+        FixedVector {
+            data: rhs.data.iter().map(|&v| self * v).collect(),
+        }
+    }
+}
+
+/// Vector * Scalar
+impl Mul<FixedPoint> for FixedVector {
+    type Output = Self;
+    fn mul(self, rhs: FixedPoint) -> Self {
+        Self {
+            data: self.data.iter().map(|&v| v * rhs).collect(),
+        }
+    }
+}
+
+/// &Vector * Scalar
+impl Mul<FixedPoint> for &FixedVector {
+    type Output = FixedVector;
+    fn mul(self, rhs: FixedPoint) -> FixedVector {
+        FixedVector {
+            data: self.data.iter().map(|&v| v * rhs).collect(),
+        }
+    }
+}
+
+// ============================================================================
+// L1A: Additional vector operations
+// ============================================================================
+
+impl FixedVector {
+    /// Compute-tier precise dot product.
+    ///
+    /// Accumulates at tier N+1 (double width) and rounds once at the end.
+    /// For an n-element vector, this gives 1 ULP of rounding error instead
+    /// of the n ULP that the standard `dot()` method may accumulate.
+    pub fn dot_precise(&self, other: &FixedVector) -> FixedPoint {
+        assert_eq!(self.len(), other.len(), "FixedVector::dot_precise: dimension mismatch");
+        compute_tier_dot(&self.data, &other.data)
+    }
+
+    /// Cross product (3D vectors only).
+    ///
+    /// Panics if either vector is not 3-dimensional.
+    pub fn cross(&self, other: &FixedVector) -> FixedVector {
+        assert_eq!(self.len(), 3, "FixedVector::cross: self must be 3D");
+        assert_eq!(other.len(), 3, "FixedVector::cross: other must be 3D");
+        FixedVector::from_slice(&[
+            self.data[1] * other.data[2] - self.data[2] * other.data[1],
+            self.data[2] * other.data[0] - self.data[0] * other.data[2],
+            self.data[0] * other.data[1] - self.data[1] * other.data[0],
+        ])
+    }
+
+    /// Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j].
+    pub fn outer_product(&self, other: &FixedVector) -> super::FixedMatrix {
+        let mut m = super::FixedMatrix::new(self.len(), other.len());
+        for i in 0..self.len() {
+            for j in 0..other.len() {
+                m.set(i, j, self.data[i] * other.data[j]);
+            }
+        }
+        m
+    }
+
+    /// Access the underlying data slice (for compute-tier operations).
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[FixedPoint] {
+        &self.data
     }
 }

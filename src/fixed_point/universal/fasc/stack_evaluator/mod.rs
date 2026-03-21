@@ -34,7 +34,11 @@ use core::fmt::{self, Display};
 #[allow(unused_imports)]
 pub(crate) use conversion::to_binary_storage;
 #[allow(unused_imports)]
-pub(crate) use compute::{downscale_to_storage, upscale_to_compute};
+pub(crate) use compute::{
+    downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier,
+    compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
+    compute_halve, compute_is_zero, compute_is_negative,
+};
 
 // ============================================================================
 // PROFILE-SPECIFIC STORAGE TYPES (TIER N+1 PRECISION PRESERVATION)
@@ -178,7 +182,7 @@ impl StackValue {
                     return Ok(RationalNumber::new(num, den));
                 }
                 // Materialize to storage tier first, then convert
-                let storage_val = downscale_to_storage(*value);
+                let storage_val = downscale_to_storage(*value)?;
                 let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
                 materialized.to_rational()
             }
@@ -301,7 +305,7 @@ impl StackValue {
     pub fn as_binary_storage(&self) -> Option<BinaryStorage> {
         match self {
             StackValue::Binary(_, val, _) => Some(*val),
-            StackValue::BinaryCompute(_, val, _) => Some(downscale_to_storage(*val)),
+            StackValue::BinaryCompute(_, val, _) => downscale_to_storage(*val).ok(),
             _ => None,
         }
     }
@@ -329,9 +333,13 @@ impl StackValue {
     pub fn to_decimal_string(&self, max_digits: usize) -> String {
         match self {
             StackValue::BinaryCompute(tier, val, shadow) => {
-                let storage_val = downscale_to_storage(*val);
-                let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
-                materialized.to_decimal_string(max_digits)
+                match downscale_to_storage(*val) {
+                    Ok(storage_val) => {
+                        let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                        materialized.to_decimal_string(max_digits)
+                    }
+                    Err(_) => "Overflow".to_string(),
+                }
             }
             StackValue::Binary(_tier, val, _) => {
                 formatting::binary_storage_to_decimal_string(*val, max_digits)
@@ -379,9 +387,13 @@ impl Display for StackValue {
 
         match self {
             StackValue::BinaryCompute(tier, val, shadow) => {
-                let storage_val = downscale_to_storage(*val);
-                let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
-                write!(f, "{}", materialized.to_decimal_string(precision))
+                match downscale_to_storage(*val) {
+                    Ok(storage_val) => {
+                        let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                        write!(f, "{}", materialized.to_decimal_string(precision))
+                    }
+                    Err(_) => write!(f, "Overflow"),
+                }
             }
             StackValue::Binary(_, val, _) => {
                 write!(f, "{}", formatting::binary_storage_to_decimal_string(*val, precision))
@@ -558,12 +570,16 @@ impl StackEvaluator {
     ///
     /// Called at the top-level evaluate boundary to ensure callers always
     /// receive values at the storage tier, not the internal compute tier.
-    fn materialize_compute(&self, value: StackValue) -> StackValue {
+    ///
+    /// Returns `Err(TierOverflow)` if the compute-tier value exceeds the
+    /// storage tier's range (UGOD overflow detection).
+    fn materialize_compute(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, shadow) => {
-                StackValue::Binary(tier, downscale_to_storage(val), shadow)
+                let storage = downscale_to_storage(val)?;
+                Ok(StackValue::Binary(tier, storage, shadow))
             }
-            other => other,
+            other => Ok(other),
         }
     }
 }
@@ -602,7 +618,7 @@ pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
         let mut evaluator = eval.borrow_mut();
         evaluator.reset();
         let result = evaluator.evaluate(expr)?;
-        let materialized = evaluator.materialize_compute(result);
+        let materialized = evaluator.materialize_compute(result)?;
         evaluator.apply_output_mode(materialized)
     })
 }

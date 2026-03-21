@@ -1,8 +1,8 @@
 [package]
 name = "g_math"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
-description = "Multi-domain fixed-point arithmetic library with 18 transcendental functions"
+description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — zero-float, 0 ULP transcendentals"
 authors = ["Niels Erik Toren"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -26,6 +26,8 @@ num-integer = "0.1"
 num-traits = { version = "0.2", optional = true }
 num-bigint = { version = "0.4", optional = true }
 num-integer = { version = "0.1", optional = true }
+# Optional: serde serialization support
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 criterion = "0.4"
@@ -48,13 +50,14 @@ scientific = []    # Q256.256, 77 decimals
 # Feature gates for optional subsystems
 legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
+serde = ["dep:serde"]    # Serialize/Deserialize impls for FixedPoint, FixedVector, FixedMatrix, Tensor
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
     'cfg(table_format, values("q64_64", "q128_128", "q256_256", "q512_512"))',
     'cfg(q64_64)', 'cfg(q128_128)', 'cfg(q256_256)', 'cfg(q512_512)',
-    'cfg(feature, values("rebuild-tables"))',
+    'cfg(feature, values("rebuild-tables", "serde"))',
 ]
 
 [profile.release]
