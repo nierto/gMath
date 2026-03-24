@@ -35,6 +35,8 @@ use num_traits::{One, ToPrimitive, Signed, Zero};
 /// - Scientific: Tier 6 (I256/I256) → Q256.256 (I512), maximum precision
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeploymentProfile {
+    Realtime,    //  4 decimals, Q16.16,   i32 storage, i64 compute
+    Compact,     //  9 decimals, Q32.32,   i64 storage, i128 compute
     Embedded,    // 19 decimals, Q64.64,   i128 arithmetic
     Balanced,    // 38 decimals, Q128.128, I256 arithmetic
     Scientific,  // 77 decimals, Q256.256, I512 arithmetic
@@ -52,6 +54,16 @@ struct PrecisionConfig {
 impl PrecisionConfig {
     fn for_profile(profile: DeploymentProfile) -> Self {
         match profile {
+            DeploymentProfile::Realtime => PrecisionConfig {
+                target_decimal_places: 4,
+                profile_name: "realtime",
+                table_format: "Q16.16",
+            },
+            DeploymentProfile::Compact => PrecisionConfig {
+                target_decimal_places: 9,
+                profile_name: "compact",
+                table_format: "Q32.32",
+            },
             DeploymentProfile::Embedded => PrecisionConfig {
                 target_decimal_places: 19,
                 profile_name: "embedded",
@@ -96,6 +108,8 @@ fn detect_deployment_profile() -> DeploymentProfile {
     // Check environment variable first (highest priority)
     if let Ok(profile_str) = env::var("GMATH_PROFILE") {
         match profile_str.to_lowercase().as_str() {
+            "realtime" => return DeploymentProfile::Realtime,
+            "compact" | "fast" => return DeploymentProfile::Compact,
             "embedded" => return DeploymentProfile::Embedded,
             "balanced" => return DeploymentProfile::Balanced,
             "scientific" => return DeploymentProfile::Scientific,
@@ -109,14 +123,16 @@ fn detect_deployment_profile() -> DeploymentProfile {
     //
     // IMPORTANT: Check EXPLICIT profile features first, in order of precision (highest to lowest)!
     // Order: embedded → scientific → balanced → default
-    if env::var("CARGO_FEATURE_EMBEDDED_MINIMAL").is_ok() || env::var("CARGO_FEATURE_EMBEDDED").is_ok() {
+    if env::var("CARGO_FEATURE_REALTIME").is_ok() {
+        DeploymentProfile::Realtime
+    } else if env::var("CARGO_FEATURE_COMPACT").is_ok() || env::var("CARGO_FEATURE_FAST").is_ok() {
+        DeploymentProfile::Compact
+    } else if env::var("CARGO_FEATURE_EMBEDDED_MINIMAL").is_ok() || env::var("CARGO_FEATURE_EMBEDDED").is_ok() {
         DeploymentProfile::Embedded
     } else if env::var("CARGO_FEATURE_SCIENTIFIC").is_ok() {
         DeploymentProfile::Scientific
     } else if env::var("CARGO_FEATURE_BALANCED").is_ok() {
         DeploymentProfile::Balanced
-    } else if env::var("CARGO_FEATURE_FAST").is_ok() {
-        DeploymentProfile::Custom
     } else {
         // Default to embedded profile (Q64.64, 19 decimals, fastest)
         DeploymentProfile::Embedded
@@ -1983,10 +1999,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_SCIENTIFIC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MULTI_PRECISION");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FAST");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_COMPACT");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REALTIME");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REBUILD_TABLES");
 
     // Declare custom cfg values for Rust compiler
-    println!("cargo::rustc-check-cfg=cfg(table_format, values(\"q64_64\", \"q128_128\", \"q256_256\"))");
+    println!("cargo::rustc-check-cfg=cfg(table_format, values(\"q16_16\", \"q32_32\", \"q64_64\", \"q128_128\", \"q256_256\"))");
 
     let out_dir = env::var("OUT_DIR").unwrap();
 
@@ -1996,6 +2014,8 @@ fn main() {
 
     // Emit cfg directives for conditional compilation based on table format
     match config.table_format {
+        "Q16.16" => println!("cargo:rustc-cfg=table_format=\"q16_16\""),
+        "Q32.32" => println!("cargo:rustc-cfg=table_format=\"q32_32\""),
         "Q64.64" => println!("cargo:rustc-cfg=table_format=\"q64_64\""),
         "Q128.128" => println!("cargo:rustc-cfg=table_format=\"q128_128\""),
         "Q256.256" => println!("cargo:rustc-cfg=table_format=\"q256_256\""),

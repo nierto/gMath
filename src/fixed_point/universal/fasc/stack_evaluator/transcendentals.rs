@@ -30,8 +30,12 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalN
 use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i1024;
 #[cfg(table_format = "q128_128")]
 use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i512, ln_binary_i512};
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i256, ln_binary_i256};
+#[cfg(table_format = "q32_32")]
+use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i128, ln_binary_i128};
+#[cfg(table_format = "q16_16")]
+use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i64, ln_binary_i64};
 
 impl StackEvaluator {
 
@@ -57,6 +61,22 @@ impl StackEvaluator {
             // ComputeStorage = I256 (Q128.128)
             let result = exp_binary_i256(compute_val);
             Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
+        }
+        #[cfg(table_format = "q32_32")]
+        {
+            // ComputeStorage = i128 (Q64.64) → upscale to Q128.128 (I256), compute exp, downscale back
+            let wide = I256::from_i128(compute_val) << 64usize; // Q64.64 → Q128.128
+            let result = exp_binary_i256(wide);
+            let downscaled = (result >> 64u32).as_i128(); // Q128.128 → Q64.64
+            Ok(StackValue::BinaryCompute(storage_tier, downscaled, CompactShadow::None))
+        }
+        #[cfg(table_format = "q16_16")]
+        {
+            // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute exp, downscale
+            let wide = I256::from_i128(compute_val as i128) << 96usize; // Q32.32 → Q128.128
+            let result = exp_binary_i256(wide);
+            let downscaled = ((result >> 96u32).as_i128()) as i64; // Q128.128 → Q32.32
+            Ok(StackValue::BinaryCompute(storage_tier, downscaled, CompactShadow::None))
         }
     }
 
@@ -100,6 +120,22 @@ impl StackEvaluator {
             // ComputeStorage = I256 (Q128.128)
             let result = ln_binary_i256(compute_val);
             Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
+        }
+        #[cfg(table_format = "q32_32")]
+        {
+            // ComputeStorage = i128 (Q64.64) → upscale to Q128.128 (I256), compute ln, downscale back
+            let wide = I256::from_i128(compute_val) << 64usize; // Q64.64 → Q128.128
+            let result = ln_binary_i256(wide);
+            let downscaled = (result >> 64u32).as_i128(); // Q128.128 → Q64.64
+            Ok(StackValue::BinaryCompute(storage_tier, downscaled, CompactShadow::None))
+        }
+        #[cfg(table_format = "q16_16")]
+        {
+            // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute ln, downscale
+            let wide = I256::from_i128(compute_val as i128) << 96usize; // Q32.32 → Q128.128
+            let result = ln_binary_i256(wide);
+            let downscaled = ((result >> 96u32).as_i128()) as i64; // Q128.128 → Q32.32
+            Ok(StackValue::BinaryCompute(storage_tier, downscaled, CompactShadow::None))
         }
     }
 
@@ -203,6 +239,10 @@ impl StackEvaluator {
         { StackValue::Binary(tier, I256::from_i128(value) << 128, CompactShadow::from_rational(value, 1)) }
         #[cfg(table_format = "q64_64")]
         { StackValue::Binary(tier, value << 64, CompactShadow::from_rational(value, 1)) }
+        #[cfg(table_format = "q32_32")]
+        { StackValue::Binary(tier, (value as i64) << 32, CompactShadow::from_rational(value, 1)) }
+        #[cfg(table_format = "q16_16")]
+        { StackValue::Binary(tier, (value as i32) << 16, CompactShadow::from_rational(value, 1)) }
     }
 
     /// Convert any StackValue to BinaryCompute (compute tier).
@@ -235,6 +275,10 @@ impl StackEvaluator {
                 { Ok(StackValue::Binary(tier, val >> 1, CompactShadow::None)) }
                 #[cfg(table_format = "q64_64")]
                 { Ok(StackValue::Binary(tier, val >> 1, CompactShadow::None)) }
+                #[cfg(table_format = "q32_32")]
+                { Ok(StackValue::Binary(tier, val >> 1, CompactShadow::None)) }
+                #[cfg(table_format = "q16_16")]
+                { Ok(StackValue::Binary(tier, val >> 1, CompactShadow::None)) }
             }
             other => {
                 // Fallback to rational division for non-binary
@@ -247,6 +291,10 @@ impl StackEvaluator {
                 #[cfg(table_format = "q128_128")]
                 { Ok(StackValue::Binary(tier, binary_val >> 1, CompactShadow::None)) }
                 #[cfg(table_format = "q64_64")]
+                { Ok(StackValue::Binary(tier, binary_val >> 1, CompactShadow::None)) }
+                #[cfg(table_format = "q32_32")]
+                { Ok(StackValue::Binary(tier, binary_val >> 1, CompactShadow::None)) }
+                #[cfg(table_format = "q16_16")]
                 { Ok(StackValue::Binary(tier, binary_val >> 1, CompactShadow::None)) }
             }
         }
@@ -305,6 +353,24 @@ impl StackEvaluator {
             let den_wide = I256::from_i128(den);
             if den_wide == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
             let result = (num_wide / den_wide).as_i128();
+            Ok(StackValue::Binary(tier, result, CompactShadow::None))
+        }
+        #[cfg(table_format = "q32_32")]
+        {
+            // Q32.32: (num << 32) / den — use i128 intermediate
+            let num_wide = (num as i128) << 32;
+            let den_wide = den as i128;
+            if den_wide == 0 { return Err(OverflowDetected::DivisionByZero); }
+            let result = (num_wide / den_wide) as i64;
+            Ok(StackValue::Binary(tier, result, CompactShadow::None))
+        }
+        #[cfg(table_format = "q16_16")]
+        {
+            // Q16.16: (num << 16) / den — use i64 intermediate
+            let num_wide = (num as i64) << 16;
+            let den_wide = den as i64;
+            if den_wide == 0 { return Err(OverflowDetected::DivisionByZero); }
+            let result = (num_wide / den_wide) as i32;
             Ok(StackValue::Binary(tier, result, CompactShadow::None))
         }
     }
@@ -398,6 +464,18 @@ impl StackEvaluator {
                 return Err(OverflowDetected::DomainError);
             }
         }
+        #[cfg(table_format = "q32_32")]
+        {
+            if binary_val >= one_binary || binary_val <= -one_binary {
+                return Err(OverflowDetected::DomainError);
+            }
+        }
+        #[cfg(table_format = "q16_16")]
+        {
+            if binary_val >= one_binary || binary_val <= -one_binary {
+                return Err(OverflowDetected::DomainError);
+            }
+        }
 
         // Convert to binary to avoid cross-domain rational overflow
         let value = self.to_binary_value(&value)?;
@@ -475,6 +553,16 @@ impl StackEvaluator {
             let abs_val = if binary_val < 0 { -binary_val } else { binary_val };
             if abs_val > one_bs { return Err(OverflowDetected::DomainError); }
         }
+        #[cfg(table_format = "q32_32")]
+        {
+            let abs_val = if binary_val < 0 { -binary_val } else { binary_val };
+            if abs_val > one_bs { return Err(OverflowDetected::DomainError); }
+        }
+        #[cfg(table_format = "q16_16")]
+        {
+            let abs_val = if binary_val < 0 { -binary_val } else { binary_val };
+            if abs_val > one_bs { return Err(OverflowDetected::DomainError); }
+        }
 
         // Boundary cases: asin(±1) = ±π/2 exactly (avoids division by sqrt(0))
         if binary_val == one_bs {
@@ -488,10 +576,14 @@ impl StackEvaluator {
         let neg_one_bs = I256::zero() - one_bs;
         #[cfg(table_format = "q256_256")]
         let neg_one_bs = I512::zero() - one_bs;
+        #[cfg(table_format = "q32_32")]
+        let neg_one_bs: i64 = -one_bs;
+        #[cfg(table_format = "q16_16")]
+        let neg_one_bs: i32 = -one_bs;
         if binary_val == neg_one_bs {
             let storage_tier = self.profile_max_binary_tier();
             let pi_half = pi_half_at_compute_tier();
-            return Ok(StackValue::BinaryCompute(storage_tier, ComputeStorage::zero() - pi_half, CompactShadow::None));
+            return Ok(StackValue::BinaryCompute(storage_tier, -pi_half, CompactShadow::None));
         }
 
         // asin(x) = atan(x / sqrt(1 - x²))
@@ -598,6 +690,22 @@ impl StackEvaluator {
                     let num = I256::from_i128(*scaled) << 64;
                     Ok((num / ten_pow).as_i128())
                 }
+
+                #[cfg(table_format = "q32_32")]
+                {
+                    // Q32.32: BinaryStorage = i64, use i128 intermediate
+                    let ten_pow = pow10_i256(*decimals);
+                    let num = I256::from_i128(*scaled as i128) << 32;
+                    Ok((num / ten_pow).as_i128() as i64)
+                }
+
+                #[cfg(table_format = "q16_16")]
+                {
+                    // Q16.16: BinaryStorage = i32, use i64 intermediate
+                    let ten_pow = pow10_i256(*decimals);
+                    let num = I256::from_i128(*scaled as i128) << 16;
+                    Ok((num / ten_pow).as_i128() as i32)
+                }
             }
             StackValue::Symbolic(rational) => {
                 // Try i128 extraction first (tiers 1-5)
@@ -618,6 +726,18 @@ impl StackEvaluator {
                     #[cfg(table_format = "q64_64")]
                     {
                         return Ok((num << 64) / den);
+                    }
+
+                    #[cfg(table_format = "q32_32")]
+                    {
+                        // Q32.32: BinaryStorage = i64
+                        return Ok(((num << 32) / den) as i64);
+                    }
+
+                    #[cfg(table_format = "q16_16")]
+                    {
+                        // Q16.16: BinaryStorage = i32
+                        return Ok(((num << 16) / den) as i32);
                     }
                 }
                 // Fall back to wider extraction for Massive/Ultra tier rationals
@@ -644,6 +764,16 @@ impl StackEvaluator {
                     #[cfg(table_format = "q64_64")]
                     {
                         return Ok((num << 64) / den);
+                    }
+
+                    #[cfg(table_format = "q32_32")]
+                    {
+                        return Ok(((num << 32) / den) as i64);
+                    }
+
+                    #[cfg(table_format = "q16_16")]
+                    {
+                        return Ok(((num << 16) / den) as i32);
                     }
                 } else {
                     let cs = symbolic_wide_to_compute_storage(&rational)?;

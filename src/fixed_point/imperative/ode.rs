@@ -468,6 +468,8 @@ fn h_half(h: FixedPoint) -> FixedPoint {
     // Right-shift the raw Q-format value by 1 bit = divide by 2 exactly.
     // This works because the Q-format representation has the fractional
     // point at bit FRAC_BITS, so shifting right by 1 divides by 2.
+    #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+    { FixedPoint::from_raw(h.raw() >> 1) }
     #[cfg(table_format = "q64_64")]
     { FixedPoint::from_raw(h.raw() >> 1u32) }
     #[cfg(table_format = "q128_128")]
@@ -488,6 +490,10 @@ fn inf_norm_diff(a: &FixedVector, b: &FixedVector) -> FixedPoint {
 }
 
 /// Storage-tier quantum (smallest nonzero FixedPoint).
+#[cfg(table_format = "q32_32")]
+fn quantum_raw() -> BinaryStorage { 1i64 }
+#[cfg(table_format = "q16_16")]
+fn quantum_raw() -> BinaryStorage { 1i32 }
 #[cfg(table_format = "q64_64")]
 fn quantum_raw() -> BinaryStorage { 1i128 }
 #[cfg(table_format = "q128_128")]

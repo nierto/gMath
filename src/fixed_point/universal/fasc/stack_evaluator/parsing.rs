@@ -111,6 +111,10 @@ impl StackEvaluator {
 
         // All profiles use i128 path for ≤38 digits (10^38 fits in i128).
         // Q256.256 extends to 76 digits via two-part parsing.
+        #[cfg(table_format = "q16_16")]
+        let max_frac: usize = 4;
+        #[cfg(table_format = "q32_32")]
+        let max_frac: usize = 9;
         #[cfg(table_format = "q64_64")]
         let max_frac: usize = 38;
         #[cfg(table_format = "q128_128")]
@@ -336,6 +340,26 @@ impl StackEvaluator {
             Ok(StackValue::Binary(storage_tier, q_value, shadow))
         }
 
+        #[cfg(table_format = "q32_32")]
+        {
+            // Q32.32 has 32 integer bits (signed), valid range is i32.
+            if value > i32::MAX as i128 || value < i32::MIN as i128 {
+                return Err(OverflowDetected::Overflow);
+            }
+            let q_value = (value as i64) << 32;
+            Ok(StackValue::Binary(storage_tier, q_value, shadow))
+        }
+
+        #[cfg(table_format = "q16_16")]
+        {
+            // Q16.16 has 16 integer bits (signed), valid range is i16.
+            if value > i16::MAX as i128 || value < i16::MIN as i128 {
+                return Err(OverflowDetected::Overflow);
+            }
+            let q_value = (value as i32) << 16;
+            Ok(StackValue::Binary(storage_tier, q_value, shadow))
+        }
+
     }
 
     /// Parse named mathematical constant via fast hardcoded match
@@ -405,6 +429,12 @@ impl StackEvaluator {
             // 3^64 fits in u128, 3^128 does not
             if frac_trits <= 64 {
                 let den = 3u128.pow(frac_trits);
+
+                #[cfg(table_format = "q16_16")]
+                let raw_opt: Option<i128> = Some(storage as i128);
+
+                #[cfg(table_format = "q32_32")]
+                let raw_opt: Option<i128> = Some(storage as i128);
 
                 #[cfg(table_format = "q64_64")]
                 let raw_opt: Option<i128> = Some(storage);

@@ -20,6 +20,12 @@ pub(crate) fn to_binary_storage(val: i128) -> BinaryStorage {
     #[cfg(table_format = "q64_64")]
     { val }
 
+    #[cfg(table_format = "q32_32")]
+    { val as i64 }
+
+    #[cfg(table_format = "q16_16")]
+    { val as i32 }
+
 }
 
 /// Profile-specific extraction to i128 from BinaryStorage
@@ -35,6 +41,12 @@ pub(super) fn binary_storage_to_i128(val: &BinaryStorage) -> i128 {
 
     #[cfg(table_format = "q64_64")]
     { *val }
+
+    #[cfg(table_format = "q32_32")]
+    { *val as i128 }
+
+    #[cfg(table_format = "q16_16")]
+    { *val as i128 }
 
 }
 

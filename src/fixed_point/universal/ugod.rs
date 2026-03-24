@@ -102,6 +102,8 @@ pub trait UniversalTieredArithmetic: Clone + Sized + Debug {
     /// Get deployment profile maximum tier limit
     fn max_tier_for_profile(profile: DeploymentProfile) -> u8 where Self: Sized {
         match profile {
+            DeploymentProfile::Realtime => 2,        // Q16.16 minimal tiers
+            DeploymentProfile::Compact => 3,         // Q32.32 compact tiers
             DeploymentProfile::Embedded => 4,        // Conservative limits
             DeploymentProfile::Balanced => 5,        // Balanced precision/performance
             DeploymentProfile::Scientific => 6,      // High precision for research

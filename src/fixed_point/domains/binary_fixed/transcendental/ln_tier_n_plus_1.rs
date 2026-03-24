@@ -65,7 +65,7 @@ include!("../../../../generated_tables/ln_q512_512_tables.rs");
 
 /// Find the position of the most significant bit (0-indexed from LSB)
 /// Returns None for x == 0
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn find_msb_position_i128(x: i128) -> Option<u32> {
     if x <= 0 {
@@ -75,7 +75,7 @@ fn find_msb_position_i128(x: i128) -> Option<u32> {
     Some(127 - (x as u128).leading_zeros())
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn find_msb_position_i256(x: &I256) -> Option<u32> {
     if *x <= I256::zero() {
@@ -135,7 +135,7 @@ fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 /// **TABLES**: Uses Q64.64 tables directly (no conversion)
 /// **DOMAIN**: x > 0 (returns i128::MIN for x <= 0)
 #[inline(always)]
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_q64_64_native(x: i128) -> i128 {
     use crate::fixed_point::multiply_binary_i128;
 
@@ -233,7 +233,7 @@ pub fn ln_q64_64_native(x: i128) -> i128 {
 /// 8. Taylor series on final remainder (|r4| < 2^-40, only 5 terms needed)
 /// 9. Add all terms
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_q128_128_native(x: I256) -> I256 {
     // Handle domain error: ln(x) undefined for x <= 0
     if x <= I256::zero() {
@@ -683,7 +683,7 @@ pub fn ln_q512_512_native(x: I1024) -> I1024 {
 // HELPER MULTIPLICATION FUNCTIONS
 // ============================================================================
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
     // Handle signed multiplication: mul_to_i512 does UNSIGNED multiplication,
@@ -709,7 +709,7 @@ fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
 /// Divide two I256 values in Q128.128 format
 /// Result = (a / b) in Q128.128
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 fn divide_i256_q128_128(a: I256, b: I256) -> I256 {
     if b == I256::zero() {
         return I256::zero();
@@ -728,7 +728,7 @@ fn divide_i256_q128_128(a: I256, b: I256) -> I256 {
 /// **INPUT**: r is the scaled remainder after 4-stage table lookup, |r| < 2^-40
 /// **OUTPUT**: ln(1+r) in Q128.128 format
 /// **PRECISION**: For |r| < 2^-40, 5 terms for 128+ bits (r^5 < 2^-200)
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn taylor_series_ln_i256_q128_128(r: &I256) -> I256 {
     if *r == I256::zero() {
@@ -1099,4 +1099,54 @@ pub fn ln_binary_i1024(x: I1024) -> I1024 {
         return I1024::min_value();
     }
     ln_q512_512_native(x)
+}
+
+// ============================================================================
+// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
+// ============================================================================
+
+/// ln() for Q32.32 storage (i64) — tier N+1 via Q64.64
+///
+/// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
+/// For Q32.32 profile: BinaryStorage = i64
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn ln_binary_i64(x: i64) -> i64 {
+    if x <= 0 {
+        return i64::MIN;
+    }
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = ln_q64_64_native(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// ln() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn ln_binary_i128(x: i128) -> i128 {
+    if x <= 0 {
+        return i128::MIN;
+    }
+    ln_q64_64_native(x)
+}
+
+/// ln() for Q32.32 profile — I256 is tier N+1 (Q128.128)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn ln_binary_i256(x: I256) -> I256 {
+    if x <= I256::zero() {
+        return I256::min_value();
+    }
+    // Tier N+1: compute ln at Q128.128 natively
+    ln_q128_128_native(x)
+}
+
+/// ln() for Q32.32 profile — I512 wrapper
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn ln_binary_i512(x: I512) -> I512 {
+    if x <= I512::zero() {
+        return I512::min_value();
+    }
+    // Q32.32 profile doesn't support I512 natively, downscale
+    let x_q64 = (x >> 192).as_i256().as_i128();
+    let result_q64 = ln_q64_64_native(x_q64);
+    I512::from_i256(I256::from_i128(result_q64)) << 192
 }

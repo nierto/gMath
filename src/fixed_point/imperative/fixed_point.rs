@@ -24,10 +24,17 @@ use crate::fixed_point::{I256, I512};
 #[cfg(table_format = "q256_256")]
 use crate::fixed_point::{I512, I1024};
 
+// No extra wide-int imports needed for q32_32 (i64 storage, i128 intermediate)
+// No extra wide-int imports needed for q16_16 (i32 storage, i64 intermediate)
+
 // ============================================================================
 // Profile-dependent constants
 // ============================================================================
 
+#[cfg(table_format = "q16_16")]
+const STORAGE_TIER: u8 = 1;
+#[cfg(table_format = "q32_32")]
+const STORAGE_TIER: u8 = 2;
 #[cfg(table_format = "q64_64")]
 const STORAGE_TIER: u8 = 3;
 #[cfg(table_format = "q128_128")]
@@ -35,6 +42,10 @@ const STORAGE_TIER: u8 = 4;
 #[cfg(table_format = "q256_256")]
 const STORAGE_TIER: u8 = 5;
 
+#[cfg(table_format = "q16_16")]
+const FRAC_BITS: i32 = 16;
+#[cfg(table_format = "q32_32")]
+const FRAC_BITS: i32 = 32;
 #[cfg(table_format = "q64_64")]
 const FRAC_BITS: i32 = 64;
 #[cfg(table_format = "q128_128")]
@@ -42,6 +53,10 @@ const FRAC_BITS: i32 = 128;
 #[cfg(table_format = "q256_256")]
 const FRAC_BITS: i32 = 256;
 
+#[cfg(table_format = "q16_16")]
+const MAX_DECIMAL_DIGITS: usize = 4;
+#[cfg(table_format = "q32_32")]
+const MAX_DECIMAL_DIGITS: usize = 9;
 #[cfg(table_format = "q64_64")]
 const MAX_DECIMAL_DIGITS: usize = 19;
 #[cfg(table_format = "q128_128")]
@@ -97,6 +112,10 @@ impl Ord for FixedPoint {
 
 impl FixedPoint {
     /// Zero constant.
+    #[cfg(table_format = "q16_16")]
+    pub const ZERO: Self = Self { raw: 0i32 };
+    #[cfg(table_format = "q32_32")]
+    pub const ZERO: Self = Self { raw: 0i64 };
     #[cfg(table_format = "q64_64")]
     pub const ZERO: Self = Self { raw: 0i128 };
     #[cfg(table_format = "q128_128")]
@@ -107,6 +126,10 @@ impl FixedPoint {
     /// One (1.0) in Q-format.
     #[inline]
     pub fn one() -> Self {
+        #[cfg(table_format = "q16_16")]
+        { Self { raw: 1i32 << 16 } }
+        #[cfg(table_format = "q32_32")]
+        { Self { raw: 1i64 << 32 } }
         #[cfg(table_format = "q64_64")]
         { Self { raw: 1i128 << 64 } }
         #[cfg(table_format = "q128_128")]
@@ -130,6 +153,10 @@ impl FixedPoint {
     /// Create from an integer value.
     #[inline]
     pub fn from_int(v: i32) -> Self {
+        #[cfg(table_format = "q16_16")]
+        { Self { raw: (v as i32) << 16 } }
+        #[cfg(table_format = "q32_32")]
+        { Self { raw: (v as i64) << 32 } }
         #[cfg(table_format = "q64_64")]
         { Self { raw: (v as i128) << 64 } }
         #[cfg(table_format = "q128_128")]
@@ -141,6 +168,10 @@ impl FixedPoint {
     /// Extract the integer part (floor toward negative infinity).
     #[inline]
     pub fn to_int(self) -> i32 {
+        #[cfg(table_format = "q16_16")]
+        { (self.raw >> 16) as i32 }
+        #[cfg(table_format = "q32_32")]
+        { (self.raw >> 32) as i32 }
         #[cfg(table_format = "q64_64")]
         { (self.raw >> 64) as i32 }
         #[cfg(table_format = "q128_128")]
@@ -158,7 +189,7 @@ impl FixedPoint {
     /// Check if negative.
     #[inline]
     pub fn is_negative(self) -> bool {
-        #[cfg(table_format = "q64_64")]
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
         { self.raw < 0 }
         #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
         { self.raw.is_negative() }
@@ -167,7 +198,7 @@ impl FixedPoint {
     /// Check if zero.
     #[inline]
     pub fn is_zero(self) -> bool {
-        #[cfg(table_format = "q64_64")]
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
         { self.raw == 0 }
         #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
         { self.raw.is_zero() }
@@ -384,15 +415,15 @@ impl FixedPoint {
     // ========================================================================
 
     #[inline]
-    fn to_stack_value(self) -> StackValue {
+    pub(crate) fn to_stack_value(self) -> StackValue {
         StackValue::Binary(STORAGE_TIER, self.raw, CompactShadow::None)
     }
 
-    fn from_stack_value(sv: StackValue) -> Self {
+    pub(crate) fn from_stack_value(sv: StackValue) -> Self {
         Self::try_from_stack_value(sv).expect("FixedPoint: domain conversion failed")
     }
 
-    fn try_from_stack_value(sv: StackValue) -> Result<Self, OverflowDetected> {
+    pub(crate) fn try_from_stack_value(sv: StackValue) -> Result<Self, OverflowDetected> {
         match sv.as_binary_storage() {
             Some(raw) => Ok(Self { raw }),
             None => {
@@ -420,6 +451,32 @@ impl FixedPoint {
 
     /// Shift a non-negative mantissa into Q-format raw storage.
     fn shift_mantissa_to_raw(mantissa: i128, shift: i32) -> BinaryStorage {
+        #[cfg(table_format = "q16_16")]
+        {
+            if shift >= 32 {
+                panic!("FixedPoint: value too large for Q16.16");
+            } else if shift >= 0 {
+                (mantissa as i32).checked_shl(shift as u32)
+                    .expect("FixedPoint: value too large for Q16.16")
+            } else if shift > -32 {
+                (mantissa as i32) >> ((-shift) as u32)
+            } else {
+                0i32
+            }
+        }
+        #[cfg(table_format = "q32_32")]
+        {
+            if shift >= 64 {
+                panic!("FixedPoint: value too large for Q32.32");
+            } else if shift >= 0 {
+                (mantissa as i64).checked_shl(shift as u32)
+                    .expect("FixedPoint: value too large for Q32.32")
+            } else if shift > -64 {
+                (mantissa as i64) >> ((-shift) as u32)
+            } else {
+                0i64
+            }
+        }
         #[cfg(table_format = "q64_64")]
         {
             if shift >= 128 {
@@ -488,7 +545,7 @@ impl Add for FixedPoint {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        #[cfg(table_format = "q64_64")]
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
         { Self { raw: self.raw.wrapping_add(rhs.raw) } }
         #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
         { Self { raw: self.raw + rhs.raw } }
@@ -499,7 +556,7 @@ impl Sub for FixedPoint {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        #[cfg(table_format = "q64_64")]
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
         { Self { raw: self.raw.wrapping_sub(rhs.raw) } }
         #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
         { Self { raw: self.raw - rhs.raw } }
@@ -526,7 +583,7 @@ impl Neg for FixedPoint {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        #[cfg(table_format = "q64_64")]
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
         { Self { raw: self.raw.wrapping_neg() } }
         #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
         { Self { raw: -self.raw } }
@@ -562,6 +619,18 @@ impl DivAssign for FixedPoint {
 /// Uses tier N+1 widening multiplication with right-shift by FRAC_BITS.
 #[inline]
 fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
+    #[cfg(table_format = "q16_16")]
+    {
+        // i32*i32→i64, >>16, truncate to i32
+        let wide = (a as i64) * (b as i64);
+        (wide >> 16) as i32
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // i64*i64→i128, >>32, truncate to i64
+        let wide = (a as i128) * (b as i128);
+        (wide >> 32) as i64
+    }
     #[cfg(table_format = "q64_64")]
     {
         // multiply_binary_i128 does: i128*i128→I256, >>64, banker's rounding
@@ -604,6 +673,20 @@ fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
 /// Panics on division by zero.
 #[inline]
 fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
+    #[cfg(table_format = "q16_16")]
+    {
+        let num = (a as i64) << 16;
+        let den = b as i64;
+        assert!(den != 0, "FixedPoint: division by zero");
+        (num / den) as i32
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        let num = (a as i128) << 32;
+        let den = b as i128;
+        assert!(den != 0, "FixedPoint: division by zero");
+        (num / den) as i64
+    }
     #[cfg(table_format = "q64_64")]
     {
         let num = I256::from_i128(a) << 64usize;

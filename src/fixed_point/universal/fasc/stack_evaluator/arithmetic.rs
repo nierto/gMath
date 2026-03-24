@@ -412,7 +412,9 @@ impl StackEvaluator {
     /// **CONTRAST**: Basic ops (add/mul/sub/div) promote on overflow detection
     pub(crate) fn profile_max_binary_tier(&self) -> u8 {
         match self.deployment_profile {
-            DeploymentProfile::Embedded => 3,     // Q64.64 (i128)
+            DeploymentProfile::Realtime => 1,      // Q16.16 (i32)
+            DeploymentProfile::Compact => 2,       // Q32.32 (i64)
+            DeploymentProfile::Embedded => 3,      // Q64.64 (i128)
             DeploymentProfile::Balanced => 4,      // Q128.128 (I256)
             DeploymentProfile::Scientific => 5,    // Q256.256 (I512)
             DeploymentProfile::Custom => 3,        // Default to Q64.64 for custom
@@ -429,6 +431,8 @@ impl StackEvaluator {
     ///   - Scientific (I512)           → Tier 5 TQ128.128 (I512, 128 frac trits ≈ 61 decimals)
     pub(crate) fn profile_max_ternary_tier(&self) -> u8 {
         match self.deployment_profile {
+            DeploymentProfile::Realtime => 1,      // TQ8.8 (i32, 8 frac trits)
+            DeploymentProfile::Compact => 2,       // TQ16.16 (i64, 16 frac trits)
             DeploymentProfile::Embedded => 3,      // TQ32.32 (i128, 32 frac trits)
             DeploymentProfile::Balanced => 4,      // TQ64.64 (I256, 64 frac trits)
             DeploymentProfile::Scientific => 5,    // TQ128.128 (I512, 128 frac trits)

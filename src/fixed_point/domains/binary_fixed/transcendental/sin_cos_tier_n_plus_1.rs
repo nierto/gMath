@@ -59,19 +59,19 @@ pub fn cos_binary_i128(x: i128) -> i128 {
     cos_q64_64(x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute sin at Q128.128 natively
     sin_q128_128_for_embedded(x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute cos at Q128.128 natively
     cos_q128_128_for_embedded(x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_binary_i512(x: I512) -> I512 {
     // Downscale to Q128.128, compute, upscale back to Q256.256
     let x_q128 = (x >> 128).as_i256();
@@ -79,7 +79,7 @@ pub fn sin_binary_i512(x: I512) -> I512 {
     I512::from_i256(result_q128) << 128
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_binary_i512(x: I512) -> I512 {
     // Downscale to Q128.128, compute, upscale back to Q256.256
     let x_q128 = (x >> 128).as_i256();
@@ -88,20 +88,20 @@ pub fn cos_binary_i512(x: I512) -> I512 {
 }
 
 /// Core Q64.64 sin/cos implementation
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn sin_q64_64(x: i128) -> i128 {
     let (sin_val, _cos_val) = sincos_q64_64(x);
     sin_val
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn cos_q64_64(x: i128) -> i128 {
     let (_sin_val, cos_val) = sincos_q64_64(x);
     cos_val
 }
 
 /// Compute both sin and cos simultaneously (shared range reduction)
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn sincos_q64_64(x: i128) -> (i128, i128) {
     let one_q64: i128 = 1i128 << 64;
 
@@ -155,7 +155,7 @@ fn sincos_q64_64(x: i128) -> (i128, i128) {
 
 /// Taylor series for sin(r) in Q64.64 format
 /// sin(r) = Σ (-1)^k * r^(2k+1) / (2k+1)!
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn taylor_sin_q64_64(r: i128) -> i128 {
     // Horner form: sin(r) = r * (1 - r²/6 * (1 - r²/20 * (1 - r²/42 * ...)))
     let r_sq = {
@@ -204,7 +204,7 @@ fn taylor_sin_q64_64(r: i128) -> i128 {
 
 /// Taylor series for cos(r) in Q64.64 format
 /// cos(r) = Σ (-1)^k * r^(2k) / (2k)!
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn taylor_cos_q64_64(r: i128) -> i128 {
     let r_sq = {
         let r_wide = I256::from_i128(r);
@@ -553,7 +553,7 @@ fn taylor_cos_q256_256(r: I512) -> I512 {
 // ============================================================================
 
 /// Returns π/2 in Q64.64 format
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn pi_half_i128() -> i128 {
     PI_HALF_Q64
 }
@@ -710,13 +710,13 @@ pub fn cos_compute_tier_i512(x: I512) -> I512 {
 }
 
 /// Compute sin at compute tier for embedded/performance profile (Q128.128 on I256)
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_compute_tier_i256(x: I256) -> I256 {
     sin_q128_128_for_embedded(x)
 }
 
 /// Compute cos at compute tier for embedded/performance profile (Q128.128 on I256)
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_compute_tier_i256(x: I256) -> I256 {
     cos_q128_128_for_embedded(x)
 }
@@ -735,7 +735,7 @@ pub fn sincos_compute_tier_i512(x: I512) -> (I512, I512) {
 }
 
 /// Fused sin+cos at compute tier for embedded profile (Q128.128 on I256).
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sincos_compute_tier_i256(x: I256) -> (I256, I256) {
     sincos_q128_128_impl(x)
 }
@@ -746,17 +746,17 @@ pub fn sincos_compute_tier_i256(x: I256) -> (I256, I256) {
 //
 // Q128.128 sin/cos available under q64_64 for tier N+1 computation
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn sin_q128_128_for_embedded(x: I256) -> I256 {
     sincos_q128_128_impl(x).0
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn cos_q128_128_for_embedded(x: I256) -> I256 {
     sincos_q128_128_impl(x).1
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn sincos_q128_128_impl(x: I256) -> (I256, I256) {
     let one_q128 = I256::from_i128(1) << 128;
 
@@ -799,7 +799,7 @@ fn sincos_q128_128_impl(x: I256) -> (I256, I256) {
     }
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn taylor_sin_q128_128_impl(r: I256) -> I256 {
     let r_sq = {
         let r_wide = I512::from_i256(r);
@@ -831,7 +831,7 @@ fn taylor_sin_q128_128_impl(r: I256) -> I256 {
     ((r_wide * poly_wide) >> 128).as_i256()
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn taylor_cos_q128_128_impl(r: I256) -> I256 {
     let r_sq = {
         let r_wide = I512::from_i256(r);
@@ -972,4 +972,65 @@ fn taylor_cos_q256_256_impl(r: I512) -> I512 {
         ((r_sq_wide * result_wide) >> 256).as_i512()
     };
     I512::from_words(COS_COEFFS_Q256[0]) - inner
+}
+
+// ============================================================================
+// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
+// ============================================================================
+
+/// sin() for Q32.32 storage (i64) — tier N+1 via Q64.64
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sin_binary_i64(x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = sin_q64_64(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// cos() for Q32.32 storage (i64) — tier N+1 via Q64.64
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn cos_binary_i64(x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = cos_q64_64(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// sin() at compute tier for Q16.16 profile (Q32.32 on i64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sin_compute_tier_i64(x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = sin_q64_64(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// cos() at compute tier for Q16.16 profile (Q32.32 on i64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn cos_compute_tier_i64(x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = cos_q64_64(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// Fused sin+cos at compute tier for Q16.16 profile (Q32.32 on i64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sincos_compute_tier_i64(x: i64) -> (i64, i64) {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let (sin_val, cos_val) = sincos_q64_64(x_q64);
+    (downscale_q64_to_q32(sin_val), downscale_q64_to_q32(cos_val))
+}
+
+/// sin() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sin_binary_i128(x: i128) -> i128 {
+    sin_q64_64(x)
+}
+
+/// cos() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn cos_binary_i128(x: i128) -> i128 {
+    cos_q64_64(x)
 }

@@ -1,6 +1,6 @@
 [package]
 name = "g_math"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — zero-float, 0 ULP transcendentals"
 authors = ["Niels Erik Toren"]
@@ -43,6 +43,8 @@ default = []
 infinite-precision = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
 
 # Deployment profiles (select compute precision via GMATH_PROFILE env var)
+realtime = []      # Q16.16, 4 decimals, i32 storage, i64 compute
+compact = []       # Q32.32, 9 decimals, i64 storage, i128 compute
 embedded = []      # Q64.64, 19 decimals
 balanced = []      # Q128.128, 38 decimals
 scientific = []    # Q256.256, 77 decimals

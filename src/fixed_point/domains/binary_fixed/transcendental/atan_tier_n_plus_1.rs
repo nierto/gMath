@@ -46,15 +46,15 @@ pub fn atan_binary_i128(x: i128) -> i128 {
     atan_q64_64(x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute atan at Q128.128 natively
     atan_q128_128(x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i512(x: I512) -> I512 {
-    // Compute at Q256.256 for Q64.64 profile
+    // Compute at Q256.256 for Q64.64/Q32.32 profile
     let x_q256 = x;
     atan_q256_256(x_q256)
 }
@@ -65,13 +65,13 @@ pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
     atan2_q64_64(y, x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
     // Tier N+1: compute atan2 at Q128.128 natively
     atan2_q128_128_for_embedded(y, x)
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
     // Downscale to Q128.128, compute, upscale back
     let y_q128 = (y >> 128).as_i256();
@@ -80,7 +80,7 @@ pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
     I512::from_i256(result_q128) << 128
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_q64_64(x: i128) -> i128 {
     let one_q64: i128 = 1i128 << 64;
 
@@ -126,7 +126,7 @@ fn atan_q64_64(x: i128) -> i128 {
 
 /// Core Taylor series for atan(x), |x| <= tan(π/8) ≈ 0.414
 /// atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_core_q64_64(x: i128) -> i128 {
     let x_sq = {
         let x_wide = I256::from_i128(x);
@@ -172,7 +172,7 @@ fn atan_core_q64_64(x: i128) -> i128 {
 }
 
 /// atan2(y, x) in Q64.64 — handles all quadrants
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan2_q64_64(y: i128, x: i128) -> i128 {
     if x == 0 && y == 0 {
         return 0; // undefined, return 0
@@ -260,7 +260,7 @@ pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
     atan2_q256_256_for_balanced(y, x)
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_q128_128(x: I256) -> I256 {
     let one_q128 = I256::from_i128(1) << 128;
 
@@ -300,7 +300,7 @@ fn atan_q128_128(x: I256) -> I256 {
     if is_neg { I256::zero() - result } else { result }
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_core_q128_128(x: I256) -> I256 {
     let x_sq = {
         let x_wide = I512::from_i256(x);
@@ -420,7 +420,7 @@ pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
     atan2_q256_256(y, x)
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q256_256"))]
+#[cfg(any(table_format = "q64_64", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_q256_256(x: I512) -> I512 {
     let one_q256 = I512::from_i128(1) << 256;
 
@@ -461,7 +461,7 @@ fn atan_q256_256(x: I512) -> I512 {
     if is_neg { I512::zero() - result } else { result }
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q256_256"))]
+#[cfg(any(table_format = "q64_64", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_core_q256_256(x: I512) -> I512 {
     let x_sq = {
         let x_wide = I1024::from_i512(x);
@@ -709,13 +709,13 @@ pub fn atan2_compute_tier_i512(y: I512, x: I512) -> I512 {
 }
 
 /// Compute atan at compute tier for embedded/performance profile (Q128.128 on I256)
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_compute_tier_i256(x: I256) -> I256 {
     atan_q128_128_for_embedded(x)
 }
 
 /// Compute atan2 at compute tier for embedded/performance profile
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_compute_tier_i256(y: I256, x: I256) -> I256 {
     atan2_q128_128_for_embedded(y, x)
 }
@@ -726,7 +726,7 @@ pub fn atan2_compute_tier_i256(y: I256, x: I256) -> I256 {
 
 // Q128.128 atan available under q64_64 for tier N+1
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_q128_128_for_embedded(x: I256) -> I256 {
     let one_q128 = I256::from_i128(1) << 128;
 
@@ -762,7 +762,7 @@ fn atan_q128_128_for_embedded(x: I256) -> I256 {
     if is_neg { I256::zero() - result } else { result }
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan_core_q128_128_impl(x: I256) -> I256 {
     let x_sq = {
         let x_wide = I512::from_i256(x);
@@ -800,7 +800,7 @@ fn atan_core_q128_128_impl(x: I256) -> I256 {
     ((x_wide * poly_wide) >> 128).as_i256()
 }
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan2_q128_128_for_embedded(y: I256, x: I256) -> I256 {
     let zero = I256::zero();
     if x == zero && y == zero { return zero; }
@@ -943,4 +943,48 @@ fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
     }
     let pi_half = I512::from_words(PI_HALF_Q256);
     if y > zero { pi_half } else { zero - pi_half }
+}
+
+// ============================================================================
+// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
+// ============================================================================
+
+/// atan() for Q32.32 storage (i64) — tier N+1 via Q64.64
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn atan_binary_i64(x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = atan_q64_64(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// atan() at compute tier for Q16.16 profile (Q32.32 on i64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn atan_compute_tier_i64(x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = atan_q64_64(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// atan2() at compute tier for Q16.16 profile (Q32.32 on i64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn atan2_compute_tier_i64(y: i64, x: i64) -> i64 {
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let y_q64 = upscale_q32_to_q64(y);
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = atan2_q64_64(y_q64, x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// atan() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn atan_binary_i128(x: i128) -> i128 {
+    atan_q64_64(x)
+}
+
+/// atan2() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
+    atan2_q64_64(y, x)
 }

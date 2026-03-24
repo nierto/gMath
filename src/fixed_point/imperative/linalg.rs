@@ -18,6 +18,9 @@ use crate::fixed_point::{I256, I512};
 #[cfg(table_format = "q256_256")]
 use crate::fixed_point::{I512, I1024};
 
+// Q32.32 and Q16.16 use native integer types only — no I256/I512/I1024 imports needed.
+// BinaryStorage = i64 / i32, ComputeStorage = i128 / i64 (already native).
+
 // Re-export ComputeStorage for fused operations
 pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::downscale_to_storage;
@@ -43,6 +46,10 @@ pub(crate) fn round_to_storage(acc: ComputeStorage) -> BinaryStorage {
             // Fallback: truncate without rounding (matches old behavior)
             #[cfg(table_format = "q64_64")]
             { (acc >> 64u32).as_i128() }
+            #[cfg(table_format = "q32_32")]
+            { (acc >> 32) as i64 }
+            #[cfg(table_format = "q16_16")]
+            { (acc >> 16) as i32 }
             #[cfg(table_format = "q128_128")]
             { (acc >> 128usize).as_i256() }
             #[cfg(table_format = "q256_256")]
@@ -56,6 +63,10 @@ pub(crate) fn round_to_storage(acc: ComputeStorage) -> BinaryStorage {
 pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
     #[cfg(table_format = "q64_64")]
     { I256::from_i128(val) << 64usize }
+    #[cfg(table_format = "q32_32")]
+    { (val as i128) << 32 }
+    #[cfg(table_format = "q16_16")]
+    { (val as i64) << 16 }
     #[cfg(table_format = "q128_128")]
     { I512::from_i256(val) << 128usize }
     #[cfg(table_format = "q256_256")]
@@ -92,6 +103,26 @@ pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
         }
         // Shift right by FRAC_BITS (64) to convert from Q128.128 to Q64.64
         FixedPoint::from_raw((acc >> 64u32).as_i128())
+    }
+
+    #[cfg(table_format = "q32_32")]
+    {
+        // i64 × i64 → i128 (Q64.64), accumulate in i128, shift >> 32
+        let mut acc: i128 = 0;
+        for i in 0..a.len() {
+            acc += (a[i].raw() as i128) * (b[i].raw() as i128);
+        }
+        FixedPoint::from_raw((acc >> 32) as i64)
+    }
+
+    #[cfg(table_format = "q16_16")]
+    {
+        // i32 × i32 → i64 (Q32.32), accumulate in i64, shift >> 16
+        let mut acc: i64 = 0;
+        for i in 0..a.len() {
+            acc += (a[i].raw() as i64) * (b[i].raw() as i64);
+        }
+        FixedPoint::from_raw((acc >> 16) as i32)
     }
 
     #[cfg(table_format = "q128_128")]
@@ -148,6 +179,26 @@ pub(crate) fn compute_tier_dot_raw(a: &[BinaryStorage], b: &[BinaryStorage]) -> 
         let mut acc = I256::zero();
         for i in 0..a.len() {
             acc = acc + (I256::from_i128(a[i]) * I256::from_i128(b[i]));
+        }
+        round_to_storage(acc)
+    }
+
+    #[cfg(table_format = "q32_32")]
+    {
+        // i64 × i64 → i128, accumulate in i128
+        let mut acc: i128 = 0;
+        for i in 0..a.len() {
+            acc += (a[i] as i128) * (b[i] as i128);
+        }
+        round_to_storage(acc)
+    }
+
+    #[cfg(table_format = "q16_16")]
+    {
+        // i32 × i32 → i64, accumulate in i64
+        let mut acc: i64 = 0;
+        for i in 0..a.len() {
+            acc += (a[i] as i64) * (b[i] as i64);
         }
         round_to_storage(acc)
     }
@@ -223,6 +274,26 @@ pub(crate) fn compute_tier_sub_dot_compute(
         let mut acc = I256::from_i128(init) << 64usize;
         for i in 0..a.len() {
             acc = acc - (I256::from_i128(a[i]) * I256::from_i128(b[i]));
+        }
+        acc
+    }
+
+    #[cfg(table_format = "q32_32")]
+    {
+        // i64 upscaled to i128, then subtract i64×i64→i128 products
+        let mut acc: i128 = (init as i128) << 32;
+        for i in 0..a.len() {
+            acc -= (a[i] as i128) * (b[i] as i128);
+        }
+        acc
+    }
+
+    #[cfg(table_format = "q16_16")]
+    {
+        // i32 upscaled to i64, then subtract i32×i32→i64 products
+        let mut acc: i64 = (init as i64) << 16;
+        for i in 0..a.len() {
+            acc -= (a[i] as i64) * (b[i] as i64);
         }
         acc
     }
@@ -371,6 +442,10 @@ pub(crate) fn convergence_threshold_tight(magnitude: FixedPoint) -> FixedPoint {
 
 #[cfg(table_format = "q64_64")]
 fn two_thirds_frac_bits() -> u32 { 42 }
+#[cfg(table_format = "q32_32")]
+fn two_thirds_frac_bits() -> u32 { 21 }
+#[cfg(table_format = "q16_16")]
+fn two_thirds_frac_bits() -> u32 { 10 }
 #[cfg(table_format = "q128_128")]
 fn two_thirds_frac_bits() -> u32 { 85 }
 #[cfg(table_format = "q256_256")]
@@ -378,6 +453,10 @@ fn two_thirds_frac_bits() -> usize { 170 }
 
 #[cfg(table_format = "q64_64")]
 fn half_frac_bits() -> u32 { 32 }
+#[cfg(table_format = "q32_32")]
+fn half_frac_bits() -> u32 { 16 }
+#[cfg(table_format = "q16_16")]
+fn half_frac_bits() -> u32 { 8 }
 #[cfg(table_format = "q128_128")]
 fn half_frac_bits() -> u32 { 64 }
 #[cfg(table_format = "q256_256")]
@@ -385,7 +464,204 @@ fn half_frac_bits() -> usize { 128 }
 
 #[cfg(table_format = "q64_64")]
 fn quantum_raw() -> BinaryStorage { 1i128 }
+#[cfg(table_format = "q32_32")]
+fn quantum_raw() -> BinaryStorage { 1i64 }
+#[cfg(table_format = "q16_16")]
+fn quantum_raw() -> BinaryStorage { 1i32 }
 #[cfg(table_format = "q128_128")]
 fn quantum_raw() -> BinaryStorage { I256::from_i128(1) }
 #[cfg(table_format = "q256_256")]
 fn quantum_raw() -> BinaryStorage { I512::from_i128(1) }
+
+// ============================================================================
+// Compute-tier trit-weighted operations (zero-multiply dot product)
+// ============================================================================
+
+use crate::fixed_point::domains::balanced_ternary::trit_packing::Trit;
+// upscale_to_compute is defined locally above — no import needed
+
+/// Trit-weighted dot product accumulated at compute tier (tier N+1).
+///
+/// For each trit in `packed_trits` (5 per byte, base-3 encoding):
+///   - `+1` → `acc += widen(values[i])`
+///   - `-1` → `acc -= widen(values[i])`
+///   - ` 0` → skip (no operation)
+///
+/// The accumulator runs at ComputeStorage width. A single downscale
+/// with rounding occurs at the very end. **Zero multiplications** in the
+/// inner loop — only add/sub/skip.
+///
+/// After downscaling, the result is multiplied by `scale` (per-block
+/// dequantization factor). The final multiply also uses compute-tier
+/// intermediate to preserve precision.
+///
+/// # Arguments
+/// - `packed_trits`: 5 trits per byte, base-3 encoded ({-1,0,+1} → {0,1,2})
+/// - `num_elements`: exact number of trits (may be less than 5 × packed.len())
+/// - `values`: activation vector in BinaryStorage format
+/// - `scale`: per-block scale factor in BinaryStorage format
+///
+/// # Panics
+/// Panics if `values.len() < num_elements`.
+pub fn compute_tier_trit_dot_raw(
+    packed_trits: &[u8],
+    num_elements: usize,
+    values: &[BinaryStorage],
+    scale: BinaryStorage,
+) -> BinaryStorage {
+    assert!(values.len() >= num_elements, "compute_tier_trit_dot_raw: values shorter than num_elements");
+
+    // Accumulate at compute tier (tier N+1) for full precision
+    let mut acc = compute_zero();
+    let mut trit_idx = 0;
+
+    for &byte in packed_trits {
+        if trit_idx >= num_elements {
+            break;
+        }
+
+        // Unpack 5 trits from this byte (most-significant first)
+        let mut remaining = byte;
+        let mut chunk_trits = [1u8; 5]; // 1 = Zero (no-op)
+        for j in (0..5).rev() {
+            chunk_trits[j] = remaining % 3;
+            remaining /= 3;
+        }
+
+        for j in 0..5 {
+            if trit_idx >= num_elements {
+                break;
+            }
+
+            let trit = chunk_trits[j];
+            if trit == 2 {
+                // Trit::Pos (+1): acc += widen(value)
+                let widened = upscale_to_compute(values[trit_idx]);
+                acc = compute_add(acc, widened);
+            } else if trit == 0 {
+                // Trit::Neg (-1): acc -= widen(value)
+                let widened = upscale_to_compute(values[trit_idx]);
+                acc = compute_sub(acc, widened);
+            }
+            // trit == 1 → Trit::Zero: skip (zero multiply eliminated)
+
+            trit_idx += 1;
+        }
+    }
+
+    // Single downscale of the accumulated dot product
+    let dot_storage = round_to_storage(acc);
+
+    // Apply per-block scale: result = dot * scale, at compute tier
+    compute_tier_mul_pair(dot_storage, scale)
+}
+
+/// Row-wise trit-weighted matrix-vector product at compute tier.
+///
+/// Computes `result[row] = sum_j(trit[row][j] * values[j]) * scales[row]`
+/// for each row, where the inner sum is a zero-multiply trit dot product.
+///
+/// # Arguments
+/// - `packed_trits`: row-major packed trit matrix (each row = ceil(cols/5) bytes)
+/// - `rows`: number of matrix rows
+/// - `cols`: number of columns (= length of values vector)
+/// - `values`: input activation vector
+/// - `scales`: per-row scale factors (one per row)
+///
+/// # Returns
+/// Output vector of length `rows`.
+pub fn compute_tier_trit_matvec_raw(
+    packed_trits: &[u8],
+    rows: usize,
+    cols: usize,
+    values: &[BinaryStorage],
+    scales: &[BinaryStorage],
+) -> Vec<BinaryStorage> {
+    assert!(values.len() >= cols, "compute_tier_trit_matvec_raw: values shorter than cols");
+    assert!(scales.len() >= rows, "compute_tier_trit_matvec_raw: scales shorter than rows");
+
+    let bytes_per_row = (cols + 4) / 5;
+    let mut result = Vec::with_capacity(rows);
+
+    for row in 0..rows {
+        let row_start = row * bytes_per_row;
+        let row_end = row_start + bytes_per_row;
+        let row_trits = &packed_trits[row_start..row_end];
+
+        let dot = compute_tier_trit_dot_raw(row_trits, cols, values, scales[row]);
+        result.push(dot);
+    }
+
+    result
+}
+
+// Compute-tier helpers for trit operations
+#[inline]
+fn compute_zero() -> ComputeStorage {
+    #[cfg(table_format = "q64_64")]
+    { I256::zero() }
+    #[cfg(table_format = "q32_32")]
+    { 0i128 }
+    #[cfg(table_format = "q16_16")]
+    { 0i64 }
+    #[cfg(table_format = "q128_128")]
+    { I512::zero() }
+    #[cfg(table_format = "q256_256")]
+    { I1024::zero() }
+}
+
+#[inline]
+fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    a + b
+}
+
+#[inline]
+fn compute_sub(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    a - b
+}
+
+/// Multiply two BinaryStorage values at compute tier with single downscale.
+#[inline]
+fn compute_tier_mul_pair(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
+    #[cfg(table_format = "q64_64")]
+    {
+        let a_wide = I256::from_i128(a);
+        let b_wide = I256::from_i128(b);
+        let product = a_wide * b_wide;
+        round_to_storage(product)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // i64 × i64 → i128 (native widening, no I256 needed)
+        let product = (a as i128) * (b as i128);
+        round_to_storage(product)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // i32 × i32 → i64 (native widening, no I128 needed)
+        let product = (a as i64) * (b as i64);
+        round_to_storage(product)
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        let a_neg = a.is_negative();
+        let b_neg = b.is_negative();
+        let result_neg = a_neg != b_neg;
+        let abs_a = if a_neg { -a } else { a };
+        let abs_b = if b_neg { -b } else { b };
+        let product = abs_a.mul_to_i512(abs_b);
+        let product = if result_neg { -product } else { product };
+        round_to_storage(product)
+    }
+    #[cfg(table_format = "q256_256")]
+    {
+        let a_neg = a.is_negative();
+        let b_neg = b.is_negative();
+        let result_neg = a_neg != b_neg;
+        let abs_a = if a_neg { -a } else { a };
+        let abs_b = if b_neg { -b } else { b };
+        let product = abs_a.mul_to_i1024(abs_b);
+        let product = if result_neg { -product } else { product };
+        round_to_storage(product)
+    }
+}

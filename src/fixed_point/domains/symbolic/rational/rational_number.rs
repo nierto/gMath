@@ -996,23 +996,27 @@ impl RationalNumber {
     // TIER-SPECIFIC OPERATION METHODS: Mathematical operations at specific tiers
     // ================================================================================================
     
-    /// Addition at tiny tier
+    /// Addition at tiny tier: a/a_den + b/b_den = (a*b_den + b*a_den) / (a_den*b_den)
     fn add_tiny_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         match (&self.storage, &other.storage) {
             (RationalStorage::Tiny { num: a_num, den: a_den },
-             RationalStorage::Tiny { num: b_num, den: _b_den }) => {
-                Ok(Self::new(*a_num as i128 + *b_num as i128, *a_den as u128))
+             RationalStorage::Tiny { num: b_num, den: b_den }) => {
+                let num = *a_num as i128 * *b_den as i128 + *b_num as i128 * *a_den as i128;
+                let den = *a_den as u128 * *b_den as u128;
+                Ok(Self::new(num, den))
             },
-            _ => Err(OverflowDetected::TierOverflow), // Both should be tiny tier
+            _ => Err(OverflowDetected::TierOverflow),
         }
     }
 
-    /// Subtraction at tiny tier
+    /// Subtraction at tiny tier: a/a_den - b/b_den = (a*b_den - b*a_den) / (a_den*b_den)
     fn subtract_tiny_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         match (&self.storage, &other.storage) {
             (RationalStorage::Tiny { num: a_num, den: a_den },
-             RationalStorage::Tiny { num: b_num, den: _b_den }) => {
-                Ok(Self::new(*a_num as i128 - *b_num as i128, *a_den as u128))
+             RationalStorage::Tiny { num: b_num, den: b_den }) => {
+                let num = *a_num as i128 * *b_den as i128 - *b_num as i128 * *a_den as i128;
+                let den = *a_den as u128 * *b_den as u128;
+                Ok(Self::new(num, den))
             },
             _ => Err(OverflowDetected::TierOverflow),
         }
@@ -1029,7 +1033,7 @@ impl RationalNumber {
         }
     }
     
-    /// Division at tiny tier
+    /// Division at tiny tier: (a/a_den) / (b/b_den) = (a*b_den) / (a_den*|b|), with sign
     fn divide_tiny_tier(&self, other: &Self) -> Result<Self, OverflowDetected> {
         match (&self.storage, &other.storage) {
             (RationalStorage::Tiny { num: a_num, den: a_den },
@@ -1037,8 +1041,14 @@ impl RationalNumber {
                 if *b_num == 0 {
                     return Err(OverflowDetected::PrecisionLimit);
                 }
-                // (a/b) / (c/d) = (a*d) / (b*c)
-                Ok(Self::new(*a_num as i128 * *b_den as i128, *a_den as u128 * b_num.unsigned_abs() as u128))
+                // (a/a_den) / (b/b_den) = (a*b_den) / (a_den*|b|)
+                // When b is negative, negate the numerator to preserve sign
+                let mut num = *a_num as i128 * *b_den as i128;
+                if *b_num < 0 {
+                    num = -num;
+                }
+                let den = *a_den as u128 * b_num.unsigned_abs() as u128;
+                Ok(Self::new(num, den))
             },
             _ => Err(OverflowDetected::TierOverflow),
         }
@@ -2210,6 +2220,8 @@ impl UniversalTieredArithmetic for RationalNumber {
     /// Get deployment profile maximum tier limit for rational arithmetic
     fn max_tier_for_profile(profile: DeploymentProfile) -> u8 {
         match profile {
+            DeploymentProfile::Realtime => 3,        // Minimal tiers for Q16.16
+            DeploymentProfile::Compact => 4,         // Compact tiers for Q32.32
             DeploymentProfile::Embedded => 5,        // Conservative for embedded
             DeploymentProfile::Balanced => 7,        // Full tiers except BigInt
             DeploymentProfile::Scientific => 7,      // Full tiers for research

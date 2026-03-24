@@ -6,6 +6,14 @@
 /// Selected via `GMATH_PROFILE` env var at build time (processed by build.rs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentProfile {
+    /// Realtime: Q16.16, i32 storage, i64 compute, 4 decimal places
+    /// PRECISION: 4 decimal places | TIER: 1 (i16/u16)
+    Realtime,
+
+    /// Compact/Fast: Q32.32, i64 storage, i128 compute, 9 decimal places
+    /// PRECISION: 9 decimal places | TIER: 2 (i32/u32)
+    Compact,
+
     /// Embedded systems: Q64.64, scalar-only, minimal memory
     /// PRECISION: 19 decimal places | TIER: 4 (i64/u64)
     Embedded,

@@ -693,6 +693,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// let x = DecimalFixed::<77>::from_decimal_str_decimal("2.7").unwrap();
     /// let result = x.exp();  // exp(2.7) with ~70-75 decimal precision
     /// ```
+    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
     pub fn exp(&self) -> Self {
         use crate::fixed_point::transcendental::exp_binary_i512;
 

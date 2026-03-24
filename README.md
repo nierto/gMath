@@ -128,12 +128,15 @@ Build profile selection is driven by `GMATH_PROFILE`. The default is **embedded*
 
 | Profile      | Format    | Storage | Compute | Decimal digits |
 | ------------ | --------- | ------- | ------- | -------------- |
+| `realtime`   | Q16.16    | i32     | i64     | 4              |
+| `compact`    | Q32.32    | i64     | i128    | 9              |
 | `embedded`   | Q64.64    | i128    | I256    | 19             |
 | `balanced`   | Q128.128  | I256    | I512    | 38             |
 | `scientific` | Q256.256  | I512    | I1024   | 77             |
 
 ```bash
 cargo build                             # embedded (default)
+GMATH_PROFILE=compact cargo build       # 9-digit precision
 GMATH_PROFILE=balanced cargo build      # 38-digit precision
 GMATH_PROFILE=scientific cargo build    # 77-digit precision
 ```
@@ -170,7 +173,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-g_math = "0.1.1"
+g_math = "0.3.0"
 ```
 
 Basic use:
@@ -254,6 +257,98 @@ The imperative API (`FixedPoint`, `FixedVector`, `FixedMatrix`) is also availabl
 
 If you are new to the crate, start with `g_math::canonical`.
 
+### Lazy matrix expressions (v0.3.0)
+
+`LazyMatrixExpr` provides matrix chain persistence — the matrix analog of scalar `BinaryCompute`. All intermediates stay at `ComputeMatrix` (tier N+1) with a single downscale at `evaluate_matrix()`.
+
+```rust
+use g_math::canonical::{evaluate_matrix, LazyMatrixExpr};
+use g_math::fixed_point::FixedMatrix;
+
+let a = LazyMatrixExpr::from(some_matrix);
+let b = LazyMatrixExpr::from(other_matrix);
+
+// Entire chain at compute tier — zero intermediate materializations
+let result = evaluate_matrix(&(a.exp() * b.exp())).unwrap();
+```
+
+Supports: `Add`, `Sub`, `Mul` (matmul), `ScalarMul`, `Transpose`, `Neg`, `Inverse`, `Exp`, `Log`, `Sqrt`, `Pow`.
+
+### Fused sincos (v0.3.0)
+
+`evaluate_sincos` computes both sin(x) and cos(x) from a single shared range reduction:
+
+```rust
+use g_math::canonical::{gmath, evaluate_sincos};
+
+let (sin_val, cos_val) = evaluate_sincos(&gmath("1.5")).unwrap();
+```
+
+The evaluator also short-circuits `exp(ln(x))` and `ln(exp(x))` to the identity.
+
+### Multi-domain matrices (v0.3.0)
+
+`DomainMatrix` holds `StackValue` entries — each element carries its own domain tag. Same-domain operations use native dispatch; cross-domain operations route through rational automatically.
+
+```rust
+use g_math::canonical::DomainMatrix;
+
+// Decimal matrix (financial-grade 0-ULP exact arithmetic)
+let rates = DomainMatrix::from_strings(2, 2, &["0.05", "0.03", "0.04", "0.06"]).unwrap();
+
+// Cross-domain: decimal * binary routes through rational
+let result = rates.mat_mul(&binary_matrix).unwrap();
+```
+
+### Fused compute-tier operations (v0.3.0)
+
+Operations that keep all intermediates at tier N+1, eliminating materialization boundaries:
+
+```rust
+use g_math::fixed_point::imperative::fused;
+
+// Fused norm: sqrt(Σ x_i²) — single downscale
+let norm = fused::sqrt_sum_sq(&values);
+
+// Fused distance: sqrt(Σ (a_i - b_i)²) — saves 2 materializations
+let dist = fused::euclidean_distance(&a, &b);
+
+// Stable softmax at compute tier
+let weights = fused::softmax(&scores).unwrap();
+
+// RMSNorm scaling factor: 1/sqrt(mean(x²) + eps)
+let factor = fused::rms_norm_factor(&hidden, eps).unwrap();
+
+// SiLU activation: x / (1 + exp(-x))
+let gate = fused::silu(x);
+```
+
+Also available as convenience methods on `FixedVector`:
+
+```rust
+let norm = v.length_fused();           // fused sqrt(Σ x_i²)
+let dist = v.distance_to(&other);      // fused euclidean distance
+```
+
+### TQ1.9 compact ternary (v0.3.0)
+
+Standalone 2-byte ternary fixed-point type for neural network weight storage. 1 integer trit + 9 fractional trits, range ±1.5, ~4.3 decimal digits of uniform precision (vs fp16's ~3.3 variable digits).
+
+```rust
+use g_math::fixed_point::domains::balanced_ternary::trit_q1_9::TritQ1_9;
+use g_math::fixed_point::domains::balanced_ternary::trit_packing::{pack_trits, unpack_trits, Trit};
+
+// TQ1.9 arithmetic
+let a = TritQ1_9::from_i16(9842);   // ~0.5 in TQ1.9
+let b = TritQ1_9::from_i16(19683);  // 1.0 in TQ1.9
+let c = a.checked_add(b).unwrap();
+
+// Trit packing: 5 trits per byte (3^5 = 243 ≤ 255)
+let trits = vec![Trit::Pos, Trit::Zero, Trit::Neg, Trit::Pos, Trit::Zero];
+let packed = pack_trits(&trits);
+let unpacked = unpack_trits(&packed, trits.len());
+```
+
 ## Validation and tests
 
 The published crate includes test suites for:
@@ -279,7 +374,7 @@ This README intentionally avoids broad numerical slogans. Stronger correctness c
 
 The crate includes a geometric mathematics extension built on top of the FASC canonical API. Every operation in this extension follows the **compute-tier principle**: all accumulations, dot products, and matrix chains operate at tier N+1 (double width), with a single downscale at the output boundary. This is the matrix-level analog of BinaryCompute chain persistence for scalars.
 
-**797 tests, 0 failures, all 3 profiles.**
+**938 tests, 0 failures, all 5 profiles.**
 
 ### L1A: Linear algebra
 
@@ -627,7 +722,7 @@ let (sin_t, cos_t) = theta.try_sincos().unwrap(); // single range reduction, bot
 
 ### Precision guarantees
 
-All precision claims are empirically measured against mpmath at 50+ digit precision, not theoretical. Validated with 797 tests across all modules.
+All precision claims are empirically measured against mpmath at 50+ digit precision, not theoretical. Validated with 938 tests across all modules.
 
 | Operation | ULP | Measurement |
 |-----------|-----|-------------|
@@ -644,12 +739,15 @@ All precision claims are empirically measured against mpmath at 50+ digit precis
 | ODE RK4 step | 1 per step | compute-tier weighted sums |
 | Tensor contraction | 1 per entry | compute-tier dot products |
 | Frobenius / 1-norm / inf-norm | 1 | compute-tier accumulation |
+| Fused sqrt_sum_sq / euclidean_distance | 0-1 | compute-tier accumulation + sqrt |
+| Fused softmax | 0-1 per weight | compute-tier exp + sum + divide |
+| Fused silu | 0-1 | compute-tier exp + divide |
 
 **Practical limitations:** Values like 0.3 and 0.7 are repeating binary fractions with 1 ULP representation error. Operations with high condition numbers (Hilbert matrices, rotation formulas) amplify this input error. This is a fundamental limit of finite-precision arithmetic — binary, decimal, or otherwise — not an implementation deficiency. The roundtrip precision (which cancels input errors) proves the implementation is mathematically correct.
 
 **Determinism guarantee:** All results are bit-identical across x86_64, ARM, RISC-V, and any other architecture. Every operation is pure integer arithmetic on Q-format storage. No floating-point anywhere in the pipeline.
 
-**Profile support:** All geometric operations work across all three profiles (embedded Q64.64, balanced Q128.128, scientific Q256.256) via compile-time `#[cfg]` gates. The same source code, same algorithms, same precision guarantees.
+**Profile support:** All geometric operations work across all five profiles (realtime Q16.16, compact Q32.32, embedded Q64.64, balanced Q128.128, scientific Q256.256) via compile-time `#[cfg]` gates. The same source code, same algorithms, same precision guarantees.
 
 ## Design notes
 
