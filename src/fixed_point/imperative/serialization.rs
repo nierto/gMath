@@ -48,6 +48,10 @@ const PROFILE_TAG: u8 = 0x01;
 const PROFILE_TAG: u8 = 0x02;
 #[cfg(table_format = "q256_256")]
 const PROFILE_TAG: u8 = 0x03;
+#[cfg(table_format = "q32_32")]
+const PROFILE_TAG: u8 = 0x04;
+#[cfg(table_format = "q16_16")]
+const PROFILE_TAG: u8 = 0x05;
 
 #[cfg(table_format = "q64_64")]
 const RAW_BYTE_LEN: usize = 16;
@@ -55,6 +59,10 @@ const RAW_BYTE_LEN: usize = 16;
 const RAW_BYTE_LEN: usize = 32;
 #[cfg(table_format = "q256_256")]
 const RAW_BYTE_LEN: usize = 64;
+#[cfg(table_format = "q32_32")]
+const RAW_BYTE_LEN: usize = 8;
+#[cfg(table_format = "q16_16")]
+const RAW_BYTE_LEN: usize = 4;
 
 // ============================================================================
 // FixedPoint serialization
@@ -601,6 +609,28 @@ fn raw_to_be_bytes(raw: BinaryStorage) -> Vec<u8> {
 fn be_bytes_to_raw(bytes: &[u8]) -> BinaryStorage {
     let le: Vec<u8> = bytes.iter().rev().copied().collect();
     crate::fixed_point::I512::from_bytes_le(&le)
+}
+
+#[cfg(table_format = "q32_32")]
+fn raw_to_be_bytes(raw: BinaryStorage) -> Vec<u8> {
+    raw.to_be_bytes().to_vec()
+}
+
+#[cfg(table_format = "q32_32")]
+fn be_bytes_to_raw(bytes: &[u8]) -> BinaryStorage {
+    let arr: [u8; 8] = bytes[..8].try_into().unwrap();
+    i64::from_be_bytes(arr)
+}
+
+#[cfg(table_format = "q16_16")]
+fn raw_to_be_bytes(raw: BinaryStorage) -> Vec<u8> {
+    raw.to_be_bytes().to_vec()
+}
+
+#[cfg(table_format = "q16_16")]
+fn be_bytes_to_raw(bytes: &[u8]) -> BinaryStorage {
+    let arr: [u8; 4] = bytes[..4].try_into().unwrap();
+    i32::from_be_bytes(arr)
 }
 
 // ============================================================================

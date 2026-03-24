@@ -35,7 +35,7 @@ use core::fmt::{self, Display};
 pub(crate) use conversion::to_binary_storage;
 #[allow(unused_imports)]
 pub(crate) use compute::{
-    downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier,
+    downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier, exp_at_compute_tier,
     compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
     compute_halve, compute_is_zero, compute_is_negative,
 };
@@ -62,6 +62,12 @@ pub type BinaryStorage = I256;  // Q128.128: 38 decimals
 #[cfg(table_format = "q64_64")]
 pub type BinaryStorage = i128;  // Q64.64: 19 decimals
 
+#[cfg(table_format = "q32_32")]
+pub type BinaryStorage = i64;   // Q32.32: 9 decimals
+
+#[cfg(table_format = "q16_16")]
+pub type BinaryStorage = i32;   // Q16.16: 4 decimals
+
 // ============================================================================
 // COMPUTE-TIER STORAGE TYPE (TIER N+1 CHAIN PERSISTENCE)
 // ============================================================================
@@ -85,10 +91,20 @@ pub type ComputeStorage = I512;   // Q256.256
 #[cfg(table_format = "q64_64")]
 pub type ComputeStorage = I256;   // Q128.128
 
+#[cfg(table_format = "q32_32")]
+pub type ComputeStorage = i128;   // Q64.64 (tier N+1 for Q32.32)
+
+#[cfg(table_format = "q16_16")]
+pub type ComputeStorage = i64;    // Q32.32 (tier N+1 for Q16.16)
+
 /// Maximum decimal places before promoting Decimal to BinaryCompute.
 /// Matches each profile's meaningful decimal precision.
 /// Beyond this threshold, the scaled integer exceeds BinaryStorage range,
 /// so we promote to binary fixed-point (which has FIXED fractional bits, no dp growth).
+#[cfg(table_format = "q16_16")]
+const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 4;
+#[cfg(table_format = "q32_32")]
+const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 9;
 #[cfg(table_format = "q64_64")]
 const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 18;
 #[cfg(table_format = "q128_128")]
@@ -192,8 +208,15 @@ impl StackValue {
                     return Ok(RationalNumber::new(num, den));
                 }
                 // Binary Q-format: rational = value / 2^frac_bits
+                // Tier mapping depends on profile — the storage tier IS the profile's max tier.
                 let frac_bits: u32 = match tier {
-                    1 => 0,    // Raw integer (hex/bin parse)
+                    1 => {
+                        // Tier 1: Q16.16 on Realtime, raw integer on others
+                        #[cfg(table_format = "q16_16")]
+                        { 16 }
+                        #[cfg(not(table_format = "q16_16"))]
+                        { 0 }
+                    }
                     2 => 32,   // Q32.32
                     3 => 64,   // Q64.64
                     4 => 128,  // Q128.128
@@ -256,6 +279,28 @@ impl StackValue {
                     return Ok(RationalNumber::new(reduced_num, reduced_den));
                 }
 
+                #[cfg(table_format = "q32_32")]
+                {
+                    if *value == 0 {
+                        return Ok(RationalNumber::new(0, 1));
+                    }
+                    let trailing = (*value as u64).trailing_zeros().min(frac_bits);
+                    let reduced_num = (*value >> trailing) as i128;
+                    let reduced_den = 1u128 << (frac_bits - trailing);
+                    return Ok(RationalNumber::new(reduced_num, reduced_den));
+                }
+
+                #[cfg(table_format = "q16_16")]
+                {
+                    if *value == 0 {
+                        return Ok(RationalNumber::new(0, 1));
+                    }
+                    let trailing = (*value as u32).trailing_zeros().min(frac_bits);
+                    let reduced_num = (*value >> trailing) as i128;
+                    let reduced_den = 1u128 << (frac_bits - trailing);
+                    return Ok(RationalNumber::new(reduced_num, reduced_den));
+                }
+
             }
             StackValue::Decimal(decimals, scaled, ref shadow) => {
                 // Shadow fast path: O(1) when shadow exists
@@ -284,6 +329,16 @@ impl StackValue {
                 #[cfg(table_format = "q64_64")]
                 {
                     return conversion::reduce_decimal_to_rational(*scaled, *decimals);
+                }
+
+                #[cfg(table_format = "q32_32")]
+                {
+                    return conversion::reduce_decimal_to_rational(*scaled as i128, *decimals);
+                }
+
+                #[cfg(table_format = "q16_16")]
+                {
+                    return conversion::reduce_decimal_to_rational(*scaled as i128, *decimals);
                 }
 
             }
@@ -376,6 +431,10 @@ impl StackValue {
 
 impl Display for StackValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(table_format = "q16_16")]
+        const DEFAULT_DIGITS: usize = 5;
+        #[cfg(table_format = "q32_32")]
+        const DEFAULT_DIGITS: usize = 9;
         #[cfg(table_format = "q64_64")]
         const DEFAULT_DIGITS: usize = 19;
         #[cfg(table_format = "q128_128")]
@@ -494,10 +553,18 @@ impl StackEvaluator {
                 self.divide_values(l, r)
             }
             LazyExpr::Exp(inner) => {
+                // Identity short-circuit: exp(ln(x)) = x
+                if let LazyExpr::Ln(inner_inner) = inner.as_ref() {
+                    return self.evaluate(inner_inner);
+                }
                 let val = self.evaluate(inner)?;
                 self.evaluate_exp(val)
             }
             LazyExpr::Ln(inner) => {
+                // Identity short-circuit: ln(exp(x)) = x
+                if let LazyExpr::Exp(inner_inner) = inner.as_ref() {
+                    return self.evaluate(inner_inner);
+                }
                 let val = self.evaluate(inner)?;
                 self.evaluate_ln(val)
             }
@@ -573,7 +640,7 @@ impl StackEvaluator {
     ///
     /// Returns `Err(TierOverflow)` if the compute-tier value exceeds the
     /// storage tier's range (UGOD overflow detection).
-    fn materialize_compute(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn materialize_compute(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, shadow) => {
                 let storage = downscale_to_storage(val)?;
@@ -598,6 +665,12 @@ const fn compile_time_profile() -> DeploymentProfile {
 
     #[cfg(table_format = "q64_64")]
     { DeploymentProfile::Embedded }
+
+    #[cfg(table_format = "q32_32")]
+    { DeploymentProfile::Compact }
+
+    #[cfg(table_format = "q16_16")]
+    { DeploymentProfile::Realtime }
 }
 
 thread_local! {
@@ -620,6 +693,30 @@ pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
         let result = evaluator.evaluate(expr)?;
         let materialized = evaluator.materialize_compute(result)?;
         evaluator.apply_output_mode(materialized)
+    })
+}
+
+/// Evaluate sin and cos of the same expression with a single range reduction.
+///
+/// More efficient than evaluating sin(x) and cos(x) separately — shares the
+/// Cody-Waite range reduction and Taylor evaluation at compute tier.
+///
+/// **USAGE**:
+/// ```rust
+/// use g_math::canonical::{gmath, evaluate_sincos};
+/// let (sin_val, cos_val) = evaluate_sincos(&gmath("0.5")).unwrap();
+/// ```
+pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
+    EVALUATOR.with(|eval| {
+        let mut evaluator = eval.borrow_mut();
+        evaluator.reset();
+        let inner_val = evaluator.evaluate(expr)?;
+        let (sin_compute, cos_compute) = evaluator.evaluate_sincos(inner_val)?;
+        let sin_mat = evaluator.materialize_compute(sin_compute)?;
+        let cos_mat = evaluator.materialize_compute(cos_compute)?;
+        let sin_out = evaluator.apply_output_mode(sin_mat)?;
+        let cos_out = evaluator.apply_output_mode(cos_mat)?;
+        Ok((sin_out, cos_out))
     })
 }
 

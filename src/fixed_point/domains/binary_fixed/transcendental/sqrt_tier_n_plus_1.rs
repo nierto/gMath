@@ -46,7 +46,7 @@ use super::exp_tier_n_plus_1::{
 // HELPER: Find MSB position (floor of log2) for initial seed
 // ============================================================================
 
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn find_msb_position_i256(x: &I256) -> Option<u32> {
     if *x <= I256::zero() {
@@ -61,7 +61,7 @@ fn find_msb_position_i256(x: &I256) -> Option<u32> {
     None
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn find_msb_position_i512(x: &I512) -> Option<u32> {
     if *x <= I512::zero() {
@@ -76,7 +76,7 @@ fn find_msb_position_i512(x: &I512) -> Option<u32> {
     None
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q512_512"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q512_512", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
     if *x <= I1024::zero() {
@@ -102,7 +102,7 @@ fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 /// **PRECISION**: 19 correct decimal digits (all 64 fractional bits exact)
 /// **ALGORITHM**: Newton-Raphson in I256 (Q128.128) with 7 iterations
 /// **DOMAIN**: x >= 0 (returns i128::MIN for x < 0)
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn sqrt_q64_64_native(x: i128) -> i128 {
     // Domain: sqrt(x) undefined for x < 0
     if x < 0 {
@@ -158,7 +158,7 @@ fn sqrt_q64_64_native(x: i128) -> i128 {
 /// **PRECISION**: 38 correct decimal digits (all 128 fractional bits exact)
 /// **ALGORITHM**: Newton-Raphson in I512 (Q256.256) with 9 iterations
 /// **DOMAIN**: x >= 0 (returns I256::min_value() for x < 0)
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 fn sqrt_q128_128_native(x: I256) -> I256 {
     if x < I256::zero() {
         return I256::min_value();
@@ -202,7 +202,7 @@ fn sqrt_q128_128_native(x: I256) -> I256 {
 /// **PRECISION**: 77 correct decimal digits (all 256 fractional bits exact)
 /// **ALGORITHM**: Newton-Raphson in I1024 (Q512.512) with 10 iterations
 /// **DOMAIN**: x >= 0 (returns I512::min_value() for x < 0)
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
 fn sqrt_q256_256_native(x: I512) -> I512 {
     if x < I512::zero() {
         return I512::min_value();
@@ -392,10 +392,48 @@ pub fn sqrt_binary_i1024(x: I1024) -> I1024 {
 }
 
 // ============================================================================
+// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
+// ============================================================================
+
+/// sqrt() for Q32.32 storage (i64) — tier N+1 via Q64.64
+///
+/// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
+/// For Q32.32 profile: BinaryStorage = i64
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sqrt_binary_i64(x: i64) -> i64 {
+    if x < 0 { return i64::MIN; }
+    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = sqrt_q64_64_native(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// sqrt() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sqrt_binary_i128(x: i128) -> i128 {
+    sqrt_q64_64_native(x)
+}
+
+/// sqrt() for Q32.32 profile — I256 is tier N+1 (Q128.128)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sqrt_binary_i256(x: I256) -> I256 {
+    // Tier N+1: compute sqrt at Q128.128 natively
+    sqrt_q128_128_native(x)
+}
+
+/// sqrt() for Q32.32 profile — I512 wrapper
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn sqrt_binary_i512(x: I512) -> I512 {
+    // Compute sqrt at Q256.256 for Q32.32 profile
+    sqrt_q256_256_native(x)
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
 #[cfg(test)]
+#[cfg(not(any(table_format = "q32_32", table_format = "q16_16")))]
 mod tests {
     use super::*;
 

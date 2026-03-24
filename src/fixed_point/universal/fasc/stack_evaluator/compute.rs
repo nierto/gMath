@@ -16,6 +16,7 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDe
 
 // Compute-tier sqrt for decimal domain
 #[allow(unused_imports)]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::{
     sqrt_binary_i256, sqrt_binary_i512,
 };
@@ -32,9 +33,13 @@ use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_pl
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
     sin_compute_tier_i512, cos_compute_tier_i512, sincos_compute_tier_i512,
 };
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
     sin_compute_tier_i256, cos_compute_tier_i256, sincos_compute_tier_i256,
+};
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
+    sin_compute_tier_i64, cos_compute_tier_i64, sincos_compute_tier_i64,
 };
 
 #[cfg(table_format = "q256_256")]
@@ -45,13 +50,32 @@ use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_
 use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_1::{
     atan_compute_tier_i512, atan2_compute_tier_i512,
 };
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_1::{
     atan_compute_tier_i256, atan2_compute_tier_i256,
+};
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_1::{
+    atan_compute_tier_i64, atan2_compute_tier_i64,
 };
 
 #[cfg(table_format = "q256_256")]
 use crate::fixed_point::domains::binary_fixed::transcendental::sqrt_tier_n_plus_1::sqrt_binary_i1024;
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+use crate::fixed_point::domains::binary_fixed::transcendental::sqrt_tier_n_plus_1::sqrt_binary_i64;
+
+// q32_32: ComputeStorage = i128 (Q64.64), use native Q64.64 transcendentals
+#[cfg(table_format = "q32_32")]
+use crate::fixed_point::domains::binary_fixed::transcendental::{
+    sin_binary_i128, cos_binary_i128, sqrt_binary_i128,
+    atan_binary_i128, atan2_binary_i128,
+};
+#[cfg(table_format = "q32_32")]
+use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::pi_half_i128;
+
+// q16_16: ComputeStorage = i64 (Q32.32), use Q32.32 transcendentals (to be implemented)
+// NOTE: sin_binary_i64, cos_binary_i64, sqrt_binary_i64, atan_binary_i64, atan2_binary_i64,
+//       and pi_half_i64 must be added to the transcendental modules for q16_16 support.
 
 pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
     #[cfg(table_format = "q256_256")]
@@ -68,6 +92,16 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
     {
         // i128 → I256, shift left 64
         I256::from_i128(val) << 64
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // i64 → i128, shift left 32 (Q32.32 → Q64.64)
+        (val as i128) << 32
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // i32 → i64, shift left 16 (Q16.16 → Q32.32)
+        (val as i64) << 16
     }
 }
 
@@ -122,6 +156,34 @@ pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage,
         }
         Ok(result)
     }
+    #[cfg(table_format = "q32_32")]
+    {
+        // i128 → i64, shift right 32 with rounding (Q64.64 → Q32.32)
+        let round_bit = (val & (1i128 << 31)) != 0;
+        let shifted = val >> 32;
+        if shifted > i64::MAX as i128 || shifted < i64::MIN as i128 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let mut result = shifted as i64;
+        if round_bit {
+            result += 1;
+        }
+        Ok(result)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // i64 → i32, shift right 16 with rounding (Q32.32 → Q16.16)
+        let round_bit = (val & (1i64 << 15)) != 0;
+        let shifted = val >> 16;
+        if shifted > i32::MAX as i64 || shifted < i32::MIN as i64 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let mut result = shifted as i32;
+        if round_bit {
+            result += 1;
+        }
+        Ok(result)
+    }
 }
 
 /// Convert a Decimal StackValue directly to ComputeStorage at full compute-tier precision.
@@ -140,6 +202,10 @@ pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) ->
         { return Ok(I512::from_i256(scaled) << 256); }
         #[cfg(table_format = "q64_64")]
         { return Ok(I256::from_i128(scaled) << 128); }
+        #[cfg(table_format = "q32_32")]
+        { return Ok((scaled as i128) << 64); }
+        #[cfg(table_format = "q16_16")]
+        { return Ok((scaled as i64) << 32); }
     }
 
     let den = pow10_compute(decimals)?;
@@ -157,6 +223,18 @@ pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) ->
     #[cfg(table_format = "q64_64")]
     {
         let num = I256::from_i128(scaled) << 128;
+        Ok(num / den)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // BinaryStorage=i64 → promote to i128, shift by 64 (Q64.64 compute format)
+        let num = (scaled as i128) << 64;
+        Ok(num / den)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // BinaryStorage=i32 → promote to i64, shift by 32 (Q32.32 compute format)
+        let num = (scaled as i64) << 32;
         Ok(num / den)
     }
 }
@@ -201,6 +279,26 @@ pub(super) fn pow10_compute(exp: u8) -> Result<ComputeStorage, OverflowDetected>
             Ok(TABLE[exp as usize])
         } else {
             Ok(pow10_compute_fallback_i1024(exp))
+        }
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128. i128 safe max ~10^38.
+        const TABLE: [i128; 39] = pow10_table_i128();
+        if (exp as usize) < TABLE.len() {
+            Ok(TABLE[exp as usize])
+        } else {
+            Err(OverflowDetected::Overflow)
+        }
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64. i64 safe max ~10^18.
+        const TABLE: [i64; 19] = pow10_table_i64();
+        if (exp as usize) < TABLE.len() {
+            Ok(TABLE[exp as usize])
+        } else {
+            Err(OverflowDetected::Overflow)
         }
     }
 }
@@ -272,6 +370,32 @@ pub(super) const fn pow10_table_i1024() -> [I1024; 155] {
     table
 }
 
+/// Build const pow10 table for i128 (covers 10^0..10^38)
+#[cfg(table_format = "q32_32")]
+pub(super) const fn pow10_table_i128() -> [i128; 39] {
+    let mut table = [0i128; 39];
+    table[0] = 1;
+    let mut i = 1;
+    while i < 39 {
+        table[i] = table[i - 1] * 10;
+        i += 1;
+    }
+    table
+}
+
+/// Build const pow10 table for i64 (covers 10^0..10^18)
+#[cfg(table_format = "q16_16")]
+pub(super) const fn pow10_table_i64() -> [i64; 19] {
+    let mut table = [0i64; 19];
+    table[0] = 1;
+    let mut i = 1;
+    while i < 19 {
+        table[i] = table[i - 1] * 10;
+        i += 1;
+    }
+    table
+}
+
 // Fallback loops for exponents beyond the precomputed table
 #[cold]
 #[allow(dead_code)]
@@ -321,6 +445,20 @@ pub(super) fn symbolic_to_compute_storage(num: i128, den: i128) -> Result<Comput
         let d = I256::from_i128(den);
         Ok(n / d)
     }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64). Use I256 intermediate for (num << 64) / den.
+        let n = I256::from_i128(num) << 64;
+        let d = I256::from_i128(den);
+        Ok((n / d).as_i128())
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32). Use i128 intermediate for (num << 32) / den.
+        let n = (num as i128) << 32;
+        let d = den as i128;
+        Ok((n / d) as i64)
+    }
 }
 
 /// Convert Symbolic rational (Massive I256 or Ultra I512) to ComputeStorage.
@@ -369,6 +507,36 @@ pub(super) fn symbolic_wide_to_compute_storage(
             let n = I1024::from_i512(num_i512) << 128;
             let d = I1024::from_i512(den_i512);
             return Ok((n / d).as_i256());
+        }
+    }
+
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64). I256 intermediate for shift+divide.
+        if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
+            let n = I256::from_i128(num_i256.as_i128()) << 64;
+            let d = I256::from_i128(den_i256.as_i128());
+            return Ok((n / d).as_i128());
+        }
+        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
+            let n = I1024::from_i512(num_i512) << 64;
+            let d = I1024::from_i512(den_i512);
+            return Ok((n / d).as_i512().as_i256().as_i128());
+        }
+    }
+
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32). Use I256 intermediate for shift+divide → i64.
+        if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
+            let n = I256::from_i128(num_i256.as_i128()) << 32;
+            let d = I256::from_i128(den_i256.as_i128());
+            return Ok((n / d).as_i128() as i64);
+        }
+        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
+            let n = I1024::from_i512(num_i512) << 32;
+            let d = I1024::from_i512(den_i512);
+            return Ok((n / d).as_i512().as_i256().as_i128() as i64);
         }
     }
 
@@ -433,6 +601,32 @@ pub(crate) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeS
         }
         result
     }
+    #[cfg(table_format = "q32_32")]
+    {
+        // i128 × i128 → I256 >> 64 → i128 (with rounding)
+        // ComputeStorage = i128 (Q64.64), COMPUTE_FRAC = 64
+        let a_wide = I256::from_i128(a);
+        let b_wide = I256::from_i128(b);
+        let product = a_wide * b_wide;
+        let round_bit = (product & (I256::from_i128(1) << 63)) != I256::zero();
+        let mut result = (product >> 64).as_i128();
+        if round_bit {
+            result += 1;
+        }
+        result
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // i64 × i64 → i128 >> 32 → i64 (with rounding)
+        // ComputeStorage = i64 (Q32.32), COMPUTE_FRAC = 32
+        let product = (a as i128) * (b as i128);
+        let round_bit = (product & (1i128 << 31)) != 0;
+        let mut result = (product >> 32) as i64;
+        if round_bit {
+            result += 1;
+        }
+        result
+    }
 }
 
 /// Divide two compute-tier values (needs double-width intermediate for numerator shift)
@@ -464,12 +658,45 @@ pub(crate) fn compute_divide(a: ComputeStorage, b: ComputeStorage) -> Result<Com
         let b_wide = I512::from_i256(b);
         Ok((a_wide / b_wide).as_i256())
     }
+    #[cfg(table_format = "q32_32")]
+    {
+        // (i128 << 64) / i128 — use I256 for shifted numerator
+        // ComputeStorage = i128 (Q64.64), COMPUTE_FRAC = 64
+        if b == 0i128 { return Err(OverflowDetected::DivisionByZero); }
+        let a_wide = I256::from_i128(a) << 64;
+        let b_wide = I256::from_i128(b);
+        Ok((a_wide / b_wide).as_i128())
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // (i64 << 32) / i64 — use i128 for shifted numerator
+        // ComputeStorage = i64 (Q32.32), COMPUTE_FRAC = 32
+        if b == 0i64 { return Err(OverflowDetected::DivisionByZero); }
+        let a_wide = (a as i128) << 32;
+        let b_wide = b as i128;
+        Ok((a_wide / b_wide) as i64)
+    }
 }
 
 /// Halve a compute-tier value (right shift by 1)
 #[inline]
 pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
     a >> 1
+}
+
+/// Create a compute-tier integer (e.g., 1, 2 in the compute Q-format)
+#[inline]
+pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
+    #[cfg(table_format = "q256_256")]
+    { I1024::from_i128(n as i128) << 512 }
+    #[cfg(table_format = "q128_128")]
+    { I512::from_i128(n as i128) << 256 }
+    #[cfg(table_format = "q64_64")]
+    { I256::from_i128(n as i128) << 128 }
+    #[cfg(table_format = "q32_32")]
+    { (n as i128) << 64 }
+    #[cfg(table_format = "q16_16")]
+    { n << 32 }
 }
 
 /// Check if a compute-tier value is zero
@@ -481,6 +708,10 @@ pub(crate) fn compute_is_zero(a: &ComputeStorage) -> bool {
     { *a == I512::zero() }
     #[cfg(table_format = "q64_64")]
     { *a == I256::zero() }
+    #[cfg(table_format = "q32_32")]
+    { *a == 0i128 }
+    #[cfg(table_format = "q16_16")]
+    { *a == 0i64 }
 }
 
 /// Check if a compute-tier value is negative
@@ -492,6 +723,10 @@ pub(crate) fn compute_is_negative(a: &ComputeStorage) -> bool {
     { *a < I512::zero() }
     #[cfg(table_format = "q64_64")]
     { *a < I256::zero() }
+    #[cfg(table_format = "q32_32")]
+    { *a < 0i128 }
+    #[cfg(table_format = "q16_16")]
+    { *a < 0i64 }
 }
 
 // ============================================================================
@@ -510,6 +745,18 @@ pub(super) fn sin_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     { sin_compute_tier_i512(x) }
     #[cfg(table_format = "q64_64")]
     { sin_compute_tier_i256(x) }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64) — compute at Q128.128 (I256) for tier N+1 precision
+        let wide = I256::from_i128(x) << 64usize; // Q64.64 -> Q128.128
+        (sin_compute_tier_i256(wide) >> 64u32).as_i128() // Q128.128 → Q64.64
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute, downscale
+        let wide = I256::from_i128(x as i128) << 96usize; // Q32.32 → Q128.128 (128-32=96)
+        ((sin_compute_tier_i256(wide) >> 96u32).as_i128()) as i64 // Q128.128 → Q32.32
+    }
 }
 
 /// Compute cos at compute tier (tier N+1)
@@ -521,6 +768,18 @@ pub(super) fn cos_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     { cos_compute_tier_i512(x) }
     #[cfg(table_format = "q64_64")]
     { cos_compute_tier_i256(x) }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64) — compute at Q128.128 (I256) for tier N+1 precision
+        let wide = I256::from_i128(x) << 64usize; // Q64.64 -> Q128.128
+        (cos_compute_tier_i256(wide) >> 64u32).as_i128() // Q128.128 → Q64.64
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute, downscale
+        let wide = I256::from_i128(x as i128) << 96usize;
+        ((cos_compute_tier_i256(wide) >> 96u32).as_i128()) as i64
+    }
 }
 
 /// Fused sin+cos at compute tier (tier N+1) — single shared range reduction.
@@ -533,6 +792,22 @@ pub(crate) fn sincos_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, Comp
     { sincos_compute_tier_i512(x) }
     #[cfg(table_format = "q64_64")]
     { sincos_compute_tier_i256(x) }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64) → upscale to Q128.128 (I256), compute, downscale
+        let wide = I256::from_i128(x) << 64usize;
+        let s = sin_compute_tier_i256(wide);
+        let c = cos_compute_tier_i256(wide);
+        ((s >> 64u32).as_i128(), (c >> 64u32).as_i128())
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute, downscale
+        let wide = I256::from_i128(x as i128) << 96usize;
+        let s = sin_compute_tier_i256(wide);
+        let c = cos_compute_tier_i256(wide);
+        (((s >> 96u32).as_i128()) as i64, ((c >> 96u32).as_i128()) as i64)
+    }
 }
 
 /// Compute atan at compute tier (tier N+1)
@@ -544,6 +819,18 @@ pub(super) fn atan_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     { atan_compute_tier_i512(x) }
     #[cfg(table_format = "q64_64")]
     { atan_compute_tier_i256(x) }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64) — compute at Q128.128 (I256) for tier N+1 precision
+        let wide = I256::from_i128(x) << 64usize; // Q64.64 -> Q128.128
+        (atan_compute_tier_i256(wide) >> 64u32).as_i128() // Q128.128 → Q64.64
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute, downscale
+        let wide = I256::from_i128(x as i128) << 96usize;
+        ((atan_compute_tier_i256(wide) >> 96u32).as_i128()) as i64
+    }
 }
 
 /// Compute atan2 at compute tier (tier N+1)
@@ -555,6 +842,55 @@ pub(super) fn atan2_at_compute_tier(y: ComputeStorage, x: ComputeStorage) -> Com
     { atan2_compute_tier_i512(y, x) }
     #[cfg(table_format = "q64_64")]
     { atan2_compute_tier_i256(y, x) }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64) → upscale to Q128.128 (I256), compute, downscale
+        let y_wide = I256::from_i128(y) << 64usize;
+        let x_wide = I256::from_i128(x) << 64usize;
+        (atan2_compute_tier_i256(y_wide, x_wide) >> 64u32).as_i128()
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute, downscale
+        let y_wide = I256::from_i128(y as i128) << 96usize;
+        let x_wide = I256::from_i128(x as i128) << 96usize;
+        ((atan2_compute_tier_i256(y_wide, x_wide) >> 96u32).as_i128()) as i64
+    }
+}
+
+/// Compute exp at compute tier (tier N+1) — free function variant.
+///
+/// Returns ComputeStorage directly (no StackValue wrapping).
+/// Used by fused operations that need exp without evaluator context.
+#[inline]
+pub(crate) fn exp_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q256_256")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i1024;
+        exp_binary_i1024(x)
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i512;
+        exp_binary_i512(x)
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i256;
+        exp_binary_i256(x)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i256;
+        let wide = I256::from_i128(x) << 64usize;
+        (exp_binary_i256(wide) >> 64u32).as_i128()
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i256;
+        let wide = I256::from_i128(x as i128) << 96usize;
+        ((exp_binary_i256(wide) >> 96u32).as_i128()) as i64
+    }
 }
 
 /// Compute sqrt at compute tier (tier N+1)
@@ -571,6 +907,18 @@ pub(crate) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     {
         // ComputeStorage = I256 (Q128.128) — use native sqrt_binary_i256
         sqrt_binary_i256(x)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // ComputeStorage = i128 (Q64.64) — compute at Q128.128 (I256) for tier N+1 precision
+        let wide = I256::from_i128(x) << 64usize; // Q64.64 -> Q128.128
+        (sqrt_binary_i256(wide) >> 64u32).as_i128() // Q128.128 → Q64.64
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // ComputeStorage = i64 (Q32.32) → upscale to Q128.128 (I256), compute, downscale
+        let wide = I256::from_i128(x as i128) << 96usize;
+        ((sqrt_binary_i256(wide) >> 96u32).as_i128()) as i64
     }
 }
 
@@ -598,5 +946,18 @@ pub(super) fn pi_half_at_compute_tier() -> ComputeStorage {
         // PI_HALF_Q128 constant is at full Q128.128 precision
         use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::PI_HALF_Q128;
         I256::from_words(PI_HALF_Q128)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // Compute tier is Q64.64 on i128
+        // PI_HALF_Q64 constant is at full Q64.64 precision
+        pi_half_i128()
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        // Compute tier is Q32.32 on i64
+        // Derive from PI_HALF_Q64 (always available): shift right 32 to get Q32.32
+        use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::PI_HALF_Q64;
+        (PI_HALF_Q64 >> 32) as i64
     }
 }

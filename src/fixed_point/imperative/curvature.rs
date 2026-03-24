@@ -37,6 +37,10 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// - Q128.128:  h ≈ 2^(-43) ≈ 1.1e-13
 /// - Q256.256:  h ≈ 2^(-85) ≈ 2.6e-26
 pub fn differentiation_step() -> FixedPoint {
+    #[cfg(table_format = "q32_32")]
+    { FixedPoint::from_raw(1i64 << (32 - 11)) }
+    #[cfg(table_format = "q16_16")]
+    { FixedPoint::from_raw(1i32 << (16 - 5)) }
     #[cfg(table_format = "q64_64")]
     { FixedPoint::from_raw(1i128 << (64 - 21)) }
     #[cfg(table_format = "q128_128")]
@@ -60,6 +64,10 @@ fn divide_by_two_h(val: FixedPoint) -> FixedPoint {
     // val / (2h) where 2h = 2^(-FRAC_BITS/3 + 1)
     // = val * 2^(FRAC_BITS/3 - 1)
     // In Q-format, this means shifting the raw value left by (FRAC_BITS/3 - 1)
+    #[cfg(table_format = "q32_32")]
+    { FixedPoint::from_raw(val.raw() << 10) }  // 11 - 1 = 10
+    #[cfg(table_format = "q16_16")]
+    { FixedPoint::from_raw(val.raw() << 4) }  // 5 - 1 = 4
     #[cfg(table_format = "q64_64")]
     { FixedPoint::from_raw(val.raw() << 20u32) }  // 21 - 1 = 20
     #[cfg(table_format = "q128_128")]

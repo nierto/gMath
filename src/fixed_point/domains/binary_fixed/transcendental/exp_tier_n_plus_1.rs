@@ -64,7 +64,7 @@ include!("../../../../generated_tables/q512_512_tables.rs");
 /// **PRECISION**: ~10-13 correct digits (baseline implementation)
 /// **TABLES**: Uses Q64.64 tables directly (no conversion)
 #[inline(always)]
-#[cfg(table_format = "q64_64")]
+#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn exp_q64_64_native(x: i128) -> i128 {
     // Tables are included directly at module level, use them without super::
     // Note: Q64.64 tables use TIER_3 naming (NOT Q64_64)
@@ -135,7 +135,7 @@ pub fn exp_q64_64_native(x: i128) -> i128 {
 /// **PRECISION**: ~16-20 correct digits (exceeds f64)
 /// **TABLES**: Uses Q128.128 tables directly (TIER_4 tables with (I256, i128) format)
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 pub fn exp_q128_128_native(x: I256) -> I256 {
     // Tables are included directly at module level
     // Q128.128 tables use TIER_4 naming with (I256, i128) format
@@ -414,7 +414,7 @@ pub fn upscale_q64_to_q256(value: i128) -> I512 {
 // ============================================================================
 
 /// Multiply two I256 values in Q128.128 format
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
     // I256 × I256 in Q128.128 format
@@ -729,4 +729,65 @@ fn taylor_series_q512_512(r: crate::fixed_point::I1024) -> crate::fixed_point::I
 #[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 pub fn exp_binary_i1024(x: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
     exp_q512_512_native(x)
+}
+
+// ============================================================================
+// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
+// ============================================================================
+
+/// Downscale Q64.64 (i128) result to Q32.32 (i64) with proper rounding
+///
+/// **GUARANTEE**: Result is correctly rounded to nearest Q32.32 value (<=0.5 ULP)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+#[inline(always)]
+pub(crate) fn downscale_q64_to_q32(val: i128) -> i64 {
+    // Q64.64: 64 integer bits + 64 fractional bits in i128
+    // Q32.32: 32 integer bits + 32 fractional bits in i64
+    //
+    // Round-half-up: add 0.5 ULP at target precision before shift
+    // 0.5 ULP at Q32.32 = 2^31 at Q64.64 position = bit 31
+    let round_bit = (val & (1i128 << 31)) != 0;
+    let mut result = (val >> 32) as i64;
+    if round_bit { result += 1; }
+    result
+}
+
+/// Upscale Q32.32 (i64) to Q64.64 (i128) for tier N+1 computation
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+#[inline(always)]
+pub(crate) fn upscale_q32_to_q64(val: i64) -> i128 {
+    (val as i128) << 32
+}
+
+/// exp() for Q32.32 storage (i64) — tier N+1 via Q64.64
+///
+/// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
+/// For Q32.32 profile: BinaryStorage = i64
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn exp_binary_i64(x: i64) -> i64 {
+    let x_q64 = upscale_q32_to_q64(x);
+    let result_q64 = exp_q64_64_native(x_q64);
+    downscale_q64_to_q32(result_q64)
+}
+
+/// exp() for Q32.32 profile — i128 is the compute tier (Q64.64)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn exp_binary_i128(x: i128) -> i128 {
+    exp_q64_64_native(x)
+}
+
+/// exp() for Q32.32 profile — I256 is tier N+1 (Q128.128)
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn exp_binary_i256(x: I256) -> I256 {
+    // Tier N+1: compute exp at Q128.128 natively
+    exp_q128_128_native(x)
+}
+
+/// exp() for Q32.32 profile — I512 wrapper
+#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+pub fn exp_binary_i512(x: I512) -> I512 {
+    // Downscale to Q128.128, compute at tier N+1, upscale back
+    let x_q128 = (x >> 128).as_i256();
+    let result_q128 = exp_q128_128_native(x_q128);
+    I512::from_i256(result_q128) << 128
 }

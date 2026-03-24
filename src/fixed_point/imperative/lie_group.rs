@@ -65,6 +65,8 @@ pub trait LieGroup: Manifold {
 /// Uses closed-form Rodrigues formula — O(1) trig, not matrix_exp.
 pub struct SO3;
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+const RODRIGUES_THRESH: &str = "0.001";
 #[cfg(table_format = "q64_64")]
 const RODRIGUES_THRESH: &str = "0.00001";
 #[cfg(table_format = "q128_128")]

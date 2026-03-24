@@ -112,6 +112,50 @@ pub(super) fn binary_storage_to_decimal_string(val: BinaryStorage, max_digits: u
         format!("{}{}.{}", sign, int_part, frac_str)
     }
 
+    #[cfg(table_format = "q32_32")]
+    {
+        // Q32.32: i64
+        let is_negative = val < 0;
+        let abs_val = if is_negative { -val } else { val };
+        let int_part = (abs_val >> 32) as u32;
+        let frac_part = abs_val as u32; // Lower 32 bits
+
+        let digits = max_digits.min(9);
+        let mut frac_str = String::with_capacity(digits);
+        let mut remainder = frac_part as u64;
+        for _ in 0..digits {
+            remainder *= 10;
+            let digit = (remainder >> 32) as u8;
+            frac_str.push((b'0' + digit) as char);
+            remainder &= (1u64 << 32) - 1;
+        }
+
+        let sign = if is_negative { "-" } else { "" };
+        format!("{}{}.{}", sign, int_part, frac_str)
+    }
+
+    #[cfg(table_format = "q16_16")]
+    {
+        // Q16.16: i32
+        let is_negative = val < 0;
+        let abs_val = if is_negative { -val } else { val };
+        let int_part = (abs_val >> 16) as u16;
+        let frac_part = abs_val as u16; // Lower 16 bits
+
+        let digits = max_digits.min(4);
+        let mut frac_str = String::with_capacity(digits);
+        let mut remainder = frac_part as u32;
+        for _ in 0..digits {
+            remainder *= 10;
+            let digit = (remainder >> 16) as u8;
+            frac_str.push((b'0' + digit) as char);
+            remainder &= (1u32 << 16) - 1;
+        }
+
+        let sign = if is_negative { "-" } else { "" };
+        format!("{}{}.{}", sign, int_part, frac_str)
+    }
+
     #[cfg(table_format = "q128_128")]
     {
         // Q128.128: I256
@@ -186,6 +230,42 @@ pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String 
             format!("{}{}", sign, i256_to_decimal_string(integer_part))
         } else {
             format!("{}{}.{}", sign, i256_to_decimal_string(integer_part), i256_to_padded_decimal_string(fractional_part, dp))
+        }
+    }
+
+    #[cfg(table_format = "q32_32")]
+    {
+        // Q32.32: BinaryStorage = i64. Promote to i128 for division so
+        // we never overflow on 10^dec.
+        let v = *val;
+        let is_negative = v < 0;
+        let abs_val = if is_negative { (v as i128).wrapping_neg() } else { v as i128 };
+        let divisor = pow10_i128(dec);
+        let integer_part = abs_val / divisor;
+        let fractional_part = abs_val % divisor;
+        let sign = if is_negative { "-" } else { "" };
+        if dp == 0 {
+            format!("{}{}", sign, integer_part)
+        } else {
+            format!("{}{}.{:0>width$}", sign, integer_part, fractional_part, width = dp)
+        }
+    }
+
+    #[cfg(table_format = "q16_16")]
+    {
+        // Q16.16: BinaryStorage = i32. Promote to i64 for division so
+        // we never overflow on 10^dec.
+        let v = *val;
+        let is_negative = v < 0;
+        let abs_val = if is_negative { (v as i64).wrapping_neg() } else { v as i64 };
+        let divisor = pow10_i64(dec);
+        let integer_part = abs_val / divisor;
+        let fractional_part = abs_val % divisor;
+        let sign = if is_negative { "-" } else { "" };
+        if dp == 0 {
+            format!("{}{}", sign, integer_part)
+        } else {
+            format!("{}{}.{:0>width$}", sign, integer_part, fractional_part, width = dp)
         }
     }
 
@@ -285,6 +365,62 @@ pub(super) fn i256_to_padded_decimal_string(mut val: I256, width: usize) -> Stri
     }
     digits.reverse();
     String::from_utf8(digits).unwrap()
+}
+
+/// Compute 10^exp as i128 — covers 10^0..10^38 (i128 max ~1.7e38)
+#[cfg(any(table_format = "q32_32"))]
+#[allow(dead_code)]
+pub(super) fn pow10_i128(exp: u8) -> i128 {
+    const TABLE: [i128; 39] = {
+        let mut t = [0i128; 39];
+        t[0] = 1;
+        let mut i = 1;
+        while i < 39 {
+            t[i] = t[i - 1] * 10;
+            i += 1;
+        }
+        t
+    };
+    if (exp as usize) < TABLE.len() {
+        TABLE[exp as usize]
+    } else {
+        // Fallback for exp >= 39 — unlikely for Q32.32 but safe
+        let mut result = TABLE[38];
+        let mut i = 38u8;
+        while i < exp {
+            result = result.saturating_mul(10);
+            i += 1;
+        }
+        result
+    }
+}
+
+/// Compute 10^exp as i64 — covers 10^0..10^18 (i64 max ~9.2e18)
+#[cfg(any(table_format = "q16_16"))]
+#[allow(dead_code)]
+pub(super) fn pow10_i64(exp: u8) -> i64 {
+    const TABLE: [i64; 19] = {
+        let mut t = [0i64; 19];
+        t[0] = 1;
+        let mut i = 1;
+        while i < 19 {
+            t[i] = t[i - 1] * 10;
+            i += 1;
+        }
+        t
+    };
+    if (exp as usize) < TABLE.len() {
+        TABLE[exp as usize]
+    } else {
+        // Fallback for exp >= 19 — unlikely for Q16.16 but safe
+        let mut result = TABLE[18];
+        let mut i = 18u8;
+        while i < exp {
+            result = result.saturating_mul(10);
+            i += 1;
+        }
+        result
+    }
 }
 
 #[cfg(any(table_format = "q256_256"))]

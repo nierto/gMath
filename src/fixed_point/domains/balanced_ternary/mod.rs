@@ -15,6 +15,12 @@ pub mod ternary_multiplication;
 pub mod ternary_division;
 pub mod ternary_negation;
 
+// TQ1.9 compact ternary format (standalone, for inference weight storage)
+pub mod trit_q1_9;
+
+// Trit packing utilities (5 trits/byte base-3 encoding)
+pub mod trit_packing;
+
 // UGOD type exports
 pub use ternary_types::{
     UniversalTernaryFixed, TernaryTier,
@@ -52,3 +58,7 @@ pub use ternary_negation::{
     negate_ternary_tq256_256,
 };
 pub use crate::fixed_point::core_types::errors::OverflowDetected;
+
+// TQ1.9 + trit packing exports
+pub use trit_q1_9::TritQ1_9;
+pub use trit_packing::{Trit, pack_trits, unpack_trits};

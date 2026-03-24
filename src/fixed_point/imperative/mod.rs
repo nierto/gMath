@@ -8,6 +8,7 @@ mod fixed_vector;
 mod fixed_matrix;
 pub(crate) mod linalg;
 pub(crate) mod compute_matrix;
+pub mod fused;
 pub mod decompose;
 pub mod derived;
 pub mod matrix_functions;

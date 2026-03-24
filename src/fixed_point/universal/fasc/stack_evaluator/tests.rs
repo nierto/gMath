@@ -285,31 +285,17 @@ fn test_ln_domain_error() {
 }
 
 #[test]
-#[cfg(table_format = "q64_64")]
 fn test_ln_exp_inverse() {
     // Test that ln(exp(x)) ≈ x
-    // Use x = 1.5
-    let x_q64 = 1.5 * (1u128 << 64) as f64;
-    let x_expected = x_q64 as i128;
-
+    // Identity short-circuit: ln(exp(x)) → x directly (returns original domain)
     let expr = gmath("1.5").exp().ln();
     let result = evaluate(&expr).unwrap();
 
-    match result {
-        StackValue::Binary(_, val, _) => {
-            let diff = (val - x_expected).abs();
-            let tolerance = 1i128 << 52;  // Allow some accumulation error
-
-            assert!(
-                diff < tolerance,
-                "ln(exp(1.5)) = {} is not close to 1.5 = {}. Diff: {}",
-                val,
-                x_expected,
-                diff
-            );
-        }
-        _ => panic!("Expected Binary result, got {:?}", result),
-    }
+    // The identity short-circuit returns the original parsed value.
+    // Verify via formatted output — should be ≈ 1.5 regardless of domain.
+    let display = format!("{}", result);
+    assert!(display.starts_with("1.5"),
+        "ln(exp(1.5)) should start with '1.5', got '{}'", display);
 }
 
 #[test]

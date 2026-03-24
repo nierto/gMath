@@ -433,6 +433,7 @@ pub fn pow_integer_i128(base: i128, exp: i32) -> i128 {
 // ============================================================================
 
 #[cfg(test)]
+#[cfg(not(any(table_format = "q32_32", table_format = "q16_16")))]
 mod tests {
     use super::*;
 

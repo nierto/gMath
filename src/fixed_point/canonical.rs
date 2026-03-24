@@ -66,12 +66,16 @@
 // Re-export the complete FASC API
 pub use super::universal::fasc::{
     LazyExpr,
+    LazyMatrixExpr,
+    DomainMatrix,
     gmath,
     gmath_parse,
     ConstantId,
     StackEvaluator,
     StackValue,
     evaluate,
+    evaluate_matrix,
+    evaluate_sincos,
     GmathMode,
     ComputeMode,
     OutputMode,

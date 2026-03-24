@@ -405,6 +405,8 @@ pub fn cholesky_decompose(a: &FixedMatrix) -> Result<CholeskyDecomposition, Over
         };
 
         // Check positive-definiteness at compute tier (before sqrt)
+        #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+        let is_neg = diag_compute < 0;
         #[cfg(table_format = "q64_64")]
         let is_neg = diag_compute < I256::zero();
         #[cfg(table_format = "q128_128")]
@@ -412,6 +414,8 @@ pub fn cholesky_decompose(a: &FixedMatrix) -> Result<CholeskyDecomposition, Over
         #[cfg(table_format = "q256_256")]
         let is_neg = diag_compute < I1024::zero();
 
+        #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
+        let is_zero = diag_compute == 0;
         #[cfg(table_format = "q64_64")]
         let is_zero = diag_compute == I256::zero();
         #[cfg(table_format = "q128_128")]
