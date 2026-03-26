@@ -17,17 +17,10 @@ use super::linalg::{
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     sqrt_at_compute_tier, compute_divide, downscale_to_storage,
     compute_multiply, compute_add, compute_negate,
-    compute_is_negative,
+    compute_is_negative, compute_is_zero,
 };
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
-
-#[cfg(table_format = "q64_64")]
-use crate::fixed_point::I256;
-#[cfg(table_format = "q128_128")]
-use crate::fixed_point::{I256, I512};
-#[cfg(table_format = "q256_256")]
-use crate::fixed_point::{I512, I1024};
 
 // ============================================================================
 // LU Decomposition with Partial Pivoting
@@ -405,25 +398,7 @@ pub fn cholesky_decompose(a: &FixedMatrix) -> Result<CholeskyDecomposition, Over
         };
 
         // Check positive-definiteness at compute tier (before sqrt)
-        #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-        let is_neg = diag_compute < 0;
-        #[cfg(table_format = "q64_64")]
-        let is_neg = diag_compute < I256::zero();
-        #[cfg(table_format = "q128_128")]
-        let is_neg = diag_compute < I512::zero();
-        #[cfg(table_format = "q256_256")]
-        let is_neg = diag_compute < I1024::zero();
-
-        #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-        let is_zero = diag_compute == 0;
-        #[cfg(table_format = "q64_64")]
-        let is_zero = diag_compute == I256::zero();
-        #[cfg(table_format = "q128_128")]
-        let is_zero = diag_compute == I512::zero();
-        #[cfg(table_format = "q256_256")]
-        let is_zero = diag_compute == I1024::zero();
-
-        if is_neg || is_zero {
+        if compute_is_negative(&diag_compute) || compute_is_zero(&diag_compute) {
             return Err(OverflowDetected::DomainError);
         }
 

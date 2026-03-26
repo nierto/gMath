@@ -151,32 +151,36 @@ pub fn exp_q128_128_native(x: I256) -> I256 {
 
     // Integer part: Direct table lookup (tables are (I256, i128) in Q128.128 profile)
     // Table covers int_part -40..40. For int_part 41..80, use range reduction:
-    // exp(n) = exp(40) * exp(n-40), where both entries are in the table.
-    // For int_part > 80 or < -80: true overflow/underflow for Q128.128.
-    let (exp_int_main, exp_int_comp) = if int_part < -80 {
-        return I256::zero(); // Underflow: exp(-81) ≈ 1.3e-36, below Q128.128 resolution
-    } else if int_part < -40 {
-        // Range reduction for negative: exp(n) = exp(-40) * exp(n+40)
-        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_4[0]; // exp(-40)
-        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_4[(int_part + 80) as usize]; // exp(n+40)
-        let a = a_main + I256::from_i128(a_comp >> 64);
-        let b = b_main + I256::from_i128(b_comp >> 64);
-        let combined = multiply_i256_q128_128(a, b);
-        // Skip the normal int * frac path — inject combined directly
-        // We still need to handle the fractional part below, so store combined
-        (combined, 0i128) // comp = 0 since already combined
-    } else if int_part > 80 {
-        return I256::from_i128(i128::MAX) << 128; // True overflow for Q128.128
-    } else if int_part > 40 {
-        // Range reduction for positive: exp(n) = exp(40) * exp(n-40)
-        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_4[80]; // exp(40)
-        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_4[(int_part - 40 + 40) as usize]; // exp(n-40)
-        let a = a_main + I256::from_i128(a_comp >> 64);
-        let b = b_main + I256::from_i128(b_comp >> 64);
-        let combined = multiply_i256_q128_128(a, b);
-        (combined, 0i128)
-    } else {
+    // Range reduction: exp(n) via chained multiplication of exp(40).
+    // Q128.128 overflow boundary: exp(88) fits, exp(89) does not.
+    let (exp_int_main, exp_int_comp) = if int_part < -88 {
+        return I256::zero();
+    } else if int_part > 88 {
+        return I256::from_i128(i128::MAX) << 128;
+    } else if int_part >= -40 && int_part <= 40 {
+        // Direct table lookup
         EXP_INTEGER_TABLE_TIER_4[(int_part + 40) as usize]
+    } else {
+        // Multi-stage: exp(n) = exp(40)^k * exp(r), n = 40*k + r, |r| <= 40
+        let (k, r) = if int_part > 0 {
+            let k = int_part / 40;
+            let r = int_part - k * 40;
+            (k, r)
+        } else {
+            let k = (-int_part) / 40;
+            let r = int_part + k * 40;
+            (-k, r)
+        };
+        let (r_main, r_comp) = EXP_INTEGER_TABLE_TIER_4[(r + 40) as usize];
+        let mut result = r_main + I256::from_i128(r_comp >> 64);
+        let base_idx: usize = if k > 0 { 80 } else { 0 };
+        let (base_main, base_comp) = EXP_INTEGER_TABLE_TIER_4[base_idx];
+        let base = base_main + I256::from_i128(base_comp >> 64);
+        let abs_k = k.unsigned_abs();
+        for _ in 0..abs_k {
+            result = multiply_i256_q128_128(result, base);
+        }
+        (result, 0i128)
     };
     // Compensation scaled by 2^64 in build.rs for TIER_4, shift right by 64
     let exp_int = exp_int_main + I256::from_i128(exp_int_comp >> 64);
@@ -244,24 +248,44 @@ pub fn exp_q256_256_native(x: I512) -> I512 {
     // Integer part: Direct table lookup using tier 5 tables
     // Table covers int_part -40..40. For 41..80, use range reduction:
     // exp(n) = exp(40) * exp(n-40). For > 80 or < -80: true over/underflow.
-    let (exp_int_main, exp_int_comp) = if int_part < -80 {
+    // Range reduction: exp(n) via table lookup for -40..40, then chained
+    // multiplication for larger |n|. exp(40) max index=80, exp(-40) index=0.
+    // Q256.256 overflow boundary: exp(176) fits, exp(177) does not.
+    let (exp_int_main, exp_int_comp) = if int_part < -176 {
         return I512::zero();
-    } else if int_part < -40 {
-        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_5[0]; // exp(-40)
-        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_5[(int_part + 80) as usize];
-        let a = a_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(a_comp)) >> 256).as_i512();
-        let b = b_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(b_comp)) >> 256).as_i512();
-        (multiply_i512_q256_256(a, b), I256::zero())
-    } else if int_part > 80 {
+    } else if int_part > 176 {
         return I512::from_i256(I256::from_i128(i128::MAX)) << 256;
-    } else if int_part > 40 {
-        let (a_main, a_comp) = EXP_INTEGER_TABLE_TIER_5[80]; // exp(40)
-        let (b_main, b_comp) = EXP_INTEGER_TABLE_TIER_5[(int_part - 40 + 40) as usize];
-        let a = a_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(a_comp)) >> 256).as_i512();
-        let b = b_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(b_comp)) >> 256).as_i512();
-        (multiply_i512_q256_256(a, b), I256::zero())
-    } else {
+    } else if int_part >= -40 && int_part <= 40 {
+        // Direct table lookup
         EXP_INTEGER_TABLE_TIER_5[(int_part + 40) as usize]
+    } else {
+        // Multi-stage range reduction: exp(n) = exp(40)^k * exp(r)
+        // where n = 40*k + r, |r| <= 40
+        let (k, r) = if int_part > 0 {
+            let k = int_part / 40;
+            let r = int_part - k * 40;
+            (k, r)
+        } else {
+            let k = (-int_part) / 40;
+            let r = int_part + k * 40;
+            (-k, r)
+        };
+
+        // exp(r) from table
+        let (r_main, r_comp) = EXP_INTEGER_TABLE_TIER_5[(r + 40) as usize];
+        let mut result = r_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(r_comp)) >> 256).as_i512();
+
+        // Multiply by exp(40)^|k| or exp(-40)^|k|
+        let base_idx: usize = if k > 0 { 80 } else { 0 }; // exp(40) or exp(-40)
+        let (base_main, base_comp) = EXP_INTEGER_TABLE_TIER_5[base_idx];
+        let base = base_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(base_comp)) >> 256).as_i512();
+
+        let abs_k = k.unsigned_abs();
+        for _ in 0..abs_k {
+            result = multiply_i512_q256_256(result, base);
+        }
+
+        (result, I256::zero())
     };
     // Compensation term scaled by 2^128 in build.rs, shift right by 256
     let exp_int = exp_int_main + (crate::fixed_point::I1024::from_i512(I512::from_i256(exp_int_comp)) >> 256).as_i512();
@@ -573,6 +597,15 @@ fn taylor_series_q256_256(remainder: (u128, u128)) -> I512 {
 /// Q512.512 native exponential (Tier 6 - for computing tier 5 with tier N+1)
 ///
 /// **INPUT**: I1024 value in Q512.512 format
+/// Multiply two I1024 values in Q512.512 format via I2048 intermediate.
+#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
+fn multiply_i1024_q512_512(a: crate::fixed_point::I1024, b: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
+    use crate::fixed_point::I2048;
+    let result = a.mul_to_i2048(b);
+    let rounding = I2048::from_i1024(crate::fixed_point::I1024::from_i512(I512::from_i256(I256::from_i128(1)))) << 511;
+    ((result + rounding) >> 512).as_i1024()
+}
+
 /// **OUTPUT**: I1024 value in Q512.512 format
 /// **PRECISION**: ~154 correct decimal digits
 /// **TABLES**: Uses Q512.512 tables directly (TIER_6)
@@ -591,13 +624,35 @@ pub fn exp_q512_512_native(x: crate::fixed_point::I1024) -> crate::fixed_point::
     let int_part = (x >> 512).as_i512().as_i256().as_i128();
     let frac_part = x.as_i512();  // Lower 512 bits
 
-    // Integer part: Direct table lookup using tier 6 tables
-    let (exp_int_main, exp_int_comp) = if int_part < -40 {
-        return I1024::zero();  // Underflow
-    } else if int_part > 40 {
-        return I1024::max_value();  // Overflow
-    } else {
+    // Range reduction: exp(n) via chained multiplication of exp(40).
+    // Q512.512 overflow boundary: exp(354) fits, exp(355) does not.
+    let (exp_int_main, exp_int_comp) = if int_part < -354 {
+        return I1024::zero();
+    } else if int_part > 354 {
+        return I1024::max_value();
+    } else if int_part >= -40 && int_part <= 40 {
         EXP_INTEGER_TABLE_TIER_6[(int_part + 40) as usize]
+    } else {
+        // Multi-stage: exp(n) = exp(40)^k * exp(r), n = 40*k + r, |r| <= 40
+        let (k, r) = if int_part > 0 {
+            let k = int_part / 40;
+            let r = int_part - k * 40;
+            (k, r)
+        } else {
+            let k = (-int_part) / 40;
+            let r = int_part + k * 40;
+            (-k, r)
+        };
+        let (r_main, r_comp) = EXP_INTEGER_TABLE_TIER_6[(r + 40) as usize];
+        let mut result = r_main + (I2048::from_i1024(I1024::from_i512(r_comp)) >> 512).as_i1024();
+        let base_idx: usize = if k > 0 { 80 } else { 0 };
+        let (base_main, base_comp) = EXP_INTEGER_TABLE_TIER_6[base_idx];
+        let base = base_main + (I2048::from_i1024(I1024::from_i512(base_comp)) >> 512).as_i1024();
+        let abs_k = k.unsigned_abs();
+        for _ in 0..abs_k {
+            result = multiply_i1024_q512_512(result, base);
+        }
+        (result, I512::zero())
     };
     // Compensation term scaled by 2^256 in build.rs, shift right by 512 for Q512.512
     let exp_int = exp_int_main + (I2048::from_i1024(I1024::from_i512(exp_int_comp)) >> 512).as_i1024();
