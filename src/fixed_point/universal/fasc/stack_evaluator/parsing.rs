@@ -126,7 +126,7 @@ impl StackEvaluator {
         let effective_frac_len = frac_len.min(max_frac);
         let effective_frac_str = &fractional_str[..effective_frac_len];
 
-        // For ≤38 digits: single i128 path
+        // For ≤38 digits: single i128 path (with I256 fallback for overflow)
         if effective_frac_len <= 38 {
             let integer_part = integer_str.parse::<i128>()
                 .map_err(|_| OverflowDetected::ParseError)?;
@@ -135,12 +135,55 @@ impl StackEvaluator {
             let fractional_part = effective_frac_str.parse::<i128>()
                 .map_err(|_| OverflowDetected::ParseError)?;
             let scale = 10_i128.pow(decimals as u32);
-            let scaled = integer_part
+            let scaled_opt = integer_part
                 .checked_mul(scale)
-                .and_then(|v| v.checked_add(if integer_part < 0 { -fractional_part } else { fractional_part }))
-                .ok_or(OverflowDetected::Overflow)?;
-            let shadow = CompactShadow::from_rational(scaled, scale as u128);
-            Ok(StackValue::Decimal(decimals, to_binary_storage(scaled), shadow))
+                .and_then(|v| v.checked_add(if integer_part < 0 { -fractional_part } else { fractional_part }));
+            if let Some(scaled) = scaled_opt {
+                let shadow = CompactShadow::from_rational(scaled, scale as u128);
+                Ok(StackValue::Decimal(decimals, to_binary_storage(scaled), shadow))
+            } else {
+                // i128 overflow: integer * 10^dp too large. Promote to I256 path.
+                // This happens on q128_128+ when dp=38 and integer >= 2.
+                // q16_16/q32_32: max_frac is 4/9, so scale ≤ 10^9 which never
+                // overflows i128 for any valid integer. Unreachable in practice.
+                #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+                { return Err(OverflowDetected::Overflow); }
+                #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+                let scale_256 = I256::from_i128(scale);
+                #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+                let scaled_256 = I256::from_i128(integer_part) * scale_256
+                    + I256::from_i128(if integer_part < 0 { -fractional_part } else { fractional_part });
+                // Convert directly to binary Q-format (Decimal domain can't hold this)
+                #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+                let tier = self.profile_max_binary_tier();
+                #[cfg(table_format = "q256_256")]
+                {
+                    let num = I512::from_i256(scaled_256) << 256;
+                    let den = I512::from_i256(scale_256);
+                    let raw = (num / den).as_i512();
+                    let shadow = CompactShadow::None;
+                    return Ok(StackValue::Binary(tier, raw, shadow));
+                }
+                #[cfg(table_format = "q128_128")]
+                {
+                    let num = I512::from_i256(scaled_256) << 128;
+                    let den = I512::from_i256(scale_256);
+                    let raw = (num / den).as_i256();
+                    let shadow = CompactShadow::None;
+                    return Ok(StackValue::Binary(tier, raw, shadow));
+                }
+                #[cfg(table_format = "q64_64")]
+                {
+                    // scaled_256 holds integer*10^dp + frac. Convert to Q64.64:
+                    // raw = (scaled_256 << 64) / scale_256
+                    // Max: ~10^18 * 10^38 = 10^56 ≈ 2^186, <<64 → 2^250. Fits I256.
+                    let num = scaled_256 << 64usize;
+                    let raw = (num / scale_256).as_i128();
+                    let shadow = CompactShadow::None;
+                    return Ok(StackValue::Binary(tier, raw, shadow));
+                }
+                // q32_32 and q16_16 already returned above
+            }
         } else {
             // >38 fractional digits (scientific profile Q256.256).
             // Split into two 38-digit halves, parse each into i128,
