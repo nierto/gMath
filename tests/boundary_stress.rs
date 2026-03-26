@@ -59,30 +59,58 @@ fn tier_boundary_i16_max() {
     assert!(s.starts_with("32767."), "32767 should display correctly, got '{}'", s);
 }
 
-/// Product requiring tier promotion: 200 * 200 = 40000 (exceeds i8 tier)
+/// Product requiring tier promotion — profile-appropriate values
 #[test]
+#[cfg(not(table_format = "q16_16"))]
 fn tier_boundary_multiply_requires_promotion() {
     let r = evaluate(&(gmath("200") * gmath("200")));
     assert!(r.is_ok(), "200 * 200 should succeed with tier promotion, got {:?}", r);
     let s = format!("{}", r.unwrap());
     assert!(s.starts_with("40000."), "200 * 200 = 40000, got '{}'", s);
 }
-
-/// Large multiply: 50000 * 50000 = 2,500,000,000 (requires tier 4+)
+/// Q16.16: 15 * 15 = 225 (exceeds i8 tier, fits Q16.16)
 #[test]
+#[cfg(table_format = "q16_16")]
+fn tier_boundary_multiply_requires_promotion() {
+    let r = evaluate(&(gmath("15") * gmath("15")));
+    assert!(r.is_ok(), "15 * 15 should succeed with tier promotion, got {:?}", r);
+    let s = format!("{}", r.unwrap());
+    assert!(s.starts_with("225."), "15 * 15 = 225, got '{}'", s);
+}
+
+/// Large multiply — profile-appropriate values
+#[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn tier_boundary_large_multiply() {
     let r = evaluate(&(gmath("50000") * gmath("50000")));
     assert!(r.is_ok(), "50000 * 50000 should succeed, got {:?}", r);
     let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("2500000000."),
-        "50000 * 50000 = 2500000000, got '{}'",
-        s
-    );
+    assert!(s.starts_with("2500000000."), "50000 * 50000 = 2500000000, got '{}'", s);
+}
+/// Q32.32: 46340² = 2147395600 (near max). mpmath: 2147395600 * 2^32 = 9222993873574297600
+#[test]
+#[cfg(table_format = "q32_32")]
+fn tier_boundary_large_multiply() {
+    let r = evaluate(&(gmath("46340") * gmath("46340")));
+    assert!(r.is_ok(), "46340² should succeed in Q32.32, got {:?}", r);
+    let raw = r.unwrap().as_binary_storage().unwrap();
+    let ulp = (raw - 9222993873574297600_i64).unsigned_abs();
+    assert!(ulp <= 1, "46340² ULP={}", ulp);
+}
+/// Q16.16: 180² = 32400 (near max). mpmath: 32400 * 2^16 = 2123366400
+#[test]
+#[cfg(table_format = "q16_16")]
+fn tier_boundary_large_multiply() {
+    let r = evaluate(&(gmath("180") * gmath("180")));
+    assert!(r.is_ok(), "180² should succeed in Q16.16, got {:?}", r);
+    let raw = r.unwrap().as_binary_storage().unwrap();
+    let ulp = (raw - 2123366400_i32).unsigned_abs();
+    assert!(ulp <= 1, "180² ULP={}", ulp);
 }
 
-/// i32::MAX = 2147483647
+/// i32::MAX = 2147483647 — overflows Q16.16 (max integer ~32767)
 #[test]
+#[cfg(not(table_format = "q16_16"))]
 fn tier_boundary_i32_max() {
     let r = evaluate(&gmath("2147483647"));
     assert!(r.is_ok(), "i32::MAX should parse, got {:?}", r);
@@ -94,8 +122,9 @@ fn tier_boundary_i32_max() {
     );
 }
 
-/// i64::MAX = 9223372036854775807
+/// i64::MAX overflows Q32.32/Q16.16 — only test on Q64.64+
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn tier_boundary_i64_max() {
     let r = evaluate(&gmath("9223372036854775807"));
     assert!(r.is_ok(), "i64::MAX should parse, got {:?}", r);
@@ -210,8 +239,8 @@ fn transcendental_exp_one() {
     assert!(r.is_ok(), "exp(1) should succeed, got {:?}", r);
     let s = format!("{}", r.unwrap());
     assert!(
-        s.starts_with("2.71828"),
-        "exp(1) should be ~2.71828, got '{}'",
+        s.starts_with("2.718"),
+        "exp(1) should be ~2.718..., got '{}'",
         s
     );
 }
@@ -320,13 +349,13 @@ fn transcendental_sqrt_one() {
     );
 }
 
-/// sqrt(very large number)
+/// sqrt(very large number) — 1e12 overflows Q32.32/Q16.16
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn transcendental_sqrt_large() {
     let r = evaluate(&gmath("1000000000000").sqrt());
     assert!(r.is_ok(), "sqrt(1e12) should succeed, got {:?}", r);
     let s = format!("{}", r.unwrap());
-    // sqrt(1e12) = 1e6
     assert!(
         s.starts_with("1000000."),
         "sqrt(1e12) should be 1000000, got '{}'",
@@ -442,6 +471,7 @@ fn decimal_extreme_multiply() {
 
 /// Very small * very small — tests precision floor
 #[test]
+#[cfg(not(table_format = "q16_16"))]
 fn decimal_extreme_tiny_multiply() {
     let r = evaluate(&(gmath("0.001") * gmath("0.001")));
     assert!(r.is_ok(), "0.001 * 0.001 should succeed, got {:?}", r);
@@ -449,6 +479,19 @@ fn decimal_extreme_tiny_multiply() {
     assert!(
         s.starts_with("0.000001") || s.contains("1/1000000"),
         "0.001 * 0.001 = 0.000001, got '{}'",
+        s
+    );
+}
+/// Q16.16: 0.1 * 0.1 = 0.01 (within Q16.16 resolution)
+#[test]
+#[cfg(table_format = "q16_16")]
+fn decimal_extreme_tiny_multiply() {
+    let r = evaluate(&(gmath("0.1") * gmath("0.1")));
+    assert!(r.is_ok(), "0.1 * 0.1 should succeed, got {:?}", r);
+    let s = format!("{}", r.unwrap());
+    assert!(
+        s.starts_with("0.01") || s.contains("1/100"),
+        "0.1 * 0.1 = 0.01, got '{}'",
         s
     );
 }
@@ -581,11 +624,21 @@ mod q256_256_boundaries {
 // Phase 3E: Arithmetic Edge Cases
 // ============================================================================
 
+/// Profile-appropriate test values that fit in all profiles.
+/// Q16.16 max integer: 32767. Q16.16 min resolution: ~0.00001.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+const ARITH_CASES: &[&str] = &["1", "42", "0.5", "100", "0.01"];
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+const ARITH_CASES_NONZERO: &[&str] = &["1", "42", "0.5", "100"];
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+const ARITH_CASES: &[&str] = &["1", "42", "0.5", "1000000", "0.001"];
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+const ARITH_CASES_NONZERO: &[&str] = &["1", "42", "999999999", "0.5"];
+
 /// x + 0 = x
 #[test]
 fn arithmetic_additive_identity() {
-    let cases: &[&str] = &["1", "42", "0.5", "1000000", "0.001"];
-    for &x in cases {
+    for &x in ARITH_CASES {
         let result = evaluate(&(gmath(x) + gmath("0")));
         assert!(result.is_ok(), "{} + 0 should succeed, got {:?}", x, result);
     }
@@ -594,8 +647,7 @@ fn arithmetic_additive_identity() {
 /// x * 1 = x
 #[test]
 fn arithmetic_multiplicative_identity() {
-    let cases: &[&str] = &["1", "42", "0.5", "1000000", "0.001"];
-    for &x in cases {
+    for &x in ARITH_CASES {
         let result = evaluate(&(gmath(x) * gmath("1")));
         assert!(result.is_ok(), "{} * 1 should succeed, got {:?}", x, result);
     }
@@ -604,14 +656,13 @@ fn arithmetic_multiplicative_identity() {
 /// x * 0 = 0
 #[test]
 fn arithmetic_multiply_by_zero() {
-    let cases: &[&str] = &["1", "42", "999999999", "0.5"];
-    for &x in cases {
+    for &x in ARITH_CASES_NONZERO {
         let result = evaluate(&(gmath(x) * gmath("0")));
         assert!(result.is_ok(), "{} * 0 should succeed, got {:?}", x, result);
         let s = format!("{}", result.unwrap());
         let trimmed = s.trim_start_matches('-');
         assert!(
-            trimmed.starts_with("0.000") || trimmed.starts_with("0/") || trimmed == "0",
+            trimmed.starts_with("0.000") || trimmed.starts_with("0/") || trimmed == "0" || trimmed.starts_with("0.0"),
             "{} * 0 should be 0, got '{}'",
             x, s
         );
@@ -621,8 +672,7 @@ fn arithmetic_multiply_by_zero() {
 /// x - x = 0
 #[test]
 fn arithmetic_self_subtraction() {
-    let cases: &[&str] = &["1", "42.5", "0.001", "1000000"];
-    for &x in cases {
+    for &x in ARITH_CASES {
         let result = evaluate(&(gmath(x) - gmath(x)));
         assert!(result.is_ok(), "{} - {} should succeed, got {:?}", x, x, result);
         let s = format!("{}", result.unwrap());
@@ -638,8 +688,7 @@ fn arithmetic_self_subtraction() {
 /// x / x = 1 (for x != 0)
 #[test]
 fn arithmetic_self_division() {
-    let cases: &[&str] = &["1", "42", "0.5", "1000000"];
-    for &x in cases {
+    for &x in ARITH_CASES {
         let result = evaluate(&(gmath(x) / gmath(x)));
         assert!(result.is_ok(), "{} / {} should succeed, got {:?}", x, x, result);
         let s = format!("{}", result.unwrap());

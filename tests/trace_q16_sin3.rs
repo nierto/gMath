@@ -1,6 +1,6 @@
 #[cfg(table_format = "q16_16")]
 mod trace {
-    use g_math::fixed_point::canonical::{gmath, evaluate};
+
 
     #[test]
     fn trace_sin3_directly() {

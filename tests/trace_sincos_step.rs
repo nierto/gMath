@@ -1,6 +1,7 @@
+#[allow(dead_code)]
 mod step {
     use g_math::fixed_point::i256::I256;
-    
+
     // Include trig constants
     #[cfg(not(feature = "rebuild-tables"))]
     include!("../src/generated_tables/trig_constants.rs");

@@ -21,6 +21,10 @@ fn fp(s: &str) -> FixedPoint {
 fn tol() -> FixedPoint { fp("0.01") }
 fn curv_tol() -> FixedPoint {
     // Curvature involves nested numerical derivatives — tolerance is looser
+    #[cfg(table_format = "q16_16")]
+    { fp("1") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.5") }
     #[cfg(table_format = "q64_64")]
     { fp("0.1") }
     #[cfg(table_format = "q128_128")]

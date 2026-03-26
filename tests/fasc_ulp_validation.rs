@@ -19,7 +19,9 @@
 //!   GMATH_PROFILE=balanced   cargo test --test fasc_ulp_validation -- --nocapture
 //!   GMATH_PROFILE=scientific cargo test --test fasc_ulp_validation -- --nocapture
 
+#[allow(unused_imports)]
 use g_math::fixed_point::canonical::{gmath, evaluate, LazyExpr};
+#[allow(unused_imports)]
 use std::time::Instant;
 
 // ════════════════════════════════════════════════════════════════════
@@ -30,6 +32,7 @@ use std::time::Instant;
 ///
 /// Works around a known parse_decimal issue where "-0.xxx" loses its sign.
 /// We handle ALL negative inputs via negation: "-X" → Negate(Literal("X")).
+#[allow(dead_code)]
 fn gmath_safe(input: &'static str) -> LazyExpr {
     if input.starts_with('-') {
         // Subslice of a &'static str is &'static str — Rust just can't infer it.
@@ -46,6 +49,7 @@ fn gmath_safe(input: &'static str) -> LazyExpr {
 }
 
 /// ULP statistics tracker (using u128 for all profiles).
+#[allow(dead_code)]
 struct UlpStats {
     name: &'static str,
     max_ulp: u128,
@@ -56,6 +60,7 @@ struct UlpStats {
     ulps: Vec<u128>,
 }
 
+#[allow(dead_code)]
 impl UlpStats {
     fn new(name: &'static str) -> Self {
         Self {
@@ -94,6 +99,7 @@ impl UlpStats {
         sorted[idx.min(sorted.len() - 1)]
     }
 
+    #[allow(dead_code)]
     fn mean(&self) -> f64 {
         if self.count == 0 { return 0.0; }
         self.sum_ulp as f64 / self.count as f64
@@ -112,6 +118,7 @@ impl UlpStats {
         if g < 0.0 { 0 } else { g.floor() as u32 }
     }
 
+    #[allow(dead_code)]
     fn report(&self, profile: &str, frac_bits: u32) {
         let gd = self.guaranteed_decimals(frac_bits);
         eprintln!(
@@ -148,6 +155,7 @@ impl UlpStats {
 // Shared macros
 // ════════════════════════════════════════════════════════════════════
 
+#[allow(unused_macros)]
 macro_rules! fasc_unary_test {
     ($test_name:ident, $func_name:expr, $refs:ident, $max_ulp:expr, $method:ident) => {
         fasc_unary_test!($test_name, $func_name, $refs, $max_ulp, $method, 0);
@@ -183,6 +191,7 @@ macro_rules! fasc_unary_test {
     };
 }
 
+#[allow(unused_macros)]
 macro_rules! fasc_binary_test {
     ($test_name:ident, $func_name:expr, $refs:ident, $max_ulp:expr, $method:expr) => {
         #[test]

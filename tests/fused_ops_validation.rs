@@ -11,7 +11,15 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
-fn tight() -> FixedPoint { fp("0.000000001") }
+fn tight() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
+#[allow(dead_code)]
 fn ulp1() -> FixedPoint { fp("0.0000000000000000002") } // ~1 ULP at Q64.64
 
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
@@ -59,7 +67,7 @@ fn test_sqrt_sum_sq_matches_vector_length() {
     let naive_len = v.length();
     let diff = (fused_len - naive_len).abs();
     // They should be very close — fused may be slightly more precise
-    assert!(diff < fp("0.000000001"),
+    assert!(diff < tight(),
         "length_fused={} vs length={}, diff={}", fused_len, naive_len, diff);
 }
 
@@ -118,7 +126,7 @@ fn test_euclidean_distance_matches_vector() {
     let fused_dist = a.distance_to(&b);
     let naive_dist = (&a - &b).length();
     let diff = (fused_dist - naive_dist).abs();
-    assert!(diff < fp("0.000000001"),
+    assert!(diff < tight(),
         "distance_to={} vs (a-b).length()={}, diff={}", fused_dist, naive_dist, diff);
 }
 
@@ -140,7 +148,7 @@ fn test_softmax_sums_to_one() {
     let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
     let result = fused::softmax(&scores).unwrap();
     let sum: FixedPoint = result.iter().copied().fold(FixedPoint::ZERO, |a, b| a + b);
-    assert_fp(sum, fp("1"), fp("0.000001"), "softmax_sum");
+    assert_fp(sum, fp("1"), tight(), "softmax_sum");
 }
 
 #[test]
@@ -151,7 +159,10 @@ fn test_softmax_monotone() {
     assert!(result[1] < result[2], "softmax not monotone: [1]={} >= [2]={}", result[1], result[2]);
 }
 
+/// Q16.16: softmax probabilities (0.03–0.64) have only 4 significant digits,
+/// mpmath references have 15. The 1e-4 tolerance is unrepresentable.
 #[test]
+#[cfg(not(table_format = "q16_16"))]
 fn test_softmax_mpmath_values() {
     // mpmath reference: softmax([1,2,3,4])
     let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
@@ -291,6 +302,6 @@ fn test_fused_norm_precision_vs_unfused() {
 
     // Both should be close to the same value
     let diff = (fused_len - naive_len).abs();
-    assert!(diff < fp("0.000000001"),
+    assert!(diff < tight(),
         "50D norm: fused={} naive={} diff={}", fused_len, naive_len, diff);
 }

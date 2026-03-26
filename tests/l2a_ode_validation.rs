@@ -49,6 +49,10 @@ fn test_rk4_exponential_decay() {
 
     // x(1) = e^(-1) ≈ 0.36787944117144232
     // mpmath: mp.dps=50; exp(-1) = 0.36787944117144232159647396907...
+    #[cfg(table_format = "q16_16")]
+    let expected = fp("0.3678");
+    #[cfg(table_format = "q32_32")]
+    let expected = fp("0.367879441");
     #[cfg(table_format = "q64_64")]
     let expected = fp("0.3678794411714423");
     #[cfg(table_format = "q128_128")]
@@ -57,7 +61,11 @@ fn test_rk4_exponential_decay() {
     let expected = fp("0.36787944117144232159647396907");
 
     // RK4 with h=0.01 on this smooth ODE should be very accurate
-    assert_fp(final_point.x[0], expected, fp("0.00001"), "exp_decay_rk4");
+    #[cfg(table_format = "q16_16")]
+    let rk4_tol = fp("0.01");  // 100 steps × 16-bit precision
+    #[cfg(not(table_format = "q16_16"))]
+    let rk4_tol = fp("0.00001");
+    assert_fp(final_point.x[0], expected, rk4_tol, "exp_decay_rk4");
 }
 
 // ============================================================================
@@ -88,8 +96,12 @@ fn test_rk4_harmonic_oscillator() {
     let final_point = trajectory.last().unwrap();
 
     // At t=π: x(π) = cos(π) = -1, v(π) = -sin(π) = 0
-    assert_fp(final_point.x[0], fp("-1"), fp("0.001"), "harmonic_x_at_pi");
-    assert_fp(final_point.x[1], fp("0"), fp("0.001"), "harmonic_v_at_pi");
+    #[cfg(table_format = "q16_16")]
+    let osc_tol = fp("0.1");  // ~314 steps at 16-bit precision
+    #[cfg(not(table_format = "q16_16"))]
+    let osc_tol = fp("0.001");
+    assert_fp(final_point.x[0], fp("-1"), osc_tol, "harmonic_x_at_pi");
+    assert_fp(final_point.x[1], fp("0"), osc_tol, "harmonic_v_at_pi");
 }
 
 #[test]
@@ -105,7 +117,11 @@ fn test_rk4_harmonic_energy_conservation() {
     );
 
     // Over 10 time units (1000 steps), energy drift should be small
-    assert!(max_drift < fp("0.001"),
+    #[cfg(table_format = "q16_16")]
+    let drift_tol = fp("0.1");  // 1000 steps × 16-bit → larger drift
+    #[cfg(not(table_format = "q16_16"))]
+    let drift_tol = fp("0.001");
+    assert!(max_drift < drift_tol,
         "Energy drift {} exceeds tolerance", max_drift);
 }
 
@@ -142,7 +158,9 @@ fn test_rk4_single_step_mpmath() {
 // RK45: Adaptive stepping
 // ============================================================================
 
+/// Q16.16: RK45 adaptive tolerance 1e-4 is barely representable (raw≈6) at 16-bit.
 #[test]
+#[cfg(not(table_format = "q16_16"))]
 fn test_rk45_exponential_decay() {
     let sys = ExponentialDecay;
     let x0 = FixedVector::from_slice(&[fp("1")]);
@@ -278,7 +296,11 @@ fn test_monitor_invariant_exact() {
     );
 
     // RK4 doesn't preserve the Hamiltonian exactly, but drift should be small
-    assert!(max_drift < fp("0.0001"),
+    #[cfg(table_format = "q16_16")]
+    let inv_tol = fp("0.01");
+    #[cfg(not(table_format = "q16_16"))]
+    let inv_tol = fp("0.0001");
+    assert!(max_drift < inv_tol,
         "RK4 energy drift {} over 100 steps", max_drift);
     assert_eq!(drifts.len(), trajectory.len());
     // First point should have zero drift

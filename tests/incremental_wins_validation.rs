@@ -14,8 +14,20 @@ fn fp(s: &str) -> FixedPoint {
     if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
     else { FixedPoint::from_str(s) }
 }
-fn tol() -> FixedPoint { fp("0.001") }
-fn tight() -> FixedPoint { fp("0.000000001") }
+fn tol() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }  // RK4 integration at 16-bit precision accumulates more error
+    #[cfg(not(table_format = "q16_16"))]
+    { fp("0.001") }
+}
+fn tight() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
     assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
@@ -253,7 +265,9 @@ fn test_sln_bracket_traceless() {
 // 2. Final downscale detects overflow (returns Err, not silent truncation)
 // 3. Results that fit in storage tier after tier N+1 computation are correct
 
+/// Q16.16/Q32.32: 1e9 and 2e18 exceed integer range.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_ugod_matmul_intermediate_overflow() {
     // Matrix multiply where individual a_ik * b_kj products overflow storage
     // tier (i128 for Q64.64), but the final dot product sum fits.
@@ -279,7 +293,9 @@ fn test_ugod_matmul_intermediate_overflow() {
         "UGOD: matmul intermediate overflow absorbed by compute tier");
 }
 
+/// Q16.16/Q32.32: 1e8 * 1e8 * 64 = 6.4e17 overflows both profiles.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_ugod_dot_product_many_terms() {
     // A 64-element dot product where each term is ~1e8.
     // Storage-tier accumulation: 64 additions of ~1e16 products → ~6.4e17 sum.
@@ -344,7 +360,9 @@ fn test_ugod_cholesky_fused_compute_tier() {
     assert_fp(chol.l.get(1, 1), fp("2"), tol(), "UGOD Cholesky L[1,1] fused compute tier");
 }
 
+/// Q16.16: exp(20) ≈ 4.85e8 overflows Q16.16 (max ~32767).
 #[test]
+#[cfg(not(table_format = "q16_16"))]
 fn test_ugod_exp_intermediate_overflow_succeeds() {
     // UGOD tier N+1 saves this computation:
     // exp(x) for x=20 requires computing e^20 ≈ 4.85e8.
@@ -401,7 +419,7 @@ fn test_ugod_fasc_chain_vs_imperative_precision() {
     // FASC path: single expression tree, force binary domain
     // Use binary-parseable literals to avoid decimal domain routing
     use g_math::canonical::set_gmath_mode;
-    set_gmath_mode("binary:binary");
+    set_gmath_mode("binary:binary").ok();
     let expr = (gmath("0.7").sin() + gmath("0.3")).cos();
     let fasc_result = evaluate(&expr).unwrap();
     use g_math::canonical::reset_gmath_mode;
@@ -421,7 +439,7 @@ fn test_ugod_fasc_chain_vs_imperative_precision() {
     // sin(0.7) = 0.64421768723769105367..., + 0.3 = 0.94421768723769105...,
     // cos(0.94421...) = 0.58850...
     // Actually recompute properly:
-    let expected = imp_val; // Use imperative as baseline
+    let _expected = imp_val; // Use imperative as baseline
 
     // Both paths should produce results within a few ULP of each other
     let diff = (fasc_val - imp_val).abs();
@@ -459,7 +477,9 @@ fn test_sln_singular_inverse_returns_error() {
     assert!(result.is_err(), "SL inverse of zero matrix should Err via UGOD");
 }
 
+/// Q16.16/Q32.32: exp(40) ≈ 2.35e17 overflows both profiles.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_gln_exp_overflow_large_input() {
     // UGOD: matrix_exp with very large entries should either succeed at tier N+1
     // or return OverflowDetected — never silently produce wrong results
@@ -946,10 +966,10 @@ fn test_moebius_circle_preserving() {
 
     let m = Moebius::new(fp("2"), fp("1"), fp("1"), fp("2"));
 
-    let w1 = m.apply(fp("1")).unwrap();    // (2+1)/(1+2) = 1
-    let w2 = m.apply(fp("-1")).unwrap();    // (-2+1)/(-1+2) = -1
+    let _w1 = m.apply(fp("1")).unwrap();    // (2+1)/(1+2) = 1
+    let _w2 = m.apply(fp("-1")).unwrap();    // (-2+1)/(-1+2) = -1
     // For the third point we use x=0: (0+1)/(0+2) = 0.5
-    let w3 = m.apply(fp("0")).unwrap();
+    let _w3 = m.apply(fp("0")).unwrap();
 
     // Three collinear points on R: 1, -1, 0.5 → these ARE on a "circle" in R¹
     // (any 3 distinct real points define a unique circle in the extended real line).
@@ -980,7 +1000,7 @@ fn test_moebius_circle_preserving() {
     let den = complex_mul_pub(c, d);
     let den_sq = den.0 * den.0 + den.1 * den.1;
     if !den_sq.is_zero() {
-        let cr_re = (num.0 * den.0 + num.1 * den.1) / den_sq;
+        let _cr_re = (num.0 * den.0 + num.1 * den.1) / den_sq;
         let cr_im = (num.1 * den.0 - num.0 * den.1) / den_sq;
         // Imaginary part should be ≈ 0 for concyclic points
         assert_fp(cr_im, fp("0"), tol(), "Möbius circle-preserving: CR imaginary ≈ 0");

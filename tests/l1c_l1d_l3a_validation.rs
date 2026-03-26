@@ -11,8 +11,20 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
-fn tol() -> FixedPoint { fp("0.0001") } // relaxed for multi-step algorithms
-fn tight() -> FixedPoint { fp("0.000000001") }
+fn tol() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.1") }  // multi-step algorithms (Padé, Denman-Beavers) accumulate heavily at 16-bit
+    #[cfg(not(table_format = "q16_16"))]
+    { fp("0.0001") }
+}
+fn tight() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();

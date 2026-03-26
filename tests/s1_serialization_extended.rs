@@ -18,7 +18,14 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
-fn tight() -> FixedPoint { fp("0.000000001") }
+fn tight() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
@@ -142,7 +149,9 @@ fn test_compact_small_value() {
     assert_fp(decoded, small, tight(), "compact small roundtrip");
 }
 
+/// Q16.16/Q32.32: 999999999999 overflows both profiles.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_compact_large_value() {
     // Large value — uses more of the storage, less savings
     let large = fp("999999999999");
@@ -184,7 +193,9 @@ fn test_compact_vector_roundtrip() {
     }
 }
 
+/// Q16.16/Q32.32: test uses 1e9 which overflows both profiles.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_compact_savings_report() {
     println!("\n========================================");
     println!("Compact Encoding — Savings Report");

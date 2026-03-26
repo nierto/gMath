@@ -415,6 +415,7 @@ mod q128_128 {
         if diff.is_negative() { -diff } else { diff }
     }
 
+    #[allow(dead_code)]
     fn i256_to_u128_low(v: I256) -> u128 {
         (v.words[0] as u128) | ((v.words[1] as u128) << 64)
     }

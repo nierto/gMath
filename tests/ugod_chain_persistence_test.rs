@@ -93,14 +93,14 @@ fn test_chain_cos_of_exp_overflow() {
     // cos(exp(44)) — same pattern, different outer function
     // mpmath: cos(exp(44)) = 0.49451075960498576649...
     let expr = gmath("44").exp().cos();
-    let result = evaluate(&expr);
+    let _result = evaluate(&expr);
 
     #[cfg(table_format = "q64_64")]
     {
         // exp(44) overflows storage but cos brings it back to [-1,1]
-        assert!(result.is_ok(),
+        assert!(_result.is_ok(),
             "cos(exp(44)) should succeed via BinaryCompute chain");
-        if let Ok(sv) = result {
+        if let Ok(sv) = _result {
             let s = format!("{}", sv);
             println!("cos(exp(44)) via FASC chain = {}", s);
             // mpmath: 0.49451075960498576649...
@@ -156,23 +156,23 @@ fn test_chain_imperative_fails_fasc_succeeds() {
     // This IS the value proposition of FASC-UGOD architecture.
 
     // Imperative path: exp(44) materializes, overflows
-    let imp_exp = fp("44").try_exp();
+    let _imp_exp = fp("44").try_exp();
 
     // FASC path: sin(exp(44)) stays at compute tier through chain
-    let fasc_result = evaluate(&gmath("44").exp().sin());
+    let _fasc_result = evaluate(&gmath("44").exp().sin());
 
     #[cfg(table_format = "q64_64")]
     {
-        assert!(imp_exp.is_err(),
+        assert!(_imp_exp.is_err(),
             "Imperative exp(44) MUST fail on Q64.64 — proves storage overflow");
-        assert!(fasc_result.is_ok(),
+        assert!(_fasc_result.is_ok(),
             "FASC sin(exp(44)) MUST succeed — proves chain persistence");
 
         println!("\n========================================");
         println!("UGOD Chain Persistence: PROVEN");
         println!("========================================");
         println!("Imperative exp(44):     Err(TierOverflow)");
-        println!("FASC sin(exp(44)):      {}", fasc_result.unwrap());
+        println!("FASC sin(exp(44)):      {}", _fasc_result.unwrap());
         println!("Same computation, different architecture.");
         println!("FASC keeps intermediates at BinaryCompute tier.");
         println!("Only the final result materializes to storage.");

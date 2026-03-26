@@ -39,7 +39,7 @@ fn fp(s: &str) -> FixedPoint {
 fn ulp_distance(a: FixedPoint, b: FixedPoint) -> i64 {
     let diff_fp = (a - b).abs();
     let diff = diff_fp.raw();
-    #[cfg(table_format = "q64_64")]
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
     { diff as i64 }
     #[cfg(table_format = "q128_128")]
     { diff.as_i128() as i64 }
@@ -80,6 +80,10 @@ fn test_l2a_ulp_report() {
     // mpmath 50 digits: 0.36787944117144232159647396907024893310018921374266
     let traj = rk4_integrate(&sys, &x0, fp("0"), fp("1"), fp("0.01"));
     let final_val = traj.last().unwrap().x[0];
+    #[cfg(table_format = "q16_16")]
+    let exp_neg1 = fp("0.3678");
+    #[cfg(table_format = "q32_32")]
+    let exp_neg1 = fp("0.367879441");
     #[cfg(table_format = "q64_64")]
     let exp_neg1 = fp("0.3678794411714423215");
     #[cfg(table_format = "q128_128")]
@@ -213,6 +217,10 @@ fn test_l4b_ulp_report() {
     // Cross-ratio CR(0,1,2,3) = 4/3
     // mpmath: 1.33333333333333333333333333333...
     let cr = cross_ratio_1d(fp("0"), fp("1"), fp("2"), fp("3")).unwrap();
+    #[cfg(table_format = "q16_16")]
+    let cr_expected = fp("1.3333");
+    #[cfg(table_format = "q32_32")]
+    let cr_expected = fp("1.333333333");
     #[cfg(table_format = "q64_64")]
     let cr_expected = fp("1.3333333333333333333");
     #[cfg(table_format = "q128_128")]
