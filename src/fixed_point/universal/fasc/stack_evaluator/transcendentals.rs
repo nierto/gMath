@@ -32,8 +32,10 @@ use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i1024;
 use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i512, ln_binary_i512};
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i256, ln_binary_i256};
+#[allow(unused_imports)]
 #[cfg(table_format = "q32_32")]
 use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i128, ln_binary_i128};
+#[allow(unused_imports)]
 #[cfg(table_format = "q16_16")]
 use crate::fixed_point::domains::binary_fixed::transcendental::{exp_binary_i64, ln_binary_i64};
 

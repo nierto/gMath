@@ -187,13 +187,23 @@ mod tests {
         else { FixedPoint::from_str(s) }
     }
 
+    /// Profile-appropriate tight tolerance — at least 1 ULP representable.
+    fn tight() -> FixedPoint {
+        #[cfg(table_format = "q16_16")]
+        { fp("0.001") }
+        #[cfg(table_format = "q32_32")]
+        { fp("0.000000001") }
+        #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+        { fp("0.000000001") }
+    }
+
     #[test]
     fn test_sqrt_sum_sq_basic() {
         // sqrt(3² + 4²) = sqrt(25) = 5
         let vals = [fp("3"), fp("4")];
         let result = sqrt_sum_sq(&vals);
         let diff = (result - fp("5")).abs();
-        assert!(diff < fp("0.000000001"), "sqrt(3²+4²) = {}, expected 5", result);
+        assert!(diff < tight(), "sqrt(3²+4²) = {}, expected 5", result);
     }
 
     #[test]
@@ -202,7 +212,7 @@ mod tests {
         let vals = [fp("7")];
         let result = sqrt_sum_sq(&vals);
         let diff = (result - fp("7")).abs();
-        assert!(diff < fp("0.000000001"), "sqrt(7²) = {}, expected 7", result);
+        assert!(diff < tight(), "sqrt(7²) = {}, expected 7", result);
     }
 
     #[test]
@@ -212,14 +222,14 @@ mod tests {
         let b = [fp("3"), fp("4")];
         let dist = euclidean_distance(&a, &b);
         let diff = (dist - fp("5")).abs();
-        assert!(diff < fp("0.000000001"), "dist([0,0],[3,4]) = {}, expected 5", dist);
+        assert!(diff < tight(), "dist([0,0],[3,4]) = {}, expected 5", dist);
     }
 
     #[test]
     fn test_euclidean_distance_same_point() {
         let a = [fp("1"), fp("2"), fp("3")];
         let dist = euclidean_distance(&a, &a);
-        assert!(dist.is_zero() || dist.abs() < fp("0.000000001"),
+        assert!(dist.is_zero() || dist.abs() < tight(),
             "distance to self should be 0, got {}", dist);
     }
 
@@ -241,7 +251,7 @@ mod tests {
         let result = softmax(&scores).unwrap();
         let sum: FixedPoint = result.iter().copied().fold(FixedPoint::ZERO, |a, b| a + b);
         let diff = (sum - fp("1")).abs();
-        assert!(diff < fp("0.000001"), "softmax sum = {}, expected 1.0", sum);
+        assert!(diff < tight(), "softmax sum = {}, expected 1.0", sum);
     }
 
     #[test]
@@ -269,7 +279,7 @@ mod tests {
     fn test_silu_zero() {
         // SiLU(0) = 0 / (1 + exp(0)) = 0 / 2 = 0
         let result = silu(FixedPoint::ZERO);
-        assert!(result.abs() < fp("0.000000001"), "silu(0) = {}, expected 0", result);
+        assert!(result.abs() < tight(), "silu(0) = {}, expected 0", result);
     }
 
     #[test]

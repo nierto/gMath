@@ -34,6 +34,7 @@ use num_traits::{One, ToPrimitive, Signed, Zero};
 /// - Balanced: Tier 5 (i128/u128) → Q128.128 (I256), general purpose
 /// - Scientific: Tier 6 (I256/I256) → Q256.256 (I512), maximum precision
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum DeploymentProfile {
     Realtime,    //  4 decimals, Q16.16,   i32 storage, i64 compute
     Compact,     //  9 decimals, Q32.32,   i64 storage, i128 compute

@@ -33,10 +33,12 @@ use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_pl
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
     sin_compute_tier_i512, cos_compute_tier_i512, sincos_compute_tier_i512,
 };
+#[allow(unused_imports)]
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
     sin_compute_tier_i256, cos_compute_tier_i256, sincos_compute_tier_i256,
 };
+#[allow(unused_imports)]
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::{
     sin_compute_tier_i64, cos_compute_tier_i64, sincos_compute_tier_i64,
@@ -54,6 +56,7 @@ use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_
 use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_1::{
     atan_compute_tier_i256, atan2_compute_tier_i256,
 };
+#[allow(unused_imports)]
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_1::{
     atan_compute_tier_i64, atan2_compute_tier_i64,
@@ -61,10 +64,12 @@ use crate::fixed_point::domains::binary_fixed::transcendental::atan_tier_n_plus_
 
 #[cfg(table_format = "q256_256")]
 use crate::fixed_point::domains::binary_fixed::transcendental::sqrt_tier_n_plus_1::sqrt_binary_i1024;
+#[allow(unused_imports)]
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 use crate::fixed_point::domains::binary_fixed::transcendental::sqrt_tier_n_plus_1::sqrt_binary_i64;
 
 // q32_32: ComputeStorage = i128 (Q64.64), use native Q64.64 transcendentals
+#[allow(unused_imports)]
 #[cfg(table_format = "q32_32")]
 use crate::fixed_point::domains::binary_fixed::transcendental::{
     sin_binary_i128, cos_binary_i128, sqrt_binary_i128,
@@ -685,6 +690,7 @@ pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
 }
 
 /// Create a compute-tier integer (e.g., 1, 2 in the compute Q-format)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
     #[cfg(table_format = "q256_256")]
