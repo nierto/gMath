@@ -168,6 +168,10 @@ impl ValidationResult {
 // Detect active profile
 // ════════════════════════════════════════════════════════════════════
 
+#[cfg(table_format = "q16_16")]
+const ACTIVE_PROFILE: &str = "Q16.16";
+#[cfg(table_format = "q32_32")]
+const ACTIVE_PROFILE: &str = "Q32.32";
 #[cfg(table_format = "q64_64")]
 const ACTIVE_PROFILE: &str = "Q64.64";
 #[cfg(table_format = "q128_128")]
@@ -325,6 +329,7 @@ fn validate_cross_domain_arithmetic() {
 
 /// Maximum allowed ULP for binary fixed-point arithmetic.
 /// add/sub: exact (0 ULP). mul/div: truncation rounding allows up to 1 ULP.
+#[allow(dead_code)]
 const MAX_ARITHMETIC_ULP: u128 = 1;
 
 #[cfg(table_format = "q64_64")]

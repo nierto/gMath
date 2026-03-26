@@ -38,7 +38,7 @@ fn test_fixedpoint_profile_tag() {
     let val = fp("1");
     let bytes = val.to_bytes();
     let tag = bytes[0];
-    assert!(tag >= 0x01 && tag <= 0x03, "unexpected profile tag: {:#x}", tag);
+    assert!(tag >= 0x01 && tag <= 0x05, "unexpected profile tag: {:#x}", tag);
     assert_eq!(tag, FixedPoint::profile_tag());
 }
 
@@ -94,8 +94,8 @@ fn test_fixedmatrix_identity_roundtrip() {
 #[test]
 fn test_serialization_byte_sizes() {
     let raw_len = FixedPoint::raw_byte_len();
-    // Profile-dependent: 16, 32, or 64 bytes
-    assert!(raw_len == 16 || raw_len == 32 || raw_len == 64,
+    // Profile-dependent: 4 (Q16.16), 8 (Q32.32), 16 (Q64.64), 32 (Q128.128), or 64 (Q256.256)
+    assert!(raw_len == 4 || raw_len == 8 || raw_len == 16 || raw_len == 32 || raw_len == 64,
         "unexpected raw_byte_len: {}", raw_len);
 
     let val = fp("1");
@@ -524,6 +524,9 @@ fn test_compute_tier_dot_fractional() {
     let precise = a.dot_precise(&b);
     let expected = fp("0.14");
     // Both should be extremely close to 0.14 (within a few ULP)
+    #[cfg(table_format = "q16_16")]
+    let tolerance = fp("0.01");
+    #[cfg(not(table_format = "q16_16"))]
     let tolerance = fp("0.0000001");
     let diff_standard = (standard - expected).abs();
     let diff_precise = (precise - expected).abs();
@@ -575,6 +578,9 @@ fn test_matrix_multiply_accumulation_16x16() {
         for c in 0..4 {
             let diff = (result.get(r, c) - expected).abs();
             // Allow small tolerance (a few ULP at most)
+            #[cfg(table_format = "q16_16")]
+            let tolerance = fp("0.01");
+            #[cfg(not(table_format = "q16_16"))]
             let tolerance = fp("0.0000001");
             assert!(diff < tolerance,
                 "16×16 multiply error at ({},{}): got {}, expected {}, diff={}",
@@ -614,23 +620,30 @@ fn test_try_exp_normal_value() {
     // e^1 ≈ 2.718...
     let e = result.unwrap();
     let diff = (e - fp("2.718281828")).abs();
-    assert!(diff < fp("0.000000001"), "exp(1) too far from e: {}", e);
+    #[cfg(table_format = "q16_16")]
+    let exp_tol = fp("0.01");
+    #[cfg(not(table_format = "q16_16"))]
+    let exp_tol = fp("0.000000001");
+    assert!(diff < exp_tol, "exp(1) too far from e: {}", e);
 }
 
+/// exp(44) ≈ 1.28e19 exceeds Q64.64 range (~9.2e18) but fits in Q128.128+.
+/// Q16.16: exp(44) also overflows.
 #[test]
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn test_try_exp_overflow_returns_tier_overflow() {
-    // exp(44) ≈ 1.28 × 10^19, exceeds Q64.64 range (~9.2 × 10^18)
-    // This MUST return TierOverflow, not a wrong value
     let val = fp("44");
     let result = val.try_exp();
-    assert!(result.is_err(), "exp(44) should overflow in Q64.64, got {:?}", result);
+    assert!(result.is_err(), "exp(44) should overflow in this profile, got {:?}", result);
     match result.unwrap_err() {
         OverflowDetected::TierOverflow => {} // expected — UGOD working correctly
         other => panic!("expected TierOverflow, got {:?}", other),
     }
 }
 
+/// Q16.16/Q32.32: exp(43) ≈ 4.73e18 far exceeds both profiles' range.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_try_exp_near_boundary_succeeds() {
     // exp(43) ≈ 4.73 × 10^18, fits within Q64.64 range
     let val = fp("43");

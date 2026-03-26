@@ -9,8 +9,20 @@ fn fp(s: &str) -> FixedPoint {
     if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
     else { FixedPoint::from_str(s) }
 }
-fn tol() -> FixedPoint { fp("0.0001") }
-fn tight() -> FixedPoint { fp("0.000000001") }
+fn tol() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }  // Rodrigues trig at 16-bit: cos(π/2) ≈ ±0.0001
+    #[cfg(not(table_format = "q16_16"))]
+    { fp("0.0001") }
+}
+fn tight() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
     assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);

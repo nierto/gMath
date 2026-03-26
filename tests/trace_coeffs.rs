@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod coeffs {
     // Include trig constants directly
     #[cfg(feature = "rebuild-tables")]

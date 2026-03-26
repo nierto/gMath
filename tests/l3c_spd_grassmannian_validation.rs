@@ -7,8 +7,13 @@
 //! 4. Parallel transport preserves norm
 //! 5. Known geometry: SPD 1×1 reduces to positive reals, Gr(1,n) = RP^{n-1}
 //! 6. Orthogonality preservation on Grassmannian
+//!
+//! Q16.16: SPD and Grassmannian operations require matrix exp/log, eigenvalue
+//! decomposition, and multi-step geodesic computation. These accumulate far
+//! beyond Q16.16's 16-bit fractional precision.
+#![cfg(not(table_format = "q16_16"))]
 
-use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
+use g_math::fixed_point::{FixedPoint, FixedVector};
 use g_math::fixed_point::imperative::manifold::{Manifold, SPDManifold, Grassmannian};
 
 fn fp(s: &str) -> FixedPoint {
@@ -20,7 +25,15 @@ fn fp(s: &str) -> FixedPoint {
 }
 
 fn tol() -> FixedPoint { fp("0.0001") }
-fn tight_tol() -> FixedPoint { fp("0.000000001") }
+#[allow(dead_code)]
+fn tight_tol() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 
 // Helper: build a FixedVector from slice of strings
 fn fvec(vals: &[&str]) -> FixedVector {

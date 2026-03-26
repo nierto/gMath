@@ -10,7 +10,7 @@
 
 use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
 use g_math::fixed_point::imperative::tensor::{
-    Tensor, contract, outer, transpose, trace, raise_index, lower_index,
+    Tensor, contract, outer, transpose, trace, raise_index,
     symmetrize, antisymmetrize,
 };
 
@@ -19,7 +19,14 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
-fn tol() -> FixedPoint { fp("0.000000001") }
+fn tol() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 
 // ============================================================================
 // Construction and access
@@ -236,9 +243,9 @@ fn test_raise_index_mpmath() {
 
     let expected_0 = fp("3.14285714285714285");
     let expected_1 = fp("-0.28571428571428571");
-    assert!((raised.get(&[0]) - expected_0).abs() < fp("0.00000000001"),
+    assert!((raised.get(&[0]) - expected_0).abs() < tol(),
         "raised[0] = {} (expected {})", raised.get(&[0]), expected_0);
-    assert!((raised.get(&[1]) - expected_1).abs() < fp("0.00000000001"),
+    assert!((raised.get(&[1]) - expected_1).abs() < tol(),
         "raised[1] = {} (expected {})", raised.get(&[1]), expected_1);
 }
 

@@ -12,7 +12,7 @@ fn fp(s: &str) -> FixedPoint {
 fn ulp_diff(a: FixedPoint, b: FixedPoint) -> u64 {
     let diff = a - b;
     let raw = diff.raw();
-    #[cfg(table_format = "q64_64")]
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
     { raw.unsigned_abs() as u64 }
     #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
     { let abs_raw = if raw.is_negative() { -raw } else { raw }; abs_raw.as_i128() as u64 }

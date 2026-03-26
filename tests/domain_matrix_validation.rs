@@ -26,7 +26,14 @@ fn sv_to_fp(sv: &StackValue) -> FixedPoint {
     }
 }
 
-fn tight() -> FixedPoint { fp("0.000000001") }
+fn tight() -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    { fp("0.01") }
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { fp("0.000000001") }
+}
 
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();

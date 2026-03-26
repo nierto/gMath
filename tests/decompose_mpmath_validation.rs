@@ -4,6 +4,10 @@
 //! precision. These are the mathematical ground truth for solver correctness,
 //! determinant accuracy, inverse accuracy, and Cholesky factor values.
 //!
+//! Q16.16 (4 decimal digits) lacks the precision for meaningful decomposition
+//! validation — reference value comparisons require at least Q32.32.
+#![cfg(not(table_format = "q16_16"))]
+//!
 //! This complements decompose_validation.rs (algebraic identity tests) with
 //! concrete numerical verification against an independent high-precision source.
 
@@ -24,8 +28,14 @@ fn fp(s: &str) -> FixedPoint {
     }
 }
 
-/// Tolerance: 1e-12 (conservative for ill-conditioned systems like Wilson)
-fn tol() -> FixedPoint { fp("0.000000000001") }
+/// Profile-appropriate tolerance for mpmath validation.
+/// Q32.32 has 9-digit precision — 1e-12 rounds to zero. Use 1e-4 instead.
+fn tol() -> FixedPoint {
+    #[cfg(table_format = "q32_32")]
+    { fp("0.0001") }
+    #[cfg(not(table_format = "q32_32"))]
+    { fp("0.000000000001") }
+}
 
 fn assert_fp_eq(got: FixedPoint, expected: FixedPoint, name: &str) {
     let diff = (got - expected).abs();

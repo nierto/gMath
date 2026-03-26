@@ -25,6 +25,10 @@ use std::time::Instant;
 // Profile detection
 // ════════════════════════════════════════════════════════════════════
 
+#[cfg(table_format = "q16_16")]
+const ACTIVE_PROFILE: &str = "Q16.16 (realtime)";
+#[cfg(table_format = "q32_32")]
+const ACTIVE_PROFILE: &str = "Q32.32 (compact)";
 #[cfg(table_format = "q64_64")]
 const ACTIVE_PROFILE: &str = "Q64.64 (embedded)";
 #[cfg(table_format = "q128_128")]
@@ -32,6 +36,10 @@ const ACTIVE_PROFILE: &str = "Q128.128 (balanced)";
 #[cfg(table_format = "q256_256")]
 const ACTIVE_PROFILE: &str = "Q256.256 (scientific)";
 
+#[cfg(table_format = "q16_16")]
+const FRAC_BITS: u32 = 16;
+#[cfg(table_format = "q32_32")]
+const FRAC_BITS: u32 = 32;
 #[cfg(table_format = "q64_64")]
 const FRAC_BITS: u32 = 64;
 #[cfg(table_format = "q128_128")]
@@ -703,6 +711,7 @@ fn validate_arithmetic_all_domains() {
 }
 
 /// Maximum allowed ULP for binary fixed-point arithmetic.
+#[allow(dead_code)]
 const MAX_ARITHMETIC_ULP: u128 = 1;
 
 // Profile-specific binary arithmetic validation
@@ -1200,6 +1209,74 @@ mod trans_q256_256 {
 fn run_transcendental_validation() -> Vec<TranscendentalResult> {
     trans_q256_256::run()
 }
+
+// ── Q32.32 compact profile transcendentals ──
+#[cfg(table_format = "q32_32")]
+mod trans_q32_32 {
+    use super::*;
+    include!("data/fasc_ulp_refs_q32.rs");
+    fn run_func(name: &str, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
+        let refs: Vec<_> = Q32_REFS.iter().filter(|r| r.3 == name).collect();
+        let mut stats = UlpStats::new(name);
+        if let Some(r) = refs.first() { let _ = evaluate(&method(gmath_safe(r.0))); }
+        let start = Instant::now();
+        for r in &refs {
+            match evaluate(&method(gmath_safe(r.0))).ok().and_then(|v| v.as_binary_storage()) {
+                Some(actual) => { stats.record(((actual as i64) - r.2).unsigned_abs() as u128, r.0); }
+                None => stats.record_error(r.0),
+            }
+        }
+        TranscendentalResult { stats, elapsed_ns: start.elapsed().as_nanos() as u64, max_allowed_ulp: 5, max_allowed_errors: 0 }
+    }
+    pub fn run() -> Vec<TranscendentalResult> {
+        vec![
+            run_func("exp", LazyExpr::exp), run_func("ln", LazyExpr::ln), run_func("sqrt", LazyExpr::sqrt),
+            run_func("sin", LazyExpr::sin), run_func("cos", LazyExpr::cos), run_func("tan", LazyExpr::tan),
+            run_func("atan", LazyExpr::atan), run_func("asin", LazyExpr::asin), run_func("acos", LazyExpr::acos),
+            run_func("sinh", LazyExpr::sinh), run_func("cosh", LazyExpr::cosh), run_func("tanh", LazyExpr::tanh),
+            run_func("asinh", LazyExpr::asinh), run_func("acosh", LazyExpr::acosh), run_func("atanh", LazyExpr::atanh),
+        ]
+    }
+}
+#[cfg(table_format = "q32_32")]
+fn run_transcendental_validation() -> Vec<TranscendentalResult> { trans_q32_32::run() }
+
+// ── Q16.16 realtime profile transcendentals ──
+#[cfg(table_format = "q16_16")]
+mod trans_q16_16 {
+    use super::*;
+    include!("data/fasc_ulp_refs_q16.rs");
+    fn run_func(name: &str, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
+        let refs: Vec<_> = Q16_REFS.iter().filter(|r| r.3 == name).collect();
+        let mut stats = UlpStats::new(name);
+        if let Some(r) = refs.first() { let _ = evaluate(&method(gmath_safe(r.0))); }
+        let start = Instant::now();
+        for r in &refs {
+            match evaluate(&method(gmath_safe(r.0))).ok().and_then(|v| v.as_binary_storage()) {
+                Some(actual) => { stats.record(((actual as i32) - r.2).unsigned_abs() as u128, r.0); }
+                None => stats.record_error(r.0),
+            }
+        }
+        TranscendentalResult { stats, elapsed_ns: start.elapsed().as_nanos() as u64, max_allowed_ulp: 5, max_allowed_errors: 0 }
+    }
+    pub fn run() -> Vec<TranscendentalResult> {
+        vec![
+            run_func("exp", LazyExpr::exp), run_func("ln", LazyExpr::ln), run_func("sqrt", LazyExpr::sqrt),
+            run_func("sin", LazyExpr::sin), run_func("cos", LazyExpr::cos), run_func("tan", LazyExpr::tan),
+            run_func("atan", LazyExpr::atan), run_func("asin", LazyExpr::asin), run_func("acos", LazyExpr::acos),
+            run_func("sinh", LazyExpr::sinh), run_func("cosh", LazyExpr::cosh), run_func("tanh", LazyExpr::tanh),
+            run_func("asinh", LazyExpr::asinh), run_func("acosh", LazyExpr::acosh), run_func("atanh", LazyExpr::atanh),
+        ]
+    }
+}
+#[cfg(table_format = "q16_16")]
+fn run_transcendental_validation() -> Vec<TranscendentalResult> { trans_q16_16::run() }
+
+// ── Binary arithmetic stubs for compact/realtime (no topology sweep ref data) ──
+#[cfg(table_format = "q32_32")]
+fn run_binary_arithmetic_validation() -> Vec<ValidationResult> { vec![] }
+#[cfg(table_format = "q16_16")]
+fn run_binary_arithmetic_validation() -> Vec<ValidationResult> { vec![] }
 
 // ════════════════════════════════════════════════════════════════════
 // TEST 3: Throughput benchmark — iteration-based

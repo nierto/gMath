@@ -25,6 +25,7 @@ use std::time::Instant;
 
 /// Build a LazyExpr from an input string, correctly handling negative values.
 /// Mirrors gmath_safe from fasc_ulp_validation.rs.
+#[allow(dead_code)]
 fn gmath_safe(input: &'static str) -> LazyExpr {
     if input.starts_with('-') {
         let positive: &'static str = unsafe {
@@ -39,6 +40,7 @@ fn gmath_safe(input: &'static str) -> LazyExpr {
 }
 
 /// Build the expression for a binary arithmetic operation.
+#[allow(dead_code)]
 fn build_arith_expr(a: &'static str, b: &'static str, op: &str) -> LazyExpr {
     match op {
         "add" => gmath_safe(a) + gmath_safe(b),
@@ -53,6 +55,7 @@ fn build_arith_expr(a: &'static str, b: &'static str, op: &str) -> LazyExpr {
 /// iff a_num * b_den == a_den * b_num.
 ///
 /// Handles unreduced fractions correctly (e.g. 40/10 == 4/1).
+#[allow(dead_code)]
 fn rationals_equal(
     actual_num: Option<i128>, actual_den: Option<i128>,
     expected_num: i128, expected_den: i128,
@@ -73,6 +76,7 @@ fn rationals_equal(
 }
 
 /// ULP statistics tracker (reused from fasc_ulp_validation pattern).
+#[allow(dead_code)]
 struct UlpStats {
     name: String,
     max_ulp: u128,
@@ -83,6 +87,7 @@ struct UlpStats {
     ulps: Vec<u128>,
 }
 
+#[allow(dead_code)]
 impl UlpStats {
     fn new(name: &str) -> Self {
         Self {
@@ -138,6 +143,7 @@ impl UlpStats {
 }
 
 /// Performance timing statistics.
+#[allow(dead_code)]
 struct TimingStats {
     name: String,
     min_ns: u64,
@@ -147,6 +153,7 @@ struct TimingStats {
     times_ns: Vec<u64>,
 }
 
+#[allow(dead_code)]
 impl TimingStats {
     fn new(name: &str) -> Self {
         Self {
@@ -192,6 +199,7 @@ impl TimingStats {
 }
 
 /// Exact-match statistics for rational comparison.
+#[allow(dead_code)]
 struct MatchStats {
     name: String,
     matches: usize,
@@ -200,6 +208,7 @@ struct MatchStats {
     first_mismatch: Option<String>,
 }
 
+#[allow(dead_code)]
 impl MatchStats {
     fn new(name: &str) -> Self {
         Self {
@@ -340,6 +349,7 @@ macro_rules! rational_test {
 }
 
 /// Generate a binary ULP test (profile-specific).
+#[allow(unused_macros)]
 macro_rules! binary_ulp_test {
     ($test_name:ident, $display_name:expr, $refs:ident, $op:expr, $max_ulp:expr, $profile:expr, $eval_fn:ident) => {
         #[test]
@@ -386,6 +396,10 @@ macro_rules! binary_ulp_test {
 // Detect active profile for reporting
 // ════════════════════════════════════════════════════════════════════
 
+#[cfg(table_format = "q16_16")]
+const ACTIVE_PROFILE: &str = "Q16.16";
+#[cfg(table_format = "q32_32")]
+const ACTIVE_PROFILE: &str = "Q32.32";
 #[cfg(table_format = "q64_64")]
 const ACTIVE_PROFILE: &str = "Q64.64";
 #[cfg(table_format = "q128_128")]
