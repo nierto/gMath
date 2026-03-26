@@ -27,11 +27,17 @@ use crate::fixed_point::i1024::I1024;
 #[allow(unused_imports)]
 use crate::fixed_point::I2048;
 
-// Include trig constants (pre-built or regenerated via --features rebuild-tables)
-#[cfg(feature = "rebuild-tables")]
-include!(concat!(env!("OUT_DIR"), "/trig_constants.rs"));
-#[cfg(not(feature = "rebuild-tables"))]
-include!("../../../../generated_tables/trig_constants.rs");
+// Include trig constants (pre-built or regenerated via --features rebuild-tables).
+// Not all constants are used on every profile — #[allow(dead_code)] prevents warnings.
+#[allow(dead_code)]
+mod sincos_trig_consts {
+    #[cfg(feature = "rebuild-tables")]
+    include!(concat!(env!("OUT_DIR"), "/trig_constants.rs"));
+    #[cfg(not(feature = "rebuild-tables"))]
+    include!("../../../../generated_tables/trig_constants.rs");
+}
+#[allow(unused_imports)]
+pub use sincos_trig_consts::*;
 
 // Reuse upscale/downscale helpers from exp_tier_n_plus_1
 #[allow(unused_imports)]

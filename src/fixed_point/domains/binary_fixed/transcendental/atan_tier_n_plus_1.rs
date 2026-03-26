@@ -31,11 +31,17 @@ use super::exp_tier_n_plus_1::{
     downscale_q128_to_q64, downscale_q256_to_q128, downscale_q256_to_q64,
 };
 
-// Re-include trig constants (each .rs file gets its own scope)
-#[cfg(feature = "rebuild-tables")]
-include!(concat!(env!("OUT_DIR"), "/trig_constants.rs"));
-#[cfg(not(feature = "rebuild-tables"))]
-include!("../../../../generated_tables/trig_constants.rs");
+// Re-include trig constants (each .rs file gets its own scope).
+// Not all constants are used on every profile — #[allow(dead_code)] prevents warnings.
+#[allow(dead_code)]
+mod atan_trig_consts {
+    #[cfg(feature = "rebuild-tables")]
+    include!(concat!(env!("OUT_DIR"), "/trig_constants.rs"));
+    #[cfg(not(feature = "rebuild-tables"))]
+    include!("../../../../generated_tables/trig_constants.rs");
+}
+#[allow(unused_imports)]
+use atan_trig_consts::*;
 
 // ============================================================================
 // Q64.64 IMPLEMENTATION

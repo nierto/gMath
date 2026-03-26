@@ -475,8 +475,10 @@ fn quantum_raw() -> BinaryStorage { I512::from_i128(1) }
 
 // ============================================================================
 // Compute-tier trit-weighted operations (zero-multiply dot product)
+// Infrastructure ready for FASC ternary integration.
 // ============================================================================
 
+#[allow(unused_imports)]
 use crate::fixed_point::domains::balanced_ternary::trit_packing::Trit;
 // upscale_to_compute is defined locally above — no import needed
 
@@ -503,6 +505,7 @@ use crate::fixed_point::domains::balanced_ternary::trit_packing::Trit;
 ///
 /// # Panics
 /// Panics if `values.len() < num_elements`.
+#[allow(dead_code)]
 pub fn compute_tier_trit_dot_raw(
     packed_trits: &[u8],
     num_elements: usize,
@@ -570,6 +573,7 @@ pub fn compute_tier_trit_dot_raw(
 ///
 /// # Returns
 /// Output vector of length `rows`.
+#[allow(dead_code)]
 pub fn compute_tier_trit_matvec_raw(
     packed_trits: &[u8],
     rows: usize,
@@ -596,6 +600,7 @@ pub fn compute_tier_trit_matvec_raw(
 }
 
 // Compute-tier helpers for trit operations
+#[allow(dead_code)]
 #[inline]
 fn compute_zero() -> ComputeStorage {
     #[cfg(table_format = "q64_64")]
@@ -610,17 +615,20 @@ fn compute_zero() -> ComputeStorage {
     { I1024::zero() }
 }
 
+#[allow(dead_code)]
 #[inline]
 fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
     a + b
 }
 
+#[allow(dead_code)]
 #[inline]
 fn compute_sub(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
     a - b
 }
 
 /// Multiply two BinaryStorage values at compute tier with single downscale.
+#[allow(dead_code)]
 #[inline]
 fn compute_tier_mul_pair(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
     #[cfg(table_format = "q64_64")]

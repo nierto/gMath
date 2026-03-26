@@ -30,7 +30,9 @@
 // ============================================================================
 
 use crate::fixed_point::i256::I256;
+#[allow(unused_imports)]
 use crate::fixed_point::i512::I512;
+#[allow(unused_imports)]
 use crate::fixed_point::i1024::I1024;
 
 // Conditional imports based on table format

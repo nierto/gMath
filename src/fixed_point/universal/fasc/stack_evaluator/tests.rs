@@ -451,24 +451,24 @@ fn test_asinh_zero() {
     let expr = gmath("0").asinh();
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::new(DeploymentProfile::default());
-    let val = eval.to_binary_storage(&result).unwrap();
-    let zero = to_binary_storage(0);
+    let _val = eval.to_binary_storage(&result).unwrap();
+    let _zero = to_binary_storage(0);
     // Allow small tolerance from ln(1) computation
     #[cfg(table_format = "q256_256")]
     {
-        let diff = if val > zero { val - zero } else { zero - val };
+        let diff = if _val > _zero { _val - _zero } else { _zero - _val };
         let tolerance = I512::from_i128(1) << 20;
         assert!(diff < tolerance, "asinh(0) should be close to 0");
     }
     #[cfg(table_format = "q128_128")]
     {
-        let diff = if val > zero { val - zero } else { zero - val };
+        let diff = if _val > _zero { _val - _zero } else { _zero - _val };
         let tolerance = I256::from_i128(1) << 20;
         assert!(diff < tolerance, "asinh(0) should be close to 0");
     }
     #[cfg(table_format = "q64_64")]
     {
-        let diff = (val - zero).abs();
+        let diff = (_val - _zero).abs();
         let tolerance = 1i128 << 20;
         assert!(diff < tolerance, "asinh(0) should be close to 0");
     }
@@ -496,23 +496,23 @@ fn test_atanh_zero() {
     let expr = gmath("0").atanh();
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::new(DeploymentProfile::default());
-    let val = eval.to_binary_storage(&result).unwrap();
-    let zero = to_binary_storage(0);
+    let _val = eval.to_binary_storage(&result).unwrap();
+    let _zero = to_binary_storage(0);
     #[cfg(table_format = "q256_256")]
     {
-        let diff = if val > zero { val - zero } else { zero - val };
+        let diff = if _val > _zero { _val - _zero } else { _zero - _val };
         let tolerance = I512::from_i128(1) << 20;
         assert!(diff < tolerance, "atanh(0) should be close to 0");
     }
     #[cfg(table_format = "q128_128")]
     {
-        let diff = if val > zero { val - zero } else { zero - val };
+        let diff = if _val > _zero { _val - _zero } else { _zero - _val };
         let tolerance = I256::from_i128(1) << 20;
         assert!(diff < tolerance, "atanh(0) should be close to 0");
     }
     #[cfg(table_format = "q64_64")]
     {
-        let diff = (val - zero).abs();
+        let diff = (_val - _zero).abs();
         let tolerance = 1i128 << 20;
         assert!(diff < tolerance, "atanh(0) should be close to 0");
     }
@@ -647,26 +647,26 @@ fn test_acos_zero() {
     let expr = gmath("0").acos();
     let result = evaluate(&expr).expect("acos(0) should succeed");
     let eval = StackEvaluator::new(DeploymentProfile::default());
-    let result_bs = eval.to_binary_storage(&result).unwrap();
+    let _result_bs = eval.to_binary_storage(&result).unwrap();
     #[cfg(table_format = "q256_256")]
     {
         use crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i512;
         let expected = pi_half_i512();
-        let diff = if result_bs > expected { result_bs - expected } else { expected - result_bs };
+        let diff = if _result_bs > expected { _result_bs - expected } else { expected - _result_bs };
         assert!(diff <= I512::from_i128(1), "acos(0) should be π/2 within 1 ULP, diff = {:?}", diff);
     }
     #[cfg(table_format = "q128_128")]
     {
         use crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i256;
         let expected = pi_half_i256();
-        let diff = if result_bs > expected { result_bs - expected } else { expected - result_bs };
+        let diff = if _result_bs > expected { _result_bs - expected } else { expected - _result_bs };
         assert!(diff <= I256::from_i128(1), "acos(0) should be π/2 within 1 ULP, diff = {:?}", diff);
     }
     #[cfg(table_format = "q64_64")]
     {
         use crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128;
         let expected = pi_half_i128();
-        let diff = if result_bs > expected { (result_bs - expected).abs() } else { (expected - result_bs).abs() };
+        let diff = if _result_bs > expected { (_result_bs - expected).abs() } else { (expected - _result_bs).abs() };
         assert!(diff <= 1, "acos(0) should be π/2 within 1 ULP, diff = {}", diff);
     }
 }
@@ -1153,10 +1153,16 @@ fn test_shadow_none_falls_through() {
     // Transcendental results have no shadow — to_rational must still work
     let result = evaluate(&gmath("1.0").exp()).unwrap();
     assert!(result.shadow().is_none(), "transcendental should have no shadow");
-    let rational = result.to_rational().unwrap();
-    // Should still produce valid rational via Q-format reconstruction
-    let num = rational.numerator_i128();
-    assert!(num.is_some(), "to_rational must succeed even without shadow");
+    // to_rational must succeed via Q-format reconstruction on all profiles
+    let rational = result.to_rational();
+    assert!(rational.is_ok(), "to_rational must succeed even without shadow, got {:?}", rational.err());
+    // On embedded (i128 storage), numerator fits in i128.
+    // On balanced/scientific (I256/I512 storage), it may not — that's expected.
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+    {
+        let num = rational.unwrap().numerator_i128();
+        assert!(num.is_some(), "numerator must fit in i128 for native-int profiles");
+    }
 }
 
 #[test]
