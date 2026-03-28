@@ -11,6 +11,9 @@ pub mod canonical;
 pub mod imperative;
 pub use imperative::{FixedPoint, FixedVector, FixedMatrix};
 
+/// TQ1.9 compact ternary operations — standalone, decoupled from FASC/routing.
+pub mod tq19;
+
 // Internal modules — pub for integration test access, hidden from docs
 #[doc(hidden)] pub mod domains;
 #[doc(hidden)] pub mod core_types;

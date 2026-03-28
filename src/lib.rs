@@ -26,5 +26,8 @@ pub mod fixed_point;
 // Canonical API — the single public entry point
 pub use fixed_point::canonical;
 
+/// TQ1.9 compact ternary operations — standalone module for inference and signal processing.
+pub use fixed_point::tq19;
+
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

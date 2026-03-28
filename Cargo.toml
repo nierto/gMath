@@ -28,6 +28,8 @@ num-bigint = { version = "0.4", optional = true }
 num-integer = { version = "0.1", optional = true }
 # Optional: serde serialization support
 serde = { version = "1", features = ["derive"], optional = true }
+# Optional: rayon row-parallel TQ1.9 matvec
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 criterion = "0.4"
@@ -53,13 +55,14 @@ scientific = []    # Q256.256, 77 decimals
 legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
 serde = ["dep:serde"]    # Serialize/Deserialize impls for FixedPoint, FixedVector, FixedMatrix, Tensor
+parallel = ["dep:rayon"] # Row-parallel TQ1.9 matvec (rayon thread pool)
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
-    'cfg(table_format, values("q64_64", "q128_128", "q256_256", "q512_512"))',
-    'cfg(q64_64)', 'cfg(q128_128)', 'cfg(q256_256)', 'cfg(q512_512)',
-    'cfg(feature, values("rebuild-tables", "serde"))',
+    'cfg(table_format, values("q16_16", "q32_32", "q64_64", "q128_128", "q256_256", "q512_512"))',
+    'cfg(q16_16)', 'cfg(q32_32)', 'cfg(q64_64)', 'cfg(q128_128)', 'cfg(q256_256)', 'cfg(q512_512)',
+    'cfg(feature, values("rebuild-tables", "serde", "parallel"))',
 ]
 
 [profile.release]

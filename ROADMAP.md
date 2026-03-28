@@ -134,16 +134,84 @@ Also added `FixedVector::length_fused()` and `FixedVector::distance_to()` conven
 
 ---
 
+## Next: 0.3.89 — TQ1.9 inference layer
+
+Dedicated inference module decoupled from FASC routing/shadow/domain machinery. Optimized for Maniference throughput (196 matvec calls per token, Llama 3.2 3B). All TQ1.9 code in its own module — no close coupling with gMath internals where that would affect speed.
+
+### 1. Dedicated inference module (`inference/`)
+
+**Priority:** HIGH — architectural prerequisite for everything below
+**Estimated effort:** ~300 lines, 1 session
+
+New top-level module `src/fixed_point/inference/` containing:
+- `TQ19Matrix` type (row-major `Vec<i16>`, rows/cols metadata)
+- `tq19_matvec()` — compute-tier accumulation, single `/19683` per row
+- `tq19_matvec_batch()` — multiple input vectors, cache-friendly
+- Re-export trit packing utilities
+- No StackValue, no CompactShadow, no FASC evaluator in the hot path
+- Direct `i16 × BinaryStorage → ComputeStorage` arithmetic
+
+### 2. AVX2 SIMD inner loop
+
+**Priority:** HIGH — largest single throughput gain
+**Estimated effort:** ~400 lines, 1-2 sessions
+
+Zero-multiply SIMD for trit dot product:
+- Compact profile (i64 activations): **4× i64 add/sub per AVX2 cycle** via `_mm256_add_epi64` / `_mm256_sub_epi64` with trit-derived masks
+- Realtime profile (i32 activations): **8× i32 per cycle**
+- Pre-decode trits into sign masks (+1/0/-1 → add/skip/sub) outside the SIMD loop
+- Feature-gated: `#[cfg(target_feature = "avx2")]` with scalar fallback
+- Each CPU core has its own AVX2 unit — fully parallelizable with rayon, no shared bottleneck
+
+### 3. Row-parallel rayon dispatch
+
+**Priority:** HIGH — already proven in Maniference, needs upstreaming
+**Estimated effort:** ~100 lines, 1 session
+
+`tq19_matvec_par()` with `rayon::par_iter` over rows. Each row is independent (embarrassingly parallel). Move this from Maniference into gMath so the inference engine gets it for free.
+
+### 4. Batch matvec
+
+**Priority:** MEDIUM — cache efficiency for multi-token inference
+**Estimated effort:** ~200 lines, 1 session
+
+`tq19_matvec_batch(matrix, vectors: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>>` — process N input vectors against the same weight matrix. Benefits:
+- Weight matrix stays in L2/L3 cache across vectors (row data loaded once, applied N times)
+- Amortizes trit decoding cost across batch
+- Enables prefill-phase parallelism (multiple tokens in flight)
+
+### 5. Pre-decoded trit table
+
+**Priority:** MEDIUM — eliminates repeated unpack overhead
+**Estimated effort:** ~150 lines, 1 session
+
+Precompute 256-entry lookup table mapping each byte to 5 sign values ({-1, 0, +1}). Maniference already has `TRIT_TABLE` for this — upstream a const version into the inference module. Avoids per-element divmod in the inner loop.
+
+---
+
 ## Next: 0.4.0 — remaining items
 
-### 4. UGOD multi-tier promotion
+### 1. Decimal domain transcendentals
+
+**Priority:** HIGH — enables true multi-domain composability
+**Estimated effort:** ~3,000 lines, 3-4 sessions
+
+Native decimal exp/ln/sqrt/sin/cos/tan/atan at tier N+1 with decimal-specific tables. Currently decimal transcendentals route through binary compute, which works but introduces a domain conversion round-trip. Native decimal transcendentals mean:
+- All composed methods (sinh, cosh, tanh, asin, acos, pow, etc.) become multi-domain automatically — they're built from the 5 dedicated algorithms which each domain implements natively
+- `DomainMatrix` operations with decimal entries get native transcendentals without binary conversion
+- Financial/accounting domains get exact decimal exp/ln for compound interest, Black-Scholes, etc.
+- FASC chain persistence works per-domain: decimal intermediates stay decimal throughout
+
+Requires: decimal-specific table generation in `build.rs`, decimal tier N+1 compute infrastructure, decimal BinaryCompute equivalent.
+
+### 2. UGOD multi-tier promotion
 
 **Priority:** HIGH — correctness concern
 **Estimated effort:** ~200 lines, 1 session
 
 Verify and enforce that UGOD overflow promotion tries at least 2 subsequent tiers before falling back to symbolic rational. Current behavior may fall back to symbolic after a single tier overflow, which is wasteful when the next tier would succeed.
 
-### 5. Stack evaluator modularization
+### 3. Stack evaluator modularization
 
 **Priority:** MEDIUM — reduces cognitive load for future changes
 **Estimated effort:** ~750 lines, 2 sessions
@@ -153,10 +221,6 @@ Extract `profile_dispatch!` macro to replace the 5-way `#[cfg(table_format)]` bl
 ---
 
 ## Future — High Priority
-
-### Decimal domain transcendentals
-
-Native decimal exp/ln/sqrt/sin/cos at tier N+1 with decimal-specific tables. Eliminates the binary→decimal conversion round-trip. Estimated ~3,000 lines. After FASC chain persistence.
 
 ### Fractal topology FASC integration
 
@@ -168,7 +232,7 @@ Balanced ternary arithmetic lacks dedicated validation suite. The domain works b
 
 ### Batch/vectorized API
 
-SIMD-friendly array processing. Especially compelling with Q32.32 (8x i32 in AVX2 register) and Q16.16 (16x i16 in AVX2). New API surface.
+SIMD-friendly array processing beyond TQ1.9. Especially compelling with Q32.32 (8x i32 in AVX2 register) and Q16.16 (16x i16 in AVX2). New API surface.
 
 ### Imperative geometry methods — UGOD + FASC integration
 
