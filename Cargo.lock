@@ -260,6 +260,7 @@ dependencies = [
  "num-rational",
  "num-traits",
  "proptest",
+ "rayon",
  "serde",
 ]
 
