@@ -318,6 +318,10 @@ impl FixedPoint {
     pub fn sin(self) -> Self { self.apply_unary(LazyExpr::sin) }
     /// cos(x)
     pub fn cos(self) -> Self { self.apply_unary(LazyExpr::cos) }
+    /// Fused (sin(x), cos(x)) — single range reduction, ~2× faster than separate calls.
+    pub fn sincos(self) -> (Self, Self) {
+        self.try_sincos().expect("sincos: overflow or domain error")
+    }
     /// tan(x)
     pub fn tan(self) -> Self { self.apply_unary(LazyExpr::tan) }
     /// atan(x)
