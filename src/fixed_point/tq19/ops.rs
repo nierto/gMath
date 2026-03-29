@@ -269,10 +269,23 @@ pub fn tq19_matvec(
         .collect()
 }
 
-/// Batch TQ1.9 matvec (sequential, weight-centric cache optimization).
+/// Tile size for batch matvec (elements per tile).
 ///
-/// Iterates row-by-row. For each row, computes dot against all batch vectors
-/// before moving to the next row. Keeps row weights in L1 cache.
+/// Chosen so that weight_tile + activation_tiles fit in L1d:
+///   512 × 2B (weights) + 512 × 8B × batch_size (activations)
+///   = 1 KB + 4 KB × batch_size
+/// For batch=8: 33 KB — fits in 32-48 KB L1d.
+const BATCH_TILE: usize = 512;
+
+/// Batch TQ1.9 matvec with tiled accumulation.
+///
+/// For each row, processes BATCH_TILE elements at a time across all batch
+/// vectors before advancing to the next tile. This keeps the weight tile
+/// and all corresponding activation tiles in L1 cache together.
+///
+/// Without tiling, batch=4 on compact profile (32KB activation vectors)
+/// thrashes L1. With tiling: weight tile (1KB) + activation tiles (4KB × batch)
+/// fits comfortably.
 pub fn tq19_matvec_batch(
     data: &[i16],
     rows: usize,
@@ -285,11 +298,36 @@ pub fn tq19_matvec_batch(
         .map(|_| Vec::with_capacity(rows))
         .collect();
 
+    // Per-batch accumulators, reused across rows
+    let mut accs = vec![compute_zero(); batch_size];
+
     for row in 0..rows {
-        let row_weights = &data[row * cols..(row + 1) * cols];
+        // Reset accumulators
+        for acc in accs.iter_mut() {
+            *acc = compute_zero();
+        }
+
+        let row_start = row * cols;
+
+        // Tiled: process BATCH_TILE elements across all batch vectors
+        let mut tile_start = 0;
+        while tile_start < cols {
+            let tile_end = (tile_start + BATCH_TILE).min(cols);
+            let tile_weights = &data[row_start + tile_start..row_start + tile_end];
+
+            for b in 0..batch_size {
+                let tile_acts = &batch[b][tile_start..tile_end];
+                for i in 0..tile_weights.len() {
+                    accs[b] = accs[b] + widen_weight(tile_weights[i]) * widen_activation(tile_acts[i]);
+                }
+            }
+
+            tile_start = tile_end;
+        }
+
+        // Finalize: divide by SCALE, narrow, store
         for b in 0..batch_size {
-            let acc = tq19_dot_compute(row_weights, batch[b]);
-            results[b].push(narrow_to_storage(acc / scale));
+            results[b].push(narrow_to_storage(accs[b] / scale));
         }
     }
 
@@ -340,10 +378,11 @@ pub fn tq19_matvec_par(
         .collect()
 }
 
-/// Row-parallel batch TQ1.9 matvec.
+/// Row-parallel batch TQ1.9 matvec with tiled accumulation.
 ///
-/// Parallelizes across rows. Each row processes all batch vectors sequentially
-/// to keep row weights in the thread's L1 cache. Results are transposed at end.
+/// Parallelizes across rows via rayon. Each row uses tiled accumulation:
+/// processes BATCH_TILE elements across all batch vectors before advancing,
+/// keeping weight tile + activation tiles in L1 cache together.
 #[cfg(feature = "parallel")]
 pub fn tq19_matvec_batch_par(
     data: &[i16],
@@ -354,15 +393,31 @@ pub fn tq19_matvec_batch_par(
     let batch_size = batch.len();
     let scale = compute_scale();
 
-    // Parallel: each row produces a Vec of batch_size results
+    // Parallel: each row produces batch_size results with tiled accumulation
     let row_results: Vec<Vec<BinaryStorage>> = (0..rows)
         .into_par_iter()
         .map(|row| {
-            let row_weights = &data[row * cols..(row + 1) * cols];
-            batch.iter().map(|activations| {
-                let acc = tq19_dot_compute(row_weights, activations);
-                narrow_to_storage(acc / scale)
-            }).collect()
+            let row_start = row * cols;
+            let mut accs = vec![compute_zero(); batch_size];
+
+            let mut tile_start = 0;
+            while tile_start < cols {
+                let tile_end = (tile_start + BATCH_TILE).min(cols);
+                let tile_weights = &data[row_start + tile_start..row_start + tile_end];
+
+                for b in 0..batch_size {
+                    let tile_acts = &batch[b][tile_start..tile_end];
+                    for i in 0..tile_weights.len() {
+                        accs[b] = accs[b] + widen_weight(tile_weights[i]) * widen_activation(tile_acts[i]);
+                    }
+                }
+
+                tile_start = tile_end;
+            }
+
+            accs.into_iter()
+                .map(|acc| narrow_to_storage(acc / scale))
+                .collect()
         })
         .collect();
 
@@ -419,6 +474,10 @@ mod tests {
         }
     }
 
+    /// Profile-aware BinaryStorage constants for assertions.
+    fn bs_zero() -> BinaryStorage { narrow_to_storage(compute_zero()) }
+    fn bs_one() -> BinaryStorage { narrow_to_storage(compute_scale() / compute_scale()) }
+
     #[test]
     fn tq19_dot_identity_weight() {
         // Weight = SCALE means TQ1.9 value = 1.0
@@ -428,8 +487,7 @@ mod tests {
         // Should be very close to activation (within 1 ULP from SCALE rounding)
         let diff = if result > act { result - act } else { act - result };
         // Allow 1 ULP tolerance
-        let one: BinaryStorage = 1;
-        assert!(diff <= one, "identity weight: diff = {diff:?}");
+        assert!(diff <= bs_one(), "identity weight: diff = {diff:?}");
     }
 
     #[test]
@@ -437,8 +495,7 @@ mod tests {
         let activations: Vec<BinaryStorage> = (0..4).map(|i| fp_raw(&format!("{}.0", i + 1))).collect();
         let weights = vec![0i16; 4];
         let result = tq19_dot(&weights, &activations);
-        let zero: BinaryStorage = 0;
-        assert_eq!(result, zero, "zero weights should produce zero");
+        assert_eq!(result, bs_zero(), "zero weights should produce zero");
     }
 
     #[test]
@@ -452,8 +509,7 @@ mod tests {
         let result = trit_dot(&trits, &activations);
         let expected = fp_raw("6.0");
         let diff = if result > expected { result - expected } else { expected - result };
-        let one: BinaryStorage = 1;
-        assert!(diff <= one, "all-positive trits: diff = {diff:?}");
+        assert!(diff <= bs_one(), "all-positive trits: diff = {diff:?}");
     }
 
     #[test]
@@ -464,8 +520,7 @@ mod tests {
         let result = trit_dot(&trits, &activations);
         let expected = fp_raw("-2.0");
         let diff = if result > expected { result - expected } else { expected - result };
-        let one: BinaryStorage = 1;
-        assert!(diff <= one, "mixed trits: diff = {diff:?}");
+        assert!(diff <= bs_one(), "mixed trits: diff = {diff:?}");
     }
 
     #[test]
@@ -481,8 +536,7 @@ mod tests {
         for i in 0..n {
             let diff = if result[i] > activations[i] { result[i] - activations[i] }
                 else { activations[i] - result[i] };
-            let one: BinaryStorage = 1;
-            assert!(diff <= one, "identity matvec row {i}: diff = {diff:?}");
+            assert!(diff <= bs_one(), "identity matvec row {i}: diff = {diff:?}");
         }
     }
 
@@ -522,7 +576,7 @@ mod tests {
         // Allow 2 ULP tolerance
         let diff = if packed_result > trit_result { packed_result - trit_result }
             else { trit_result - packed_result };
-        let tolerance: BinaryStorage = 2;
+        let tolerance = bs_one() + bs_one();
         assert!(diff <= tolerance, "packed vs trit dot: diff = {diff:?}");
     }
 
