@@ -136,7 +136,7 @@ Also added `FixedVector::length_fused()` and `FixedVector::distance_to()` conven
 
 ## Next: 0.3.89 — TQ1.9 inference layer
 
-Dedicated inference module decoupled from FASC routing/shadow/domain machinery. Optimized for Maniference throughput (196 matvec calls per token, Llama 3.2 3B). All TQ1.9 code in its own module — no close coupling with gMath internals where that would affect speed.
+Dedicated TQ1.9 module decoupled from FASC routing/shadow/domain machinery. Optimized for throughput-critical ternary workloads (~196 matvec calls per token for typical 3B-parameter models). Standalone module — no close coupling with gMath internals where that would affect speed.
 
 ### 1. Dedicated inference module (`inference/`)
 
@@ -165,10 +165,10 @@ Zero-multiply SIMD for trit dot product:
 
 ### 3. Row-parallel rayon dispatch
 
-**Priority:** HIGH — already proven in Maniference, needs upstreaming
+**Priority:** HIGH — proven pattern, upstreamed into gMath
 **Estimated effort:** ~100 lines, 1 session
 
-`tq19_matvec_par()` with `rayon::par_iter` over rows. Each row is independent (embarrassingly parallel). Move this from Maniference into gMath so the inference engine gets it for free.
+`tq19_matvec_par()` with `rayon::par_iter` over rows. Each row is independent (embarrassingly parallel). Consumers get row-level parallelism for free.
 
 ### 4. Batch matvec
 
@@ -185,7 +185,7 @@ Zero-multiply SIMD for trit dot product:
 **Priority:** MEDIUM — eliminates repeated unpack overhead
 **Estimated effort:** ~150 lines, 1 session
 
-Precompute 256-entry lookup table mapping each byte to 5 sign values ({-1, 0, +1}). Maniference already has `TRIT_TABLE` for this — upstream a const version into the inference module. Avoids per-element divmod in the inner loop.
+Precompute 256-entry lookup table mapping each byte to 5 sign values ({-1, 0, +1}). Const version compiled into `.rodata` — avoids per-element divmod in the inner loop.
 
 ---
 

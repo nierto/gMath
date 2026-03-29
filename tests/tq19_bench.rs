@@ -86,7 +86,7 @@ fn bench_matvec_4096x4096() {
     let elapsed = start.elapsed();
     let per_matvec_ms = elapsed.as_millis() as f64 / iters as f64;
 
-    // Llama 3.2 3B: 196 matvecs per token
+    // Typical large model: ~196 matvecs per token (7 projections × 28 layers)
     let tokens_per_sec = 1000.0 / (per_matvec_ms * 196.0);
 
     eprintln!("=== matvec {dim}×{dim} (sequential) ===");

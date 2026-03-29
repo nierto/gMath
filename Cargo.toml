@@ -1,6 +1,6 @@
 [package]
 name = "g_math"
-version = "0.3.23"
+version = "0.3.89"
 edition = "2021"
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — zero-float, 0 ULP transcendentals"
 authors = ["Niels Erik Toren"]
