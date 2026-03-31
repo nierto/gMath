@@ -1,6 +1,8 @@
 //! TQ1.9 throughput measurement.
 //!
-//! Run: GMATH_PROFILE=compact cargo test --test tq19_bench --release -- --nocapture
+//! Run: GMATH_PROFILE=compact cargo test --features inference --test tq19_bench --release -- --nocapture
+
+#![cfg(feature = "inference")]
 
 use g_math::fixed_point::tq19::{TQ19Matrix, SCALE, tq19_dot, trit_dot};
 use g_math::fixed_point::imperative::{FixedPoint, BinaryStorage};

@@ -2,6 +2,10 @@
 //!
 //! Tests core operations against known values, verifies SIMD/scalar equivalence,
 //! batch/sequential equivalence, and precision bounds.
+//!
+//! Requires: `cargo test --features inference`
+
+#![cfg(feature = "inference")]
 
 use g_math::fixed_point::tq19::{
     TQ19Matrix, SCALE, TRIT_DECODE_TABLE,

@@ -102,7 +102,7 @@ pub type ComputeStorage = i64;    // Q32.32 (tier N+1 for Q16.16)
 /// Beyond this threshold, the scaled integer exceeds BinaryStorage range,
 /// so we promote to binary fixed-point (which has FIXED fractional bits, no dp growth).
 #[cfg(table_format = "q16_16")]
-const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 4;
+const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = crate::fixed_point::frac_config::MAX_DECIMAL_DIGITS as u16;
 #[cfg(table_format = "q32_32")]
 const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 9;
 #[cfg(table_format = "q64_64")]

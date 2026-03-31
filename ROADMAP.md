@@ -246,6 +246,10 @@ Truncated SVD, HOSVD/Tucker, CP/ALS for model compression. Optimization-tier fea
 
 Vahlen matrices over Cl(n,0,1). High novelty — no zero-float Clifford algebra in Rust.
 
+### Custom FRAC_BITS for non-realtime profiles
+
+The realtime profile (i32 tier) supports custom `GMATH_FRAC_BITS` (e.g., Q8.24 via `GMATH_FRAC_BITS=24`). Extending this to compact (i64), embedded (i128), and higher profiles requires verifying that `COMPUTE_FRAC_BITS = 2 * FRAC_BITS` does not exceed the native transcendental tier's capacity (64 for Q64.64 natives). For i64 storage with FRAC_BITS > 32, COMPUTE_FRAC_BITS > 64, which overflows the Q64.64 native path. Needs per-tier constraint validation and possibly dynamic transcendental dispatch. Deferred until user demand.
+
 ### Public API stabilization
 
 Pre-1.0 audit of exports, feature gating, StackValue extraction methods.

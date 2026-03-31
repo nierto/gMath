@@ -138,6 +138,7 @@ fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_q64_64_native(x: i128) -> i128 {
     use crate::fixed_point::multiply_binary_i128;
+    use crate::fixed_point::i256::I256;
 
     // Handle domain error: ln(x) undefined for x <= 0
     if x <= 0 {
@@ -151,67 +152,98 @@ pub fn ln_q64_64_native(x: i128) -> i128 {
     }
 
     // Step 1: Range reduction - find k such that x = 2^k × m where m ∈ [1, 2)
-    // For Q64.64: if x has MSB at position p, then k = p - 64
     let msb_pos = find_msb_position_i128(x).unwrap_or(0);
-    let k = msb_pos as i128 - 64;  // Exponent relative to Q64.64 format
+    let k = msb_pos as i128 - 64;
 
     // Step 2: Normalize to get m = x / 2^k in Q64.64 format (m ∈ [1, 2))
-    // Shift x so that it's in range [1, 2) × 2^64
     let m = if k >= 0 {
         x >> k
     } else {
         x << (-k)
     };
 
-    // Step 3: Compute k × ln(2) using pre-computed constant
+    // Step 3: Compute k × ln(2)
     let (ln2_main, ln2_comp) = LN_2_CONSTANT_TIER_3;
     let ln2 = ln2_main + ((ln2_comp as i128) >> 32);
     let k_ln2 = multiply_binary_i128(k << 64, ln2);
 
-    // Step 4: Compute ln(m) where m ∈ [1, 2)
-    // Let y = m - 1, then y ∈ [0, 1) and ln(m) = ln(1 + y)
-    let y = m - one_q64;  // y in Q64.64, range [0, 1)
+    // Step 4: y = m - 1, where y ∈ [0, 1)
+    let y = m - one_q64;
 
     if y == 0 {
-        return k_ln2;  // m = 1 exactly, ln(1) = 0
+        return k_ln2;
     }
 
-    // Step 5: Four-stage table lookup for ln(1 + y)
-    // y = k/2^10 + j/2^20 + m/2^30 + p/2^40 + tiny_remainder
-    let k_idx = (y >> 54) as usize;  // Top 10 bits → k/2^10
-    let r1 = y & ((1i128 << 54) - 1);
-    let j_idx = (r1 >> 44) as usize;  // Next 10 bits → j/2^20
-    let r2 = r1 & ((1i128 << 44) - 1);
-    let m_idx = (r2 >> 34) as usize;  // Next 10 bits → m/2^30
-    let r3 = r2 & ((1i128 << 34) - 1);
-    let p_idx = (r3 >> 24) as usize;  // Next 10 bits → p/2^40
-    let tiny = r3 & ((1i128 << 24) - 1);
+    // =========================================================================
+    // MULTIPLICATIVE DECOMPOSITION (matches Q128.128+ algorithm)
+    //
+    // Identity: (1+y) = (1+a₁)(1+r₁) → ln(1+y) = ln(1+a₁) + ln(1+r₁)
+    // where r₁ = (y - a₁) / (1 + a₁) — the TRUE mathematical remainder
+    //
+    // Each stage: extract top 10 bits of remainder, table lookup, divide to
+    // get the next (smaller) remainder. After 4 stages, |r₄| < 2^-40.
+    // =========================================================================
 
-    // Table lookups: ln(1 + k/2^10), ln(1 + j/2^20), ln(1 + m/2^30), ln(1 + p/2^40)
+    // Division helper: a/b in Q64.64, using I256 intermediate for full precision
+    #[inline(always)]
+    fn divide_q64(a: i128, b: i128) -> i128 {
+        if b == 0 { return 0; }
+        let a_wide = I256::from_i128(a) << 64usize;
+        let b_wide = I256::from_i128(b);
+        (a_wide / b_wide).as_i128()
+    }
+
+    // Stage 1: Primary table lookup
+    let k_idx = (y >> 54) as usize;  // Top 10 bits of y
     let (t1_main, t1_comp) = LN_PRIMARY_TABLE_TIER_3[k_idx];
-    let (t2_main, t2_comp) = LN_SECONDARY_TABLE_TIER_3[j_idx];
-    let (t3_main, t3_comp) = LN_TERTIARY_TABLE_TIER_3[m_idx];
-    let (t4_main, t4_comp) = LN_QUATERNARY_TABLE_TIER_3[p_idx];
-
     let ln_t1 = t1_main + ((t1_comp as i128) >> 32);
+
+    // Multiplicative remainder: r₁ = (y - k/1024) / (1 + k/1024)
+    let k_frac = (k_idx as i128) << 54;  // k/1024 in Q64.64
+    let d1 = one_q64 + k_frac;
+    let r1 = if k_idx == 0 { y } else { divide_q64(y - k_frac, d1) };
+
+    // Stage 2: Secondary table lookup on r₁
+    // r₁ < 1/1024, so top 10 bits are 0; extract bits [53..44]
+    let j_idx = ((r1 >> 44) & 0x3FF) as usize;
+    let (t2_main, t2_comp) = LN_SECONDARY_TABLE_TIER_3[j_idx];
     let ln_t2 = t2_main + ((t2_comp as i128) >> 32);
+
+    let j_frac = (j_idx as i128) << 44;  // j/2^20 in Q64.64
+    let d2 = one_q64 + j_frac;
+    let r2 = if j_idx == 0 { r1 } else { divide_q64(r1 - j_frac, d2) };
+
+    // Stage 3: Tertiary table lookup on r₂
+    // r₂ < 1/2^20; extract bits [33..24]
+    let m_idx = ((r2 >> 34) & 0x3FF) as usize;
+    let (t3_main, t3_comp) = LN_TERTIARY_TABLE_TIER_3[m_idx];
     let ln_t3 = t3_main + ((t3_comp as i128) >> 32);
+
+    let m_frac = (m_idx as i128) << 34;  // m/2^30 in Q64.64
+    let d3 = one_q64 + m_frac;
+    let r3 = if m_idx == 0 { r2 } else { divide_q64(r2 - m_frac, d3) };
+
+    // Stage 4: Quaternary table lookup on r₃
+    // r₃ < 1/2^30; extract bits [23..14]
+    let p_idx = ((r3 >> 24) & 0x3FF) as usize;
+    let (t4_main, t4_comp) = LN_QUATERNARY_TABLE_TIER_3[p_idx];
     let ln_t4 = t4_main + ((t4_comp as i128) >> 32);
 
-    // Step 6: Taylor series for tiny remainder (|r| < 2^-40)
+    let p_frac = (p_idx as i128) << 24;  // p/2^40 in Q64.64
+    let d4 = one_q64 + p_frac;
+    let r4 = if p_idx == 0 { r3 } else { divide_q64(r3 - p_frac, d4) };
+
+    // Step 6: Taylor series for final remainder (|r₄| < 2^-40)
     // ln(1 + r) ≈ r - r²/2 for |r| < 2^-40 (r³ < 2^-120, negligible for Q64.64)
-    let ln_tiny = if tiny == 0 {
+    let ln_remainder = if r4 == 0 {
         0
     } else {
-        let r = tiny;  // Tiny remainder in Q64.64
-        let r2 = multiply_binary_i128(r, r);
-        // ln(1+r) ≈ r - r²/2 (sufficient for |r| < 2^-40 at Q64.64 precision)
-        r - (r2 >> 1)
+        let r2 = multiply_binary_i128(r4, r4);
+        r4 - (r2 >> 1)
     };
 
-    // Step 7: Combine: ln(x) = k×ln(2) + ln(1 + y)
-    // Simplified additive combination for small increments
-    k_ln2 + ln_t1 + ln_t2 + ln_t3 + ln_t4 + ln_tiny
+    // Step 7: Combine: ln(x) = k×ln(2) + ln(1+a₁) + ln(1+a₂) + ln(1+a₃) + ln(1+a₄) + ln(1+r₄)
+    k_ln2 + ln_t1 + ln_t2 + ln_t3 + ln_t4 + ln_remainder
 }
 
 /// Q128.128 native natural logarithm (Tier 4)

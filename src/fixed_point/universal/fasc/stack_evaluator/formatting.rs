@@ -3,6 +3,8 @@
 //! All conversions are float-free, using integer long division.
 
 use super::BinaryStorage;
+#[cfg(table_format = "q16_16")]
+use crate::fixed_point::frac_config;
 use crate::fixed_point::i256::I256;
 #[allow(unused_imports)]
 use crate::fixed_point::i512::I512;
@@ -136,20 +138,21 @@ pub(super) fn binary_storage_to_decimal_string(val: BinaryStorage, max_digits: u
 
     #[cfg(table_format = "q16_16")]
     {
-        // Q16.16: i32
+        // i32 Q-format with configurable FRAC_BITS
+        let fb = frac_config::FRAC_BITS;
         let is_negative = val < 0;
         let abs_val = if is_negative { -val } else { val };
-        let int_part = (abs_val >> 16) as u16;
-        let frac_part = abs_val as u16; // Lower 16 bits
+        let int_part = (abs_val >> fb) as u32;
+        let frac_part = abs_val as u32 & ((1u32 << fb) - 1);
 
-        let digits = max_digits.min(4);
+        let digits = max_digits.min(frac_config::MAX_DECIMAL_DIGITS);
         let mut frac_str = String::with_capacity(digits);
-        let mut remainder = frac_part as u32;
+        let mut remainder = frac_part;
         for _ in 0..digits {
             remainder *= 10;
-            let digit = (remainder >> 16) as u8;
+            let digit = (remainder >> fb) as u8;
             frac_str.push((b'0' + digit) as char);
-            remainder &= (1u32 << 16) - 1;
+            remainder &= (1u32 << fb) - 1;
         }
 
         let sign = if is_negative { "-" } else { "" };

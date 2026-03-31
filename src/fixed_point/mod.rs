@@ -12,7 +12,12 @@ pub mod imperative;
 pub use imperative::{FixedPoint, FixedVector, FixedMatrix};
 
 /// TQ1.9 compact ternary operations — standalone, decoupled from FASC/routing.
+/// Gated behind the `inference` feature flag.
+#[cfg(feature = "inference")]
 pub mod tq19;
+
+/// Build-time Q-format configuration (FRAC_BITS and derived constants).
+#[doc(hidden)] pub mod frac_config;
 
 // Internal modules — pub for integration test access, hidden from docs
 #[doc(hidden)] pub mod domains;

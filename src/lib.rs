@@ -27,6 +27,8 @@ pub mod fixed_point;
 pub use fixed_point::canonical;
 
 /// TQ1.9 compact ternary operations — standalone module for inference and signal processing.
+/// Requires the `inference` feature flag.
+#[cfg(feature = "inference")]
 pub use fixed_point::tq19;
 
 /// Version information
