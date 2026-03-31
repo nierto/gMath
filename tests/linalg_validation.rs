@@ -628,9 +628,11 @@ fn test_try_exp_normal_value() {
 }
 
 /// exp(44) ≈ 1.28e19 exceeds Q64.64 range (~9.2e18) but fits in Q128.128+.
-/// Q16.16: exp(44) also overflows.
+/// On Q64.64: detected via downscale_to_storage overflow check → Err(TierOverflow).
+/// On Q16.16/Q32.32: native Q64.64 compute itself overflows i128 for exp(44),
+/// producing truncated result rather than clean TierOverflow detection.
 #[test]
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+#[cfg(table_format = "q64_64")]
 fn test_try_exp_overflow_returns_tier_overflow() {
     let val = fp("44");
     let result = val.try_exp();

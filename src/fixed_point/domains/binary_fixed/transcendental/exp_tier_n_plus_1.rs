@@ -793,25 +793,33 @@ pub fn exp_binary_i1024(x: crate::fixed_point::I1024) -> crate::fixed_point::I10
 /// Downscale Q64.64 (i128) result to Q32.32 (i64) with proper rounding
 ///
 /// **GUARANTEE**: Result is correctly rounded to nearest Q32.32 value (<=0.5 ULP)
+/// Downscale from Q64.64 (i128) to compute tier (i64).
+///
+/// Shift amount is profile-dependent:
+/// - Q32.32: COMPUTE_FRAC_BITS = 64, shift = 0 (but uses exp_binary_i128 instead)
+/// - Q16.16: shift = NATIVE_UPSHIFT = 64 - 2×FRAC_BITS
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 pub(crate) fn downscale_q64_to_q32(val: i128) -> i64 {
-    // Q64.64: 64 integer bits + 64 fractional bits in i128
-    // Q32.32: 32 integer bits + 32 fractional bits in i64
-    //
-    // Round-half-up: add 0.5 ULP at target precision before shift
-    // 0.5 ULP at Q32.32 = 2^31 at Q64.64 position = bit 31
-    let round_bit = (val & (1i128 << 31)) != 0;
-    let mut result = (val >> 32) as i64;
+    #[cfg(table_format = "q16_16")]
+    let shift = crate::fixed_point::frac_config::NATIVE_UPSHIFT;
+    #[cfg(table_format = "q32_32")]
+    let shift = 32u32;
+
+    let round_bit = (val & (1i128 << (shift - 1))) != 0;
+    let mut result = (val >> shift) as i64;
     if round_bit { result += 1; }
     result
 }
 
-/// Upscale Q32.32 (i64) to Q64.64 (i128) for tier N+1 computation
+/// Upscale compute tier (i64) to Q64.64 (i128) for native transcendental computation.
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 pub(crate) fn upscale_q32_to_q64(val: i64) -> i128 {
-    (val as i128) << 32
+    #[cfg(table_format = "q16_16")]
+    { (val as i128) << crate::fixed_point::frac_config::NATIVE_UPSHIFT }
+    #[cfg(table_format = "q32_32")]
+    { (val as i128) << 32 }
 }
 
 /// exp() for Q32.32 storage (i64) — tier N+1 via Q64.64

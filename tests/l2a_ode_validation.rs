@@ -343,7 +343,10 @@ fn test_rk4_lotka_volterra() {
 // RK4 order verification: halving step size should reduce error by ~16x
 // ============================================================================
 
+// Q16.16/Q32.32: limited precision means both step sizes hit the representation floor,
+// so the error ratio collapses. Convergence order test requires ≥Q64.64.
 #[test]
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 fn test_rk4_order_verification() {
     let sys = ExponentialDecay;
     let x0 = FixedVector::from_slice(&[fp("1")]);

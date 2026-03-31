@@ -43,7 +43,7 @@ const STORAGE_TIER: u8 = 4;
 const STORAGE_TIER: u8 = 5;
 
 #[cfg(table_format = "q16_16")]
-const FRAC_BITS: i32 = 16;
+const FRAC_BITS: i32 = crate::fixed_point::frac_config::FRAC_BITS as i32;
 #[cfg(table_format = "q32_32")]
 const FRAC_BITS: i32 = 32;
 #[cfg(table_format = "q64_64")]
@@ -54,7 +54,7 @@ const FRAC_BITS: i32 = 128;
 const FRAC_BITS: i32 = 256;
 
 #[cfg(table_format = "q16_16")]
-const MAX_DECIMAL_DIGITS: usize = 4;
+const MAX_DECIMAL_DIGITS: usize = crate::fixed_point::frac_config::MAX_DECIMAL_DIGITS;
 #[cfg(table_format = "q32_32")]
 const MAX_DECIMAL_DIGITS: usize = 9;
 #[cfg(table_format = "q64_64")]
@@ -127,7 +127,7 @@ impl FixedPoint {
     #[inline]
     pub fn one() -> Self {
         #[cfg(table_format = "q16_16")]
-        { Self { raw: 1i32 << 16 } }
+        { Self { raw: 1i32 << FRAC_BITS } }
         #[cfg(table_format = "q32_32")]
         { Self { raw: 1i64 << 32 } }
         #[cfg(table_format = "q64_64")]
@@ -154,7 +154,7 @@ impl FixedPoint {
     #[inline]
     pub fn from_int(v: i32) -> Self {
         #[cfg(table_format = "q16_16")]
-        { Self { raw: (v as i32) << 16 } }
+        { Self { raw: (v as i32) << FRAC_BITS } }
         #[cfg(table_format = "q32_32")]
         { Self { raw: (v as i64) << 32 } }
         #[cfg(table_format = "q64_64")]
@@ -169,7 +169,7 @@ impl FixedPoint {
     #[inline]
     pub fn to_int(self) -> i32 {
         #[cfg(table_format = "q16_16")]
-        { (self.raw >> 16) as i32 }
+        { (self.raw >> FRAC_BITS) as i32 }
         #[cfg(table_format = "q32_32")]
         { (self.raw >> 32) as i32 }
         #[cfg(table_format = "q64_64")]
@@ -374,6 +374,54 @@ impl FixedPoint {
         let compute_val = upscale_to_compute(self.raw());
         let (sin_c, cos_c) = sincos_at_compute_tier(compute_val);
         Ok((Self::from_raw(round_to_storage(sin_c)), Self::from_raw(round_to_storage(cos_c))))
+    }
+
+    /// Fused sin+cos for wide-range angles that exceed storage-tier integer range.
+    ///
+    /// The angle is a raw i64 in **Q32.32 fixed-point format** (32 integer bits,
+    /// 32 fractional bits). This gives ±2.1 billion integer range regardless of
+    /// the profile's FRAC_BITS, covering all practical RoPE frequencies.
+    ///
+    /// Internally computes at Q64.64 (i128) via the native sincos path,
+    /// then narrows to storage tier. Output sin/cos always fits in [-1, 1].
+    ///
+    /// # Use case
+    /// RoPE position encoding where `theta^(2i/d) × position` exceeds storage range.
+    /// ```ignore
+    /// // Precompute frequency at i64 precision:
+    /// let angle_q32: i64 = compute_rope_angle_i64(freq, position);
+    /// let (sin_val, cos_val) = FixedPoint::sincos_wide(angle_q32);
+    /// ```
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn sincos_wide(angle_q32_32: i64) -> (Self, Self) {
+        use crate::fixed_point::domains::binary_fixed::transcendental::{
+            sin_binary_i128, cos_binary_i128,
+        };
+        // Fixed Q32.32→Q64.64 upscale (always 32, independent of profile FRAC_BITS)
+        let angle_q64 = (angle_q32_32 as i128) << 32;
+        let sin_q64 = sin_binary_i128(angle_q64);
+        let cos_q64 = cos_binary_i128(angle_q64);
+
+        // Downscale Q64.64 → storage tier: shift = 64 - FRAC_BITS
+        #[cfg(table_format = "q16_16")]
+        {
+            use crate::fixed_point::frac_config;
+            let shift = 64 - frac_config::FRAC_BITS;
+            let sin_round = (sin_q64 >> (shift - 1)) & 1;
+            let cos_round = (cos_q64 >> (shift - 1)) & 1;
+            let sin_raw = ((sin_q64 >> shift) + sin_round) as i32;
+            let cos_raw = ((cos_q64 >> shift) + cos_round) as i32;
+            (Self::from_raw(sin_raw), Self::from_raw(cos_raw))
+        }
+        #[cfg(table_format = "q32_32")]
+        {
+            // Q64.64 → Q32.32: shift right 32 with rounding
+            let sin_round = (sin_q64 >> 31) & 1;
+            let cos_round = (cos_q64 >> 31) & 1;
+            let sin_raw = ((sin_q64 >> 32) + sin_round) as i64;
+            let cos_raw = ((cos_q64 >> 32) + cos_round) as i64;
+            (Self::from_raw(sin_raw), Self::from_raw(cos_raw))
+        }
     }
     /// Fallible tan(x).
     pub fn try_tan(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::tan) }
@@ -625,9 +673,9 @@ impl DivAssign for FixedPoint {
 fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
     {
-        // i32*i32→i64, >>16, truncate to i32
+        // i32*i32→i64, >>FRAC_BITS, truncate to i32
         let wide = (a as i64) * (b as i64);
-        (wide >> 16) as i32
+        (wide >> FRAC_BITS) as i32
     }
     #[cfg(table_format = "q32_32")]
     {
@@ -679,7 +727,7 @@ fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
 fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
     {
-        let num = (a as i64) << 16;
+        let num = (a as i64) << FRAC_BITS;
         let den = b as i64;
         assert!(den != 0, "FixedPoint: division by zero");
         (num / den) as i32

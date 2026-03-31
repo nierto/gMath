@@ -45,7 +45,7 @@ pub(crate) mod simd;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::imperative::FixedPoint;
 
-#[cfg(feature = "parallel")]
+// rayon is always available when inference feature is enabled
 use rayon::prelude::*;
 
 // ============================================================================
@@ -201,7 +201,6 @@ impl TQ19Matrix {
     // ========================================================================
 
     /// Row-parallel matvec. Each row computed independently via rayon.
-    #[cfg(feature = "parallel")]
     pub fn matvec_par(&self, activations: &[BinaryStorage]) -> Vec<BinaryStorage> {
         assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec_par: activation length mismatch");
         ops::tq19_matvec_par(&self.data, self.rows, self.cols, activations)
@@ -211,7 +210,6 @@ impl TQ19Matrix {
     ///
     /// Parallelizes across rows. Each row processes all batch vectors sequentially
     /// (keeping row weights in L1 cache), then results are transposed.
-    #[cfg(feature = "parallel")]
     pub fn matvec_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>> {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_batch_par: activation[{i}] length mismatch");
@@ -275,7 +273,6 @@ pub fn packed_trit_matvec(
 }
 
 /// Row-parallel packed trit matvec.
-#[cfg(feature = "parallel")]
 pub fn packed_trit_matvec_par(
     packed_trits: &[u8],
     rows: usize,

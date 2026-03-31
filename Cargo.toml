@@ -1,6 +1,6 @@
 [package]
 name = "g_math"
-version = "0.3.89"
+version = "0.3.90"
 edition = "2021"
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — zero-float, 0 ULP transcendentals"
 authors = ["Niels Erik Toren"]
@@ -55,14 +55,14 @@ scientific = []    # Q256.256, 77 decimals
 legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
 serde = ["dep:serde"]    # Serialize/Deserialize impls for FixedPoint, FixedVector, FixedMatrix, Tensor
-parallel = ["dep:rayon"] # Row-parallel TQ1.9 matvec (rayon thread pool)
+inference = ["dep:rayon"] # TQ1.9 ternary inference ops + rayon row-parallel matvec
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
     'cfg(table_format, values("q16_16", "q32_32", "q64_64", "q128_128", "q256_256", "q512_512"))',
     'cfg(q16_16)', 'cfg(q32_32)', 'cfg(q64_64)', 'cfg(q128_128)', 'cfg(q256_256)', 'cfg(q512_512)',
-    'cfg(feature, values("rebuild-tables", "serde", "parallel"))',
+    'cfg(feature, values("rebuild-tables", "serde", "inference"))',
 ]
 
 [profile.release]

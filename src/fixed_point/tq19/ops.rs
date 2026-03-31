@@ -4,6 +4,8 @@
 //! Single division/downscale at the end per gMath precision contract.
 
 use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
+#[cfg(table_format = "q16_16")]
+use crate::fixed_point::frac_config;
 
 #[allow(unused_imports)]
 use crate::fixed_point::I256;
@@ -12,7 +14,6 @@ use crate::fixed_point::I512;
 #[allow(unused_imports)]
 use crate::fixed_point::I1024;
 
-#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use super::{SCALE, TRIT_DECODE_TABLE};
@@ -116,8 +117,8 @@ fn mul_fixed(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
 fn shift_right_frac_and_narrow(v: ComputeStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
     {
-        let round = (v >> 15) & 1;
-        ((v >> 16) + round) as i32
+        let round = (v >> frac_config::FRAC_ROUND_BIT) & 1;
+        ((v >> frac_config::FRAC_BITS) + round) as i32
     }
     #[cfg(table_format = "q32_32")]
     {
@@ -360,7 +361,7 @@ pub fn packed_trit_matvec(
 // ============================================================================
 
 /// Row-parallel TQ1.9 matvec.
-#[cfg(feature = "parallel")]
+// rayon always available — module is gated behind inference feature
 pub fn tq19_matvec_par(
     data: &[i16],
     rows: usize,
@@ -383,7 +384,7 @@ pub fn tq19_matvec_par(
 /// Parallelizes across rows via rayon. Each row uses tiled accumulation:
 /// processes BATCH_TILE elements across all batch vectors before advancing,
 /// keeping weight tile + activation tiles in L1 cache together.
-#[cfg(feature = "parallel")]
+// rayon always available — module is gated behind inference feature
 pub fn tq19_matvec_batch_par(
     data: &[i16],
     rows: usize,
@@ -434,7 +435,7 @@ pub fn tq19_matvec_batch_par(
 }
 
 /// Row-parallel packed trit matvec.
-#[cfg(feature = "parallel")]
+// rayon always available — module is gated behind inference feature
 pub fn packed_trit_matvec_par(
     packed_trits: &[u8],
     rows: usize,

@@ -6,6 +6,8 @@
 use super::{StackValue, StackEvaluator};
 use super::conversion::to_binary_storage;
 use super::domain::ternary_to_storage;
+#[cfg(table_format = "q16_16")]
+use crate::fixed_point::frac_config;
 #[allow(unused_imports)]
 use crate::fixed_point::i256::I256;
 #[allow(unused_imports)]
@@ -395,11 +397,13 @@ impl StackEvaluator {
 
         #[cfg(table_format = "q16_16")]
         {
-            // Q16.16 has 16 integer bits (signed), valid range is i16.
-            if value > i16::MAX as i128 || value < i16::MIN as i128 {
+            // Integer range check: max integer = 2^(STORAGE_BITS - FRAC_BITS - 1) - 1
+            let max_int = (1i128 << frac_config::INTEGER_BITS) - 1;
+            let min_int = -(1i128 << frac_config::INTEGER_BITS);
+            if value > max_int || value < min_int {
                 return Err(OverflowDetected::Overflow);
             }
-            let q_value = (value as i32) << 16;
+            let q_value = (value as i32) << frac_config::FRAC_BITS;
             Ok(StackValue::Binary(storage_tier, q_value, shadow))
         }
 

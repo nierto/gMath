@@ -9,6 +9,8 @@
 
 use super::FixedPoint;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+#[cfg(table_format = "q16_16")]
+use crate::fixed_point::frac_config;
 #[cfg(table_format = "q64_64")]
 use crate::fixed_point::I256;
 
@@ -49,7 +51,7 @@ pub(crate) fn round_to_storage(acc: ComputeStorage) -> BinaryStorage {
             #[cfg(table_format = "q32_32")]
             { (acc >> 32) as i64 }
             #[cfg(table_format = "q16_16")]
-            { (acc >> 16) as i32 }
+            { (acc >> frac_config::FRAC_BITS) as i32 }
             #[cfg(table_format = "q128_128")]
             { (acc >> 128usize).as_i256() }
             #[cfg(table_format = "q256_256")]
@@ -66,7 +68,7 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
     #[cfg(table_format = "q32_32")]
     { (val as i128) << 32 }
     #[cfg(table_format = "q16_16")]
-    { (val as i64) << 16 }
+    { (val as i64) << frac_config::FRAC_BITS }
     #[cfg(table_format = "q128_128")]
     { I512::from_i256(val) << 128usize }
     #[cfg(table_format = "q256_256")]
@@ -117,12 +119,12 @@ pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
 
     #[cfg(table_format = "q16_16")]
     {
-        // i32 × i32 → i64 (Q32.32), accumulate in i64, shift >> 16
+        // i32 × i32 → i64, accumulate in i64, shift >> FRAC_BITS
         let mut acc: i64 = 0;
         for i in 0..a.len() {
             acc += (a[i].raw() as i64) * (b[i].raw() as i64);
         }
-        FixedPoint::from_raw((acc >> 16) as i32)
+        FixedPoint::from_raw((acc >> frac_config::FRAC_BITS) as i32)
     }
 
     #[cfg(table_format = "q128_128")]
@@ -291,7 +293,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
     #[cfg(table_format = "q16_16")]
     {
         // i32 upscaled to i64, then subtract i32×i32→i64 products
-        let mut acc: i64 = (init as i64) << 16;
+        let mut acc: i64 = (init as i64) << frac_config::FRAC_BITS;
         for i in 0..a.len() {
             acc -= (a[i] as i64) * (b[i] as i64);
         }

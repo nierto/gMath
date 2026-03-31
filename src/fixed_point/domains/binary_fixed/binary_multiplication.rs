@@ -18,6 +18,7 @@ use std::arch::x86_64::*;
 
 impl BinaryTier1 {
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {
+        // BinaryTier1 is always Q16.16 (UGOD tier type, fixed format)
         let wide = (self.value as i64) * (other.value as i64);
         let round_bit = (wide >> 15) & 1;
         let shifted = (wide >> 16) + round_bit;
