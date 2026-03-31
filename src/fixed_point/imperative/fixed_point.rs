@@ -508,10 +508,13 @@ impl FixedPoint {
             if shift >= 32 {
                 panic!("FixedPoint: value too large for Q16.16");
             } else if shift >= 0 {
-                (mantissa as i32).checked_shl(shift as u32)
-                    .expect("FixedPoint: value too large for Q16.16")
-            } else if shift > -32 {
-                (mantissa as i32) >> ((-shift) as u32)
+                // Shift wide, then narrow — mantissa has 53 significant bits
+                let wide = mantissa.checked_shl(shift as u32)
+                    .expect("FixedPoint: value too large for Q16.16");
+                wide as i32
+            } else if shift > -128 {
+                // Right-shift on full i128 first to preserve precision, then narrow
+                (mantissa >> ((-shift) as u32)) as i32
             } else {
                 0i32
             }
@@ -521,10 +524,13 @@ impl FixedPoint {
             if shift >= 64 {
                 panic!("FixedPoint: value too large for Q32.32");
             } else if shift >= 0 {
-                (mantissa as i64).checked_shl(shift as u32)
-                    .expect("FixedPoint: value too large for Q32.32")
-            } else if shift > -64 {
-                (mantissa as i64) >> ((-shift) as u32)
+                // Shift wide, then narrow — mantissa has 53 significant bits
+                let wide = mantissa.checked_shl(shift as u32)
+                    .expect("FixedPoint: value too large for Q32.32");
+                wide as i64
+            } else if shift > -128 {
+                // Right-shift on full i128 first to preserve precision, then narrow
+                (mantissa >> ((-shift) as u32)) as i64
             } else {
                 0i64
             }
