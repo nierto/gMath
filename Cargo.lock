@@ -251,7 +251,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "g_math"
-version = "0.3.89"
+version = "0.3.90"
 dependencies = [
  "approx",
  "criterion",
