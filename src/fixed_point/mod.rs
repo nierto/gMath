@@ -24,6 +24,7 @@ pub mod tq19;
 #[doc(hidden)] pub mod core_types;
 #[doc(hidden)] pub mod universal;
 #[doc(hidden)] pub mod tables;
+#[doc(hidden)] pub mod router;
 
 // ============================================================================
 // Internal re-exports — convenience paths for crate-internal use.

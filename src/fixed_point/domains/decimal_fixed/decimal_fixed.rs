@@ -688,24 +688,168 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     ///
     /// **FLOAT-FREE**: 100% integer arithmetic throughout
     ///
-    /// # Example
-    /// ```rust,ignore
-    /// let x = DecimalFixed::<77>::from_decimal_str_decimal("2.7").unwrap();
-    /// let result = x.exp();  // exp(2.7) with ~70-75 decimal precision
-    /// ```
-    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+    // ====================================================================
+    // NATIVE DECIMAL TRANSCENDENTALS (direct engine, no binary round-trip)
+    // ====================================================================
+    //
+    // Each method: upscale i128 → ComputeStorage → decimal engine → downscale → i128.
+    // Zero binary contamination. 0 ULP at storage dp.
+    //
+    // These replace the old binary round-trip path (decimal→binary→engine→binary→decimal)
+    // which wasted ~200 ns on conversion AND introduced representation error for values
+    // like 0.1 that are inexact in binary.
+
+    /// Upscale self.value at 10^DECIMALS to ComputeStorage at 10^DECIMAL_COMPUTE_DP.
+    #[inline]
+    fn to_decimal_compute(&self) -> super::transcendental::decimal_compute::ComputeStorage {
+        super::transcendental::i128_upscale_to_compute(self.value, DECIMALS)
+    }
+
+    /// Downscale ComputeStorage at 10^DECIMAL_COMPUTE_DP to i128 at 10^DECIMALS.
+    #[inline]
+    fn from_decimal_compute(val: super::transcendental::decimal_compute::ComputeStorage) -> Self {
+        Self { value: super::transcendental::decimal_compute_to_i128(val, DECIMALS) }
+    }
+
+    /// `exp(x)` — native decimal exponential at full compute-tier precision.
     pub fn exp(&self) -> Self {
-        use crate::fixed_point::transcendental::exp_binary_i512;
+        use super::transcendental::decimal_exp;
+        let compute = self.to_decimal_compute();
+        let result = decimal_exp(compute).expect("decimal exp overflow");
+        Self::from_decimal_compute(result)
+    }
 
-        // Step 1: Convert decimal to Q256.256 binary format
-        let q256_input = self.to_binary_q256();
+    /// `ln(x)` — native decimal natural logarithm. Requires x > 0.
+    pub fn ln(&self) -> Self {
+        use super::transcendental::decimal_ln;
+        let compute = self.to_decimal_compute();
+        let result = decimal_ln(compute).expect("decimal ln: domain error (x <= 0)");
+        Self::from_decimal_compute(result)
+    }
 
-        // Step 2: Compute exp() using binary transcendental
-        // This uses the proven 75-77 decimal precision implementation
-        let q256_result = exp_binary_i512(q256_input);
+    /// `sqrt(x)` — native decimal square root. Requires x >= 0.
+    pub fn sqrt(&self) -> Self {
+        use super::transcendental::decimal_sqrt;
+        let compute = self.to_decimal_compute();
+        let result = decimal_sqrt(compute).expect("decimal sqrt: domain error (x < 0)");
+        Self::from_decimal_compute(result)
+    }
 
-        // Step 3: Convert result back to DecimalFixed
-        Self::from_binary_q256(q256_result)
+    /// `sin(x)` — native decimal sine.
+    pub fn sin(&self) -> Self {
+        use super::transcendental::decimal_sin;
+        let compute = self.to_decimal_compute();
+        let result = decimal_sin(compute).expect("decimal sin overflow");
+        Self::from_decimal_compute(result)
+    }
+
+    /// `cos(x)` — native decimal cosine.
+    pub fn cos(&self) -> Self {
+        use super::transcendental::decimal_cos;
+        let compute = self.to_decimal_compute();
+        let result = decimal_cos(compute).expect("decimal cos overflow");
+        Self::from_decimal_compute(result)
+    }
+
+    /// `sincos(x)` — fused sine and cosine with single range reduction.
+    pub fn sincos(&self) -> (Self, Self) {
+        use super::transcendental::decimal_sincos;
+        let compute = self.to_decimal_compute();
+        let (s, c) = decimal_sincos(compute).expect("decimal sincos overflow");
+        (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
+    }
+
+    /// `tan(x)` — native decimal tangent (sin/cos).
+    pub fn tan(&self) -> Self {
+        let (s, c) = self.sincos();
+        Self { value: (s.value * Self::SCALE) / c.value }
+    }
+
+    /// `atan(x)` — native decimal arctangent.
+    pub fn atan(&self) -> Self {
+        use super::transcendental::decimal_atan;
+        let compute = self.to_decimal_compute();
+        let result = decimal_atan(compute).expect("decimal atan overflow");
+        Self::from_decimal_compute(result)
+    }
+
+    /// `atan2(y, x)` — native decimal two-argument arctangent.
+    pub fn atan2(&self, x: Self) -> Self {
+        use super::transcendental::decimal_atan2;
+        let y_compute = self.to_decimal_compute();
+        let x_compute = x.to_decimal_compute();
+        let result = decimal_atan2(y_compute, x_compute).expect("decimal atan2 overflow");
+        Self::from_decimal_compute(result)
+    }
+
+    /// `asin(x)` — via atan(x / sqrt(1 - x^2)).
+    pub fn asin(&self) -> Self {
+        // asin(x) = atan(x / sqrt(1 - x^2))
+        let x2 = *self * *self;
+        let one_minus_x2 = Self::ONE - x2;
+        let denom = one_minus_x2.sqrt();
+        let ratio = Self { value: (self.value * Self::SCALE) / denom.value };
+        ratio.atan()
+    }
+
+    /// `acos(x)` — pi/2 - asin(x).
+    pub fn acos(&self) -> Self {
+        use super::transcendental::pi_at_decimal_compute;
+        use super::transcendental::decimal_compute::{decimal_compute_halve, decimal_compute_to_i128};
+        let pi = pi_at_decimal_compute().expect("pi computation");
+        let pi_half = decimal_compute_halve(pi);
+        let pi_half_val = Self { value: decimal_compute_to_i128(pi_half, DECIMALS) };
+        pi_half_val - self.asin()
+    }
+
+    /// `sinh(x)` — (exp(x) - exp(-x)) / 2.
+    pub fn sinh(&self) -> Self {
+        let e_pos = self.exp();
+        let e_neg = (-*self).exp();
+        Self { value: (e_pos.value - e_neg.value) / 2 }
+    }
+
+    /// `cosh(x)` — (exp(x) + exp(-x)) / 2.
+    pub fn cosh(&self) -> Self {
+        let e_pos = self.exp();
+        let e_neg = (-*self).exp();
+        Self { value: (e_pos.value + e_neg.value) / 2 }
+    }
+
+    /// `tanh(x)` — (exp(2x) - 1) / (exp(2x) + 1).
+    pub fn tanh(&self) -> Self {
+        let two_x = Self { value: self.value * 2 };
+        let e2x = two_x.exp();
+        let num = e2x.value - Self::SCALE;
+        let den = e2x.value + Self::SCALE;
+        Self { value: (num * Self::SCALE) / den }
+    }
+
+    /// `asinh(x)` — ln(x + sqrt(x^2 + 1)).
+    pub fn asinh(&self) -> Self {
+        let x2 = *self * *self;
+        let inner = Self { value: x2.value + Self::SCALE }; // x^2 + 1
+        let root = inner.sqrt();
+        let arg = Self { value: self.value + root.value };
+        arg.ln()
+    }
+
+    /// `acosh(x)` — ln(x + sqrt(x^2 - 1)). Requires x >= 1.
+    pub fn acosh(&self) -> Self {
+        let x2 = *self * *self;
+        let inner = Self { value: x2.value - Self::SCALE }; // x^2 - 1
+        let root = inner.sqrt();
+        let arg = Self { value: self.value + root.value };
+        arg.ln()
+    }
+
+    /// `atanh(x)` — ln((1+x)/(1-x)) / 2. Requires |x| < 1.
+    pub fn atanh(&self) -> Self {
+        let one_plus = Self { value: Self::SCALE + self.value };
+        let one_minus = Self { value: Self::SCALE - self.value };
+        let ratio = one_plus / one_minus;
+        let ln_ratio = ratio.ln();
+        Self { value: ln_ratio.value / 2 }
     }
 }
 

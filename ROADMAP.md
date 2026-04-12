@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.3.90**
+Current version: **0.4.0**
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise — this is a working list for a solo-maintained project.
 
@@ -24,13 +24,6 @@ All profiles use true tier N+1 computation. 18 transcendentals, 4 domains (binar
 
 Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch matvec. `TQ19Matrix`, `tq19_dot`, `trit_dot`, packed trit operations, `TRIT_DECODE_TABLE`. 38 tests.
 
-### v0.4.0 — Matrix chain persistence, fused ops
-
-- `LazyMatrixExpr` — 14-variant enum, operator overloading, recursive evaluator at ComputeMatrix tier
-- `DomainMatrix` — StackValue-tagged matrix, 4 domains + cross-domain routing
-- Fused transcendental paths — `evaluate_sincos()`, identity short-circuits (`exp(ln(x))` -> x)
-- Fused compute-tier ops — `sqrt_sum_sq`, `euclidean_distance`, `softmax`, `rms_norm_factor`, `silu`
-
 ### v0.3.90 — Configurable FRAC_BITS, native transcendental dispatch, inference feature gate
 
 - `GMATH_FRAC_BITS` env var for realtime profile (e.g., Q8.24 via `GMATH_FRAC_BITS=24`)
@@ -40,9 +33,59 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 - TQ1.9 gated behind `inference` feature (replaces `parallel`)
 - Decimal-to-binary rounding fix (round-to-nearest instead of truncation)
 
+### v0.4.0 — Decimal transcendentals, fractal router, direct engine calls, gmath! macro
+
+**Decimal transcendentals (native, 0 ULP):**
+- 5 native engines: exp (4-stage table decomposition), ln (atanh), sqrt (Newton-Raphson), sin/cos (Cody-Waite + Machin pi), atan (half-angle)
+- DecimalCompute StackValue variant + full FASC dispatch
+- DecimalFixed imperative type: 18 transcendental methods wired to native engines (eliminated binary round-trip)
+- 14 ULP validation tests + 24 FASC integration tests + ~9500 mpmath reference points
+
+**Fractal topology router:**
+- Shadow-based operand classifier (~15 ns) — factors CompactShadow denominator to determine domain exactness
+- Compile-time routing table (5.25 KB .rodata, 21 ops x 16 x 16 classes) — O(1) lookup
+- Cross-domain coercion in arithmetic — `gmath("0.1") + gmath("255")` routes to Decimal (was Symbolic fallback)
+- Tree walker: `route_expression(&LazyExpr) -> OperandClass`, O(N) bottom-up
+
+**Decimal 4-stage exp tables:**
+- `exp(x) = exp(k) * exp(d1/10) * exp(d2/100) * exp(d3/1000) * exp(r)` — 71 cached entries
+- 4.1x speedup on decimal exp (43K -> 177K ops/s), binary gap narrowed 8.6x -> 2.1x
+
+**Direct binary engine calls (FASC bypass):**
+- FixedPoint: exp/ln/sqrt/sin/cos/atan use `direct_unary` pattern — upscale -> engine -> downscale
+- ~65 ns saved per call vs FASC pipeline (no LazyExpr, no TLS, no StackValue boxing)
+
+**gmath!() compile-time macro:**
+- `g_math_macros/` proc-macro crate — zero external deps, `--features macros`
+- Pre-parses decimal/integer literals at compile time, emits direct StackValue construction
+- Falls back to runtime `gmath()` for fractions, constants, hex
+
+**FRAC_BITS root cause fix:**
+- BinaryTier1 mul/div hardcoded `>> 16` — wrong when `GMATH_FRAC_BITS != 16`
+- Fixed: uses `frac_config::FRAC_BITS` for q16_16 profile, hardcoded 16 for all others
+
+**Matrix chain persistence, fused ops (also in v0.4.0):**
+- `LazyMatrixExpr` — 14-variant enum, operator overloading, recursive evaluator at ComputeMatrix tier
+- `DomainMatrix` — StackValue-tagged matrix, 4 domains + cross-domain routing
+- Fused transcendental paths — `evaluate_sincos()`, identity short-circuits (`exp(ln(x))` -> x)
+- Fused compute-tier ops — `sqrt_sum_sq`, `euclidean_distance`, `softmax`, `rms_norm_factor`, `silu`
+
+**Tensor decompositions (for inference weight/KV-cache compression):**
+- `truncated_svd(a, k)` — keep top-k singular values, O(mk + nk) memory vs O(m² + n²)
+- `truncated_svd_auto(a, threshold)` — automatic rank selection via singular value threshold
+- `tucker_decompose(t, ranks)` — HOSVD: mode-n unfolding → SVD per mode → core tensor
+- `cp_decompose(t, rank, max_iter, tol)` — Alternating Least Squares for rank-R canonical polyadic
+
+**Composed transcendental direct bypass (complete FASC elimination):**
+- ALL 18 FixedPoint transcendentals now bypass FASC entirely
+- Composed functions (tan, sinh, asin, etc.) use direct compute-tier arithmetic
+- `pow(x, y) = direct_exp(direct_ln(x) * y)` — zero FASC overhead
+
+**Test count: 1375+ across all 5 profiles, 0 failures, 0 warnings.**
+
 ---
 
-## Next: 0.5.0 — Decimal transcendentals + correctness audit
+## Next: 0.5.0 — Correctness audit + remaining composed transcendental bypass
 
 ### 1. UGOD multi-tier promotion verification
 
@@ -51,20 +94,12 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 
 Verify that UGOD overflow promotion tries at least 2 subsequent tiers before falling back to symbolic rational. Current behavior may promote to symbolic after a single tier overflow, bypassing intermediate tiers that would succeed. Either confirm the code is correct (document the guarantee) or fix it.
 
-### 2. Decimal domain transcendentals
+### 2. Complete FixedPoint direct-engine bypass for composed transcendentals
 
-**Priority:** HIGH — unlocks an entire application domain
-**Effort:** ~3,000 lines, 3-4 sessions
+**Priority:** MEDIUM — throughput for inference consumers
+**Effort:** ~300 lines, 1 session
 
-Native decimal exp/ln/sqrt/sin/cos/tan/atan at tier N+1 with decimal-specific tables. This is the highest-impact architectural addition remaining:
-
-**What it enables:**
-- **DecimalCompute chain persistence** — the decimal equivalent of BinaryCompute. Values like 0.1, 0.01, 1/3 that are exact in decimal but lossy in binary stay exact through transcendental chains. Eliminates the representation error class we encountered with Q8.24 ln(0.1).
-- **Financial-grade computation** — compound interest, Black-Scholes, amortization schedules, tax calculations with exact decimal arithmetic end-to-end. No binary round-trip.
-- **Multi-domain composability** — all 13 composed transcendentals (sinh, cosh, tanh, asin, acos, pow, etc.) become natively multi-domain. FASC chain persistence works per-domain.
-- **Architectural precedent** — establishes the pattern for symbolic rational transcendentals (future: ultra-precision mode where all intermediates are exact rationals).
-
-**Requires:** decimal-specific table generation in `build.rs`, decimal tier N+1 compute infrastructure, DecimalCompute variant in StackValue.
+Currently tan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh still route through FASC (`apply_unary(LazyExpr::tan)` etc.). These are FASC-composed (e.g., tan = sin/cos, sinh = (exp(x)-exp(-x))/2). Implement direct compositions using the already-direct exp/ln/sqrt/sin/cos/atan engines. Saves ~65 ns per call.
 
 ### 3. Stack evaluator `profile_dispatch!` macro
 
@@ -93,17 +128,9 @@ Upstream `square()`, `reciprocal()`, `powi()`, `manhattan_distance()`, `mul_vect
 
 The third compute domain after Binary and Decimal. Transcendental chains where ALL intermediates are exact rational numbers (num/den BigInt pairs). Unbounded precision — no ULP concept, just exact arithmetic until final materialization. Ultra-precision mode for scientific computing and formal verification.
 
-### Tensor decompositions (L2B)
+### n-D Clifford algebra with Vahlen matrices (L4B) — 0.5.0
 
-Truncated SVD, HOSVD/Tucker, CP/ALS for model compression. Optimization-tier features for distributed inference.
-
-### Fractal topology FASC integration
-
-Wire the fractal topology engine into FASC `parse_literal()` for geometric domain routing. Replace syntactic routing with data-driven routing. Not urgent — current routing works correctly.
-
-### n-D Clifford algebra (L4B)
-
-Vahlen matrices over Cl(n,0,1). High novelty — no zero-float Clifford algebra in Rust.
+Cl(n,0,1) Clifford algebra with Vahlen matrix representation. Multivector arithmetic, geometric product, inner/outer products, grade extraction, and Vahlen matrix Mobius transformations. High novelty — no zero-float Clifford algebra exists in Rust. Targeted for v0.5.0 release.
 
 ### Custom FRAC_BITS for non-realtime profiles
 
@@ -111,7 +138,11 @@ Extending `GMATH_FRAC_BITS` to compact (i64), embedded (i128), and higher profil
 
 ### Public API stabilization
 
-Pre-1.0 audit of exports, feature gating, StackValue extraction methods.
+Pre-1.0 audit of exports, feature gating, StackValue extraction methods. Five API tiers documented (FASC, Imperative, Fused, Geometric, TQ1.9) but export hygiene not yet audited.
+
+### Decimal sin/cos 3-stage tables
+
+Precomputed sin/cos tables for the decimal engine. Deferred — analysis showed Taylor computation is <3% of FASC pipeline time, so tables give negligible throughput gain through the full pipeline. Revisit when decimal sin/cos becomes a bottleneck (currently not, since binary sin/cos is 8x faster and used for most inference).
 
 ---
 

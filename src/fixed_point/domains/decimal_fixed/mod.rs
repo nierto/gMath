@@ -20,6 +20,9 @@ pub mod decimal_multiplication;
 pub mod decimal_division;
 pub mod decimal_negation;
 
+// Native decimal transcendental functions (tier N+1 with decimal scaling)
+pub mod transcendental;
+
 // Re-export the main DecimalFixed types
 pub use decimal_fixed::{
     DecimalFixed, DecimalFixed2, DecimalFixed3, DecimalFixed6, DecimalFixed9,

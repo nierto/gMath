@@ -15,6 +15,7 @@ pub mod matrix_functions;
 pub mod manifold;
 pub mod lie_group;
 pub mod tensor;
+pub mod tensor_decompose;
 pub mod ode;
 pub mod curvature;
 pub mod projective;

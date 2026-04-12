@@ -13,8 +13,14 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 
 impl BinaryTier1 {
     pub fn checked_div(&self, other: &Self) -> Option<Self> {
+        let fb: u32 = {
+            #[cfg(table_format = "q16_16")]
+            { crate::fixed_point::frac_config::FRAC_BITS as u32 }
+            #[cfg(not(table_format = "q16_16"))]
+            { 16 }
+        };
         if other.value == 0 { return None; }
-        let a_wide = (self.value as i64) << 16;
+        let a_wide = (self.value as i64) << fb;
         let b_wide = other.value as i64;
         let quotient = a_wide / b_wide;
         let remainder = a_wide % b_wide;

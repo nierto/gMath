@@ -77,12 +77,33 @@ impl StackEvaluator {
         }
     }
 
+    /// Extract decimal compute-tier value if input is Decimal or DecimalCompute.
+    ///
+    /// Returns `Some(compute_val)` for decimal-domain inputs, `None` otherwise.
+    /// Used to route transcendental evaluation to decimal engines when the input
+    /// came from the decimal domain, preserving decimal exactness end-to-end.
+    pub(crate) fn try_decimal_compute(&self, value: &StackValue) -> Option<ComputeStorage> {
+        use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_upscale_to_compute;
+        match value {
+            StackValue::DecimalCompute(_, val, _) => Some(*val),
+            StackValue::Decimal(dp, scaled, _) => decimal_upscale_to_compute(*scaled, *dp).ok(),
+            _ => None,
+        }
+    }
+
     /// Evaluate exponential function on stack value at tier N+1
     ///
-    /// All inputs are upscaled to compute tier (tier N+1) before computation.
-    /// Returns BinaryCompute for transcendental chain persistence.
+    /// Routes to decimal engine for decimal-domain inputs, binary engine otherwise.
+    /// Returns BinaryCompute or DecimalCompute for transcendental chain persistence.
     pub(crate) fn evaluate_exp(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        // Decimal fast path: preserve decimal exactness through the chain
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_exp;
+            let result = decimal_exp(dec_compute)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
+        // Binary path (default)
         let compute_val = self.to_compute_storage(&value)?;
         self.exp_at_compute_tier(compute_val, storage_tier)
     }
@@ -140,10 +161,13 @@ impl StackEvaluator {
     /// **DOMAIN ERROR**: Returns DomainError for x <= 0
     pub(crate) fn evaluate_ln(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        // Decimal fast path
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_ln;
+            let result = decimal_ln(dec_compute)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
         let compute_val = self.to_compute_storage(&value)?;
-
-        // Domain check: ln(x) requires x > 0 (checked in ln_at_compute_tier too,
-        // but check here to avoid unnecessary conversion overhead for error cases)
         self.ln_at_compute_tier(compute_val, storage_tier)
     }
 
@@ -151,10 +175,16 @@ impl StackEvaluator {
     // SQUARE ROOT AND POWER FUNCTION EVALUATION
     // ============================================================================
 
-    /// sqrt(x) — tier N+1 computation returning BinaryCompute
+    /// sqrt(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
     /// **DOMAIN**: x >= 0 (returns error for x < 0)
     pub(crate) fn evaluate_sqrt(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        // Decimal fast path
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_sqrt;
+            let result = decimal_sqrt(dec_compute)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
         let compute_val = self.to_compute_storage(&value)?;
 
         // Domain check: sqrt(x) undefined for x < 0
@@ -194,12 +224,13 @@ impl StackEvaluator {
         let mut n = exp.unsigned_abs();
 
         if n == 0 {
-            return Ok(self.make_binary_int(1));
+            return Ok(self.make_int_like(&base, 1));
         }
 
-        // Convert to binary to avoid Decimal*Decimal → rational overflow in squaring
-        let mut result = self.make_binary_int(1);
+        // to_binary_value preserves decimal domain (returns DecimalCompute for decimal input)
         let mut b = self.to_binary_value(&base)?;
+        // Start with "1" in the same domain as base — avoids Binary×DecimalCompute mixing
+        let mut result = self.make_int_like(&b, 1);
 
         while n > 0 {
             if n & 1 == 1 {
@@ -212,7 +243,7 @@ impl StackEvaluator {
         }
 
         if negative {
-            let one = self.make_binary_int(1);
+            let one = self.make_int_like(&result, 1);
             result = self.binary_divide(one, result)?;
         }
 
@@ -241,15 +272,46 @@ impl StackEvaluator {
         }
     }
 
-    /// Convert any StackValue to BinaryCompute (compute tier).
-    /// Used by composed transcendental functions to:
-    /// 1. Avoid Decimal*Decimal → rational overflow
-    /// 2. Avoid Binary*Binary → UGOD promotion → i128 truncation for large values
-    /// Since BinaryCompute uses ComputeStorage (I256 for q64_64), it has enough range
-    /// for intermediate squaring and other arithmetic.
+    /// Create an integer constant in the same domain as `reference`.
+    ///
+    /// Returns `DecimalCompute` if `reference` is `Decimal`/`DecimalCompute`,
+    /// otherwise `Binary`. Used by composed transcendentals (asinh, acosh, atanh,
+    /// asin, etc.) to avoid decimal/binary domain mixing during composition.
+    pub(crate) fn make_int_like(&self, reference: &StackValue, value: i128) -> StackValue {
+        match reference {
+            StackValue::DecimalCompute(..) | StackValue::Decimal(..) => {
+                use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_compute_from_int;
+                let tier = self.profile_max_binary_tier();
+                StackValue::DecimalCompute(
+                    tier,
+                    decimal_compute_from_int(value as i64),
+                    CompactShadow::from_rational(value, 1),
+                )
+            }
+            _ => self.make_binary_int(value),
+        }
+    }
+
+    /// Convert any StackValue to a compute-tier form suitable for transcendental composition.
+    ///
+    /// Routes preserving domain:
+    /// - `BinaryCompute` → unchanged (already at binary compute tier)
+    /// - `DecimalCompute` → unchanged (already at decimal compute tier)
+    /// - `Decimal` → `DecimalCompute` (upscale, preserve decimal identity)
+    /// - Everything else → `BinaryCompute` (via binary compute tier)
+    ///
+    /// This ensures composed transcendentals (sinh, asinh, tan, etc.) stay in
+    /// their native domain through the entire composition chain.
     pub(crate) fn to_binary_value(&mut self, val: &StackValue) -> Result<StackValue, OverflowDetected> {
         match val {
             StackValue::BinaryCompute(..) => Ok(val.clone()),
+            StackValue::DecimalCompute(..) => Ok(val.clone()),
+            StackValue::Decimal(dp, scaled, shadow) => {
+                use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_upscale_to_compute;
+                let dec_compute = decimal_upscale_to_compute(*scaled, *dp)?;
+                let tier = self.profile_max_binary_tier();
+                Ok(StackValue::DecimalCompute(tier, dec_compute, shadow.clone()))
+            }
             _ => {
                 let compute = self.to_compute_storage(val)?;
                 let tier = self.profile_max_binary_tier();
@@ -263,6 +325,10 @@ impl StackEvaluator {
         match value {
             StackValue::BinaryCompute(tier, val, _) => {
                 Ok(StackValue::BinaryCompute(tier, compute_halve(val), CompactShadow::None))
+            }
+            StackValue::DecimalCompute(tier, val, _) => {
+                use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_compute_halve;
+                Ok(StackValue::DecimalCompute(tier, decimal_compute_halve(val), CompactShadow::None))
             }
             StackValue::Binary(tier, val, _) => {
                 #[cfg(table_format = "q256_256")]
@@ -298,6 +364,24 @@ impl StackEvaluator {
 
     /// Divide a binary value by another in Q-format (native binary division)
     pub(crate) fn binary_divide(&self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+        // DecimalCompute propagation — mirror the BinaryCompute pattern for decimal
+        use crate::fixed_point::domains::decimal_fixed::transcendental::{
+            decimal_compute_div, decimal_upscale_to_compute,
+        };
+        match (&left, &right) {
+            (StackValue::DecimalCompute(t, v1, _), StackValue::DecimalCompute(_, v2, _)) => {
+                return Ok(StackValue::DecimalCompute(*t, decimal_compute_div(*v1, *v2)?, CompactShadow::None));
+            }
+            (StackValue::DecimalCompute(t, v1, _), StackValue::Decimal(dp, scaled, _)) => {
+                let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t, decimal_compute_div(*v1, v2)?, CompactShadow::None));
+            }
+            (StackValue::Decimal(dp, scaled, _), StackValue::DecimalCompute(t, v2, _)) => {
+                let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t, decimal_compute_div(v1, *v2)?, CompactShadow::None));
+            }
+            _ => {}
+        }
         // Handle BinaryCompute: if either operand is BinaryCompute, use compute-tier division
         match (&left, &right) {
             (StackValue::BinaryCompute(t, v1, _), StackValue::BinaryCompute(_, v2, _)) => {
@@ -393,10 +477,10 @@ impl StackEvaluator {
     /// Optimized: only 1 exp call instead of 3
     pub(crate) fn evaluate_tanh(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let value = self.to_binary_value(&value)?;
-        let two = self.make_binary_int(2);
-        let two_x = self.multiply_values(two, value)?;
+        let two = self.make_int_like(&value, 2);
+        let two_x = self.multiply_values(two, value.clone())?;
         let exp_2x = self.evaluate_exp(two_x)?;
-        let one = self.make_binary_int(1);
+        let one = self.make_int_like(&value, 1);
         let numerator = self.subtract_values(exp_2x.clone(), one.clone())?;
         let denominator = self.add_values(exp_2x, one)?;
         self.binary_divide(numerator, denominator)
@@ -404,10 +488,10 @@ impl StackEvaluator {
 
     /// asinh(x) = ln(x + sqrt(x² + 1))
     pub(crate) fn evaluate_asinh(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
-        // Convert to binary to avoid Decimal*Decimal → rational overflow
+        // to_binary_value preserves decimal domain (returns DecimalCompute for decimal input)
         let value = self.to_binary_value(&value)?;
         let x_sq = self.multiply_values(value.clone(), value.clone())?;
-        let one = self.make_binary_int(1);
+        let one = self.make_int_like(&value, 1);
         let x_sq_plus_1 = self.add_values(x_sq, one)?;
         let sqrt_val = self.evaluate_sqrt(x_sq_plus_1)?;
         let sum = self.add_values(value, sqrt_val)?;
@@ -422,10 +506,10 @@ impl StackEvaluator {
         let one_binary = self.to_binary_storage(&self.make_binary_int(1))?;
         if binary_val < one_binary { return Err(OverflowDetected::DomainError); }
 
-        // Convert to binary to avoid Decimal*Decimal → rational overflow
+        // to_binary_value preserves decimal domain
         let value = self.to_binary_value(&value)?;
         let x_sq = self.multiply_values(value.clone(), value.clone())?;
-        let one = self.make_binary_int(1);
+        let one = self.make_int_like(&value, 1);
         let x_sq_minus_1 = self.subtract_values(x_sq, one)?;
         let sqrt_val = self.evaluate_sqrt(x_sq_minus_1)?;
         let sum = self.add_values(value, sqrt_val)?;
@@ -473,9 +557,9 @@ impl StackEvaluator {
             }
         }
 
-        // Convert to binary to avoid cross-domain rational overflow
+        // to_binary_value preserves decimal domain
         let value = self.to_binary_value(&value)?;
-        let one = self.make_binary_int(1);
+        let one = self.make_int_like(&value, 1);
         let one_plus_x = self.add_values(one.clone(), value.clone())?;
         let one_minus_x = self.subtract_values(one, value)?;
         let ratio = self.binary_divide(one_plus_x, one_minus_x)?;
@@ -487,26 +571,44 @@ impl StackEvaluator {
     // TRIGONOMETRIC FUNCTIONS
     // ============================================================================
 
-    /// sin(x) — tier N+1 computation returning BinaryCompute
+    /// sin(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
     pub(crate) fn evaluate_sin(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_sin;
+            let result = decimal_sin(dec_compute)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
         let compute_val = self.to_compute_storage(&value)?;
         let result = sin_at_compute_tier(compute_val);
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// cos(x) — tier N+1 computation returning BinaryCompute
+    /// cos(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
     pub(crate) fn evaluate_cos(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_cos;
+            let result = decimal_cos(dec_compute)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
         let compute_val = self.to_compute_storage(&value)?;
         let result = cos_at_compute_tier(compute_val);
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
     /// Fused sin+cos at compute tier — single shared range reduction.
-    /// Returns (sin_val, cos_val) both as BinaryCompute.
+    /// Returns (sin_val, cos_val) both as BinaryCompute or DecimalCompute.
     pub(crate) fn evaluate_sincos(&mut self, value: StackValue) -> Result<(StackValue, StackValue), OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_sincos;
+            let (sin_result, cos_result) = decimal_sincos(dec_compute)?;
+            return Ok((
+                StackValue::DecimalCompute(storage_tier, sin_result, CompactShadow::None),
+                StackValue::DecimalCompute(storage_tier, cos_result, CompactShadow::None),
+            ));
+        }
         let compute_val = self.to_compute_storage(&value)?;
         let (sin_result, cos_result) = sincos_at_compute_tier(compute_val);
         Ok((
@@ -583,9 +685,9 @@ impl StackEvaluator {
         }
 
         // asin(x) = atan(x / sqrt(1 - x²))
-        // Convert to binary to avoid Decimal*Decimal → rational overflow
+        // to_binary_value preserves decimal domain
         let value = self.to_binary_value(&value)?;
-        let one = self.make_binary_int(1);
+        let one = self.make_int_like(&value, 1);
         let x_sq = self.multiply_values(value.clone(), value.clone())?;
         let one_minus_x_sq = self.subtract_values(one, x_sq)?;
         let sqrt_val = self.evaluate_sqrt(one_minus_x_sq)?;
@@ -598,16 +700,33 @@ impl StackEvaluator {
     pub(crate) fn evaluate_acos(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let asin_val = self.evaluate_asin(value)?;
 
-        // π/2 at compute tier
+        // π/2 at compute tier — match asin_val's domain
         let storage_tier = self.profile_max_binary_tier();
-        let pi_half_compute = pi_half_at_compute_tier();
-        let pi_half_val = StackValue::BinaryCompute(storage_tier, pi_half_compute, CompactShadow::None);
+        let pi_half_val = match &asin_val {
+            StackValue::DecimalCompute(..) => {
+                // Use decimal π/2 = pi_at_decimal_compute / 2
+                use crate::fixed_point::domains::decimal_fixed::transcendental::{
+                    pi_at_decimal_compute, decimal_compute_halve,
+                };
+                let pi = pi_at_decimal_compute()?;
+                StackValue::DecimalCompute(storage_tier, decimal_compute_halve(pi), CompactShadow::None)
+            }
+            _ => {
+                let pi_half_compute = pi_half_at_compute_tier();
+                StackValue::BinaryCompute(storage_tier, pi_half_compute, CompactShadow::None)
+            }
+        };
         self.subtract_values(pi_half_val, asin_val)
     }
 
-    /// atan(x) — tier N+1 computation returning BinaryCompute
+    /// atan(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
     pub(crate) fn evaluate_atan(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_atan;
+            let result = decimal_atan(dec_compute)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
         let compute_val = self.to_compute_storage(&value)?;
         let result = atan_at_compute_tier(compute_val);
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
@@ -616,6 +735,12 @@ impl StackEvaluator {
     /// atan2(y, x) — tier N+1 computation returning BinaryCompute
     pub(crate) fn evaluate_atan2(&mut self, y: StackValue, x: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
+        // Decimal fast path: both operands decimal → decimal engine
+        if let (Some(y_dec), Some(x_dec)) = (self.try_decimal_compute(&y), self.try_decimal_compute(&x)) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_atan2;
+            let result = decimal_atan2(y_dec, x_dec)?;
+            return Ok(StackValue::DecimalCompute(storage_tier, result, CompactShadow::None));
+        }
         let y_compute = self.to_compute_storage(&y)?;
         let x_compute = self.to_compute_storage(&x)?;
         let result = atan2_at_compute_tier(y_compute, x_compute);
@@ -636,6 +761,66 @@ impl StackEvaluator {
             // (which fills lower bits with zeros instead of real precision).
             StackValue::Decimal(decimals, scaled, _) => {
                 decimal_to_compute_storage(*decimals, *scaled)
+            }
+            StackValue::DecimalCompute(_tier, val, _) => {
+                // Direct conversion at tier N+1 (no lossy Decimal intermediate):
+                // binary_compute = val × 2^COMPUTE_FRAC_BITS / 10^DECIMAL_COMPUTE_DP
+                // Done in the next-wider integer type to preserve full precision.
+                use crate::fixed_point::domains::decimal_fixed::transcendental::DECIMAL_COMPUTE_DP;
+                #[cfg(table_format = "q64_64")]
+                {
+                    // val: I256 at dp=38. Target: Q128.128 I256.
+                    // result = val × 2^128 / 10^38 via I512 intermediate
+                    let num = I512::from_i256(*val) << 128usize;
+                    let mut den = I512::from_i128(1);
+                    let ten = I512::from_i128(10);
+                    for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
+                    Ok((num / den).as_i256())
+                }
+                #[cfg(table_format = "q128_128")]
+                {
+                    // val: I512 at dp=77. Target: Q256.256 I512.
+                    let num = I1024::from_i512(*val) << 256usize;
+                    let mut den = I1024::from_i128(1);
+                    let ten = I1024::from_i128(10);
+                    for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
+                    Ok((num / den).as_i512())
+                }
+                #[cfg(table_format = "q256_256")]
+                {
+                    // val: I1024 at dp=154. Target: Q512.512 I1024.
+                    use crate::fixed_point::I2048;
+                    use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
+                    let num = I2048::from_i1024(*val) << 512usize;
+                    let mut pow = I1024::from_i128(1);
+                    let ten = I1024::from_i128(10);
+                    for _ in 0..DECIMAL_COMPUTE_DP { pow = pow * ten; }
+                    let den = I2048::from_i1024(pow);
+                    let quot = i2048_div(num, den);
+                    Ok(I1024::from_words([
+                        quot.words[0], quot.words[1], quot.words[2], quot.words[3],
+                        quot.words[4], quot.words[5], quot.words[6], quot.words[7],
+                        quot.words[8], quot.words[9], quot.words[10], quot.words[11],
+                        quot.words[12], quot.words[13], quot.words[14], quot.words[15],
+                    ]))
+                }
+                #[cfg(table_format = "q32_32")]
+                {
+                    // val: i128 at dp=19. Target: Q64.64 i128.
+                    let num = I256::from_i128(*val) << 64usize;
+                    let mut den = I256::from_i128(1);
+                    let ten = I256::from_i128(10);
+                    for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
+                    Ok((num / den).as_i128())
+                }
+                #[cfg(table_format = "q16_16")]
+                {
+                    use crate::fixed_point::frac_config;
+                    let num = (*val as i128) << (frac_config::COMPUTE_FRAC_BITS as usize);
+                    let mut den: i128 = 1;
+                    for _ in 0..DECIMAL_COMPUTE_DP { den *= 10; }
+                    Ok((num / den) as i64)
+                }
             }
             StackValue::Symbolic(rational) => {
                 // Try i128 extraction first (tiers 1-5)
@@ -663,6 +848,10 @@ impl StackEvaluator {
         match value {
             StackValue::Binary(_, val, _) => Ok(*val),
             StackValue::BinaryCompute(_, val, _) => downscale_to_storage(*val),
+            StackValue::DecimalCompute(_tier, val, _shadow) => {
+                // Direct tier N+1 conversion (no lossy intermediate)
+                crate::fixed_point::universal::fasc::stack_evaluator::decimal_compute_to_binary_storage_pub(*val)
+            }
             StackValue::Decimal(decimals, scaled, _) => {
                 #[cfg(table_format = "q256_256")]
                 {

@@ -20,3 +20,6 @@ __pycache__/
 **/*.rs.bk
 .idea/
 ECOSYSTEM_INTEGRATION_NOTES.md
+CLIENT_INTEGRATION_MISSION_BRIEF.md
+g_math_macros/
+tests/gmath_macro_test.rs

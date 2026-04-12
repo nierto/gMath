@@ -9,7 +9,9 @@ use std::ops::{Add, Sub, Mul, Div, Neg, AddAssign, SubAssign, MulAssign, DivAssi
 use crate::fixed_point::canonical::{
     LazyExpr, StackValue, evaluate, gmath_parse, CompactShadow,
 };
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+use crate::fixed_point::universal::fasc::stack_evaluator::{
+    BinaryStorage, ComputeStorage, upscale_to_compute, downscale_to_storage,
+};
 pub use crate::fixed_point::core_types::errors::OverflowDetected;
 
 #[cfg(table_format = "q64_64")]
@@ -52,6 +54,149 @@ const FRAC_BITS: i32 = 64;
 const FRAC_BITS: i32 = 128;
 #[cfg(table_format = "q256_256")]
 const FRAC_BITS: i32 = 256;
+
+// ============================================================================
+// Direct binary engine wrappers (bypass FASC pipeline)
+// Each function: ComputeStorage → ComputeStorage via the profile's engine.
+// ============================================================================
+
+fn direct_exp(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i64(x) }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i128(x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i256(x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i512(x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::exp_binary_i1024(x) }
+}
+
+fn direct_ln(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i64(x) }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i128(x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i256(x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i512(x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i1024(x) }
+}
+
+fn direct_sqrt(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sqrt_binary_i64(x) }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sqrt_binary_i128(x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sqrt_binary_i256(x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sqrt_binary_i512(x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sqrt_binary_i1024(x) }
+}
+
+fn direct_sin(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sin_binary_i64(x) }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sin_binary_i128(x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sin_binary_i256(x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sin_binary_i512(x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::sin_binary_i1024(x) }
+}
+
+fn direct_cos(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::cos_binary_i64(x) }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::cos_binary_i128(x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::cos_binary_i256(x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::cos_binary_i512(x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::cos_binary_i1024(x) }
+}
+
+fn direct_atan2(y: ComputeStorage, x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i128(y as i128, x as i128) as i64 }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i128(y, x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i256(y, x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i512(y, x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i1024(y, x) }
+}
+
+// Compute-tier arithmetic helpers for direct transcendental composition.
+// These operate on ComputeStorage without FASC overhead.
+use crate::fixed_point::universal::fasc::stack_evaluator::{
+    compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide, compute_halve,
+};
+
+#[inline] fn compute_add_direct(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage { compute_add(a, b) }
+#[inline] fn compute_sub_direct(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage { compute_subtract(a, b) }
+#[inline] fn compute_neg_direct(a: ComputeStorage) -> ComputeStorage { compute_negate(a) }
+#[inline] fn compute_mul_direct(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage { compute_multiply(a, b) }
+#[inline] fn compute_divide_direct(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    compute_divide(a, b).expect("division by zero in transcendental composition")
+}
+#[inline] fn compute_halve_direct(a: ComputeStorage) -> ComputeStorage { compute_halve(a) }
+
+/// 1.0 at compute tier
+fn compute_one() -> ComputeStorage { upscale_to_compute(one_storage()) }
+
+/// pi/2 at compute tier for acos.
+/// Upscales from the available pi_half constant to the profile's compute tier.
+fn compute_pi_half() -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128() as i64 }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128() }
+    #[cfg(table_format = "q64_64")]
+    { upscale_to_compute(crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128()) }
+    #[cfg(table_format = "q128_128")]
+    { upscale_to_compute(crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i256()) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i1024() }
+}
+
+/// 1.0 at storage tier
+fn one_storage() -> BinaryStorage {
+    #[cfg(table_format = "q16_16")]
+    { 1i32 << crate::fixed_point::frac_config::FRAC_BITS }
+    #[cfg(table_format = "q32_32")]
+    { 1i64 << 32 }
+    #[cfg(table_format = "q64_64")]
+    { 1i128 << 64 }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::i256::I256::from_i128(1) << 128 }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::i512::I512::from_i128(1) << 256 }
+}
+
+fn direct_atan(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan_binary_i64(x) }
+    #[cfg(table_format = "q32_32")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan_binary_i128(x) }
+    #[cfg(table_format = "q64_64")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan_binary_i256(x) }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan_binary_i512(x) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan_binary_i1024(x) }
+}
 
 #[cfg(table_format = "q16_16")]
 const MAX_DECIMAL_DIGITS: usize = crate::fixed_point::frac_config::MAX_DECIMAL_DIGITS;
@@ -305,52 +450,140 @@ impl FixedPoint {
     }
 
     // ========================================================================
-    // Transcendentals — route through FASC at tier N+1
+    // Transcendentals — direct binary engine calls (bypass FASC)
+    //
+    // Pattern: upscale → binary engine at compute tier → downscale.
+    // Saves ~65 ns per call vs the FASC pipeline (no LazyExpr tree, no TLS,
+    // no StackValue boxing, no domain routing). Proven by sincos_wide().
     // ========================================================================
 
+    /// Upscale self.raw to compute tier, call engine, downscale result.
+    #[inline]
+    fn direct_unary<F: FnOnce(ComputeStorage) -> ComputeStorage>(self, f: F) -> Self {
+        let compute = upscale_to_compute(self.raw);
+        let result = f(compute);
+        Self { raw: downscale_to_storage(result).expect("transcendental overflow") }
+    }
+
+    /// Fallible version of direct_unary.
+    #[inline]
+    fn try_direct_unary<F: FnOnce(ComputeStorage) -> ComputeStorage>(self, f: F) -> Result<Self, OverflowDetected> {
+        let compute = upscale_to_compute(self.raw);
+        let result = f(compute);
+        Ok(Self { raw: downscale_to_storage(result)? })
+    }
+
     /// e^x
-    pub fn exp(self) -> Self { self.apply_unary(LazyExpr::exp) }
+    pub fn exp(self) -> Self { self.direct_unary(direct_exp) }
     /// ln(x), x > 0
-    pub fn ln(self) -> Self { self.apply_unary(LazyExpr::ln) }
+    pub fn ln(self) -> Self { self.direct_unary(direct_ln) }
     /// sqrt(x), x >= 0
-    pub fn sqrt(self) -> Self { self.apply_unary(LazyExpr::sqrt) }
+    pub fn sqrt(self) -> Self { self.direct_unary(direct_sqrt) }
     /// sin(x)
-    pub fn sin(self) -> Self { self.apply_unary(LazyExpr::sin) }
+    pub fn sin(self) -> Self { self.direct_unary(direct_sin) }
     /// cos(x)
-    pub fn cos(self) -> Self { self.apply_unary(LazyExpr::cos) }
+    pub fn cos(self) -> Self { self.direct_unary(direct_cos) }
     /// Fused (sin(x), cos(x)) — single range reduction, ~2× faster than separate calls.
     pub fn sincos(self) -> (Self, Self) {
         self.try_sincos().expect("sincos: overflow or domain error")
     }
-    /// tan(x)
-    pub fn tan(self) -> Self { self.apply_unary(LazyExpr::tan) }
+    /// tan(x) = sin(x) / cos(x) — direct composition, no FASC
+    pub fn tan(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let s = direct_sin(c);
+        let c_val = direct_cos(c);
+        let result = compute_divide_direct(s, c_val);
+        Self { raw: downscale_to_storage(result).expect("tan overflow") }
+    }
     /// atan(x)
-    pub fn atan(self) -> Self { self.apply_unary(LazyExpr::atan) }
-    /// asin(x), |x| <= 1
-    pub fn asin(self) -> Self { self.apply_unary(LazyExpr::asin) }
-    /// acos(x), |x| <= 1
-    pub fn acos(self) -> Self { self.apply_unary(LazyExpr::acos) }
-    /// sinh(x)
-    pub fn sinh(self) -> Self { self.apply_unary(LazyExpr::sinh) }
-    /// cosh(x)
-    pub fn cosh(self) -> Self { self.apply_unary(LazyExpr::cosh) }
-    /// tanh(x)
-    pub fn tanh(self) -> Self { self.apply_unary(LazyExpr::tanh) }
-    /// asinh(x)
-    pub fn asinh(self) -> Self { self.apply_unary(LazyExpr::asinh) }
-    /// acosh(x), x >= 1
-    pub fn acosh(self) -> Self { self.apply_unary(LazyExpr::acosh) }
-    /// atanh(x), |x| < 1
-    pub fn atanh(self) -> Self { self.apply_unary(LazyExpr::atanh) }
-
-    /// x^y = exp(y * ln(x))
-    pub fn pow(self, exponent: Self) -> Self {
-        self.try_pow(exponent).expect("pow: overflow or domain error")
+    pub fn atan(self) -> Self { self.direct_unary(direct_atan) }
+    /// asin(x) = atan(x / sqrt(1 - x^2)), |x| <= 1 — direct composition
+    pub fn asin(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let one = compute_one();
+        let x2 = compute_mul_direct(c, c);
+        let denom = direct_sqrt(compute_sub_direct(one, x2));
+        let ratio = compute_divide_direct(c, denom);
+        Self { raw: downscale_to_storage(direct_atan(ratio)).expect("asin overflow") }
+    }
+    /// acos(x) = pi/2 - asin(x), |x| <= 1 — direct composition
+    pub fn acos(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let one = compute_one();
+        let x2 = compute_mul_direct(c, c);
+        let denom = direct_sqrt(compute_sub_direct(one, x2));
+        let ratio = compute_divide_direct(c, denom);
+        let asin_val = direct_atan(ratio);
+        let pi_half = compute_pi_half();
+        Self { raw: downscale_to_storage(compute_sub_direct(pi_half, asin_val)).expect("acos overflow") }
+    }
+    /// sinh(x) = (exp(x) - exp(-x)) / 2 — direct composition
+    pub fn sinh(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let ep = direct_exp(c);
+        let en = direct_exp(compute_neg_direct(c));
+        let result = compute_halve_direct(compute_sub_direct(ep, en));
+        Self { raw: downscale_to_storage(result).expect("sinh overflow") }
+    }
+    /// cosh(x) = (exp(x) + exp(-x)) / 2 — direct composition
+    pub fn cosh(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let ep = direct_exp(c);
+        let en = direct_exp(compute_neg_direct(c));
+        let result = compute_halve_direct(compute_add_direct(ep, en));
+        Self { raw: downscale_to_storage(result).expect("cosh overflow") }
+    }
+    /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1) — direct composition
+    pub fn tanh(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let two_x = compute_add_direct(c, c);
+        let e2x = direct_exp(two_x);
+        let one = compute_one();
+        let num = compute_sub_direct(e2x, one);
+        let den = compute_add_direct(e2x, one);
+        Self { raw: downscale_to_storage(compute_divide_direct(num, den)).expect("tanh overflow") }
+    }
+    /// asinh(x) = ln(x + sqrt(x^2 + 1)) — direct composition
+    pub fn asinh(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let one = compute_one();
+        let x2 = compute_mul_direct(c, c);
+        let inner = direct_sqrt(compute_add_direct(x2, one));
+        Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner))).expect("asinh overflow") }
+    }
+    /// acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1 — direct composition
+    pub fn acosh(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let one = compute_one();
+        let x2 = compute_mul_direct(c, c);
+        let inner = direct_sqrt(compute_sub_direct(x2, one));
+        Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner))).expect("acosh overflow") }
+    }
+    /// atanh(x) = ln((1+x)/(1-x)) / 2, |x| < 1 — direct composition
+    pub fn atanh(self) -> Self {
+        let c = upscale_to_compute(self.raw);
+        let one = compute_one();
+        let num = compute_add_direct(one, c);
+        let den = compute_sub_direct(one, c);
+        let ratio = compute_divide_direct(num, den);
+        Self { raw: downscale_to_storage(compute_halve_direct(direct_ln(ratio))).expect("atanh overflow") }
     }
 
-    /// atan2(self=y, x) — angle of point (x, y)
+    /// x^y = exp(y * ln(x)) — direct composition
+    pub fn pow(self, exponent: Self) -> Self {
+        let xc = upscale_to_compute(self.raw);
+        let yc = upscale_to_compute(exponent.raw);
+        let ln_x = direct_ln(xc);
+        let y_ln_x = compute_mul_direct(yc, ln_x);
+        Self { raw: downscale_to_storage(direct_exp(y_ln_x)).expect("pow overflow") }
+    }
+
+    /// atan2(self=y, x) — direct binary engine
     pub fn atan2(self, x: Self) -> Self {
-        self.try_atan2(x).expect("atan2 failed")
+        let yc = upscale_to_compute(self.raw);
+        let xc = upscale_to_compute(x.raw);
+        let result = direct_atan2(yc, xc);
+        Self { raw: downscale_to_storage(result).expect("atan2 overflow") }
     }
 
     // ========================================================================
@@ -358,15 +591,15 @@ impl FixedPoint {
     // ========================================================================
 
     /// Fallible e^x — returns `Err(TierOverflow)` if result exceeds storage tier.
-    pub fn try_exp(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::exp) }
+    pub fn try_exp(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_exp) }
     /// Fallible ln(x) — returns `Err(DomainError)` if x <= 0.
-    pub fn try_ln(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::ln) }
+    pub fn try_ln(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_ln) }
     /// Fallible sqrt(x) — returns `Err(DomainError)` if x < 0.
-    pub fn try_sqrt(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::sqrt) }
+    pub fn try_sqrt(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_sqrt) }
     /// Fallible sin(x).
-    pub fn try_sin(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::sin) }
+    pub fn try_sin(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_sin) }
     /// Fallible cos(x).
-    pub fn try_cos(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::cos) }
+    pub fn try_cos(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_cos) }
     /// Fused sin+cos — single shared range reduction at compute tier.
     /// Returns (sin(x), cos(x)). More efficient than separate try_sin + try_cos.
     pub fn try_sincos(self) -> Result<(Self, Self), OverflowDetected> {
@@ -490,6 +723,7 @@ impl FixedPoint {
         }
     }
 
+    #[allow(dead_code)]
     fn apply_unary(self, f: fn(LazyExpr) -> LazyExpr) -> Self {
         self.try_apply_unary(f).expect("transcendental: overflow or domain error")
     }
