@@ -113,6 +113,151 @@ const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 38;
 const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 76;
 
 // ============================================================================
+// DECIMAL → BINARY STORAGE HELPER (used by as_binary_storage)
+// ============================================================================
+
+/// Convert a Decimal (dp, scaled) to the profile's BinaryStorage type via
+/// `(scaled << frac_bits) / 10^dp` with round-to-nearest.
+///
+/// Mirrors `StackEvaluator::to_binary_storage` but is callable without `&mut self`.
+pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result<BinaryStorage, OverflowDetected> {
+    #[cfg(not(table_format = "q256_256"))]
+    use formatting::pow10_i256;
+    #[cfg(table_format = "q256_256")]
+    use formatting::pow10_i512;
+
+    #[cfg(table_format = "q256_256")]
+    {
+        let ten_pow = pow10_i512(dp);
+        let scaled_i1024 = I1024::from_i512(scaled) << 256;
+        Ok((scaled_i1024 / I1024::from_i512(ten_pow)).as_i512())
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        let ten_pow = pow10_i256(dp);
+        let num = I512::from_i256(scaled) << 128;
+        let den = I512::from_i256(ten_pow);
+        Ok((num / den).as_i256())
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        let ten_pow = pow10_i256(dp);
+        let num = I256::from_i128(scaled) << 64;
+        Ok((num / ten_pow).as_i128())
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        let ten_pow = pow10_i256(dp);
+        let num = I256::from_i128(scaled as i128) << 32;
+        Ok((num / ten_pow).as_i128() as i64)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        use crate::fixed_point::frac_config;
+        let ten_pow = pow10_i256(dp);
+        let num = I256::from_i128(scaled as i128) << (frac_config::FRAC_BITS as usize);
+        let half = ten_pow >> 1;
+        let rounded = if num >= I256::zero() { num + half } else { num - half };
+        Ok((rounded / ten_pow).as_i128() as i32)
+    }
+}
+
+/// Public wrapper for use from sibling modules (transcendentals.rs).
+pub(crate) fn decimal_compute_to_binary_storage_pub(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    decimal_compute_to_binary_storage(val)
+}
+
+/// Convert a DecimalCompute value directly to profile BinaryStorage via
+/// `val × 2^frac_bits / 10^compute_dp` — no intermediate Decimal materialization.
+///
+/// This is lossless (within rounding) because we do one big-integer division.
+fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    use crate::fixed_point::domains::decimal_fixed::transcendental::DECIMAL_COMPUTE_DP;
+
+    #[cfg(table_format = "q64_64")]
+    {
+        // val is I256 at decimal compute dp=38. Target: Q64.64 i128.
+        // result = val * 2^64 / 10^38 via I512 intermediate
+        let num = I512::from_i256(val) << 64usize;
+        let mut den = I512::from_i128(1);
+        let ten = I512::from_i128(10);
+        for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
+        let quot = num / den;
+        if !quot.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(quot.as_i128())
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        // val is I512 at dp=77. Target: Q128.128 I256.
+        // result = val * 2^128 / 10^77 via I1024 intermediate
+        let num = I1024::from_i512(val) << 128usize;
+        let mut den = I1024::from_i128(1);
+        let ten = I1024::from_i128(10);
+        for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
+        let quot = num / den;
+        if !quot.fits_in_i256() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(quot.as_i256())
+    }
+    #[cfg(table_format = "q256_256")]
+    {
+        // val is I1024 at dp=154. Target: Q256.256 I512.
+        // Use I2048 intermediate.
+        use crate::fixed_point::I2048;
+        use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
+        let num = I2048::from_i1024(val) << 256usize;
+        let mut pow = I1024::from_i128(1);
+        let ten = I1024::from_i128(10);
+        for _ in 0..DECIMAL_COMPUTE_DP { pow = pow * ten; }
+        let den = I2048::from_i1024(pow);
+        let quot = i2048_div(num, den);
+        // Check fit in I512: upper words (8-31) must be sign extension of word[7]
+        let sign = (quot.words[7] as i64) < 0;
+        let expected = if sign { u64::MAX } else { 0 };
+        for i in 8..32 {
+            if quot.words[i] != expected {
+                return Err(OverflowDetected::TierOverflow);
+            }
+        }
+        Ok(I512::from_words([
+            quot.words[0], quot.words[1], quot.words[2], quot.words[3],
+            quot.words[4], quot.words[5], quot.words[6], quot.words[7],
+        ]))
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // val is i128 at dp=19. Target: Q32.32 i64.
+        // result = val * 2^32 / 10^19 via I256 intermediate
+        let num = I256::from_i128(val) << 32usize;
+        let mut den = I256::from_i128(1);
+        let ten = I256::from_i128(10);
+        for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
+        let quot = num / den;
+        let q_i128 = quot.as_i128();
+        if q_i128 > i64::MAX as i128 || q_i128 < i64::MIN as i128 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(q_i128 as i64)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        use crate::fixed_point::frac_config;
+        // val is i64 at dp=9. Target: Q16.16 i32.
+        let num = (val as i128) << (frac_config::FRAC_BITS as usize);
+        let mut den: i128 = 1;
+        for _ in 0..DECIMAL_COMPUTE_DP { den *= 10; }
+        let quot = num / den;
+        if quot > i32::MAX as i128 || quot < i32::MIN as i128 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(quot as i32)
+    }
+}
+
+// ============================================================================
 // STACK VALUE — UNIFIED DOMAIN REPRESENTATION
 // ============================================================================
 
@@ -140,6 +285,18 @@ pub enum StackValue {
     /// **SHADOW**: Exact rational representation for precision preservation
     Decimal(u8, BinaryStorage, CompactShadow),
 
+    /// Decimal compute-tier value for transcendental chain persistence.
+    ///
+    /// **STORAGE**: ComputeStorage at `DECIMAL_COMPUTE_DP` scaling (10^-dp).
+    /// **PURPOSE**: Decimal equivalent of BinaryCompute — keeps intermediate
+    /// transcendental results at compute-tier precision between chained ops.
+    /// Materialized to `Decimal` at non-transcendental boundaries (display, arithmetic
+    /// with non-decimal operands, etc.) with dp chosen to guarantee 0 storage ULP.
+    ///
+    /// **FIELDS**: `(storage_tier, compute_value, shadow)` where `compute_value`
+    /// is scaled by `10^DECIMAL_COMPUTE_DP` (per-profile: 9, 19, 38, 77, 154).
+    DecimalCompute(u8, ComputeStorage, CompactShadow),
+
     /// Balanced ternary value (precision_tier, trit_value, shadow)
     /// **STORAGE**: Profile-specific (i128 | I256 | I512) - matches binary precision
     /// **SHADOW**: Exact rational representation for precision preservation
@@ -160,6 +317,7 @@ impl StackValue {
             StackValue::Binary(..) => Some(DomainType::Binary),
             StackValue::BinaryCompute(..) => Some(DomainType::Binary),
             StackValue::Decimal(..) => Some(DomainType::Decimal),
+            StackValue::DecimalCompute(..) => Some(DomainType::Decimal),
             StackValue::Ternary(..) => Some(DomainType::Ternary),
             StackValue::Symbolic(_) => Some(DomainType::Symbolic),
             StackValue::Error(_) => None,
@@ -177,6 +335,7 @@ impl StackValue {
             StackValue::Binary(_, _, s) => s.clone(),
             StackValue::BinaryCompute(_, _, s) => s.clone(),
             StackValue::Decimal(_, _, s) => s.clone(),
+            StackValue::DecimalCompute(_, _, s) => s.clone(),
             StackValue::Ternary(_, _, s) => s.clone(),
             StackValue::Symbolic(_) => CompactShadow::None, // Symbolic IS exact
             StackValue::Error(_) => CompactShadow::None,
@@ -200,6 +359,21 @@ impl StackValue {
                 // Materialize to storage tier first, then convert
                 let storage_val = downscale_to_storage(*value)?;
                 let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                materialized.to_rational()
+            }
+            StackValue::DecimalCompute(_tier, value, ref shadow) => {
+                // Shadow fast path
+                if let Some((num, den)) = shadow.as_rational() {
+                    return Ok(RationalNumber::new(num, den));
+                }
+                // DecimalCompute holds raw × 10^-COMPUTE_DP. Convert via materialize to decimal.
+                use crate::fixed_point::domains::decimal_fixed::transcendental::{
+                    decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
+                };
+                // Downscale to max storage dp to preserve precision, then use Decimal path
+                let target_dp = DECIMAL_STORAGE_MAX_DP.saturating_sub(2);
+                let storage_val = decimal_downscale_to_storage(*value, target_dp)?;
+                let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
                 materialized.to_rational()
             }
             StackValue::Binary(tier, value, ref shadow) => {
@@ -355,12 +529,23 @@ impl StackValue {
 
     /// Extract the raw binary storage value (profile-specific type).
     ///
-    /// Returns `None` for non-binary values and error states.
-    /// For `BinaryCompute`, materializes (downscales) to storage tier first.
+    /// Returns `None` for non-materializable values and error states.
+    /// - `Binary` → returns as-is
+    /// - `BinaryCompute` → downscales to storage tier
+    /// - `Decimal` → converts to binary Q-format via `(scaled << frac_bits) / 10^dp`
+    /// - `DecimalCompute` → downscales to Decimal first, then converts
     pub fn as_binary_storage(&self) -> Option<BinaryStorage> {
         match self {
             StackValue::Binary(_, val, _) => Some(*val),
             StackValue::BinaryCompute(_, val, _) => downscale_to_storage(*val).ok(),
+            StackValue::Decimal(dp, scaled, _) => {
+                decimal_to_binary_storage(*dp, *scaled).ok()
+            }
+            StackValue::DecimalCompute(_, val, _) => {
+                // Direct conversion: DecimalCompute value × 2^frac_bits / 10^compute_dp
+                // (no intermediate Decimal materialization — preserves full precision)
+                decimal_compute_to_binary_storage(*val).ok()
+            }
             _ => None,
         }
     }
@@ -373,6 +558,7 @@ impl StackValue {
             StackValue::Binary(t, _, _) => *t,
             StackValue::BinaryCompute(t, _, _) => *t,
             StackValue::Decimal(t, _, _) => *t,
+            StackValue::DecimalCompute(t, _, _) => *t,
             StackValue::Ternary(t, _, _) => *t,
             StackValue::Symbolic(_) => 8, // Symbolic = rational tier
             StackValue::Error(_) => 0,
@@ -391,6 +577,20 @@ impl StackValue {
                 match downscale_to_storage(*val) {
                     Ok(storage_val) => {
                         let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                        materialized.to_decimal_string(max_digits)
+                    }
+                    Err(_) => "Overflow".to_string(),
+                }
+            }
+            StackValue::DecimalCompute(_tier, val, shadow) => {
+                // Materialize to Decimal at max storage dp, then format.
+                use crate::fixed_point::domains::decimal_fixed::transcendental::{
+                    decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
+                };
+                let target_dp = DECIMAL_STORAGE_MAX_DP.saturating_sub(2);
+                match decimal_downscale_to_storage(*val, target_dp) {
+                    Ok(storage_val) => {
+                        let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
                         materialized.to_decimal_string(max_digits)
                     }
                     Err(_) => "Overflow".to_string(),
@@ -449,6 +649,19 @@ impl Display for StackValue {
                 match downscale_to_storage(*val) {
                     Ok(storage_val) => {
                         let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                        write!(f, "{}", materialized.to_decimal_string(precision))
+                    }
+                    Err(_) => write!(f, "Overflow"),
+                }
+            }
+            StackValue::DecimalCompute(_tier, val, shadow) => {
+                use crate::fixed_point::domains::decimal_fixed::transcendental::{
+                    decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
+                };
+                let target_dp = DECIMAL_STORAGE_MAX_DP.saturating_sub(2);
+                match decimal_downscale_to_storage(*val, target_dp) {
+                    Ok(storage_val) => {
+                        let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
                         write!(f, "{}", materialized.to_decimal_string(precision))
                     }
                     Err(_) => write!(f, "Overflow"),
@@ -646,6 +859,9 @@ impl StackEvaluator {
                 let storage = downscale_to_storage(val)?;
                 Ok(StackValue::Binary(tier, storage, shadow))
             }
+            // DecimalCompute passes through — it's a valid output format.
+            // Chain persistence ensures DecimalCompute stays hot between
+            // transcendental operations. Display handles formatting.
             other => Ok(other),
         }
     }

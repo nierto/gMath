@@ -18,10 +18,17 @@ use std::arch::x86_64::*;
 
 impl BinaryTier1 {
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {
-        // BinaryTier1 is always Q16.16 (UGOD tier type, fixed format)
+        // q16_16: FRAC_BITS may be customized via GMATH_FRAC_BITS (default 16).
+        // All other profiles: BinaryTier1 is an internal UGOD tier, always Q16.16.
+        let fb: u32 = {
+            #[cfg(table_format = "q16_16")]
+            { crate::fixed_point::frac_config::FRAC_BITS as u32 }
+            #[cfg(not(table_format = "q16_16"))]
+            { 16 }
+        };
         let wide = (self.value as i64) * (other.value as i64);
-        let round_bit = (wide >> 15) & 1;
-        let shifted = (wide >> 16) + round_bit;
+        let round_bit = (wide >> (fb - 1)) & 1;
+        let shifted = (wide >> fb) + round_bit;
         let result = shifted as i32;
         if (result as i64) == shifted {
             Some(Self { value: result })

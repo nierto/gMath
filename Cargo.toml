@@ -1,6 +1,6 @@
 [package]
 name = "g_math"
-version = "0.3.91"
+version = "0.4.0"
 edition = "2021"
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — zero-float, 0 ULP transcendentals"
 authors = ["Niels Erik Toren"]
@@ -30,6 +30,8 @@ num-integer = { version = "0.1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 # Optional: rayon row-parallel TQ1.9 matvec
 rayon = { version = "1.10", optional = true }
+# Optional: gmath!() proc-macro for compile-time literal parsing (published separately)
+# g_math_macros = { path = "g_math_macros", optional = true }
 
 [dev-dependencies]
 criterion = "0.4"
@@ -56,6 +58,7 @@ legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
 serde = ["dep:serde"]    # Serialize/Deserialize impls for FixedPoint, FixedVector, FixedMatrix, Tensor
 inference = ["dep:rayon"] # TQ1.9 ternary inference ops + rayon row-parallel matvec
+# macros = ["dep:g_math_macros"]    # gmath!() — deferred to separate crate publish
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

@@ -95,3 +95,56 @@ pub fn set_gmath_mode(mode_str: &str) -> Result<(), &'static str> {
 pub fn reset_gmath_mode() {
     super::universal::fasc::mode::reset_mode();
 }
+
+// ============================================================================
+// PRE-PARSED CONSTRUCTORS (called by gmath!() proc-macro)
+// ============================================================================
+
+/// Construct a pre-parsed Decimal LazyExpr. Called by `gmath!("0.1")` expansion.
+///
+/// Skips runtime string parsing — dp, scaled value, and shadow are computed
+/// at compile time by the proc-macro. ~60 ns faster than `gmath("0.1")`.
+#[doc(hidden)]
+pub fn __pre_decimal(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -> LazyExpr {
+    use super::universal::fasc::stack_evaluator::conversion::to_binary_storage;
+    let storage = to_binary_storage(scaled);
+    let shadow = CompactShadow::from_rational(shadow_num, shadow_den);
+    LazyExpr::Value(Box::new(StackValue::Decimal(dp, storage, shadow)))
+}
+
+/// Construct a pre-parsed Binary integer LazyExpr. Called by `gmath!("255")` expansion.
+#[doc(hidden)]
+pub fn __pre_integer(value: i128) -> LazyExpr {
+    let shadow = CompactShadow::from_rational(value, 1);
+    // Binary storage: value << frac_bits
+    #[cfg(table_format = "q256_256")]
+    let storage = {
+        use super::binary_fixed::I512;
+        I512::from_i128(value) << 256
+    };
+    #[cfg(table_format = "q128_128")]
+    let storage = {
+        use super::binary_fixed::I256;
+        I256::from_i128(value) << 128
+    };
+    #[cfg(table_format = "q64_64")]
+    let storage = value << 64;
+    #[cfg(table_format = "q32_32")]
+    let storage = (value as i64) << 32;
+    #[cfg(table_format = "q16_16")]
+    let storage = {
+        use super::frac_config;
+        (value as i32) << frac_config::FRAC_BITS
+    };
+
+    // Tier = profile's max binary tier
+    let tier = {
+        #[cfg(table_format = "q16_16")] { 1u8 }
+        #[cfg(table_format = "q32_32")] { 2u8 }
+        #[cfg(table_format = "q64_64")] { 3u8 }
+        #[cfg(table_format = "q128_128")] { 4u8 }
+        #[cfg(table_format = "q256_256")] { 5u8 }
+    };
+
+    LazyExpr::Value(Box::new(StackValue::Binary(tier, storage, shadow)))
+}

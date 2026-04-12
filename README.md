@@ -2,7 +2,23 @@
 
 **Author**: Niels Erik Toren
 
-Multi-domain fixed-point arithmetic for Rust.
+Multi-domain fixed-point arithmetic for Rust. **v0.4.0** — 1375+ tests, 0 ULP, 0 warnings across all 5 profiles.
+
+### What's new in v0.4.0
+
+**Fractal topology router** — cross-domain arithmetic (e.g. `gmath("0.1") + gmath("255")`) now classifies operands via shadow denominator factoring and routes to the optimal shared domain. Eliminates the Symbolic/rational fallback cascade that previously made mixed decimal-integer chains slow.
+
+**Direct binary engine calls** — all 18 `FixedPoint` transcendentals bypass the FASC pipeline entirely. `exp()`, `ln()`, `sqrt()`, `sin()`, `cos()`, `atan()` use a direct upscale-engine-downscale path. Composed functions (`tan`, `sinh`, `asin`, `pow`, etc.) use direct compute-tier arithmetic. ~65 ns saved per call.
+
+**Native decimal transcendentals** — `DecimalFixed<DECIMALS>` now has 18 transcendental methods that call native decimal engines directly. The previous binary round-trip (decimal to binary, compute, convert back) has been eliminated. Zero binary contamination, 0 ULP in the decimal domain.
+
+**Decimal 4-stage exp tables** — decimal `exp()` decomposes the argument into decimal digits with precomputed table lookups, reducing Taylor iterations from ~25 to ~8. 4.1x throughput improvement on decimal exp.
+
+**Tensor decompositions** — `truncated_svd` (top-k singular values for weight compression), `tucker_decompose` (HOSVD for multi-way tensor compression), `cp_decompose` (ALS for canonical polyadic factorization). Built on the existing compute-tier SVD infrastructure.
+
+**gmath!() compile-time macro** — optional `macros` feature. Pre-parses decimal and integer literals at compile time, skipping runtime string parsing.
+
+**FRAC_BITS arithmetic fix** — `BinaryTier1` multiplication and division now correctly use the configured `GMATH_FRAC_BITS` on the realtime profile instead of hardcoding Q16.16.
 
 `g_math` is a pure-Rust arithmetic crate built around a canonical expression pipeline:
 
@@ -161,6 +177,9 @@ cargo build --features rebuild-tables
 | `infinite-precision` | off | Adds BigInt tier 8 to the symbolic rational domain. Pulls in `num-bigint`, `num-traits`, `num-integer` as runtime dependencies. Without this flag, the rational domain caps at tier 7 (I512 numerator/denominator). |
 | `rebuild-tables` | off | Regenerates all lookup tables (exp, ln, trig) from `build.rs` instead of using the checked-in pre-built tables. Takes about 20 minutes. |
 | `legacy-tests` | off | Enables compilation of legacy test suites from earlier development phases. |
+| `serde` | off | Adds `Serialize`/`Deserialize` for `FixedPoint`, `FixedVector`, `FixedMatrix`, `Tensor`. |
+| `inference` | off | TQ1.9 ternary inference ops + rayon row-parallel matvec. |
+| `macros` | off | `gmath!()` proc-macro for compile-time literal pre-parsing (~60 ns savings per literal). |
 | `embedded` | off | Selects embedded profile via Cargo feature instead of environment variable. |
 | `balanced` | off | Selects balanced profile via Cargo feature instead of environment variable. |
 | `scientific` | off | Selects scientific profile via Cargo feature instead of environment variable. |
@@ -253,9 +272,62 @@ The primary public interface lives in `g_math::canonical`:
 | `set_gmath_mode("compute:output")` | Set compute and output domain routing |
 | `reset_gmath_mode()` | Reset to `auto:auto` |
 
-The imperative API (`FixedPoint`, `FixedVector`, `FixedMatrix`) is also available via `g_math::fixed_point` for mutable arithmetic workflows. Transcendentals on `FixedPoint` route through the FASC evaluator internally.
+### Imperative API
 
-If you are new to the crate, start with `g_math::canonical`.
+`FixedPoint`, `FixedVector`, `FixedMatrix` are available via `g_math::fixed_point` for direct binary Q-format arithmetic. These are the fastest path for tight inner loops and matrix operations.
+
+```rust
+use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
+
+let a = FixedPoint::from_str("0.1");
+let b = FixedPoint::from_int(255);
+let c = a + b;              // direct i128 arithmetic, ~15 ns
+let e = a.exp();            // tier N+1 binary engine
+let (s, c) = a.sincos();   // fused sin+cos, single range reduction
+```
+
+**When to use FASC vs Imperative**:
+
+| Scenario | Use | Why |
+| -------- | --- | --- |
+| Mixed decimal/integer arithmetic | **FASC** (`gmath`) | Router keeps values in optimal domain; "0.1" is decimal-exact |
+| Tight inner loops (matvec, softmax) | **Imperative** (`FixedPoint`) | Zero overhead, direct i128 ops, `Copy` semantics |
+| Composed transcendentals (`exp(sin(x))`) | **FASC** | Chain persistence keeps intermediates at compute tier |
+| Financial chains with exact decimals | **FASC** | Decimal domain preserves "0.01" exactly (binary can't) |
+| Matrix decompositions, ODE solvers | **Imperative** | `FixedMatrix` + decompose/ode modules |
+| Single transcendental in a hot loop | **Imperative** | ~65 ns less overhead per call vs FASC |
+
+If you are new to the crate, start with `g_math::canonical`. Switch to imperative when profiling shows the FASC pipeline overhead matters.
+
+### Fractal topology router (v0.4.0)
+
+The FASC evaluator includes a **fractal topology router** that classifies operands by their CompactShadow denominator factoring and dispatches cross-domain arithmetic to the optimal shared domain.
+
+Before the router, `gmath("0.1") + gmath("255")` (Decimal + Binary) fell through to rational arithmetic — slow BigInt operations that destroyed domain identity. Now the router detects that both values are decimal-exact (0.1 is exact in base-10, 255 is an integer exact in all domains) and routes the addition through native decimal arithmetic.
+
+```
+gmath("0.1") + gmath("255")    → Decimal domain (was Symbolic/rational)
+gmath("3") + gmath("6")        → Binary domain (both exact in binary)
+gmath("0.1") + gmath("1/3")    → Symbolic domain (no shared domain)
+```
+
+The routing table is a 5.25 KB const array in `.rodata` — zero runtime init, zero sync, ~3 ns lookup. Classification uses shadow denominator factoring: strip factors of 2 (binary-exact), 2 and 5 (decimal-exact), 3 (ternary-exact). ~15 ns per classification.
+
+### gmath!() compile-time macro (v0.4.0)
+
+With the `macros` feature, `gmath!("0.1")` pre-parses the literal at compile time:
+
+```rust
+use g_math::gmath;                  // the macro (requires --features macros)
+use g_math::canonical::evaluate;
+
+let expr = gmath!("0.1") + gmath!("0.2");
+let result = evaluate(&expr).unwrap();
+```
+
+The macro extracts decimal places, scaled value, and shadow at compile time, emitting a direct `StackValue` construction. Saves ~60 ns per literal by skipping runtime string parsing. The existing `g_math::canonical::gmath()` function is unchanged.
+
+Fractions (`gmath!("1/3")`), named constants (`gmath!("pi")`), and hex literals fall back to the runtime function automatically.
 
 ### Lazy matrix expressions (v0.3.0)
 

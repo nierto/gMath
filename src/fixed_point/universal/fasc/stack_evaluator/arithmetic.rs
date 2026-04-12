@@ -16,6 +16,9 @@ use crate::fixed_point::universal::tier_types::CompactShadow;
 #[allow(unused_imports)]
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
 use crate::deployment_profiles::DeploymentProfile;
+use crate::fixed_point::router::fractal_topology::{
+    classify, route_binary_op, coerce_to_decimal, OpId, DomainChoice,
+};
 
 impl StackEvaluator {
     /// Negate value with overflow handling
@@ -23,6 +26,10 @@ impl StackEvaluator {
         match value {
             StackValue::BinaryCompute(tier, val, ref shadow) => {
                 Ok(StackValue::BinaryCompute(tier, compute_negate(val), shadow_negate(shadow)))
+            }
+            StackValue::DecimalCompute(tier, val, ref shadow) => {
+                use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_compute_neg;
+                Ok(StackValue::DecimalCompute(tier, decimal_compute_neg(val), shadow_negate(shadow)))
             }
             StackValue::Binary(tier, val, ref shadow) => {
                 // Full-precision binary negation with UGOD tier promotion
@@ -54,6 +61,24 @@ impl StackEvaluator {
 
     /// Add values with UGOD overflow handling
     pub(crate) fn add_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+        // Handle DecimalCompute: if both operands are decimal-domain, stay at decimal compute tier
+        use crate::fixed_point::domains::decimal_fixed::transcendental::{
+            decimal_compute_add, decimal_upscale_to_compute,
+        };
+        match (&left, &right) {
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_add(*v1, *v2), shadow_add(s1, s2)));
+            }
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
+                let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_add(*v1, v2), shadow_add(s1, s2)));
+            }
+            (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
+                let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_add(v1, *v2), shadow_add(s1, s2)));
+            }
+            _ => {}
+        }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
@@ -117,14 +142,38 @@ impl StackEvaluator {
                 }
             }
         } else {
-            // Cross-domain: exact symbolic arithmetic via rational representation.
-            // a/b + c/d = (ad+bc)/bd — always exact, no rounding.
-            self.add_via_rational(left, right)
+            // Cross-domain: try router-guided coercion before rational fallback.
+            // The fractal router classifies both operands by shadow denominator factoring
+            // and picks the lowest-rank domain where both are exact. If coercion succeeds,
+            // the recursive call hits the same-domain path — no infinite recursion.
+            if let Some((cl, cr)) = self.try_route_coerce(OpId::Add, &left, &right) {
+                self.add_values(cl, cr)
+            } else {
+                self.add_via_rational(left, right)
+            }
         }
     }
 
     /// Subtract values with UGOD overflow handling
     pub(crate) fn subtract_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+        // DecimalCompute propagation
+        use crate::fixed_point::domains::decimal_fixed::transcendental::{
+            decimal_compute_sub, decimal_upscale_to_compute,
+        };
+        match (&left, &right) {
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_sub(*v1, *v2), shadow_subtract(s1, s2)));
+            }
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
+                let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_sub(*v1, v2), shadow_subtract(s1, s2)));
+            }
+            (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
+                let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_sub(v1, *v2), shadow_subtract(s1, s2)));
+            }
+            _ => {}
+        }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
@@ -190,14 +239,35 @@ impl StackEvaluator {
                 }
             }
         } else {
-            // Cross-domain: exact symbolic arithmetic via rational representation.
-            // a/b - c/d = (ad-bc)/bd — always exact, no rounding.
-            self.subtract_via_rational(left, right)
+            // Cross-domain: try router-guided coercion before rational fallback
+            if let Some((cl, cr)) = self.try_route_coerce(OpId::Sub, &left, &right) {
+                self.subtract_values(cl, cr)
+            } else {
+                self.subtract_via_rational(left, right)
+            }
         }
     }
 
     /// Multiply values with UGOD overflow handling
     pub(crate) fn multiply_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+        // DecimalCompute propagation
+        use crate::fixed_point::domains::decimal_fixed::transcendental::{
+            decimal_compute_mul, decimal_upscale_to_compute,
+        };
+        match (&left, &right) {
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_mul(*v1, *v2), shadow_multiply(s1, s2)));
+            }
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
+                let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_mul(*v1, v2), shadow_multiply(s1, s2)));
+            }
+            (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
+                let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_mul(v1, *v2), shadow_multiply(s1, s2)));
+            }
+            _ => {}
+        }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
@@ -268,14 +338,35 @@ impl StackEvaluator {
                 }
             }
         } else {
-            // Cross-domain: exact symbolic arithmetic via rational representation.
-            // (a/b) × (c/d) = (ac)/(bd) — always exact, no rounding.
-            self.multiply_via_rational(left, right)
+            // Cross-domain: try router-guided coercion before rational fallback
+            if let Some((cl, cr)) = self.try_route_coerce(OpId::Mul, &left, &right) {
+                self.multiply_values(cl, cr)
+            } else {
+                self.multiply_via_rational(left, right)
+            }
         }
     }
 
     /// Divide values with UGOD overflow handling
     pub(crate) fn divide_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+        // DecimalCompute propagation
+        use crate::fixed_point::domains::decimal_fixed::transcendental::{
+            decimal_compute_div, decimal_upscale_to_compute,
+        };
+        match (&left, &right) {
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_div(*v1, *v2)?, shadow_divide(s1, s2)));
+            }
+            (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
+                let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_div(*v1, v2)?, shadow_divide(s1, s2)));
+            }
+            (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
+                let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
+                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_div(v1, *v2)?, shadow_divide(s1, s2)));
+            }
+            _ => {}
+        }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
@@ -338,9 +429,12 @@ impl StackEvaluator {
                 Ok(StackValue::Ternary(tier, storage, shadow_divide(s1, s2)))
             }
             _ => {
-                // Cross-domain: exact symbolic arithmetic via rational representation.
-                // (a/b) ÷ (c/d) = (a/b) × (d/c) — always exact, no rounding.
-                self.divide_via_rational(left, right)
+                // Cross-domain: try router-guided coercion before rational fallback
+                if let Some((cl, cr)) = self.try_route_coerce(OpId::Div, &left, &right) {
+                    self.divide_values(cl, cr)
+                } else {
+                    self.divide_via_rational(left, right)
+                }
             }
         }
     }
@@ -392,6 +486,61 @@ impl StackEvaluator {
                 Ok(StackValue::BinaryCompute(tier, compute_divide(l_compute, r_compute)?, CompactShadow::None))
             }
             Err(e) => Err(e),
+        }
+    }
+
+    // ============================================================================
+    // ROUTER-GUIDED CROSS-DOMAIN COERCION
+    // ============================================================================
+
+    /// Try router-guided coercion for a cross-domain binary operation.
+    ///
+    /// Returns `Some((coerced_left, coerced_right))` if both operands can be
+    /// coerced to a common domain. Returns `None` if coercion is impossible
+    /// (should fall back to rational arithmetic).
+    ///
+    /// **Performance**: ~35 ns (classify × 2 + table lookup + shadow coercion).
+    fn try_route_coerce(
+        &self,
+        op: OpId,
+        left: &StackValue,
+        right: &StackValue,
+    ) -> Option<(StackValue, StackValue)> {
+        let lc = classify(left);
+        let rc = classify(right);
+        match route_binary_op(op, lc, rc) {
+            DomainChoice::Decimal => {
+                let dl = coerce_to_decimal(left)?;
+                let dr = coerce_to_decimal(right)?;
+                Some((dl, dr))
+            }
+            DomainChoice::Binary => {
+                let bl = self.coerce_to_binary_sv(left).ok()?;
+                let br = self.coerce_to_binary_sv(right).ok()?;
+                Some((bl, br))
+            }
+            DomainChoice::Symbolic => None,
+        }
+    }
+
+    /// Coerce a StackValue to Binary domain.
+    ///
+    /// - Binary/BinaryCompute: pass through
+    /// - Decimal: use decimal_to_binary_storage (Q-format conversion)
+    /// - Other: use to_binary_storage (general conversion via shadow/rational)
+    fn coerce_to_binary_sv(&self, value: &StackValue) -> Result<StackValue, OverflowDetected> {
+        match value {
+            StackValue::Binary(..) | StackValue::BinaryCompute(..) => Ok(value.clone()),
+            StackValue::Decimal(dp, scaled, shadow) => {
+                let binary_storage = super::decimal_to_binary_storage(*dp, *scaled)?;
+                let tier = self.profile_max_binary_tier();
+                Ok(StackValue::Binary(tier, binary_storage, *shadow))
+            }
+            _ => {
+                let storage = self.to_binary_storage(value)?;
+                let tier = self.profile_max_binary_tier();
+                Ok(StackValue::Binary(tier, storage, value.shadow()))
+            }
         }
     }
 
