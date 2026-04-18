@@ -57,8 +57,8 @@ cargo build
 # Run tests
 cargo test --release
 
-# Run the comprehensive validation suite
-cargo test --release --test comprehensive_benchmark -- --nocapture --test-threads=1
+# Run the validation suite
+cargo test --release --test validation_benchmark -- --nocapture --test-threads=1
 ```
 
 **Switching profiles**: clear the incremental build cache first to avoid stale artifacts:

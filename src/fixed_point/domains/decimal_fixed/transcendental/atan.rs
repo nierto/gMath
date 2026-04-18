@@ -208,7 +208,7 @@ pub fn decimal_atan2(y: ComputeStorage, x: ComputeStorage) -> Result<ComputeStor
 #[cfg(all(test, table_format = "q64_64"))]
 mod tests {
     use super::*;
-    use super::super::decimal_compute::{decimal_compute_from_int, pow10_compute_ct};
+    use super::super::decimal_compute::pow10_compute_ct;
     use crate::fixed_point::i256::I256;
 
     fn parse_decimal_str(s: &str) -> I256 {
