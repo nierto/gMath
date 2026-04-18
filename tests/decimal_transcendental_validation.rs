@@ -1,4 +1,4 @@
-//! Decimal Transcendental ULP Validation — mpmath-verified comprehensive test suite.
+//! Decimal Transcendental ULP Validation — mpmath-verified test suite.
 //!
 //! Tests all decimal transcendental engines against mpmath-generated reference values
 //! across ~3200 points per profile, covering:

@@ -434,10 +434,10 @@ The published crate includes test suites for:
 * mode routing validation (12 modes x 24 test cases)
 * transcendental ULP validation
 
-Run the comprehensive suite:
+Run the full suite:
 
 ```bash
-cargo test --release --test comprehensive_benchmark -- --nocapture --test-threads=1
+cargo test --release --test validation_benchmark -- --nocapture --test-threads=1
 ```
 
 This README intentionally avoids broad numerical slogans. Stronger correctness claims belong in a dedicated validation document with exact definitions, scope, corpus size, and methodology.
@@ -837,7 +837,7 @@ Instead of focusing on front-end apps, I prefer to rebuild from first principles
 
 So yes, some of this project carries personal style, philosophy, and a slightly stubborn tone. That is intentional.
 
-If this crate is useful to you, then use it, stress it, break it, and tell me where it fails. It could contain flaws but I have not found them myself. I validated all operations against mpmath — run the comprehensive test to see for yourself.
+If this crate is useful to you, then use it, stress it, break it, and tell me where it fails. It could contain flaws but I have not found them myself. I validated all operations against mpmath — run the full test suite to see for yourself.
 
 If you want to support the work:
 

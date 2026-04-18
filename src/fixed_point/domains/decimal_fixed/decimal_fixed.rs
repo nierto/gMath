@@ -350,7 +350,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     
     /// Pure decimal addition using optimized scaled integer arithmetic
     /// 
-    /// ALGORITHM: Direct scaled integer addition with comprehensive overflow handling
+    /// ALGORITHM: checked scaled-integer addition; saturating on overflow
     /// PRECISION: Exact for all representable results
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
@@ -374,7 +374,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     
     /// Pure decimal subtraction using optimized scaled integer arithmetic
     /// 
-    /// ALGORITHM: Direct scaled integer subtraction with comprehensive overflow handling
+    /// ALGORITHM: checked scaled-integer subtraction; saturating on overflow
     /// PRECISION: Exact for all representable results
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
@@ -1592,7 +1592,7 @@ mod tests {
     
     #[test]
     fn test_optimized_vs_original_equivalence() {
-        // Comprehensive equivalence testing between optimized and original implementations
+        // Equivalence testing between optimized and original implementations
         let test_cases = [
             ("19.99", "5.00"),
             ("0.1", "10.0"),

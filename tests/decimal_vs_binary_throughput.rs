@@ -17,7 +17,7 @@
 
 #![cfg(table_format = "q64_64")]
 
-use g_math::fixed_point::canonical::{gmath, evaluate, LazyExpr};
+use g_math::fixed_point::canonical::{gmath, evaluate};
 use std::time::Instant;
 
 /// A set of representative inputs for throughput measurement.
@@ -29,29 +29,12 @@ const INPUTS: &[&str] = &[
     "0.7", "0.6", "0.4", "0.3", "0.2", "0.05", "0.15", "0.35", "0.45",
 ];
 
-fn bench<F: Fn() -> LazyExpr>(name: &str, iters: usize, f: F) -> (f64, f64) {
-    // Warmup
-    for _ in 0..10 {
-        let _ = evaluate(&f());
-    }
-    let start = Instant::now();
-    for _ in 0..iters {
-        let _ = evaluate(&f());
-    }
-    let elapsed = start.elapsed();
-    let per_op_ns = elapsed.as_nanos() as f64 / iters as f64;
-    let ops_per_sec = 1e9 / per_op_ns;
-    eprintln!("  {:10} : {:>8.0} ns/op  {:>7.1} K ops/s", name, per_op_ns, ops_per_sec / 1000.0);
-    (per_op_ns, ops_per_sec)
-}
-
 macro_rules! cmp_row {
     ($func_name:expr, $iters:expr, $method:ident) => {{
         eprintln!("\n== {} ==", $func_name);
         // Binary path: use gmath_parse to force binary domain (or use integer literal)
         // Simpler: wrap inputs with "2^k" style that always parses as binary?
         // For now, just use same inputs — decimal inputs will route to decimal dispatch.
-        let mut dec_total_ns = 0.0;
         let mut dec_iters = 0;
         let dec_start = Instant::now();
         for _ in 0..$iters {
@@ -61,7 +44,7 @@ macro_rules! cmp_row {
             }
         }
         let dec_elapsed = dec_start.elapsed();
-        dec_total_ns = dec_elapsed.as_nanos() as f64;
+        let dec_total_ns = dec_elapsed.as_nanos() as f64;
         let dec_ns_per_op = dec_total_ns / dec_iters as f64;
         let dec_ops = 1e9 / dec_ns_per_op;
         eprintln!("  DECIMAL (via gmath): {:>8.0} ns/op  {:>7.1} K ops/s  ({} total)",

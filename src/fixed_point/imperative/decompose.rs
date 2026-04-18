@@ -502,7 +502,7 @@ pub struct EigenDecomposition {
 /// **Why Jacobi for fixed-point:** The method is inherently self-correcting.
 /// Each Givens rotation introduces ~1 ULP of rounding error, but subsequent
 /// rotations targeting the same off-diagonal element correct it. This makes
-/// Jacobi far more robust than QR iteration for fixed-point arithmetic.
+/// Jacobi is numerically more stable than QR iteration for fixed-point arithmetic.
 ///
 /// **Algorithm:**
 /// 1. Cyclic-by-row sweeps: for each (i,j) with i<j, apply a Givens rotation

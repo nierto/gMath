@@ -135,7 +135,7 @@ fn test_adversarial_near_singular_solve() {
     let b = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
     let lu = lu_decompose(&a).unwrap();
     let x = lu.solve(&b).unwrap();
-    // Verify via round-trip (more robust than comparing x to mpmath for ill-conditioned)
+    // Verify via round-trip (more stable than comparing x to mpmath for ill-conditioned systems)
     verify_solve(&a, &x, &b, fp("0.00001"), "near-singular roundtrip");
 }
 
