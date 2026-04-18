@@ -1,18 +1,18 @@
-//! Comprehensive Benchmark Suite — Unified mpmath-validated accuracy + throughput
+//! Validation Benchmark Suite — mpmath-validated accuracy + throughput.
 //!
-//! **PURPOSE**: Pre-launch "one ring" validation combining:
-//! - 50K+ mpmath reference points across all 4 domains × 4 arithmetic operations
+//! Combines:
+//! - 50K+ mpmath reference points across 4 domains × 4 arithmetic operations
 //! - 18 transcendental functions × 1000+ reference points with ULP validation
 //! - Ternary UGOD-tier validation with hardcoded test cases
 //! - Iteration-based throughput benchmarking with percentile statistics
 //!
-//! **ARCHITECTURE**: Reuses patterns from existing test suites (UlpStats, ValidationResult,
+//! Reuses patterns from existing test suites (UlpStats, ValidationResult,
 //! gmath_safe, rational_exact_equal, build_arith_expr) without modifying them.
 //!
 //! Run per profile:
-//!   GMATH_PROFILE=embedded   cargo test --test comprehensive_benchmark -- --nocapture --test-threads=1
-//!   GMATH_PROFILE=balanced   cargo test --test comprehensive_benchmark -- --nocapture --test-threads=1
-//!   GMATH_PROFILE=scientific cargo test --test comprehensive_benchmark -- --nocapture --test-threads=1
+//!   GMATH_PROFILE=embedded   cargo test --test validation_benchmark -- --nocapture --test-threads=1
+//!   GMATH_PROFILE=balanced   cargo test --test validation_benchmark -- --nocapture --test-threads=1
+//!   GMATH_PROFILE=scientific cargo test --test validation_benchmark -- --nocapture --test-threads=1
 
 use g_math::fixed_point::canonical::{gmath, evaluate, LazyExpr, set_gmath_mode, reset_gmath_mode};
 use g_math::fixed_point::domains::binary_fixed::i256::I256;
@@ -1457,11 +1457,11 @@ fn validate_mode_routing() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// TEST 5: Comprehensive summary
+// TEST 5: Validation summary
 // ════════════════════════════════════════════════════════════════════
 
 #[test]
-fn comprehensive_summary() {
+fn validation_summary() {
     let decimal_total =
         TOPO_DECIMAL_ADD_REFS.len() + TOPO_DECIMAL_SUB_REFS.len() +
         TOPO_DECIMAL_MUL_REFS.len() + TOPO_DECIMAL_DIV_REFS.len();
@@ -1476,7 +1476,7 @@ fn comprehensive_summary() {
 
     eprintln!();
     eprintln!("╔═══════════════════════════════════════════════════════════════════════════╗");
-    eprintln!("║  COMPREHENSIVE SUMMARY — {}                               ║", ACTIVE_PROFILE);
+    eprintln!("║  VALIDATION SUMMARY — {}                                  ║", ACTIVE_PROFILE);
     eprintln!("╠═══════════════════════════════════════════════════════════════════════════╣");
     eprintln!("║  Decimal:      {:>6} mpmath-verified reference points                   ║", decimal_total);
     eprintln!("║  Symbolic:     {:>6} mpmath-verified reference points                   ║", symbolic_total);
