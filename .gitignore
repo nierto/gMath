@@ -21,5 +21,6 @@ __pycache__/
 .idea/
 ECOSYSTEM_INTEGRATION_NOTES.md
 CLIENT_INTEGRATION_MISSION_BRIEF.md
+GMATH_TODO_SUGGESTIONS_*.md
 g_math_macros/
 tests/gmath_macro_test.rs
