@@ -816,6 +816,20 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: (e_pos.value + e_neg.value) / 2 }
     }
 
+    /// `sinhcosh(x)` — fused hyperbolic pair sharing one exp-pair evaluation at
+    /// decimal compute tier.
+    ///
+    /// Mirrors `FixedPoint::sinhcosh` in the binary domain. sinh and cosh are
+    /// derived from the same `(exp(x), exp(-x))` pair at compute tier, so their
+    /// rounding bias is correlated — important for expressions of the form
+    /// `cosh(θ)·p + (sinh(θ)/θ)·v`.
+    pub fn sinhcosh(&self) -> (Self, Self) {
+        use super::transcendental::decimal_sinhcosh;
+        let compute = self.to_decimal_compute();
+        let (s, c) = decimal_sinhcosh(compute).expect("decimal sinhcosh overflow");
+        (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
+    }
+
     /// `tanh(x)` — (exp(2x) - 1) / (exp(2x) + 1).
     pub fn tanh(&self) -> Self {
         let two_x = Self { value: self.value * 2 };

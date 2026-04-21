@@ -36,6 +36,7 @@ pub(crate) use conversion::to_binary_storage;
 #[allow(unused_imports)]
 pub(crate) use compute::{
     downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier, exp_at_compute_tier,
+    sinhcosh_at_compute_tier,
     compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
     compute_halve, compute_is_zero, compute_is_negative,
 };
@@ -933,6 +934,34 @@ pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), Over
         let sin_out = evaluator.apply_output_mode(sin_mat)?;
         let cos_out = evaluator.apply_output_mode(cos_mat)?;
         Ok((sin_out, cos_out))
+    })
+}
+
+/// Evaluate sinh and cosh of the same expression with a single shared exp-pair.
+///
+/// More efficient than evaluating sinh(x) and cosh(x) separately — shares one
+/// `exp(x)` + `exp(-x)` evaluation at compute tier. sinh and cosh come from the
+/// same `(ep, en)` pair, so their rounding errors are correlated and cancel
+/// in downstream expressions like `cosh(θ)·p + (sinh(θ)/θ)·v`.
+///
+/// Routes to native decimal engine for decimal inputs, binary otherwise.
+///
+/// **USAGE**:
+/// ```rust
+/// use g_math::canonical::{gmath, evaluate_sinhcosh};
+/// let (sinh_val, cosh_val) = evaluate_sinhcosh(&gmath("0.5")).unwrap();
+/// ```
+pub fn evaluate_sinhcosh(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
+    EVALUATOR.with(|eval| {
+        let mut evaluator = eval.borrow_mut();
+        evaluator.reset();
+        let inner_val = evaluator.evaluate(expr)?;
+        let (sinh_compute, cosh_compute) = evaluator.evaluate_sinhcosh(inner_val)?;
+        let sinh_mat = evaluator.materialize_compute(sinh_compute)?;
+        let cosh_mat = evaluator.materialize_compute(cosh_compute)?;
+        let sinh_out = evaluator.apply_output_mode(sinh_mat)?;
+        let cosh_out = evaluator.apply_output_mode(cosh_mat)?;
+        Ok((sinh_out, cosh_out))
     })
 }
 

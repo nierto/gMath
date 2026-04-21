@@ -533,6 +533,15 @@ impl FixedPoint {
         let result = compute_halve_direct(compute_add_direct(ep, en));
         Self { raw: downscale_to_storage(result).expect("cosh overflow") }
     }
+    /// Fused (sinh(x), cosh(x)) — single shared exp-pair evaluation at compute tier.
+    ///
+    /// ~2× faster than separate `sinh` + `cosh` (2 exp calls instead of 4).
+    /// More importantly, sinh and cosh share the same `(exp(x), exp(-x))` pair,
+    /// so their rounding bias is **correlated** — downstream expressions like
+    /// `cosh(θ)·p + (sinh(θ)/θ)·v` see errors that cancel rather than accumulate.
+    pub fn sinhcosh(self) -> (Self, Self) {
+        self.try_sinhcosh().expect("sinhcosh: overflow or domain error")
+    }
     /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1) — direct composition
     pub fn tanh(self) -> Self {
         let c = upscale_to_compute(self.raw);
@@ -607,6 +616,20 @@ impl FixedPoint {
         let compute_val = upscale_to_compute(self.raw());
         let (sin_c, cos_c) = sincos_at_compute_tier(compute_val);
         Ok((Self::from_raw(round_to_storage(sin_c)), Self::from_raw(round_to_storage(cos_c))))
+    }
+
+    /// Fallible fused sinh+cosh — single shared exp-pair at compute tier.
+    ///
+    /// Returns `Err(TierOverflow)` if either sinh(x) or cosh(x) exceeds the
+    /// storage tier (cosh grows fastest — overflows first for large |x|).
+    pub fn try_sinhcosh(self) -> Result<(Self, Self), OverflowDetected> {
+        use crate::fixed_point::universal::fasc::stack_evaluator::sinhcosh_at_compute_tier;
+        let compute_val = upscale_to_compute(self.raw);
+        let (sinh_c, cosh_c) = sinhcosh_at_compute_tier(compute_val);
+        Ok((
+            Self { raw: downscale_to_storage(sinh_c)? },
+            Self { raw: downscale_to_storage(cosh_c)? },
+        ))
     }
 
     /// Fused sin+cos for wide-range angles that exceed storage-tier integer range.

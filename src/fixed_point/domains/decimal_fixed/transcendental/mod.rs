@@ -61,7 +61,7 @@ pub use decimal_compute::{
     decimal_compute_to_i128,
 };
 
-pub use exp::decimal_exp;
+pub use exp::{decimal_exp, decimal_sinhcosh};
 pub use ln::decimal_ln;
 pub use sqrt::decimal_sqrt;
 pub use sin_cos::{decimal_sin, decimal_cos, decimal_sincos, pi_at_decimal_compute};
