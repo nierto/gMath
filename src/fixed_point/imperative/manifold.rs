@@ -246,8 +246,9 @@ impl Manifold for HyperbolicSpace {
             return Ok(base.clone());
         }
         // exp_p(v) = cosh(θ)*p + sinh(θ)*(v/θ)
-        let cosh_t = theta.try_cosh()?;
-        let sinh_t = theta.try_sinh()?;
+        // Fused sinhcosh: shared exp-pair at compute tier correlates the two
+        // roundings so their bias cancels in `cosh(θ)·p + (sinh(θ)/θ)·v`.
+        let (sinh_t, cosh_t) = theta.try_sinhcosh()?;
         let direction = tangent * (FixedPoint::one() / theta);
         Ok(base * cosh_t + direction * sinh_t)
     }
@@ -289,8 +290,8 @@ impl Manifold for HyperbolicSpace {
         // Coefficient: <v, u>_M
         let vu = Self::minkowski_dot(tangent, &u);
         // PT(v) = v + vu * (sinh(θ)*p + (cosh(θ)-1)*u)
-        let sinh_t = theta.try_sinh()?;
-        let cosh_t = theta.try_cosh()?;
+        // Fused sinhcosh: shared exp-pair, correlated rounding.
+        let (sinh_t, cosh_t) = theta.try_sinhcosh()?;
         let correction = &(base * sinh_t) + &(&u * (cosh_t - FixedPoint::one()));
         Ok(tangent + &(&correction * vu))
     }
