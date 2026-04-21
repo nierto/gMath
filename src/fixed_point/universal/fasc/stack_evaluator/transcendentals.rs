@@ -617,6 +617,30 @@ impl StackEvaluator {
         ))
     }
 
+    /// Fused sinh+cosh at compute tier — single shared exp-pair evaluation.
+    /// Returns (sinh_val, cosh_val) both as BinaryCompute or DecimalCompute.
+    ///
+    /// Routes to `decimal_sinhcosh` for decimal-domain inputs, binary
+    /// `sinhcosh_at_compute_tier` otherwise. sinh and cosh come from the
+    /// same `(exp(x), exp(-x))` pair, preserving their error correlation.
+    pub(crate) fn evaluate_sinhcosh(&mut self, value: StackValue) -> Result<(StackValue, StackValue), OverflowDetected> {
+        let storage_tier = self.profile_max_binary_tier();
+        if let Some(dec_compute) = self.try_decimal_compute(&value) {
+            use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_sinhcosh;
+            let (sinh_result, cosh_result) = decimal_sinhcosh(dec_compute)?;
+            return Ok((
+                StackValue::DecimalCompute(storage_tier, sinh_result, CompactShadow::None),
+                StackValue::DecimalCompute(storage_tier, cosh_result, CompactShadow::None),
+            ));
+        }
+        let compute_val = self.to_compute_storage(&value)?;
+        let (sinh_result, cosh_result) = sinhcosh_at_compute_tier(compute_val);
+        Ok((
+            StackValue::BinaryCompute(storage_tier, sinh_result, CompactShadow::None),
+            StackValue::BinaryCompute(storage_tier, cosh_result, CompactShadow::None),
+        ))
+    }
+
     /// tan(x) = sin(x) / cos(x) — uses fused sincos for single range reduction
     pub(crate) fn evaluate_tan(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let (sin_val, cos_val) = self.evaluate_sincos(value)?;

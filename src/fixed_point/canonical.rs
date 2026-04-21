@@ -76,6 +76,7 @@ pub use super::universal::fasc::{
     evaluate,
     evaluate_matrix,
     evaluate_sincos,
+    evaluate_sinhcosh,
     GmathMode,
     ComputeMode,
     OutputMode,

@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.4.0**
+Current version: **0.4.1**
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise — this is a working list for a solo-maintained project.
 
@@ -82,6 +82,28 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 - `pow(x, y) = direct_exp(direct_ln(x) * y)` — zero FASC overhead
 
 **Test count: 1375+ across all 5 profiles, 0 failures, 0 warnings.**
+
+### v0.4.1 — Fused `sinhcosh` hyperbolic pair
+
+Filed by the Geo dev team (`GMATH_TODO_SUGGESTIONS_GEO-DEVTEAM.md`, P2): Geo's `exp_map` at Q22.10 realtime showed ~9 ULP closure drift at θ ≈ 2, driven by independently-rounded `sinh(θ)` and `cosh(θ)` values failing to cancel in `r = cosh(θ)·p + (sinh(θ)/θ)·v`. Fix: expose a fused pair sharing one `(exp(x), exp(-x))` evaluation.
+
+**Delivered:**
+
+- `FixedPoint::sinhcosh` / `try_sinhcosh` — imperative binary, mirrors `sincos` / `try_sincos` shape
+- `DecimalFixed::sinhcosh` — imperative decimal, native compute-tier path (no binary round-trip)
+- `decimal_sinhcosh(ComputeStorage)` kernel in `decimal_fixed::transcendental::exp`
+- `sinhcosh_at_compute_tier(ComputeStorage)` in `stack_evaluator::compute`
+- `StackEvaluator::evaluate_sinhcosh` — internal, decimal/binary dispatch
+- `canonical::evaluate_sinhcosh(&LazyExpr)` — FASC public surface, parity with `evaluate_sincos`
+
+**Benefits:**
+
+- ~2× throughput: 2 `exp` evaluations instead of 4 (separate `sinh` + `cosh` each call `exp` twice)
+- **Correlated rounding**: sinh and cosh derive from the same `(ep, en)` compute-tier pair, so systematic bias cancels in expressions like `cosh(θ)·p + (sinh(θ)/θ)·v`. Per-function ULP is unchanged (still 1 ULP at final downscale), but the *joint* error is tighter.
+
+**Validation:** mpmath-backed tests in `tests/sinhcosh_validation.rs` on realtime (Q16.16) + compact (Q32.32) profiles. Binary identity `cosh²−sinh² = 1` holds to ≤8 ULP at Q16.16 storage, ≤64 ULP at Q32.32 (both dominated by cosh² amplification of input-representation ULP).
+
+**Deferred for future:** Dedicated mpmath-backed `sinhcosh` validation passes on embedded (Q64.64), balanced (Q128.128), and scientific (Q256.256) profiles. The underlying compute-tier kernels are profile-agnostic and already exercised by the existing per-profile `sinh` + `cosh` validation suites; the fused pair's correctness inherits from those. Run dedicated passes if consumer demand emerges (e.g., Geo escalates from P2 to P1 after gate G0.B stress-testing).
 
 ---
 

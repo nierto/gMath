@@ -779,6 +779,25 @@ pub(super) fn cos_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     }
 }
 
+/// Fused sinh+cosh at compute tier (tier N+1) — shares one exp-pair evaluation.
+///
+/// Evaluates `exp(x)` and `exp(-x)` once at compute tier, then derives
+/// `sinh(x) = (exp(x) - exp(-x)) / 2` and `cosh(x) = (exp(x) + exp(-x)) / 2`.
+///
+/// Benefits over separate calls:
+///   • 2 exp evaluations instead of 4 (`sinh` + `cosh` each call exp twice today).
+///   • sinh and cosh are derived from the **same** `(ep, en)` pair, so their
+///     rounding bias is correlated — critical for expressions like
+///     `cosh(θ)·p + (sinh(θ)/θ)·v` where the two errors ought to cancel.
+#[inline]
+pub(crate) fn sinhcosh_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, ComputeStorage) {
+    let ep = exp_at_compute_tier(x);
+    let en = exp_at_compute_tier(compute_negate(x));
+    let sinh_c = compute_halve(compute_subtract(ep, en));
+    let cosh_c = compute_halve(compute_add(ep, en));
+    (sinh_c, cosh_c)
+}
+
 /// Fused sin+cos at compute tier (tier N+1) — single shared range reduction.
 /// Returns (sin(x), cos(x)) saving one range reduction vs separate calls.
 #[inline]

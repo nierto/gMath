@@ -461,6 +461,25 @@ pub fn decimal_exp_neg(x: ComputeStorage) -> Result<ComputeStorage, OverflowDete
     decimal_exp(decimal_compute_neg(x))
 }
 
+/// Fused `(sinh(x), cosh(x))` at decimal compute tier — shares one exp-pair evaluation.
+///
+/// Computes `exp(x)` and `exp(-x)` once, then derives
+/// `sinh(x) = (exp(x) - exp(-x)) / 2` and `cosh(x) = (exp(x) + exp(-x)) / 2`.
+///
+/// sinh and cosh are derived from the **same** `(ep, en)` pair at compute tier,
+/// so their rounding bias is correlated — critical for expressions like
+/// `cosh(θ)·p + (sinh(θ)/θ)·v` where the two errors cancel.
+pub fn decimal_sinhcosh(x: ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
+    if decimal_compute_is_zero(&x) {
+        return Ok((decimal_compute_zero(), decimal_compute_one()));
+    }
+    let ep = decimal_exp(x)?;
+    let en = decimal_exp(decimal_compute_neg(x))?;
+    let sinh_c = decimal_compute_halve(decimal_compute_sub(ep, en));
+    let cosh_c = decimal_compute_halve(decimal_compute_add(ep, en));
+    Ok((sinh_c, cosh_c))
+}
+
 #[cfg(all(test, table_format = "q64_64"))]
 mod tests {
     use super::*;

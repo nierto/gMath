@@ -15,4 +15,4 @@ pub use lazy_expr::{LazyExpr, gmath, ConstantId};
 pub use lazy_matrix_expr::{LazyMatrixExpr, evaluate_matrix};
 pub use domain_matrix::DomainMatrix;
 pub use mode::{GmathMode, ComputeMode, OutputMode, set_mode, get_mode, reset_mode};
-pub use stack_evaluator::{StackEvaluator, StackValue, evaluate, evaluate_sincos, gmath_parse};
+pub use stack_evaluator::{StackEvaluator, StackValue, evaluate, evaluate_sincos, evaluate_sinhcosh, gmath_parse};
