@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.4.1**
+Current version: **0.4.2**
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise — this is a working list for a solo-maintained project.
 
@@ -104,6 +104,19 @@ Filed by the Geo dev team (`GMATH_TODO_SUGGESTIONS_GEO-DEVTEAM.md`, P2): Geo's `
 **Validation:** mpmath-backed tests in `tests/sinhcosh_validation.rs` on realtime (Q16.16) + compact (Q32.32) profiles. Binary identity `cosh²−sinh² = 1` holds to ≤8 ULP at Q16.16 storage, ≤64 ULP at Q32.32 (both dominated by cosh² amplification of input-representation ULP).
 
 **Deferred for future:** Dedicated mpmath-backed `sinhcosh` validation passes on embedded (Q64.64), balanced (Q128.128), and scientific (Q256.256) profiles. The underlying compute-tier kernels are profile-agnostic and already exercised by the existing per-profile `sinh` + `cosh` validation suites; the fused pair's correctness inherits from those. Run dedicated passes if consumer demand emerges (e.g., Geo escalates from P2 to P1 after gate G0.B stress-testing).
+
+### v0.4.2 — Internal adoption of `try_sinhcosh` in `HyperbolicSpace`
+
+gMath now consumes its own fused primitive internally. `HyperbolicSpace::exp_map` and `HyperbolicSpace::parallel_transport` (in `src/fixed_point/imperative/manifold.rs`) previously called `try_cosh` and `try_sinh` as two independent transcendentals on the same `theta`. Both sites feed the outputs into expressions where correlated rounding matters:
+
+- `exp_map`: `r = cosh(θ)·p + (sinh(θ)/θ)·v`
+- `parallel_transport`: `correction = sinh(θ)·p + (cosh(θ)-1)·u`
+
+Swapping to `try_sinhcosh` shares one `(exp(θ), exp(-θ))` pair at compute tier, so the two rounding errors cancel in the downstream sum instead of accumulating. This directly addresses the 9 ULP closure drift the Geo team filed against their Q22.10 `exp_map`.
+
+**API-compatible:** no surface change — both methods retain their `Result<FixedVector, OverflowDetected>` signatures. Downstream consumers get the tighter bound transparently via `cargo update`.
+
+**Regression-tested:** `tests/l1c_l1d_l3a_validation.rs` (24 tests) and `tests/sinhcosh_validation.rs` (8 tests) pass cleanly on realtime and compact profiles.
 
 ---
 
