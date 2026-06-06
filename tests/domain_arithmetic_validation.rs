@@ -462,7 +462,7 @@ mod q64_64_binary {
         (actual - expected).unsigned_abs()
     }
 
-    // Integer add/sub/mul: exact (0 ULP expected)
+    // Integer add/sub/mul: exact results expected
     binary_ulp_test!(test_binary_add, "binary_add", BINARY_ADD_REFS, "add", 0, PROFILE, ulp_i128);
     binary_ulp_test!(test_binary_sub, "binary_sub", BINARY_SUB_REFS, "sub", 0, PROFILE, ulp_i128);
     binary_ulp_test!(test_binary_mul, "binary_mul", BINARY_MUL_REFS, "mul", 0, PROFILE, ulp_i128);
@@ -500,7 +500,7 @@ mod q64_64_binary {
 
         // Report but use generous threshold — binary division precision
         // depends on implementation details (intermediate bit width).
-        // Exact divisions (10/2, 1/4, etc.) should be 0 ULP.
+        // Exact divisions (10/2, 1/4, etc.) should match exactly.
         // Inexact (7/3, 1/7) may have significant ULP.
         eprintln!("  NOTE: binary_div ULP reflects fixed-point truncation for inexact results");
     }

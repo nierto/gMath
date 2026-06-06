@@ -250,11 +250,11 @@ mod q64_64 {
         Some((actual as i128 - expected).unsigned_abs())
     }
 
-    // Measured 2026-02-14: all 0 ULP after to_compute_storage + rounding fixes.
-    // Q64.64: tier N+1 (Q128.128 compute) → all 18 functions at 0 ULP (exp: 1).
+    // Measured 2026-02-14: all exact vs reference after to_compute_storage + rounding fixes.
+    // Q64.64: tier N+1 (Q128.128 compute) → all 18 functions exact (exp: 1 ULP).
     // Thresholds: 5 ULP (generous margin for 0-1 measured).
 
-    // Direct algorithm functions (all 0 ULP except exp=1):
+    // Direct algorithm functions (all exact except exp=1 ULP):
     fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
     fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
     fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
@@ -262,12 +262,12 @@ mod q64_64 {
     fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
     fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
 
-    // Composed functions (all 0 ULP):
+    // Composed functions (all exact vs reference):
     fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   5, tan);
     fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
     fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
 
-    // Hyperbolic functions (all 0 ULP):
+    // Hyperbolic functions (all exact vs reference):
     fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
     fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
     fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
@@ -275,7 +275,7 @@ mod q64_64 {
     fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
     fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh);
 
-    // Binary functions (all 0 ULP after to_compute_storage fix):
+    // Binary functions (all exact vs reference after to_compute_storage fix):
     fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,             5, |a, b| a.atan2(b));
     fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,       5, |a, b| a.pow(b));
     fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS,    5, |a, b| a.pow(b));
@@ -318,7 +318,7 @@ mod q128_128 {
         Some(ulp_i256(actual, I256 { words: expected_words }))
     }
 
-    // Measured 2026-02-14: all 0 ULP after to_compute_storage fix.
+    // Measured 2026-02-14: all exact vs reference after to_compute_storage fix.
     // Thresholds: 5 ULP (generous margin for 0 measured).
 
     fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
@@ -401,7 +401,7 @@ mod q256_256 {
         Some(ulp_i512(actual, I512 { words: expected_words }))
     }
 
-    // Measured 2026-02-14: all 0 ULP after to_compute_storage fix, except inherent
+    // Measured 2026-02-14: all exact vs reference after to_compute_storage fix, except inherent
     // downscale rounding: sin/cos/asin/acos/atan/atan2=1, tan=7 (Q512.512→Q256.256).
 
     fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);

@@ -18,6 +18,6 @@ fn trace_sqrt_i128_consistency() {
     println!("expected: {}", expected);
     println!("ULP: {}", ulp);
 
-    // This MUST be 0 ULP on any profile — it's the same function with the same input
+    // This MUST be exact on any profile — it's the same function with the same input
     assert!(ulp <= 1, "sqrt_binary_i128 should be 0-1 ULP regardless of profile, got {} ULP", ulp);
 }

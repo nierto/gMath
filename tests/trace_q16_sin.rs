@@ -5,7 +5,7 @@ mod trace {
     #[test]
     fn trace_sin_pi_approx() {
         // sin(3.14159265) — near pi, result should be ~0
-        // If compute stays at Q32.32 throughout, downscale to Q16.16 MUST be 0 ULP
+        // If compute stays at Q32.32 throughout, downscale to Q16.16 MUST be exact
         
         // First: what does "3.14159265" parse as?
         let parsed = evaluate(&gmath("3.14159265")).unwrap();
@@ -19,7 +19,7 @@ mod trace {
         let sin3 = evaluate(&gmath("3").sin()).unwrap();
         println!("sin('3') tier={}, raw={:?}", sin3.tier(), sin3.as_binary_storage());
         
-        // sin(1) — should be 0 ULP
+        // sin(1) — should be exact
         let sin1 = evaluate(&gmath("1").sin()).unwrap();
         let sin1_raw = sin1.as_binary_storage().unwrap() as i64;
         // mpmath: sin(1) * 2^16 = 55141

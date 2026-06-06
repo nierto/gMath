@@ -64,7 +64,7 @@ fn value_chaining_compound_interest_10_years() {
 /// Each iteration adds 2 decimal places (dp_result = dp_a + dp_b).
 /// When dp exceeds DECIMAL_DP_PROMOTION_THRESHOLD, the multiply path
 /// promotes to Symbolic (exact rational). Since 1.05 has a finite decimal
-/// expansion, all results are exact — 0 ULP by construction.
+/// expansion, all results are exact by construction.
 /// All 20 checked years should match exactly.
 #[test]
 fn value_chaining_compound_interest_30_years() {
@@ -136,7 +136,7 @@ fn value_chaining_compound_interest_30_years() {
 /// 1000 * 1.05^100 = 131501.25784630345502559753209371674816065646... (mpmath)
 /// After dp promotion, iterations stay in Symbolic (exact rational).
 /// Since 1.05 = 21/20 has a finite decimal expansion, all results are exact.
-/// No accumulated rounding — 0 ULP by construction.
+/// No accumulated rounding — exact by construction.
 ///
 /// Q16.16: result overflows integer range (max 32767).
 /// Q256.256: known Decimal multiply precision loss at high dp (dp_threshold=76,
@@ -167,7 +167,7 @@ fn value_chaining_compound_interest_100_years() {
 /// 1000 * 1.05^500 = 39323261827217.83367222804425844837331164740749... (mpmath)
 /// After dp promotion, all iterations are exact Symbolic (rational arithmetic).
 /// Since 1.05 = 21/20 has a finite decimal expansion, result is exact.
-/// No accumulated rounding — 0 ULP by construction, unlimited iterations.
+/// No accumulated rounding — exact by construction, unlimited iterations.
 /// Result 39 trillion overflows Q32.32 (max ~2.1B) and Q16.16 (max ~32K).
 /// Q256.256: same Decimal multiply dp-accumulation issue as 100-year test.
 #[test]

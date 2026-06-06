@@ -3,7 +3,7 @@
 //! Run: GMATH_PROFILE=realtime GMATH_FRAC_BITS=24 cargo test --test q8_24_validation -- --nocapture
 //!
 //! Validates:
-//! 1. Core transcendentals at Q8.24 precision (0 ULP target)
+//! 1. Core transcendentals at Q8.24 precision (exact-match target)
 //! 2. sincos_wide for RoPE-class wide-angle inputs (Blocker 1)
 
 // Only compile when FRAC_BITS=24 (Q8.24 format)

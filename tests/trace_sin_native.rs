@@ -10,7 +10,7 @@ mod trace {
         let result = sin_binary_i128(three_q64);
         
         // mpmath: sin(3) * 2^64 = 2603255189406976154
-        // This is what the embedded profile produces at 0 ULP
+        // This is what the embedded profile produces — exact vs the mpmath reference
         println!("sin_binary_i128(3.0 Q64.64) = {}", result);
         println!("expected = 2603255189406976154");
         println!("ULP at Q64.64 = {}", (result - 2603255189406976154_i128).abs());
