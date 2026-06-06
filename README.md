@@ -158,8 +158,9 @@ the whole chain runs at the wide tier with a single downscale at
 `evaluate_matrix()`. `DomainMatrix` holds per-element domain-tagged values for
 mixed-domain matrices.
 
-With `--features macros`, `gmath!("0.1")` pre-parses decimal and integer literals
-at compile time; fractions, constants, and hex/ternary literals fall back to the
+A `gmath!()` proc-macro that pre-parses decimal and integer literals at compile
+time exists in the repository (`g_math_macros/`) but is not yet published to
+crates.io; fractions, constants, and hex/ternary literals fall back to the
 runtime function.
 
 ### Transcendentals
@@ -360,7 +361,6 @@ Honest limits worth knowing:
 | `infinite-precision` | BigInt tier for the symbolic rational domain (pulls in `num-bigint`) |
 | `serde` | `Serialize`/`Deserialize` for FixedPoint, vectors, matrices, tensors |
 | `inference` | TQ1.9 ternary inference ops + rayon parallel matvec |
-| `macros` | `gmath!()` compile-time literal pre-parsing |
 | `rebuild-tables` | regenerate lookup tables from `build.rs` (~20 min) |
 | `realtime` / `compact` / `embedded` / `balanced` / `scientific` | select profile via Cargo feature instead of `GMATH_PROFILE` |
 | `legacy-tests` | compile legacy test suites |
