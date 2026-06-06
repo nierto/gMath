@@ -18,6 +18,7 @@ __pycache__/
 
 # Editor backups
 **/*.rs.bk
+*.bak
 .idea/
 ECOSYSTEM_INTEGRATION_NOTES.md
 CLIENT_INTEGRATION_MISSION_BRIEF.md
