@@ -1,861 +1,394 @@
-# g_math | gMath
+# g_math
 
-**Author**: Niels Erik Toren
+**Author**: Niels Erik Toren — v0.4.23
 
-Multi-domain fixed-point arithmetic for Rust. **v0.4.0** — 1375+ tests, 0 ULP, 0 warnings across all 5 profiles.
+Pure-Rust, zero-float, deterministic multi-domain fixed-point arithmetic.
 
-### What's new in v0.4.0
-
-**Fractal topology router** — cross-domain arithmetic (e.g. `gmath("0.1") + gmath("255")`) now classifies operands via shadow denominator factoring and routes to the optimal shared domain. Eliminates the Symbolic/rational fallback cascade that previously made mixed decimal-integer chains slow.
-
-**Direct binary engine calls** — all 18 `FixedPoint` transcendentals bypass the FASC pipeline entirely. `exp()`, `ln()`, `sqrt()`, `sin()`, `cos()`, `atan()` use a direct upscale-engine-downscale path. Composed functions (`tan`, `sinh`, `asin`, `pow`, etc.) use direct compute-tier arithmetic. ~65 ns saved per call.
-
-**Native decimal transcendentals** — `DecimalFixed<DECIMALS>` now has 18 transcendental methods that call native decimal engines directly. The previous binary round-trip (decimal to binary, compute, convert back) has been eliminated. Zero binary contamination, 0 ULP in the decimal domain.
-
-**Decimal 4-stage exp tables** — decimal `exp()` decomposes the argument into decimal digits with precomputed table lookups, reducing Taylor iterations from ~25 to ~8. 4.1x throughput improvement on decimal exp.
-
-**Tensor decompositions** — `truncated_svd` (top-k singular values for weight compression), `tucker_decompose` (HOSVD for multi-way tensor compression), `cp_decompose` (ALS for canonical polyadic factorization). Built on the existing compute-tier SVD infrastructure.
-
-**gmath!() compile-time macro** — optional `macros` feature. Pre-parses decimal and integer literals at compile time, skipping runtime string parsing.
-
-**FRAC_BITS arithmetic fix** — `BinaryTier1` multiplication and division now correctly use the configured `GMATH_FRAC_BITS` on the realtime profile instead of hardcoding Q16.16.
-
-`g_math` is a pure-Rust arithmetic crate built around a canonical expression pipeline:
-
-`gmath(...) -> LazyExpr -> evaluate(...) -> StackValue`
-
-Under that API, the crate routes values and operations across four numeric domains:
-
-* Binary fixed-point
-* Decimal fixed-point
-* Balanced ternary fixed-point
-* Symbolic rational
-
-It also exposes imperative types such as `FixedPoint`, `FixedVector`, and `FixedMatrix`, but the canonical API is the primary public entry point.
-
-## What g_math is trying to do
-
-Most numeric systems are good at some things and bad at others.
-
-* Binary fixed-point is fast and natural for many low-level operations.
-* Decimal fixed-point is often preferable for decimal-facing arithmetic.
-* Ternary is available as a first-class domain rather than a curiosity.
-* Symbolic rational provides an exact fallback for values that should not be collapsed into an approximation too early.
-
-`g_math` is an attempt to let those domains coexist in one library instead of forcing everything through a single representation.
-
-## Current architecture
-
-### 1. Canonical API
-
-The primary API is the canonical expression pipeline:
-
-```rust
-use g_math::canonical::{gmath, evaluate};
-
-let expr = gmath("1.5") + gmath("2.5");
-let value = evaluate(&expr).unwrap();
-println!("{}", value);
-```
-
-There is also `gmath_parse(...)` for runtime strings and `LazyExpr::from(...)` for feeding an evaluated value back into a new expression without reparsing.
-
-### 2. FASC
-
-FASC stands for **Fixed Allocation Stack Computation**.
-
-In practical terms, it means:
-
-* expressions are built as `LazyExpr` trees
-* evaluation is deferred until `evaluate(...)`
-* evaluation runs through a thread-local `StackEvaluator`
-* the evaluator uses a fixed-size value stack and domain-aware dispatch
-
-The important consequence is that the **evaluation engine** is stack-oriented and built around fixed workspace structures rather than a growable runtime evaluator.
-
-This is the path the crate is organized around, and the one new users should start with.
-
-### 3. UGOD — Universal Graceful Overflow Delegation
-
-UGOD is the tiered overflow model.
-
-Each major domain is aligned to a shared tier system. Operations are attempted at the current tier, and when a result cannot be represented there, the computation can promote upward. At the top end, symbolic rational is the exact fallback.
-
-The current universal tier model is:
-
-| Tier | Bits | Binary   | Decimal  | Ternary   | Symbolic  |
-| ---- | ---- | -------- | -------- | --------- | --------- |
-| 1    | 32   | Q16.16   | D16.16   | TQ8.8     | i16/u16   |
-| 2    | 64   | Q32.32   | D32.32   | TQ16.16   | i32/u32   |
-| 3    | 128  | Q64.64   | D64.64   | TQ32.32   | i64/u64   |
-| 4    | 256  | Q128.128 | D128.128 | TQ64.64   | i128/u128 |
-| 5    | 512  | Q256.256 | D256.256 | TQ128.128 | I256/U256 |
-| 6    | 1024 | Q512.512 | D512.512 | TQ256.256 | I512/U512 |
-
-At the architecture level:
-
-* tiers 1-5 promote upward on overflow
-* tier 6 overflows can fall back to rational arithmetic
-* optional unbounded precision can extend symbolic arithmetic beyond the bounded native tiers
-
-The goal is not to avoid overflow by pretending it never happens. The goal is to overflow **gracefully** into a larger or exact representation instead of failing silently.
-
-### 4. Shadow system
-
-`g_math` includes a compact shadow system for preserving exactness metadata alongside approximated values.
-
-The public `CompactShadow` type can store:
-
-* no shadow
-* small rational shadows in progressively larger compact forms (2 to 32 bytes)
-* a full rational shadow (i128/u128 numerator-denominator pair)
-* references to known constants: pi, e, sqrt(2), phi, ln2, ln10, Euler's gamma
-
-This lets an inexact domain value carry a compact rational companion when one exists.
-
-Example idea:
-
-* if a value is stored in a fixed-point domain as an approximation of `1/3`,
-* a compact rational shadow can still preserve that exact fractional identity for later use.
-
-In the current implementation, shadow arithmetic is propagated where possible. It is best understood as **exactness retention infrastructure**, not magical infinite memory.
-
-### 5. Wider-tier transcendental computation
-
-The crate implements 18 transcendental functions:
-
-`exp`, `ln`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `atan`, `atan2`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
-
-The current implementation computes each at a wider tier than the active storage tier and then rounds back down. Because the intermediate has more fractional bits than the storage format can represent, the final rounding step produces the nearest representable value at the storage tier.
-
-The profile mapping is:
-
-| Profile    | Storage   | Compute tier |
-| ---------- | --------- | ------------ |
-| Embedded   | Q64.64    | Q128.128     |
-| Balanced   | Q128.128  | Q256.256     |
-| Scientific | Q256.256  | Q512.512     |
-
-That wider-tier strategy is one of the central design decisions in the crate.
-
-## Profiles
-
-Build profile selection is driven by `GMATH_PROFILE`. The default is **embedded** (Q64.64, 19 decimal digits).
-
-| Profile      | Format    | Storage | Compute | Decimal digits |
-| ------------ | --------- | ------- | ------- | -------------- |
-| `realtime`   | Q16.16    | i32     | i64     | 4              |
-| `compact`    | Q32.32    | i64     | i128    | 9              |
-| `embedded`   | Q64.64    | i128    | I256    | 19             |
-| `balanced`   | Q128.128  | I256    | I512    | 38             |
-| `scientific` | Q256.256  | I512    | I1024   | 77             |
-
-```bash
-cargo build                             # embedded (default)
-GMATH_PROFILE=compact cargo build       # 9-digit precision
-GMATH_PROFILE=balanced cargo build      # 38-digit precision
-GMATH_PROFILE=scientific cargo build    # 77-digit precision
-```
-
-**Important**: clear the incremental cache when switching profiles. Each profile compiles entirely different code paths via `cfg` flags. Stale artifacts cause build failures or runtime crashes.
-
-```bash
-rm -rf target/debug/incremental/        # Run BEFORE switching profiles
-GMATH_PROFILE=scientific cargo build    # Now safe to build a different profile
-```
-
-Pre-built lookup tables are checked into the repository. A default build completes in about 2 seconds. To regenerate tables from scratch (about 20 minutes):
-
-```bash
-cargo build --features rebuild-tables
-```
-
-## Feature flags
-
-| Flag | Default | Effect |
-| ---- | ------- | ------ |
-| `infinite-precision` | off | Adds BigInt tier 8 to the symbolic rational domain. Pulls in `num-bigint`, `num-traits`, `num-integer` as runtime dependencies. Without this flag, the rational domain caps at tier 7 (I512 numerator/denominator). |
-| `rebuild-tables` | off | Regenerates all lookup tables (exp, ln, trig) from `build.rs` instead of using the checked-in pre-built tables. Takes about 20 minutes. |
-| `legacy-tests` | off | Enables compilation of legacy test suites from earlier development phases. |
-| `serde` | off | Adds `Serialize`/`Deserialize` for `FixedPoint`, `FixedVector`, `FixedMatrix`, `Tensor`. |
-| `inference` | off | TQ1.9 ternary inference ops + rayon row-parallel matvec. |
-| `macros` | off | `gmath!()` proc-macro for compile-time literal pre-parsing (~60 ns savings per literal). |
-| `embedded` | off | Selects embedded profile via Cargo feature instead of environment variable. |
-| `balanced` | off | Selects balanced profile via Cargo feature instead of environment variable. |
-| `scientific` | off | Selects scientific profile via Cargo feature instead of environment variable. |
-
-All other arithmetic — including transcendental functions, SIMD acceleration (AVX2 runtime-detected on x86_64), tiered overflow, and I256/I512/I1024 wide integer types — is always compiled. There are no feature gates around core functionality.
-
-## Quick start
-
-Add the crate:
+`g_math` computes with scaled integers only. No `f32`/`f64` appears anywhere in the
+arithmetic, validation, or comparison paths (float conversions exist solely as
+user-convenience `from_f64`/`to_f64` wrappers). Every operation produces bit-identical
+results on every architecture, which makes the crate suitable for blockchain consensus,
+financial auditing, and reproducible scientific computation.
 
 ```toml
 [dependencies]
-g_math = "0.3.0"
+g_math = "0.4"
 ```
 
-Basic use:
+## Key concepts
+
+**Four numeric domains.** Values are routed to the representation that holds them best:
+
+| Domain | Representation | Exact for |
+| ------ | -------------- | --------- |
+| Binary fixed-point | Q-format scaled integer (Q16.16 … Q256.256) | integers, powers of two |
+| Decimal fixed-point | base-10 scaled integer | decimal literals like `0.1`, `19.99` |
+| Balanced ternary | base-3 scaled integer, digits {-1, 0, +1} | powers of three; TQ1.9 weight storage |
+| Symbolic rational | exact numerator/denominator pair | everything (`1/3`, repeating decimals) |
+
+**Canonical API (FASC).** The user-friendly wrapper. `gmath("...")` builds a lazy
+expression tree; `evaluate(...)` runs it through a thread-local stack evaluator with
+fixed-size workspaces (FASC = Fixed Allocation Stack Computation). Parsing classifies
+each literal and routes it to its natural domain — `"0.1"` becomes decimal, `"255"`
+binary, `"1/3"` symbolic.
+
+**Fractal topology router.** Cross-domain arithmetic (e.g. decimal + binary) is
+dispatched by a router that classifies operands via shadow denominator factoring
+(strip factors of 2 → binary-exact, 2 and 5 → decimal-exact, 3 → ternary-exact) and
+coerces both sides to the optimal shared domain through a small const lookup table.
+Only when no shared domain exists does arithmetic fall back to exact rational.
+
+**Tier N+1 computation.** Every transcendental and every accumulating operation
+(dot products, decompositions, matrix chains) computes one tier *wider* than the
+storage format — Q64.64 storage computes at Q128.128 — and rounds down once at the
+end. Intermediates between chained operations stay at the wide tier
+(`sin(exp(x))` never narrows mid-chain).
+
+**UGOD — tiered graceful overflow.** Arithmetic is attempted at the current tier;
+on overflow it promotes to a wider tier and retries. The top of the ladder is the
+symbolic rational domain, so overflow degrades into a wider or exact representation
+instead of wrapping or failing silently.
+
+**Shadow system.** A `CompactShadow` (0–32 bytes, stack-only) can ride alongside any
+approximated value, carrying its exact rational identity (`1/3`) or a constant
+reference (π, e, √2, φ, ln 2, ln 10, γ). The router reads shadows to classify
+domain-exactness without reparsing.
+
+## Quick start
 
 ```rust
 use g_math::canonical::{gmath, evaluate};
 
-fn main() {
-    let expr = (gmath("100") + gmath("50")) / gmath("3");
-    let value = evaluate(&expr).unwrap();
-    println!("{}", value);
-}
+let expr = (gmath("100") + gmath("50")) / gmath("3");
+let value = evaluate(&expr).unwrap();
+println!("{}", value);
+
+// Transcendentals chain lazily; intermediates stay at the wide compute tier
+let y = evaluate(&gmath("1.5").exp().sin()).unwrap();
+
+// Runtime strings
+use g_math::canonical::gmath_parse;
+let parsed = gmath_parse("3.14159265358979323846").unwrap();
+
+// Feed a result back into a new expression without reparsing
+use g_math::canonical::LazyExpr;
+let year0 = evaluate(&gmath("1000")).unwrap();
+let year1 = evaluate(&(LazyExpr::from(year0) * gmath("1.05"))).unwrap();
 ```
 
-Runtime parsing:
+Imperative path, for hot loops:
 
 ```rust
-use g_math::canonical::{gmath_parse, evaluate};
+use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
 
-fn main() {
-    let input = "3.14159265358979323846";
-    let parsed = gmath_parse(input).unwrap();
-    let result = evaluate(&(parsed * gmath("2"))).unwrap();
-    println!("{}", result);
-}
+let a = FixedPoint::from_str("0.5");
+let b = a + FixedPoint::from_int(2);  // direct integer arithmetic
+let e = a.exp();                       // direct engine call, no expression tree
+let (s, c) = a.sincos();               // fused: one shared range reduction
 ```
 
-Feeding values back into the expression system:
+**Which to use:** the canonical API when domains are mixed (decimal money, user
+input, symbolic fractions) or when chaining transcendentals; the imperative API
+when you know you are in binary Q-format and the per-call overhead of the
+expression pipeline matters (inner loops, matrix code, ML inference).
 
-```rust
-use g_math::canonical::{gmath, evaluate, LazyExpr};
+## Profiles
 
-fn main() {
-    let year0 = evaluate(&gmath("1000")).unwrap();
-    let year1 = evaluate(&(LazyExpr::from(year0) * gmath("1.05"))).unwrap();
-    println!("{}", year1);
-}
+Storage width is a compile-time choice via the `GMATH_PROFILE` environment
+variable (default: `embedded`).
+
+| Profile | Format | Storage | Compute | ~Decimal digits | Intended use |
+| ------- | ------ | ------- | ------- | --------------- | ------------ |
+| `realtime` | Q16.16 | i32 | i64 | 4 | ML inference, real-time |
+| `compact` | Q32.32 | i64 | i128 | 9 | mobile, game logic |
+| `embedded` | Q64.64 | i128 | I256 | 19 | IoT, financial |
+| `balanced` | Q128.128 | I256 | I512 | 38 | general services |
+| `scientific` | Q256.256 | I512 | I1024 | 77 | research |
+
+```bash
+cargo build                           # embedded (default)
+GMATH_PROFILE=scientific cargo build  # 77-digit precision
 ```
 
-## Domain routing and mode control
+**Custom integer/fraction split (realtime only).** The realtime profile lets you
+move the binary point inside the 32-bit storage word via `GMATH_FRAC_BITS`:
 
-The crate exposes a compute and output mode system.
-
-You can set modes such as:
-
-* `auto:auto` (default — routes each value to its natural domain)
-* `binary:ternary` (compute in binary, output in ternary)
-* `decimal:symbolic` (compute in decimal, output as symbolic rational)
-
-Available domains: `auto`, `binary`, `decimal`, `symbolic`, `ternary` — any combination as `compute:output`.
-
-Example:
-
-```rust
-use g_math::canonical::{set_gmath_mode, reset_gmath_mode, gmath, evaluate};
-
-fn main() {
-    set_gmath_mode("binary:ternary").unwrap();
-    let value = evaluate(&(gmath("3") + gmath("7"))).unwrap();
-    println!("{}", value);
-    reset_gmath_mode();
-}
+```bash
+GMATH_FRAC_BITS=10 GMATH_PROFILE=realtime cargo build   # Q22.10 — ±2M range, 3 digits
+GMATH_FRAC_BITS=24 GMATH_PROFILE=realtime cargo build   # Q8.24  — ±127 range, 7 digits
 ```
 
-## Canonical API surface
+Valid range is 2–30 fractional bits. The other profiles use fixed splits.
 
-The primary public interface lives in `g_math::canonical`:
+**Switching profiles:** each profile compiles different code paths via `cfg` flags.
+Clear the incremental cache first, or stale artifacts will cause crashes:
+
+```bash
+rm -rf target/debug/incremental/
+```
+
+Pre-built lookup tables are checked in; a default build takes ~2 seconds.
+`--features rebuild-tables` regenerates them from `build.rs` (~20 minutes,
+pure-Rust generation: π via Machin's formula, e via factorial series, √2 via
+continued fractions — zero runtime dependencies).
+
+## API overview
+
+### Canonical (`g_math::canonical`)
 
 | Item | Purpose |
 | ---- | ------- |
-| `gmath("...")` | Build a `LazyExpr` from a string literal (deferred parsing) |
-| `gmath_parse(&str)` | Build a `LazyExpr` from a runtime string (eager parsing, returns `Result`) |
-| `evaluate(&LazyExpr)` | Evaluate an expression tree, returns `Result<StackValue, _>` |
-| `LazyExpr` | Expression tree node — supports operator overloading and transcendental methods |
-| `LazyExpr::from(StackValue)` | Feed a previous result back into a new expression |
-| `StackValue` | Domain-tagged result — implements `Display`, carries shadow metadata |
-| `set_gmath_mode("compute:output")` | Set compute and output domain routing |
-| `reset_gmath_mode()` | Reset to `auto:auto` |
+| `gmath("...")` | build a `LazyExpr` from a literal (deferred parsing) |
+| `gmath_parse(&str)` | build from a runtime string, returns `Result` |
+| `evaluate(&LazyExpr)` | evaluate → `Result<StackValue, _>` |
+| `evaluate_sincos(&LazyExpr)` | sin and cos from one shared range reduction |
+| `evaluate_sinhcosh(&LazyExpr)` | sinh and cosh from one shared exp pair |
+| `evaluate_matrix(&LazyMatrixExpr)` | evaluate a matrix expression chain |
+| `set_gmath_mode("compute:output")` / `reset_gmath_mode()` | force compute/output domains (`auto`, `binary`, `decimal`, `symbolic`, `ternary`) |
+| `LazyExpr::from(StackValue)` | feed a result back into a new expression |
 
-### Imperative API
+`LazyExpr` supports the basic operators `+`, `-`, `*`, `/`, unary `-`, plus the
+18 transcendental methods listed below. Literals may be decimals (`"0.1"`),
+integers, fractions (`"1/3"`), repeating decimals (`"0.333..."`), hex/ternary
+(`"0x1F"`, `"0t10"`), or named constants (`"pi"`, `"e"`, `"sqrt2"`, `"phi"`).
 
-`FixedPoint`, `FixedVector`, `FixedMatrix` are available via `g_math::fixed_point` for direct binary Q-format arithmetic. These are the fastest path for tight inner loops and matrix operations.
+`LazyMatrixExpr` is the matrix analog of scalar chain persistence: `Add`, `Sub`,
+`Mul`, `ScalarMul`, `Transpose`, `Neg`, `Inverse`, `Exp`, `Log`, `Sqrt`, `Pow` —
+the whole chain runs at the wide tier with a single downscale at
+`evaluate_matrix()`. `DomainMatrix` holds per-element domain-tagged values for
+mixed-domain matrices.
 
-```rust
-use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
+With `--features macros`, `gmath!("0.1")` pre-parses decimal and integer literals
+at compile time; fractions, constants, and hex/ternary literals fall back to the
+runtime function.
 
-let a = FixedPoint::from_str("0.1");
-let b = FixedPoint::from_int(255);
-let c = a + b;              // direct i128 arithmetic, ~15 ns
-let e = a.exp();            // tier N+1 binary engine
-let (s, c) = a.sincos();   // fused sin+cos, single range reduction
-```
+### Transcendentals
 
-**When to use FASC vs Imperative**:
+18 functions, available on `LazyExpr`, `FixedPoint`, and `DecimalFixed`.
 
-| Scenario | Use | Why |
-| -------- | --- | --- |
-| Mixed decimal/integer arithmetic | **FASC** (`gmath`) | Router keeps values in optimal domain; "0.1" is decimal-exact |
-| Tight inner loops (matvec, softmax) | **Imperative** (`FixedPoint`) | Zero overhead, direct i128 ops, `Copy` semantics |
-| Composed transcendentals (`exp(sin(x))`) | **FASC** | Chain persistence keeps intermediates at compute tier |
-| Financial chains with exact decimals | **FASC** | Decimal domain preserves "0.01" exactly (binary can't) |
-| Matrix decompositions, ODE solvers | **Imperative** | `FixedMatrix` + decompose/ode modules |
-| Single transcendental in a hot loop | **Imperative** | ~65 ns less overhead per call vs FASC |
+Dedicated engines (table-driven or Newton-Raphson, computed at tier N+1):
 
-If you are new to the crate, start with `g_math::canonical`. Switch to imperative when profiling shows the FASC pipeline overhead matters.
+| Function | Algorithm |
+| -------- | --------- |
+| `exp` | integer part by squaring + 3-stage table lookup + Taylor remainder |
+| `ln` | multiplicative decomposition, 3-stage tables + Taylor |
+| `sqrt` | integer Newton-Raphson |
+| `sin`, `cos` | Cody-Waite range reduction + Horner Taylor (`sincos` fuses both) |
+| `atan`, `atan2` | 3-level argument reduction + Taylor |
 
-### Fractal topology router (v0.4.0)
+Composed from the dedicated engines, still at the wide tier:
 
-The FASC evaluator includes a **fractal topology router** that classifies operands by their CompactShadow denominator factoring and dispatches cross-domain arithmetic to the optimal shared domain.
+| Function | Composition |
+| -------- | ----------- |
+| `tan` | sin/cos |
+| `pow(x, y)` | exp(y·ln x) |
+| `asin`, `acos` | atan(x/√(1−x²)), π/2 − asin |
+| `sinh`, `cosh` | (eˣ ∓ e⁻ˣ)/2 (`sinhcosh` fuses both on one exp pair) |
+| `tanh` | (e²ˣ−1)/(e²ˣ+1) |
+| `asinh`, `acosh`, `atanh` | log forms |
 
-Before the router, `gmath("0.1") + gmath("255")` (Decimal + Binary) fell through to rational arithmetic — slow BigInt operations that destroyed domain identity. Now the router detects that both values are decimal-exact (0.1 is exact in base-10, 255 is an integer exact in all domains) and routes the addition through native decimal arithmetic.
+On `FixedPoint`, every function also has a fallible `try_*` variant returning
+`Result<_, OverflowDetected>`.
 
-```
-gmath("0.1") + gmath("255")    → Decimal domain (was Symbolic/rational)
-gmath("3") + gmath("6")        → Binary domain (both exact in binary)
-gmath("0.1") + gmath("1/3")    → Symbolic domain (no shared domain)
-```
+### Imperative (`g_math::fixed_point`)
 
-The routing table is a 5.25 KB const array in `.rodata` — zero runtime init, zero sync, ~3 ns lookup. Classification uses shadow denominator factoring: strip factors of 2 (binary-exact), 2 and 5 (decimal-exact), 3 (ternary-exact). ~15 ns per classification.
+- **`FixedPoint`** — `Copy` Q-format scalar. Arithmetic operators, comparisons,
+  `abs`, `from_str`/`from_int`/`from_raw`, all 18 transcendentals, `sincos`,
+  `sinhcosh`, float conversions for interop.
+- **`FixedVector`** — `dot`, `length`, `length_fused`, `normalized`,
+  `distance_to`, `cross`, `outer_product`, `map`, indexing, operators. Dot
+  products accumulate at the compute tier.
+- **`FixedMatrix`** — `identity`, `diagonal`, `from_fn`, `from_slice`,
+  `transpose`, `trace`, `row`/`col`, mat-mat and mat-vec multiply (compute-tier
+  dots per entry), `kronecker`, `submatrix`.
 
-### gmath!() compile-time macro (v0.4.0)
+### Decimal (`DecimalFixed<DECIMALS>`)
 
-With the `macros` feature, `gmath!("0.1")` pre-parses the literal at compile time:
+Base-10 scaled integer with a const-generic decimal-place count. `0.1` is stored
+exactly. Full basic arithmetic in pure decimal (add, subtract, multiply, divide,
+negate, plus a batched multiply), and its own native transcendental engines
+(all 18, plus fused `sincos` and `sinhcosh`) — no round-trip through binary, so
+results are correctly rounded *in the decimal domain*. Conversions:
+`try_convert`/`convert_with_rounding` between precisions,
+`to_binary_q256`/`from_binary_q256`.
 
-```rust
-use g_math::gmath;                  // the macro (requires --features macros)
-use g_math::canonical::evaluate;
+### Fused operations (`imperative::fused`)
 
-let expr = gmath!("0.1") + gmath!("0.2");
-let result = evaluate(&expr).unwrap();
-```
+Whole patterns computed at the wide tier with one downscale at the end:
 
-The macro extracts decimal places, scaled value, and shadow at compile time, emitting a direct `StackValue` construction. Saves ~60 ns per literal by skipping runtime string parsing. The existing `g_math::canonical::gmath()` function is unchanged.
+| Function | Computes |
+| -------- | -------- |
+| `sqrt_sum_sq(&[x])` | √(Σ xᵢ²) |
+| `euclidean_distance(&a, &b)` | √(Σ (aᵢ−bᵢ)²) |
+| `softmax(&scores)` | numerically stable softmax |
+| `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε) |
+| `silu(x)` | x/(1+e⁻ˣ) |
 
-Fractions (`gmath!("1/3")`), named constants (`gmath!("pi")`), and hex literals fall back to the runtime function automatically.
+### Linear algebra (`imperative::decompose`, `derived`, `matrix_functions`)
 
-### Lazy matrix expressions (v0.3.0)
+- **Decompositions**: LU (Doolittle, partial pivoting), QR (Householder),
+  Cholesky, SVD (Golub-Kahan), symmetric eigenvalues (Jacobi), Schur (Francis QR).
+  Each returns a struct with `solve`/`determinant`/`inverse` where applicable,
+  plus iterative refinement on LU.
+- **Derived**: `frobenius_norm`, `norm_1`, `norm_inf`, `solve`, `solve_spd`,
+  `determinant`, `inverse`, `inverse_spd`, `pseudoinverse`, `rank`, `nullspace`,
+  `least_squares`, `condition_number_1`/`_2`.
+- **Matrix functions**: `matrix_exp` (Padé + scaling-squaring), `matrix_sqrt`
+  (Denman-Beavers), `matrix_log` (inverse scaling-squaring), `matrix_pow` —
+  all chained through `ComputeMatrix` at the wide tier.
 
-`LazyMatrixExpr` provides matrix chain persistence — the matrix analog of scalar `BinaryCompute`. All intermediates stay at `ComputeMatrix` (tier N+1) with a single downscale at `evaluate_matrix()`.
+### Geometry (`imperative::{manifold, lie_group, curvature, projective, fiber_bundle}`)
 
-```rust
-use g_math::canonical::{evaluate_matrix, LazyMatrixExpr};
-use g_math::fixed_point::FixedMatrix;
+- **Manifolds** (trait: `exp_map`, `log_map`, `distance`, `parallel_transport`,
+  `inner_product`): Euclidean, Sphere, Hyperbolic (hyperboloid model), SPD,
+  Grassmannian, Stiefel, products.
+- **Lie groups** (trait adds `lie_exp`, `lie_log`, `hat`/`vee`, `adjoint`,
+  `bracket`, `act`): SO(3) via closed-form Rodrigues, SE(3) via closed-form
+  V-matrix, plus SO(n), GL(n), O(n), SL(n) via matrix exp/log.
+- **Differential geometry**: Christoffel symbols, Riemann/Ricci/scalar/sectional
+  curvature, geodesic integration, parallel transport along curves.
+- **Projective**: homogeneous coordinates, projective transforms, cross-ratios,
+  stereographic projection, Möbius transformations (real and complex).
+- **Fiber bundles**: trivial, vector (connection coefficients, horizontal lift,
+  parallel transport, curvature 2-form), principal (transition cocycles).
 
-let a = LazyMatrixExpr::from(some_matrix);
-let b = LazyMatrixExpr::from(other_matrix);
+### ODE solvers (`imperative::ode`)
 
-// Entire chain at compute tier — zero intermediate materializations
-let result = evaluate_matrix(&(a.exp() * b.exp())).unwrap();
-```
+RK4 (fixed step), Dormand-Prince RK45 (adaptive), symplectic Störmer-Verlet
+(energy-preserving, for Hamiltonian systems). Weighted sums accumulate at the
+compute tier; step halving is an exact bit shift.
 
-Supports: `Add`, `Sub`, `Mul` (matmul), `ScalarMul`, `Transpose`, `Neg`, `Inverse`, `Exp`, `Log`, `Sqrt`, `Pow`.
+### Tensors (`imperative::tensor`, `tensor_decompose`)
 
-### Fused sincos (v0.3.0)
+Arbitrary-rank tensors: contraction, outer product, trace, index raising/lowering
+via a metric, (anti)symmetrization. Decompositions: `truncated_svd`,
+`tucker_decompose` (HOSVD), `cp_decompose` (ALS).
 
-`evaluate_sincos` computes both sin(x) and cos(x) from a single shared range reduction:
+### Balanced ternary (`domains::balanced_ternary`)
 
-```rust
-use g_math::canonical::{gmath, evaluate_sincos};
+Basic arithmetic (add, subtract, multiply, divide, negate — checked and
+unchecked variants) across six tier formats from TQ8.8 up to TQ256.256, plus
+trit packing: `pack_trits`/`unpack_trits` store 5 balanced trits {-1, 0, +1}
+per byte. Ternary is also reachable through the canonical API via `0t` literals
+or `set_gmath_mode("...:ternary")`; transcendentals on ternary values route
+through the binary engines.
 
-let (sin_val, cos_val) = evaluate_sincos(&gmath("1.5")).unwrap();
-```
+### TQ1.9 ternary inference (`g_math::tq19`, feature `inference`)
 
-The evaluator also short-circuits `exp(ln(x))` and `ln(exp(x))` to the identity.
+Standalone 2-byte balanced-ternary format for neural network weights: 1 integer
+trit + 9 fractional trits, range ±1.5, ~4.3 decimal digits of uniform precision.
+Because weights are {-1, 0, +1} at the trit level, dot products need no
+multiplications.
 
-### Multi-domain matrices (v0.3.0)
+- `TQ19Matrix` with `matvec`, `matvec_batch` (and rayon `_par` variants)
+- `tq19_dot`, `trit_dot`, `packed_trit_dot` (5 trits/byte), `packed_trit_matvec`
+- AVX2 SIMD on x86_64 with runtime detection and scalar fallback
 
-`DomainMatrix` holds `StackValue` entries — each element carries its own domain tag. Same-domain operations use native dispatch; cross-domain operations route through rational automatically.
+### Serialization (`imperative::serialization`)
 
-```rust
-use g_math::canonical::DomainMatrix;
+Profile-tagged big-endian encoding for `FixedPoint`, `FixedVector`,
+`FixedMatrix`, `Tensor`, `ManifoldPoint` — compact, deterministic, suitable for
+wire transport and consensus. Optional serde support behind `--features serde`.
 
-// Decimal matrix (financial-grade 0-ULP exact arithmetic)
-let rates = DomainMatrix::from_strings(2, 2, &["0.05", "0.03", "0.04", "0.06"]).unwrap();
+## Rounding
 
-// Cross-domain: decimal * binary routes through rational
-let result = rates.mat_mul(&binary_matrix).unwrap();
-```
+Each domain has a defined rounding behavior:
 
-### Fused compute-tier operations (v0.3.0)
+| Domain | Multiply | Divide | Wide-tier downscale |
+| ------ | -------- | ------ | ------------------- |
+| Binary fixed-point | round-half-even (banker's) | round-half-away-from-zero | round-to-nearest, ties toward +∞ |
+| Decimal fixed-point | round-half-away-from-zero | round-half-away-from-zero | round-half-away-from-zero |
+| Balanced ternary | truncate toward zero | truncate toward zero | — (transcendentals route via binary) |
 
-Operations that keep all intermediates at tier N+1, eliminating materialization boundaries:
+**The binary tie-breaking inconsistency is a development artifact, not a design
+statement.** Each operation's rounding was chosen and validated independently
+against reference values during iterative development, and the three rules were
+never retroactively unified. It is documented here so nobody mistakes it for
+numerical intent.
 
-```rust
-use g_math::fixed_point::imperative::fused;
+**Why it matters less than it looks: the downscale is the rounding that counts.**
+Everything beyond a lone storage-tier multiply or divide — every transcendental,
+dot product, decomposition, matrix chain, and fused op — runs at tier N+1 with
+double the fractional bits, then rounds back to storage exactly once. In those
+paths the per-op multiply/divide tie rules never fire; the single wide→storage
+downscale (round-to-nearest) is the only rounding the result ever sees, and the
+extra fractional bits absorb the intermediate error before that final round.
+The mul/div tie rules apply only to direct storage-tier arithmetic, where all
+three rules are round-to-nearest variants — they produce identical results
+except on exact half-ULP ties, and each individual op stays within half an ULP
+regardless of which rule breaks the tie.
 
-// Fused norm: sqrt(Σ x_i²) — single downscale
-let norm = fused::sqrt_sum_sq(&values);
+All rounding is implemented in integer arithmetic and is therefore
+deterministic across platforms — including the inconsistency itself.
 
-// Fused distance: sqrt(Σ (a_i - b_i)²) — saves 2 materializations
-let dist = fused::euclidean_distance(&a, &b);
+## Precision and validation
 
-// Stable softmax at compute tier
-let weights = fused::softmax(&scores).unwrap();
+The crate's accuracy claims are defined by its test suite, not slogans. The
+approach:
 
-// RMSNorm scaling factor: 1/sqrt(mean(x²) + eps)
-let factor = fused::rms_norm_factor(&hidden, eps).unwrap();
-
-// SiLU activation: x / (1 + exp(-x))
-let gate = fused::silu(x);
-```
-
-Also available as convenience methods on `FixedVector`:
-
-```rust
-let norm = v.length_fused();           // fused sqrt(Σ x_i²)
-let dist = v.distance_to(&other);      // fused euclidean distance
-```
-
-### TQ1.9 compact ternary (v0.3.0)
-
-Standalone 2-byte ternary fixed-point type for neural network weight storage. 1 integer trit + 9 fractional trits, range ±1.5, ~4.3 decimal digits of uniform precision (vs fp16's ~3.3 variable digits).
-
-```rust
-use g_math::fixed_point::domains::balanced_ternary::trit_q1_9::TritQ1_9;
-use g_math::fixed_point::domains::balanced_ternary::trit_packing::{pack_trits, unpack_trits, Trit};
-
-// TQ1.9 arithmetic
-let a = TritQ1_9::from_i16(9842);   // ~0.5 in TQ1.9
-let b = TritQ1_9::from_i16(19683);  // 1.0 in TQ1.9
-let c = a.checked_add(b).unwrap();
-
-// Trit packing: 5 trits per byte (3^5 = 243 ≤ 255)
-let trits = vec![Trit::Pos, Trit::Zero, Trit::Neg, Trit::Pos, Trit::Zero];
-let packed = pack_trits(&trits);
-let unpacked = unpack_trits(&packed, trits.len());
-```
-
-## Validation and tests
-
-The published crate includes test suites for:
-
-* arithmetic sweep validation (4 domains, 4 operations, 60k+ reference points)
-* boundary stress testing
-* compound operations (chained arithmetic, iterative accumulation)
-* domain arithmetic validation
-* error handling
-* FASC ULP validation (18 transcendentals, validated against mpmath at 250+ digit precision)
-* mode routing validation (12 modes x 24 test cases)
-* transcendental ULP validation
-
-Run the full suite:
+- Reference values are generated with mpmath at 50–250 digit precision and
+  embedded in the tests as exact strings — never computed with floats.
+- Transcendentals are validated pointwise against those references on every
+  profile. The wide-tier strategy means the final rounding step selects the
+  nearest representable value for the storage format in the measured cases.
+- Linear algebra, manifolds, Lie groups, ODE, and tensor tests combine
+  structural checks (PA=LU, QᵀQ=I, exp/log roundtrips) with concrete
+  mpmath-validated numerical comparisons.
 
 ```bash
-cargo test --release --test validation_benchmark -- --nocapture --test-threads=1
+cargo test --release
 ```
 
-This README intentionally avoids broad numerical slogans. Stronger correctness claims belong in a dedicated validation document with exact definitions, scope, corpus size, and methodology.
-
-## Geometric extension (L1–L5)
-
-The crate includes a geometric mathematics extension built on top of the FASC canonical API. Every operation in this extension follows the **compute-tier principle**: all accumulations, dot products, and matrix chains operate at tier N+1 (double width), with a single downscale at the output boundary. This is the matrix-level analog of BinaryCompute chain persistence for scalars.
-
-**938 tests, 0 failures, all 5 profiles.**
-
-### L1A: Linear algebra
-
-Imperative matrix and vector types. All dot products and matrix multiplications use `compute_tier_dot_raw` at tier N+1.
-
-```rust
-use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
-
-let fp = |s| FixedPoint::from_str(s);
-
-// Vectors — dot product at compute tier (1 ULP)
-let u = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
-let v = FixedVector::from_slice(&[fp("4"), fp("5"), fp("6")]);
-let d = u.dot(&v);                    // compute-tier accumulation
-let len = u.length();                  // via compute-tier dot → sqrt
-let n = u.normalized();                // via compute-tier length
-let dist = u.metric_distance_safe(&v); // compute-tier sum-of-squares → sqrt
-let cross = u.cross(&v);              // 3D cross product
-let outer = u.outer_product(&v);       // u ⊗ v → matrix
-
-// Matrices — multiply at compute tier (1 ULP per output element)
-let a = FixedMatrix::from_slice(2, 2, &[fp("4"), fp("2"), fp("2"), fp("3")]);
-let b = FixedVector::from_slice(&[fp("1"), fp("2")]);
-let c = &a * &a;                       // mat-mat multiply (compute-tier dots)
-let x = a.mul_vector(&b);             // mat-vec multiply (compute-tier dots)
-let tr = a.trace();                    // diagonal sum
-let at = a.transpose();               // transpose
-let id = FixedMatrix::identity(3);     // identity
-let sub = a.submatrix(0, 0, 2, 2);    // extract submatrix
-let kron = a.kronecker(&a);           // Kronecker product
-```
-
-### L1B: Matrix decompositions
-
-Six decompositions, all at compute-tier precision internally. Every entry computed via `compute_tier_sub_dot_raw` — 0-1 ULP per element.
-
-```rust
-use g_math::fixed_point::imperative::decompose::*;
-
-// LU decomposition (Doolittle, partial pivoting)
-let lu = lu_decompose(&a).unwrap();
-let x = lu.solve(&b).unwrap();         // Ax = b, 0-1 ULP
-let det = lu.determinant();             // exact at compute tier
-let a_inv = lu.inverse().unwrap();      // full inverse
-lu.refine(&a, &b, &x);                 // iterative refinement
-
-// QR decomposition (Householder reflections)
-let qr = qr_decompose(&a).unwrap();
-
-// Cholesky decomposition (for SPD matrices)
-let chol = cholesky_decompose(&a).unwrap();
-
-// Eigenvalues (Jacobi rotation, symmetric matrices)
-let (eigenvalues, eigenvectors) = eigen_symmetric(&a).unwrap();
-
-// SVD (Golub-Kahan-Reinsch)
-let svd = svd_decompose(&a).unwrap();
-
-// Schur decomposition (Francis QR)
-let schur = schur_decompose(&a).unwrap();
-```
-
-### L1C: Derived operations
-
-Norms, least-squares, condition numbers. Norms use compute-tier accumulation.
-
-```rust
-use g_math::fixed_point::imperative::derived::*;
-
-let f_norm = frobenius_norm(&a);       // compute-tier sum-of-squares → sqrt
-let n1 = norm_1(&a);                   // compute-tier column sums
-let ni = norm_inf(&a);                 // compute-tier row sums
-let x = solve(&a, &b).unwrap();       // via LU
-let d = determinant(&a).unwrap();      // via LU
-let a_inv = inverse(&a).unwrap();      // via LU
-let cond = condition_number_1(&a).unwrap();
-let x_ls = least_squares(&a, &b).unwrap();
-let a_inv_spd = inverse_spd(&a).unwrap(); // via Cholesky
-```
-
-### L1D: Matrix functions
-
-Matrix exp, log, sqrt, pow. All operations chain through `ComputeMatrix` at tier N+1 — zero mid-chain materializations.
-
-```rust
-use g_math::fixed_point::imperative::matrix_functions::*;
-
-let exp_a = matrix_exp(&a).unwrap();      // Padé [6/6] + scaling-squaring
-let sqrt_a = matrix_sqrt(&a).unwrap();    // Denman-Beavers iteration
-let log_a = matrix_log(&a).unwrap();      // inverse scaling-squaring + Horner
-
-// matrix_pow chains log → scalar_mul → exp entirely at compute tier
-let a_half = matrix_pow(&a, fp("0.5")).unwrap();
-
-// exp(log(A)) roundtrip: 2 ULP (was 301 trillion before ComputeMatrix)
-```
-
-The `matrix_log` sqrt loop now stays at compute tier (previously: N downscale-upscale cycles per sqrt iteration). The `matrix_pow` log→exp chain is a single compute-tier pipeline with one downscale at the end.
-
-### L2A: ODE solvers
-
-Three integrators. Weighted sums (k1..k6 combinations) are accumulated at compute tier via `compute_tier_dot_raw`. Step-size halving is exact bit-shift.
-
-```rust
-use g_math::fixed_point::imperative::ode::*;
-
-// RK4 — classical 4th-order (fixed step)
-let traj = rk4_integrate(&system, t0, &x0, t_end, h);
-
-// Dormand-Prince 4(5) — adaptive step, discrete controller
-let result = rk45_integrate(&system, t0, &x0, t_end, h0, tol).unwrap();
-
-// Symplectic Störmer-Verlet — energy-preserving (Hamiltonian systems)
-let traj = verlet_integrate(&ham_system, t0, &q0, &p0, t_end, h);
-
-// Optional conserved-quantity monitoring with projection
-let mut monitor = InvariantMonitor::new(invariant_fn, threshold);
-```
-
-### L2B: Tensors
-
-Arbitrary-rank tensors with compute-tier contraction, trace, and symmetrization.
-
-```rust
-use g_math::fixed_point::imperative::tensor::Tensor;
-
-let t = Tensor::from_matrix(&a);                    // rank-2 from matrix
-let v = Tensor::from_vector(&u);                    // rank-1 from vector
-let c = Tensor::contract(&t, &v, &[(1, 0)]);       // index contraction (compute-tier dots)
-let tr = t.trace(0, 1);                             // trace (compute-tier accumulation)
-let s = t.symmetrize(&[0, 1]);                      // symmetrize (compute-tier sums)
-let a = t.antisymmetrize(&[0, 1]);                  // antisymmetrize (compute-tier sums)
-let outer = Tensor::outer_product(&t, &v);           // outer product
-let raised = t.raise_index(0, &metric_inv);          // index raising via metric
-```
-
-### L3A–L3C: Riemannian manifolds
-
-Seven manifold implementations. All metric computations (inner products, distances, geodesics) route through compute-tier dot products or `ComputeMatrix` chains. SPD and Grassmannian operations use `ComputeMatrix` for all matrix multiplication chains with `trace_compute()` for metric traces.
-
-```rust
-use g_math::fixed_point::imperative::manifold::*;
-
-// Euclidean R^n — flat space
-let euclidean = EuclideanSpace { dim: 3 };
-let d = euclidean.distance(&p, &q).unwrap();
-
-// Sphere S^n — closed-form sin/cos/acos geodesics (0-2 ULP)
-let sphere = Sphere { dim: 2 };
-let d = sphere.distance(&p, &q).unwrap();
-let transported = sphere.parallel_transport(&p, &q, &tangent).unwrap();
-
-// Hyperbolic H^n — Minkowski inner product, sinh/cosh/acosh geodesics (0-1 ULP)
-let hyp = HyperbolicSpace { dim: 3 };
-let d = hyp.distance(&p, &q).unwrap();
-
-// SPD manifold — symmetric positive definite matrices
-// Inner product, exp/log maps, distance, transport all via ComputeMatrix chains
-let spd = SPDManifold { n: 2 };
-let d = spd.distance(&p_spd, &q_spd).unwrap();
-
-// Grassmannian Gr(k, n) — k-dimensional subspaces of R^n
-// exp/log/distance via SVD + ComputeMatrix chains
-let gr = Grassmannian { k: 2, n: 4 };
-
-// Stiefel St(k, n) — orthonormal k-frames in R^n
-let st = Stiefel { k: 2, n: 4 };
-
-// Product manifold — combine any manifolds
-let product = ProductManifold::new(vec![
-    (Box::new(Sphere { dim: 2 }), 3),
-    (Box::new(EuclideanSpace { dim: 2 }), 2),
-]);
-```
-
-All manifold types implement the `Manifold` trait:
-
-```rust
-pub trait Manifold {
-    fn dimension(&self) -> usize;
-    fn inner_product(&self, base: &FixedVector, u: &FixedVector, v: &FixedVector) -> FixedPoint;
-    fn exp_map(&self, base: &FixedVector, tangent: &FixedVector) -> Result<FixedVector, _>;
-    fn log_map(&self, base: &FixedVector, target: &FixedVector) -> Result<FixedVector, _>;
-    fn distance(&self, p: &FixedVector, q: &FixedVector) -> Result<FixedPoint, _>;
-    fn parallel_transport(&self, base: &FixedVector, target: &FixedVector, tangent: &FixedVector) -> Result<FixedVector, _>;
-}
-```
-
-### L3B: Differential geometry
-
-Christoffel symbols, curvature tensors, geodesic integration. All tensor contractions at compute tier.
-
-```rust
-use g_math::fixed_point::imperative::curvature::*;
-
-// Christoffel symbols Γ^k_{ij} — compute-tier contractions
-let gamma = christoffel(&metric_fn, &point, dim);
-
-// Riemann curvature tensor R^l_{ijk}
-let riemann = riemann_curvature(&metric_fn, &point, dim);
-
-// Ricci tensor R_{ij} and scalar curvature R
-let ricci = ricci_tensor(&metric_fn, &point, dim);
-let scalar = scalar_curvature(&metric_fn, &point, dim);
-
-// Sectional curvature K(u, v)
-let k = sectional_curvature(&metric_fn, &point, &u, &v, dim);
-
-// Geodesic integration via RK4 on the geodesic ODE
-let geodesic = geodesic_integrate(&metric_fn, &point, &velocity, dim, t_end, h);
-
-// Parallel transport of a vector along a geodesic
-let transported = parallel_transport_ode(&metric_fn, &point, &velocity, &vector, dim, t_end, h);
-```
-
-### L4A: Lie groups
-
-Six Lie group implementations. SO(3) and SE(3) use **fused sincos** at compute tier — a single shared range reduction computes both sin(θ) and cos(θ), with scalar coefficients (sinc, half_cosc) computed entirely at tier N+1. Zero mid-chain materializations between trig computation and the matrix formula.
-
-```rust
-use g_math::fixed_point::imperative::lie_group::*;
-
-// SO(3) — 3D rotations via closed-form Rodrigues
-// Fused sincos + compute-tier coefficients → 0-1 ULP roundtrip
-let omega = FixedVector::from_slice(&[fp("0.5"), fp("0.3"), fp("0.7")]);
-let r = SO3::rodrigues_exp(&omega).unwrap();
-let omega_back = SO3::rodrigues_log(&r).unwrap();
-
-// SE(3) — 3D rigid motions (rotation + translation)
-// Fused sincos + compute-tier V·v via mul_vector_compute → 0-1 ULP roundtrip
-let xi = FixedVector::from_slice(&[fp("0.1"), fp("0.2"), fp("0.3"), fp("1"), fp("2"), fp("3")]);
-let g = SE3::se3_exp(&xi).unwrap();
-let xi_back = SE3::se3_log(&g).unwrap();
-
-// SO(n) — general rotations via matrix_exp fallback
-let son = SOn { n: 4 };
-let r4 = son.lie_exp(&xi_4d).unwrap();
-
-// GL(n) — invertible matrices
-let gln = GLn { n: 3 };
-
-// O(n) — orthogonal matrices (det = ±1)
-let on = On { n: 3 };
-
-// SL(n) — unit-determinant matrices
-let sln = SLn { n: 3 };
-```
-
-All Lie groups implement both the `Manifold` and `LieGroup` traits:
-
-```rust
-pub trait LieGroup: Manifold {
-    fn algebra_dim(&self) -> usize;
-    fn matrix_dim(&self) -> usize;
-    fn identity_element(&self) -> FixedMatrix;
-    fn compose(&self, g1: &FixedMatrix, g2: &FixedMatrix) -> FixedMatrix;
-    fn group_inverse(&self, g: &FixedMatrix) -> Result<FixedMatrix, _>;
-    fn lie_exp(&self, xi: &FixedVector) -> Result<FixedMatrix, _>;
-    fn lie_log(&self, g: &FixedMatrix) -> Result<FixedVector, _>;
-    fn hat(&self, xi: &FixedVector) -> FixedMatrix;
-    fn vee(&self, xi_hat: &FixedMatrix) -> FixedVector;
-    fn adjoint(&self, g: &FixedMatrix, xi: &FixedVector) -> Result<FixedVector, _>;
-    fn bracket(&self, xi: &FixedVector, eta: &FixedVector) -> FixedVector;
-    fn act(&self, g: &FixedMatrix, point: &FixedVector) -> FixedVector;
-}
-```
-
-### L4B: Projective geometry
-
-Homogeneous coordinates, cross-ratios, stereographic projection, Möbius transformations.
-
-```rust
-use g_math::fixed_point::imperative::projective::*;
-
-// Homogeneous coordinates
-let h = to_homogeneous(&p);
-let p_back = from_homogeneous(&h).unwrap();
-
-// Cross-ratio (projective invariant)
-let cr = cross_ratio(&a, &b, &c, &d, &dir);
-
-// Stereographic projection S^n → R^n and back
-let projected = stereo_project(&point_on_sphere);
-let lifted = stereo_unproject(&point_in_plane, dim);
-
-// Möbius transformations (complex plane)
-let m = Moebius::new(a, b, c, d);
-let w = m.apply(z);
-let m2 = m.compose(&other);
-```
-
-### L5A: Fiber bundles
-
-Trivial, vector, and principal bundles with connection coefficients, horizontal lift, parallel transport, and curvature. All accumulations at compute tier.
-
-```rust
-use g_math::fixed_point::imperative::fiber_bundle::*;
-
-// Trivial bundle — direct product of base and fiber
-let trivial = TrivialBundle::new(base_dim, fiber_dim);
-let (base, fiber) = trivial.project(&total);
-let lifted = trivial.lift(&base, &fiber);
-
-// Vector bundle with connection coefficients A^a_{bi}
-let bundle = VectorBundle::new(base_dim, fiber_dim);
-bundle.set_coeff(a, b, i, value);
-let h_lift = bundle.horizontal_lift(&base_tangent, &fiber);       // compute-tier accumulation
-let transported = bundle.parallel_transport_along(&path, &fiber); // compute-tier per step
-let curv = vector_bundle_curvature(&bundle);                      // R^a_{bij} tensor
-
-// Principal bundle with structure group transitions
-let principal = PrincipalBundle::new(base_dim, group_dim, num_charts);
-principal.set_transition(i, j, &matrix);
-assert!(principal.verify_cocycle(i, j, k));
-```
-
-### S1: Serialization
-
-Profile-tagged big-endian binary encoding for wire transport and consensus. Compact, deterministic, cross-platform identical.
-
-```rust
-use g_math::fixed_point::imperative::serialization::*;
-
-// FixedPoint: [u8 profile tag][raw bytes]
-let bytes = fp_val.to_bytes();
-let restored = FixedPoint::from_bytes(&bytes).unwrap();
-
-// FixedVector: [u32 len][elements...]
-let bytes = vec.to_bytes();
-let restored = FixedVector::from_bytes(&bytes).unwrap();
-
-// ManifoldPoint: [u8 manifold tag][point data]
-let mp = ManifoldPoint::new(MANIFOLD_TAG_SPHERE, &point);
-let bytes = mp.to_bytes();
-```
-
-### Fused sincos
-
-`FixedPoint::try_sincos()` computes sin(x) and cos(x) from a single shared range reduction at compute tier. More efficient than separate `try_sin` + `try_cos`, and used internally by Rodrigues (SO3), SE3 exp/log, and `evaluate_tan` in the FASC pipeline.
-
-```rust
-let theta = FixedPoint::from_str("1.2345");
-let (sin_t, cos_t) = theta.try_sincos().unwrap(); // single range reduction, both at 0 ULP
-```
-
-### Precision guarantees
-
-All precision claims are empirically measured against mpmath at 50+ digit precision, not theoretical. Validated with 938 tests across all modules.
-
-| Operation | ULP | Measurement |
-|-----------|-----|-------------|
-| Transcendentals (all 18) | 0 | 18/18 × 3 profiles, mpmath 250-digit refs |
-| Vector dot product | 1 | compute-tier accumulation |
-| Matrix multiply | 1 per entry | compute-tier dot per output element |
-| LU/Cholesky solve | 0-1 | Well-conditioned systems |
-| Manifold geodesics | 0-2 | Sphere, hyperbolic, SPD, Grassmannian |
-| Lie group exp/log roundtrip | 0-1 | SO(3) fused sincos Rodrigues, SE(3) compute-tier V·v |
-| Matrix exp (Padé [6/6]) | 1-7 | ComputeMatrix throughout |
-| Matrix pow (log→exp chain) | 1-7 | Single compute-tier pipeline, zero mid-chain downscale |
-| exp(log(A)) roundtrip | 2 | Was 301 trillion before ComputeMatrix |
-| Hilbert 4×4 residual | 0 | After iterative refinement |
-| ODE RK4 step | 1 per step | compute-tier weighted sums |
-| Tensor contraction | 1 per entry | compute-tier dot products |
-| Frobenius / 1-norm / inf-norm | 1 | compute-tier accumulation |
-| Fused sqrt_sum_sq / euclidean_distance | 0-1 | compute-tier accumulation + sqrt |
-| Fused softmax | 0-1 per weight | compute-tier exp + sum + divide |
-| Fused silu | 0-1 | compute-tier exp + divide |
-
-**Practical limitations:** Values like 0.3 and 0.7 are repeating binary fractions with 1 ULP representation error. Operations with high condition numbers (Hilbert matrices, rotation formulas) amplify this input error. This is a fundamental limit of finite-precision arithmetic — binary, decimal, or otherwise — not an implementation deficiency. The roundtrip precision (which cancels input errors) proves the implementation is mathematically correct.
-
-**Determinism guarantee:** All results are bit-identical across x86_64, ARM, RISC-V, and any other architecture. Every operation is pure integer arithmetic on Q-format storage. No floating-point anywhere in the pipeline.
-
-**Profile support:** All geometric operations work across all five profiles (realtime Q16.16, compact Q32.32, embedded Q64.64, balanced Q128.128, scientific Q256.256) via compile-time `#[cfg]` gates. The same source code, same algorithms, same precision guarantees.
-
-## Design notes
-
-This crate is opinionated.
-
-It does not pretend all arithmetic should collapse into one representation. It does not assume floating point is the only practical route. It tries to preserve exactness when possible, promote gracefully when necessary, and keep the main API compact.
-
-That is the wager.
+Honest limits worth knowing:
+
+- **Input representation**: values like `0.3` or `1/3` are repeating fractions
+  in binary and carry up to half an ULP of representation error before any
+  computation happens. No finite-precision system avoids this; the decimal and
+  symbolic domains exist precisely so you can pick a representation in which
+  your inputs *are* exact.
+- **Conditioning**: error in a solved system scales with the condition number
+  of the matrix. An ill-conditioned system (e.g. Hilbert matrices) amplifies
+  input error by orders of magnitude in any finite precision; iterative
+  refinement recovers the residual but not the lost input information.
+- **Determinism**: whatever the error is, it is the *same* error on every
+  platform — results are bit-identical across x86_64, ARM, and RISC-V.
+
+## Feature flags
+
+| Flag | Effect |
+| ---- | ------ |
+| `infinite-precision` | BigInt tier for the symbolic rational domain (pulls in `num-bigint`) |
+| `serde` | `Serialize`/`Deserialize` for FixedPoint, vectors, matrices, tensors |
+| `inference` | TQ1.9 ternary inference ops + rayon parallel matvec |
+| `macros` | `gmath!()` compile-time literal pre-parsing |
+| `rebuild-tables` | regenerate lookup tables from `build.rs` (~20 min) |
+| `realtime` / `compact` / `embedded` / `balanced` / `scientific` | select profile via Cargo feature instead of `GMATH_PROFILE` |
+| `legacy-tests` | compile legacy test suites |
+
+No feature gates around core functionality — all domains, transcendentals, wide
+integers (I256/I512/I1024), and tiered overflow are always compiled.
 
 ## Author note
 
-I write software like a builder from first principles, not a committee. This is a library I built because I needed a precise and deterministic fixed-point library.
-
-Instead of focusing on front-end apps, I prefer to rebuild from first principles keystone libraries so these are future-proof and allow me to build software and paradigms that didn't exist before.
-
-So yes, some of this project carries personal style, philosophy, and a slightly stubborn tone. That is intentional.
-
-If this crate is useful to you, then use it, stress it, break it, and tell me where it fails. It could contain flaws but I have not found them myself. I validated all operations against mpmath — run the full test suite to see for yourself.
+I build keystone libraries from first principles — this one because I needed
+precise, deterministic fixed-point arithmetic and wanted the numeric domains to
+coexist instead of collapsing everything into one representation. Use it, stress
+it, break it, and tell me where it fails.
 
 If you want to support the work:
 
 | Currency | Address |
-|----------|---------|
+| -------- | ------- |
 | Bitcoin (BTC) | bc1qwf78fjgapt2gcts4mwf3gnfkclvqgtlg4gpu4d |
 | Ethereum (ETH) | 0xf38b517Dd2005d93E0BDc1e9807665074c5eC731 / nierto.eth |
 | Monero (XMR) | 8BPaSoq1pEJH4LgbGNQ92kFJA3oi2frE4igHvdP9Lz2giwhFo2VnNvGT8XABYasjtoVY2Qb3LVHv6CP3qwcJ8UnyRtjWRZ5 |
 
-Please star the project on GitHub if it was useful to you. Thank you sincerely.
-
-I am building this in the middle of life, work, pressure, family, and limited time. That does not make the project weaker. It is the reason it exists at all. We don't do things because they are easy, but because they are hard.
-
 ## Disclaimer
 
-This software is provided **"as is"**, without warranty of any kind, express or implied. Use of this library is entirely at your own risk. In no event shall the author or contributors be held liable for any damages, data loss, financial loss, or other consequences arising from the use or inability to use this software. By using gMath, you accept full responsibility for verifying its suitability for your use case.
-
-See the license texts for the full legal terms.
+This software is provided **"as is"**, without warranty of any kind, express or
+implied. Use of this library is entirely at your own risk. In no event shall the
+author or contributors be held liable for any damages arising from the use or
+inability to use this software.
 
 ## License
 
