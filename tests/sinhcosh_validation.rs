@@ -291,7 +291,7 @@ mod compact_tests {
 // + cosh results. sinhcosh must produce identical storage values, since both
 // routes ultimately materialize the same (exp(x) ± exp(-x))/2 at decimal
 // compute tier. Independent mpmath references are redundant for the pair test
-// — the separate sinh/cosh already have 0-ULP validation in their own suites.
+// — the separate sinh/cosh already have exact-match validation in their own suites.
 
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 mod decimal_tests {

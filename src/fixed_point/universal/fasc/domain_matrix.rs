@@ -9,7 +9,7 @@
 //! tier (the only domain with transcendental tables).
 //!
 //! **USE CASES**:
-//! - Financial: Decimal interest-rate matrices with 0-ULP exact arithmetic
+//! - Financial: Decimal interest-rate matrices with exact decimal arithmetic
 //! - Neural: Balanced ternary weight matrices for {-1, 0, +1} quantization
 //! - Mixed: Decimal input → binary transcendental → decimal output chains
 //!

@@ -565,7 +565,7 @@ mod tests {
 
     /// mpmath: exp(-1) = 0.36787944117144232839...
     /// Storage-tier validation (compute-tier rounding from 1/exp(1) is acceptable
-    /// as long as storage-tier result is 0 ULP — covered by decimal_transcendental_validation).
+    /// as long as storage-tier result is exact — covered by decimal_transcendental_validation).
     #[test]
     fn exp_neg_one() {
         use crate::canonical::{gmath, evaluate};

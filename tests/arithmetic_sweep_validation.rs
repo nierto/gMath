@@ -328,7 +328,7 @@ fn validate_cross_domain_arithmetic() {
 // ════════════════════════════════════════════════════════════════════
 
 /// Maximum allowed ULP for binary fixed-point arithmetic.
-/// add/sub: exact (0 ULP). mul/div: truncation rounding allows up to 1 ULP.
+/// add/sub: exact. mul/div: truncation rounding allows up to 1 ULP.
 #[allow(dead_code)]
 const MAX_ARITHMETIC_ULP: u128 = 1;
 

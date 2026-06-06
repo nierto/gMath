@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.4.2**
+Current version: **0.4.23**
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise — this is a working list for a solo-maintained project.
 
@@ -8,15 +8,15 @@ This document tracks planned work and known gaps. Items are grouped by priority,
 
 ## Delivered
 
-### v0.3.0 — Five profiles, 0 ULP
+### v0.3.0 — Five profiles
 
 | Profile | Storage | Compute | Bytes | Digits | Status |
 |---------|---------|---------|-------|--------|--------|
-| realtime | Q16.16 (i32) | Q32.32 (i64) | 4 | 4 | **0 ULP** |
-| compact | Q32.32 (i64) | Q64.64 (i128) | 8 | 9 | **0 ULP** |
-| embedded | Q64.64 (i128) | Q128.128 (I256) | 16 | 19 | **0 ULP** |
-| balanced | Q128.128 (I256) | Q256.256 (I512) | 32 | 38 | **0 ULP** |
-| scientific | Q256.256 (I512) | Q512.512 (I1024) | 64 | 77 | **0 ULP** |
+| realtime | Q16.16 (i32) | Q32.32 (i64) | 4 | 4 | validated vs mpmath |
+| compact | Q32.32 (i64) | Q64.64 (i128) | 8 | 9 | validated vs mpmath |
+| embedded | Q64.64 (i128) | Q128.128 (I256) | 16 | 19 | validated vs mpmath |
+| balanced | Q128.128 (I256) | Q256.256 (I512) | 32 | 38 | validated vs mpmath |
+| scientific | Q256.256 (I512) | Q512.512 (I1024) | 64 | 77 | validated vs mpmath |
 
 All profiles use true tier N+1 computation. 18 transcendentals, 4 domains (binary, decimal, ternary, symbolic), FASC zero-allocation stack computation, UGOD tiered overflow delegation, BinaryCompute chain persistence.
 
@@ -35,7 +35,7 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 
 ### v0.4.0 — Decimal transcendentals, fractal router, direct engine calls, gmath! macro
 
-**Decimal transcendentals (native, 0 ULP):**
+**Decimal transcendentals (native engines):**
 - 5 native engines: exp (4-stage table decomposition), ln (atanh), sqrt (Newton-Raphson), sin/cos (Cody-Waite + Machin pi), atan (half-angle)
 - DecimalCompute StackValue variant + full FASC dispatch
 - DecimalFixed imperative type: 18 transcendental methods wired to native engines (eliminated binary round-trip)

@@ -331,7 +331,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// ALGORITHM: Multiply with extended precision, then scale back with banker's rounding
     /// PRECISION: Exact for all results that fit in the target format
     /// DOMAIN: Uses decimal D256 arithmetic - pure decimal domain separation
-    pub fn multiply_0ulp_decimal(self, other: Self) -> Self {
+    pub fn multiply_exact_decimal(self, other: Self) -> Self {
         // Use D256 for intermediate calculation to prevent overflow
         let a_extended = D256::from_i128(self.value);
         let b_extended = D256::from_i128(other.value);
@@ -471,7 +471,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         assert_eq!(inputs.len(), outputs.len());
         
         for (i, &(a, b)) in inputs.iter().enumerate() {
-            outputs[i] = a.multiply_0ulp_decimal(b);
+            outputs[i] = a.multiply_exact_decimal(b);
         }
     }
     
@@ -693,7 +693,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     // ====================================================================
     //
     // Each method: upscale i128 → ComputeStorage → decimal engine → downscale → i128.
-    // Zero binary contamination. 0 ULP at storage dp.
+    // Zero binary contamination — exact at storage dp.
     //
     // These replace the old binary round-trip path (decimal→binary→engine→binary→decimal)
     // which wasted ~200 ns on conversion AND introduced representation error for values
@@ -1760,12 +1760,12 @@ mod tests {
     }
     
     #[test]
-    fn test_0ulp_multiplication() {
+    fn test_exact_multiplication() {
         // Test exact decimal multiplication - THE CRITICAL CASE
         let hundred = DecimalFixed::<3>::from_decimal_str_decimal("100.000").unwrap();
         let one_mill = DecimalFixed::<3>::from_decimal_str_decimal("0.001").unwrap();
         
-        let product = hundred.multiply_0ulp_decimal(one_mill);
+        let product = hundred.multiply_exact_decimal(one_mill);
         assert_eq!(product.to_string(), "0.100");
         println!("✅ EXACT: 100.000 × 0.001 = 0.100 (not ~0.1000000055)");
         
@@ -1773,7 +1773,7 @@ mod tests {
         let price = DecimalFixed::<2>::from_decimal_str_decimal("19.99").unwrap();
         let quantity = DecimalFixed::<2>::from_decimal_str_decimal("5.00").unwrap();
         
-        let total = price.multiply_0ulp_decimal(quantity);
+        let total = price.multiply_exact_decimal(quantity);
         assert_eq!(total.to_string(), "99.95");
         println!("✅ FINANCIAL: $19.99 × 5.00 = $99.95 exactly");
         
@@ -1781,7 +1781,7 @@ mod tests {
         let user_decimal = DecimalFixed::<2>::from_decimal_str_decimal("0.10").unwrap();
         let ten = DecimalFixed::<2>::from_decimal_str_decimal("10.00").unwrap();
         
-        let result = user_decimal.multiply_0ulp_decimal(ten);
+        let result = user_decimal.multiply_exact_decimal(ten);
         assert_eq!(result.to_string(), "1.00");
         println!("✅ USER: 0.10 × 10.00 = 1.00 exactly");
         
@@ -1789,7 +1789,7 @@ mod tests {
         let a = DecimalFixed::<4>::from_decimal_str_decimal("0.0001").unwrap();
         let b = DecimalFixed::<4>::from_decimal_str_decimal("10000.0000").unwrap();
         
-        let precise_result = a.multiply_0ulp_decimal(b);
+        let precise_result = a.multiply_exact_decimal(b);
         assert_eq!(precise_result.to_string(), "1.0000");
         println!("✅ PRECISION: 0.0001 × 10000.0000 = 1.0000 exactly");
     }

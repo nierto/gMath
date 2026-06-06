@@ -2,7 +2,7 @@
 //!
 //! Tests:
 //! 1. Pure binary matrices (baseline)
-//! 2. Pure decimal matrices (financial-grade 0-ULP)
+//! 2. Pure decimal matrices (financial-grade exact decimal)
 //! 3. Mixed-domain operations (cross-domain via rational)
 //! 4. Symbolic matrices (exact rational arithmetic)
 
@@ -98,7 +98,7 @@ fn test_decimal_domain_matrix_creation() {
 
 #[test]
 fn test_decimal_domain_matrix_add() {
-    // Decimal addition should be exact (0 ULP)
+    // Decimal addition should be exact
     let a = DomainMatrix::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
     let b = DomainMatrix::from_strings(2, 2, &["0.01", "0.02", "0.03", "0.04"]).unwrap();
     let c = a.add(&b).unwrap();

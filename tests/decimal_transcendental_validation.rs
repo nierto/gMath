@@ -466,7 +466,7 @@ mod q64_64 {
 
     /// Storage-tier ULP test: downscale BOTH actual and expected from compute dp=38
     /// to a target storage dp, then compare. This is the **decimal equivalent of
-    /// binary "0 ULP at storage tier"** — the algorithmic compute-tier error gets
+    /// binary exactness at storage tier** — the algorithmic compute-tier error gets
     /// absorbed into the rounding when stepping down to storage precision.
     macro_rules! storage_ulp_test {
         ($name:ident, $fn:ident, $refs:ident, $storage_dp:expr, $max_ulp:expr) => {
@@ -502,7 +502,7 @@ mod q64_64 {
     }
 
     // ==================================================================
-    // STORAGE-TIER ULP VALIDATION — the "0 ULP" target matching binary
+    // STORAGE-TIER ULP VALIDATION — the exact-at-storage-tier target matching binary
     // ==================================================================
     //
     // Each function is tested at the maximum dp where its result range fits
@@ -510,8 +510,8 @@ mod q64_64 {
     // a Decimal from a transcendental computation.
     //
     // Compute tier (dp=38) provides ~19 dp of headroom over storage, absorbing
-    // all algorithmic error during downscaling. Result: 0 ULP at storage tier,
-    // matching the binary transcendental guarantee.
+    // all algorithmic error during downscaling. Result: exact at storage tier,
+    // matching the binary transcendental behavior.
     //
     // sin/cos/atan/atan2: result ∈ [-π, π], 1 integer digit → max storage dp ≤ 37
     // exp: result up to ~5e8 for our range, ~9 integer digits → max storage dp ≤ 29

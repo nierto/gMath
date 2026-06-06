@@ -514,7 +514,7 @@ impl MetricProvider for SphereMetric {
     /// All others = 0.
     ///
     /// These are derived analytically from g = r²[[1,0],[0,sin²θ]].
-    /// Uses 0-ULP FASC sin/cos — no numerical differentiation involved.
+    /// Uses the FASC sin/cos engines — no numerical differentiation involved.
     fn christoffel_closed_form(&self, p: &FixedVector) -> Option<Tensor> {
         let theta = p[0];
         let sin_t = theta.sin();
