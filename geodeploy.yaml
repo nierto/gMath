@@ -1,0 +1,35 @@
+# g_math — deterministic, zero-float fixed-point arithmetic (FASC) crate.
+# Ships a REAL CLI (`geodineum gmath`) backed by the canonical FASC engine —
+# this replaces the former bash/bc `gmath` demo, which had nothing to do with
+# the crate. "Determinism is the pitch", so the CLI runs the genuine engine:
+# exact rationals, transcendentals, identical results on every machine.
+#
+#   geodineum gmath add 1/3 1/6     # → 0.5  (exact)
+#   geodineum gmath sqrt 2          # → 1.4142135623730950488
+#   geodineum gmath ln 2            # → 0.6931471805599453...
+
+name: g_math
+version: 0.4.23
+description: Deterministic fixed-point arithmetic engine + real CLI (canonical FASC)
+tier: 1
+language: rust
+
+runtime:
+  group: gnode
+
+triggers:
+  - match: "src/**|build.rs|Cargo.toml|Cargo.lock"
+    actions: [build]
+
+build:
+  type: cargo
+
+dirty-tree:
+  strategy: stash
+
+cli:
+  commands:
+    - name: gmath
+      handler: scripts/cli/gmath.sh
+      description: Deterministic fixed-point calculator — add/sub/mul/div/pow/sqrt/exp/ln/sin/cos/tan/atan, exact rationals
+      category: Math
