@@ -42,18 +42,18 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 - 14 ULP validation tests + 24 FASC integration tests + ~9500 mpmath reference points
 
 **Fractal topology router:**
-- Shadow-based operand classifier (~15 ns) — factors CompactShadow denominator to determine domain exactness
+- Shadow-based operand classifier — factors CompactShadow denominator to determine domain exactness
 - Compile-time routing table (5.25 KB .rodata, 21 ops x 16 x 16 classes) — O(1) lookup
 - Cross-domain coercion in arithmetic — `gmath("0.1") + gmath("255")` routes to Decimal (was Symbolic fallback)
 - Tree walker: `route_expression(&LazyExpr) -> OperandClass`, O(N) bottom-up
 
 **Decimal 4-stage exp tables:**
 - `exp(x) = exp(k) * exp(d1/10) * exp(d2/100) * exp(d3/1000) * exp(r)` — 71 cached entries
-- 4.1x speedup on decimal exp (43K -> 177K ops/s), binary gap narrowed 8.6x -> 2.1x
+- Cached-table decimal exp path; narrows the binary/decimal gap
 
 **Direct binary engine calls (FASC bypass):**
 - FixedPoint: exp/ln/sqrt/sin/cos/atan use `direct_unary` pattern — upscale -> engine -> downscale
-- ~65 ns saved per call vs FASC pipeline (no LazyExpr, no TLS, no StackValue boxing)
+- Avoids the FASC pipeline overhead per call (no LazyExpr, no TLS, no StackValue boxing)
 
 **gmath!() compile-time macro:**
 - `g_math_macros/` proc-macro crate — zero external deps, `--features macros`
@@ -98,7 +98,7 @@ Filed by the Geo dev team (`GMATH_TODO_SUGGESTIONS_GEO-DEVTEAM.md`, P2): Geo's `
 
 **Benefits:**
 
-- ~2× throughput: 2 `exp` evaluations instead of 4 (separate `sinh` + `cosh` each call `exp` twice)
+- 2 `exp` evaluations instead of 4 (separate `sinh` + `cosh` each call `exp` twice)
 - **Correlated rounding**: sinh and cosh derive from the same `(ep, en)` compute-tier pair, so systematic bias cancels in expressions like `cosh(θ)·p + (sinh(θ)/θ)·v`. Per-function ULP is unchanged (still 1 ULP at final downscale), but the *joint* error is tighter.
 
 **Validation:** mpmath-backed tests in `tests/sinhcosh_validation.rs` on realtime (Q16.16) + compact (Q32.32) profiles. Binary identity `cosh²−sinh² = 1` holds to ≤8 ULP at Q16.16 storage, ≤64 ULP at Q32.32 (both dominated by cosh² amplification of input-representation ULP).
@@ -134,7 +134,7 @@ Verify that UGOD overflow promotion tries at least 2 subsequent tiers before fal
 **Priority:** MEDIUM — throughput for inference consumers
 **Effort:** ~300 lines, 1 session
 
-Currently tan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh still route through FASC (`apply_unary(LazyExpr::tan)` etc.). These are FASC-composed (e.g., tan = sin/cos, sinh = (exp(x)-exp(-x))/2). Implement direct compositions using the already-direct exp/ln/sqrt/sin/cos/atan engines. Saves ~65 ns per call.
+Currently tan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh still route through FASC (`apply_unary(LazyExpr::tan)` etc.). These are FASC-composed (e.g., tan = sin/cos, sinh = (exp(x)-exp(-x))/2). Implement direct compositions using the already-direct exp/ln/sqrt/sin/cos/atan engines. Avoids the FASC pipeline overhead per call.
 
 ### 3. Stack evaluator `profile_dispatch!` macro
 
@@ -177,7 +177,7 @@ Pre-1.0 audit of exports, feature gating, StackValue extraction methods. Five AP
 
 ### Decimal sin/cos 3-stage tables
 
-Precomputed sin/cos tables for the decimal engine. Deferred — analysis showed Taylor computation is <3% of FASC pipeline time, so tables give negligible throughput gain through the full pipeline. Revisit when decimal sin/cos becomes a bottleneck (currently not, since binary sin/cos is 8x faster and used for most inference).
+Precomputed sin/cos tables for the decimal engine. Deferred — analysis showed Taylor computation is a small fraction of FASC pipeline time, so tables give little gain through the full pipeline. Revisit when decimal sin/cos becomes a bottleneck (currently not — binary sin/cos handles most inference).
 
 ---
 
