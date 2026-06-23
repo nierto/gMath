@@ -256,7 +256,7 @@ fn parse_unary_file(path: &std::path::Path) -> Vec<GoldenLine> {
     out
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct O2 {
     n: usize,
     exact: usize,   // delta 0  (correctly rounded)
@@ -268,28 +268,75 @@ struct O2 {
     errored: usize, // gMath panicked (overflow / unexpected)
     max_delta: i128,
     worst_input: i128,
+    worst_scale: u8,
     ties: usize,
     financial_gap: usize,
 }
 
-fn run_oracle2(
-    func: &str,
-    in_domain: impl Fn(i128) -> bool,
-    compute: impl Fn(DecimalFixed<28>) -> i128,
-) -> Option<O2> {
-    let dir = oracle2_dir()?;
-    let path = dir.join("tests/golden").join(format!("{func}_d38_s{SCALE}.txt"));
-    if !path.exists() {
-        eprintln!("[oracle2/{func}] SKIP — {} not found", path.display());
-        return Some(O2::default());
+impl O2 {
+    fn merge(&mut self, o: &O2) {
+        self.n += o.n;
+        self.exact += o.exact;
+        self.one += o.one;
+        self.small += o.small;
+        self.large += o.large;
+        self.skipped_domain += o.skipped_domain;
+        self.skipped_range += o.skipped_range;
+        self.errored += o.errored;
+        self.ties += o.ties;
+        self.financial_gap += o.financial_gap;
+        if o.max_delta > self.max_delta {
+            self.max_delta = o.max_delta;
+            self.worst_input = o.worst_input;
+            self.worst_scale = o.worst_scale;
+        }
     }
-    let lines = parse_unary_file(&path);
-    let mut r = O2::default();
-    // Silence .expect() panic spew; we count panics as `errored` instead.
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    for g in &lines {
-        if !in_domain(g.input) {
+}
+
+/// 10^s as i128 (s <= 37 always fits; 10^38 would overflow i128).
+fn pow10_i128(s: u8) -> i128 {
+    10i128.pow(s as u32)
+}
+
+/// Is the raw input (value = input/10^s) inside `func`'s real domain?
+fn in_domain(func: &str, input: i128, s: u8) -> bool {
+    let one = pow10_i128(s);
+    match func {
+        "ln" => input > 0,
+        "sqrt" => input >= 0,
+        "asin" | "acos" => input.unsigned_abs() <= one as u128,
+        "atanh" => input.unsigned_abs() < one as u128,
+        "acosh" => input >= one,
+        _ => true, // exp/sin/cos/tan/atan/sinh/cosh/tanh: all-real (overflow caught)
+    }
+}
+
+/// Compute func at compile-time scale S; raw result integer at scale S.
+fn compute_unary<const S: u8>(func: &str, input: i128) -> i128 {
+    let d = DecimalFixed::<S>::from_raw(input);
+    match func {
+        "exp" => d.exp().raw_value(),
+        "ln" => d.ln().raw_value(),
+        "sqrt" => d.sqrt().raw_value(),
+        "sin" => d.sin().raw_value(),
+        "cos" => d.cos().raw_value(),
+        "tan" => d.tan().raw_value(),
+        "atan" => d.atan().raw_value(),
+        "asin" => d.asin().raw_value(),
+        "acos" => d.acos().raw_value(),
+        "sinh" => d.sinh().raw_value(),
+        "cosh" => d.cosh().raw_value(),
+        "tanh" => d.tanh().raw_value(),
+        "asinh" => d.asinh().raw_value(),
+        "acosh" => d.acosh().raw_value(),
+        "atanh" => d.atanh().raw_value(),
+        other => panic!("compute_unary: unknown func {other:?}"),
+    }
+}
+
+fn grade_scale<const S: u8>(func: &str, lines: &[GoldenLine], r: &mut O2) {
+    for g in lines {
+        if !in_domain(func, g.input, S) {
             r.skipped_domain += 1;
             continue;
         }
@@ -306,7 +353,7 @@ fn run_oracle2(
             r.financial_gap += 1;
         }
         let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compute(DecimalFixed::<28>::from_raw(g.input))
+            compute_unary::<S>(func, g.input)
         }));
         let actual = match computed {
             Ok(v) => v,
@@ -325,53 +372,186 @@ fn run_oracle2(
         if delta > r.max_delta {
             r.max_delta = delta;
             r.worst_input = g.input;
+            r.worst_scale = S;
         }
     }
-    std::panic::set_hook(prev_hook);
-    Some(r)
 }
 
-fn report_o2(func: &str, r: &O2) {
+/// Runtime scale -> compile-time const dispatch for the 14 scales present in
+/// decimal-scaled's d18 + d38 tiers. Files at any other scale are skipped.
+fn dispatch_scale(scale: u8, func: &str, lines: &[GoldenLine], r: &mut O2) {
+    macro_rules! arms {
+        ($($s:literal),* $(,)?) => {
+            match scale {
+                $( $s => grade_scale::<$s>(func, lines, r), )*
+                _ => r.skipped_range += lines.len(),
+            }
+        };
+    }
+    arms!(0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37);
+}
+
+fn report_o2(label: &str, r: &O2) {
     eprintln!(
-        "[oracle2/{func}] n={} exact={} 1LSB={} 2-8={} >8={} max_delta={} \
-         errored={} skip_domain={} skip_range={} ties(E)={} fin_gap={}{}",
+        "[oracle2/{label}] n={} exact={} 1LSB={} 2-8={} >8={} max_delta={} \
+         errored={} skip_dom={} skip_rng={} ties(E)={} fin_gap={}{}",
         r.n, r.exact, r.one, r.small, r.large, r.max_delta, r.errored,
         r.skipped_domain, r.skipped_range, r.ties, r.financial_gap,
         if r.max_delta > 1 {
-            format!(" worst_input={}", r.worst_input)
+            format!(" worst=(input={}, scale={})", r.worst_input, r.worst_scale)
         } else {
             String::new()
         },
     );
-    assert_eq!(r.errored, 0, "{func}: {} panics on valid-domain inputs", r.errored);
 }
 
-#[test]
-fn oracle2_exp() {
-    if let Some(r) = run_oracle2("exp", |_| true, |d| d.exp().raw_value()) {
-        report_o2("exp", &r);
+/// Per-function CI policy. `Some(max_delta)` = gated: must have 0 panics and
+/// max_delta within tolerance. `None` = report-only (known-broken, fix pending
+/// — see tests/oracle_golden/FINDINGS.md). As composed functions are rewritten
+/// to compose at the compute tier, move them into the gated set.
+fn gate_policy(func: &str) -> Option<i128> {
+    match func {
+        // Dedicated native engines — correctly rounded.
+        "exp" | "ln" | "sqrt" | "sin" | "cos" | "atan" => Some(0),
+        // Composed but faithful (<=1 LSB, no panics).
+        "sinh" | "cosh" => Some(1),
+        // Storage-tier composition, bypasses compute tier + UGOD — broken.
+        _ => None, // tan, asin, acos, tanh, asinh, acosh, atanh
     }
 }
 
+/// Full sweep: every native unary transcendental over decimal-scaled's
+/// d18 + d38 tiers, all scales. Gates the proven engines (0 LSB) and the
+/// faithful pair (<=1 LSB); reports the known-broken composed set without
+/// failing, so the harness is a meaningful green gate that tightens as fixes
+/// land.
 #[test]
-fn oracle2_ln() {
-    if let Some(r) = run_oracle2("ln", |x| x > 0, |d| d.ln().raw_value()) {
-        report_o2("ln", &r);
+fn oracle2_decimal_sweep() {
+    let Some(dir) = oracle2_dir() else {
+        eprintln!("[oracle2] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN to a decimal-scaled clone");
+        return;
+    };
+    const FUNCS: &[&str] = &[
+        "exp", "ln", "sqrt", "sin", "cos", "tan", "atan", "asin", "acos",
+        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+    ];
+    const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37];
+
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut grand = O2::default();
+    let mut results: Vec<(&str, O2)> = Vec::new();
+    for func in FUNCS {
+        let mut r = O2::default();
+        for tier in [18u8, 38] {
+            for &s in SCALES {
+                let path = dir
+                    .join("tests/golden")
+                    .join(format!("{func}_d{tier}_s{s}.txt"));
+                if !path.exists() {
+                    continue;
+                }
+                let lines = parse_unary_file(&path);
+                dispatch_scale(s, func, &lines, &mut r);
+            }
+        }
+        report_o2(func, &r);
+        grand.merge(&r);
+        results.push((*func, r));
     }
+    std::panic::set_hook(prev_hook);
+    report_o2("TOTAL", &grand);
+    assert!(grand.n > 0, "oracle2 sweep found no inputs — wrong corpus path?");
+
+    let mut failures = Vec::new();
+    for (func, r) in &results {
+        match gate_policy(func) {
+            Some(tol) => {
+                if r.errored != 0 || r.max_delta > tol {
+                    failures.push(format!(
+                        "{func} (errored={}, max_delta={}, tol={})",
+                        r.errored, r.max_delta, tol
+                    ));
+                }
+            }
+            None => eprintln!(
+                "[oracle2/{func}] REPORT-ONLY — known broken (FINDINGS.md): \
+                 errored={} max_delta={}",
+                r.errored, r.max_delta
+            ),
+        }
+    }
+    assert!(failures.is_empty(), "gated functions regressed: {failures:?}");
 }
 
+/// Probe gMath's actual output on the sweep's worst cases, beside the oracle,
+/// to confirm Group-C deltas are real engine errors (not harness artifacts).
 #[test]
-fn oracle2_sqrt() {
-    if let Some(r) = run_oracle2("sqrt", |x| x >= 0, |d| d.sqrt().raw_value()) {
-        report_o2("sqrt", &r);
+fn oracle2_worst_case_probe() {
+    // (func, scale, input_raw, oracle_floor) — worst offenders + their truth.
+    let cases: &[(&str, u8, i128, i128)] = &[
+        ("asinh", 19, -14661736815306297448, -11758520912203217247),
+        ("atanh", 28, -9999999999999999999999999999, -325827648921966122309604964263),
+        ("tan", 9, 14133754388, 293034591113),
+        ("asin", 19, 9999999999900000000, 15707918546589416159),
+    ];
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    for &(func, s, input, floor) in cases {
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match s {
+            9 => compute_unary::<9>(func, input),
+            19 => compute_unary::<19>(func, input),
+            28 => compute_unary::<28>(func, input),
+            _ => unreachable!(),
+        }));
+        match got {
+            Ok(v) => eprintln!(
+                "{func} s{s}: gMath={v} oracle_floor={floor} delta={}",
+                (v - floor).abs()
+            ),
+            Err(_) => eprintln!("{func} s{s}: gMath PANICKED  oracle_floor={floor}"),
+        }
     }
+    std::panic::set_hook(prev);
 }
 
+/// Arm B: do the SAME worst cases survive through the FASC/router path
+/// (compute-tier chain persistence + UGOD) where the imperative Arm A dies?
 #[test]
-fn oracle2_sin() {
-    if let Some(r) = run_oracle2("sin", |_| true, |d| d.sin().raw_value()) {
-        report_o2("sin", &r);
+fn arm_b_fasc_probe() {
+    use g_math::canonical::{evaluate, gmath_parse};
+    // (label, decimal-string input, mpmath true value)
+    let cases: &[(&str, &str, &str)] = &[
+        ("asinh", "-1.4661736815306297448", "-1.17585209122032172461"),
+        ("atanh", "-0.9999999999999999999999999999", "-32.58276489219661223096"),
+        ("tan", "14.133754388", "293.03459111392422611133"),
+        ("asin", "0.99999999999", "1.57079185465894161592"),
+        ("acosh", "2.0", "1.31695789692481670862"),
+        ("tanh", "-5.2874712800902", "-0.99995098876"),
+    ];
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    for &(func, input, truth) in cases {
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let base = gmath_parse(input).expect("parse");
+            let expr = match func {
+                "asinh" => base.asinh(),
+                "atanh" => base.atanh(),
+                "tan" => base.tan(),
+                "asin" => base.asin(),
+                "acosh" => base.acosh(),
+                "tanh" => base.tanh(),
+                _ => unreachable!(),
+            };
+            evaluate(&expr).map(|v| format!("{v}"))
+        }));
+        match out {
+            Ok(Ok(s)) => eprintln!("[armB/{func}] FASC = {s}   (true {truth})"),
+            Ok(Err(e)) => eprintln!("[armB/{func}] FASC Err({e:?})   (true {truth})"),
+            Err(_) => eprintln!("[armB/{func}] FASC PANICKED   (true {truth})"),
+        }
     }
+    std::panic::set_hook(prev);
 }
 
 /// Pin the grader against decimal-scaled's rule for every (cls, mode, sign).
