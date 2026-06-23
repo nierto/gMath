@@ -215,6 +215,165 @@ fn decimal_sin_contract() {
     report_and_assert("sin", &r);
 }
 
+// ============================================================================
+// Oracle #2 — adversarial grading against mootable/decimal-scaled's corpus.
+//
+// Env-gated: set GMATH_DECIMAL_SCALED_GOLDEN to a local clone of decimal-scaled
+// (pinned to e6c7497). Self-skips if unset, so normal runs/CI are unaffected.
+// This is the INDEPENDENT, adversarial oracle (tie-hunting, overflow edges,
+// large-trig). Report-mode in this first pass: it surveys the full error
+// distribution rather than enforcing a tolerance we have not measured yet.
+// It DOES hard-assert zero panics on valid-domain inputs — a panic there is a
+// bug, not a tolerance question.
+//
+// Run (single-threaded so the panic-hook swap doesn't race):
+//   GMATH_DECIMAL_SCALED_GOLDEN=~/gh/decimal-scaled GMATH_PROFILE=balanced \
+//     cargo test --test decimal_contract_validation oracle2 -- --nocapture --test-threads=1
+// ============================================================================
+
+fn oracle2_dir() -> Option<PathBuf> {
+    std::env::var_os("GMATH_DECIMAL_SCALED_GOLDEN").map(PathBuf::from)
+}
+
+fn parse_unary_file(path: &std::path::Path) -> Vec<GoldenLine> {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() != 3 {
+            continue; // defensively skip non-unary rows
+        }
+        let (Ok(input), Ok(floor)) = (cols[0].parse::<i128>(), cols[1].parse::<i128>()) else {
+            continue; // wider-than-i128 floor (shouldn't happen at d38) -> skip
+        };
+        out.push(GoldenLine { input, floor, cls: Cls::parse(cols[2]) });
+    }
+    out
+}
+
+#[derive(Default)]
+struct O2 {
+    n: usize,
+    exact: usize,   // delta 0  (correctly rounded)
+    one: usize,     // delta 1  (double-rounding window)
+    small: usize,   // delta 2..=8
+    large: usize,   // delta > 8 (suspicious — real weakness)
+    skipped_domain: usize,
+    skipped_range: usize,
+    errored: usize, // gMath panicked (overflow / unexpected)
+    max_delta: i128,
+    worst_input: i128,
+    ties: usize,
+    financial_gap: usize,
+}
+
+fn run_oracle2(
+    func: &str,
+    in_domain: impl Fn(i128) -> bool,
+    compute: impl Fn(DecimalFixed<28>) -> i128,
+) -> Option<O2> {
+    let dir = oracle2_dir()?;
+    let path = dir.join("tests/golden").join(format!("{func}_d38_s{SCALE}.txt"));
+    if !path.exists() {
+        eprintln!("[oracle2/{func}] SKIP — {} not found", path.display());
+        return Some(O2::default());
+    }
+    let lines = parse_unary_file(&path);
+    let mut r = O2::default();
+    // Silence .expect() panic spew; we count panics as `errored` instead.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    for g in &lines {
+        if !in_domain(g.input) {
+            r.skipped_domain += 1;
+            continue;
+        }
+        if g.floor.checked_abs().map_or(true, |a| a > i128::MAX / 2) {
+            r.skipped_range += 1;
+            continue;
+        }
+        r.n += 1;
+        if g.cls == Cls::Tie {
+            r.ties += 1;
+        }
+        let expected = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfAwayFromZero);
+        if expected != oracle_correctly_rounded(g.floor, g.cls, Mode::HalfToEven) {
+            r.financial_gap += 1;
+        }
+        let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compute(DecimalFixed::<28>::from_raw(g.input))
+        }));
+        let actual = match computed {
+            Ok(v) => v,
+            Err(_) => {
+                r.errored += 1;
+                continue;
+            }
+        };
+        let delta = (actual - expected).abs();
+        match delta {
+            0 => r.exact += 1,
+            1 => r.one += 1,
+            2..=8 => r.small += 1,
+            _ => r.large += 1,
+        }
+        if delta > r.max_delta {
+            r.max_delta = delta;
+            r.worst_input = g.input;
+        }
+    }
+    std::panic::set_hook(prev_hook);
+    Some(r)
+}
+
+fn report_o2(func: &str, r: &O2) {
+    eprintln!(
+        "[oracle2/{func}] n={} exact={} 1LSB={} 2-8={} >8={} max_delta={} \
+         errored={} skip_domain={} skip_range={} ties(E)={} fin_gap={}{}",
+        r.n, r.exact, r.one, r.small, r.large, r.max_delta, r.errored,
+        r.skipped_domain, r.skipped_range, r.ties, r.financial_gap,
+        if r.max_delta > 1 {
+            format!(" worst_input={}", r.worst_input)
+        } else {
+            String::new()
+        },
+    );
+    assert_eq!(r.errored, 0, "{func}: {} panics on valid-domain inputs", r.errored);
+}
+
+#[test]
+fn oracle2_exp() {
+    if let Some(r) = run_oracle2("exp", |_| true, |d| d.exp().raw_value()) {
+        report_o2("exp", &r);
+    }
+}
+
+#[test]
+fn oracle2_ln() {
+    if let Some(r) = run_oracle2("ln", |x| x > 0, |d| d.ln().raw_value()) {
+        report_o2("ln", &r);
+    }
+}
+
+#[test]
+fn oracle2_sqrt() {
+    if let Some(r) = run_oracle2("sqrt", |x| x >= 0, |d| d.sqrt().raw_value()) {
+        report_o2("sqrt", &r);
+    }
+}
+
+#[test]
+fn oracle2_sin() {
+    if let Some(r) = run_oracle2("sin", |_| true, |d| d.sin().raw_value()) {
+        report_o2("sin", &r);
+    }
+}
+
 /// Pin the grader against decimal-scaled's rule for every (cls, mode, sign).
 /// This proves the grader independently of whether the fixtures contain ties.
 #[test]
