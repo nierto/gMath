@@ -12,7 +12,7 @@ financial auditing, and reproducible scientific computation.
 
 ```toml
 [dependencies]
-g_math = "0.4"
+g_math = "0.4.24"
 ```
 
 ## Key concepts
