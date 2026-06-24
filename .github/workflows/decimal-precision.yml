@@ -1,0 +1,40 @@
+name: decimal-precision
+
+# Continuously proves the decimal-domain precision contract on every push/PR:
+# grades gMath's decimal transcendentals against mootable/decimal-scaled's
+# independent mpmath corpus (pinned), under gMath's own declared rounding rule.
+#
+# Free on this public repo (GitHub-hosted runners are unlimited for public repos).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  decimal-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gMath
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # Oracle #2: decimal-scaled's adversarial golden corpus, pinned to the
+      # exact commit gMath was validated against. Not vendored into this repo.
+      - name: Fetch decimal-scaled golden corpus (pinned)
+        run: |
+          git clone https://github.com/mootable/decimal-scaled.git "${{ runner.temp }}/decimal-scaled"
+          git -C "${{ runner.temp }}/decimal-scaled" checkout e6c7497832be437cf464d07b841609a0b92aac87
+
+      # Balanced profile: DecimalFixed<28> needs compute dp 77 for guard digits.
+      # Single-threaded: the sweep swaps the panic hook around catch_unwind.
+      # Prebuilt lookup tables are committed, so the build is ~seconds, not minutes.
+      - name: Decimal contract validation (balanced, vs oracle #1 + oracle #2)
+        env:
+          GMATH_PROFILE: balanced
+          GMATH_DECIMAL_SCALED_GOLDEN: ${{ runner.temp }}/decimal-scaled
+        run: cargo test --test decimal_contract_validation -- --test-threads=1 --nocapture
