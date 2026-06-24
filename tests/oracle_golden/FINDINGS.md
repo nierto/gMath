@@ -31,6 +31,38 @@ never caught it because it uses `from_raw` (a signed i128), not string parsing.
 This affected the primary public entry point (`gmath`/`gmath_parse`) for all
 sub-unit negatives — e.g. -$0.50. Regression test: `parse_negative_subunit_sign`.
 
+### Both user-reachable paths swept clean
+
+- **Arm A** (imperative `DecimalFixed`): 21,884 inputs, all 0 LSB.
+- **Arm B** (FASC canonical `gmath()`): 20,249 inputs, all 0 LSB — the path most
+  users hit, with the fractal router picking the domain per input. Previously
+  only spot-checked; now fully swept and gated.
+
+The **binary `FixedPoint`** sweep was deliberately dropped: his inputs are
+decimal-scaled, so feeding e.g. `0.1` to binary mixes representation error with
+engine error inseparably, and the binary engine is already 0-ULP validated
+against mpmath directly (`fasc_ulp_validation`). It would only re-demonstrate a
+known representation limit — over-engineering.
+
+### 4-column arm (add/sub/mul/div/atan2) + a third bug
+
+decimal-scaled's two-argument golden. Findings: `add`, `sub`, `atan2` correctly
+rounded (atan2 1461/1461 exact — decimal atan2 is solid). gMath's decimal mul/div
+use **banker's rounding** (already the financial default), so they're graded
+under HalfToEven.
+
+**Bug: the `*` / `/` operators overflow the unscaled intermediate.**
+`pure_decimal_multiply_optimized_decimal` multiplies in digit-arrays (safe) but
+reassembles the unscaled product back into an **i128** before scaling — which
+overflows when `|a·b|` exceeds i128::MAX, even though the final result fits.
+Example: `1.3333333333333333333 × 7.0 = 9.333…1` — result fits, but the
+intermediate `a·b = 9.33e38 > i128::MAX`, so the operator overflows. `div` has
+the analogous issue (`a·10^S` overflows for large `a`). The D256-based
+`multiply_exact_decimal` does NOT have this — so the fix is to route the
+operators through the wide intermediate (or add overflow-detect-and-promote,
+UGOD-style). Financially relevant (large value × rate). Gated: add/sub/atan2 at
+0; mul/div report-only until fixed.
+
 ### Helper renames (clarity)
 
 The domain-polymorphic FASC helpers were misnamed `binary_*` despite preserving
