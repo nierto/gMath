@@ -484,37 +484,6 @@ fn oracle2_decimal_sweep() {
     assert!(failures.is_empty(), "gated functions regressed: {failures:?}");
 }
 
-/// Probe gMath's actual output on the sweep's worst cases, beside the oracle,
-/// to confirm Group-C deltas are real engine errors (not harness artifacts).
-#[test]
-fn oracle2_worst_case_probe() {
-    // (func, scale, input_raw, oracle_floor) — worst offenders + their truth.
-    let cases: &[(&str, u8, i128, i128)] = &[
-        ("asinh", 19, -14661736815306297448, -11758520912203217247),
-        ("atanh", 28, -9999999999999999999999999999, -325827648921966122309604964263),
-        ("tan", 9, 14133754388, 293034591113),
-        ("asin", 19, 9999999999900000000, 15707918546589416159),
-    ];
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    for &(func, s, input, floor) in cases {
-        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match s {
-            9 => compute_unary::<9>(func, input),
-            19 => compute_unary::<19>(func, input),
-            28 => compute_unary::<28>(func, input),
-            _ => unreachable!(),
-        }));
-        match got {
-            Ok(v) => eprintln!(
-                "{func} s{s}: gMath={v} oracle_floor={floor} delta={}",
-                (v - floor).abs()
-            ),
-            Err(_) => eprintln!("{func} s{s}: gMath PANICKED  oracle_floor={floor}"),
-        }
-    }
-    std::panic::set_hook(prev);
-}
-
 /// Arm B: do the SAME worst cases survive through the FASC/router path
 /// (compute-tier chain persistence + UGOD) where the imperative Arm A dies?
 #[test]
@@ -566,6 +535,29 @@ fn parse_negative_subunit_sign() {
     }
     let p = format!("{}", evaluate(&gmath_parse("0.5").unwrap()).unwrap());
     assert!(!p.starts_with('-'), "parse(0.5) wrongly negative: {p}");
+}
+
+/// Cost-benefit probe: how accurate is the CURRENT symbolic->binary fallback for
+/// composed transcendentals? If already correctly rounded, a decimal/symbolic
+/// guard offers ~0 accuracy gain.
+#[test]
+fn symbolic_transcendental_accuracy_probe() {
+    use g_math::canonical::{evaluate, gmath_parse};
+    let cases = [
+        ("atanh", "1/3"), ("atanh", "1/10"), ("atanh", "1/4"),
+        ("asinh", "1/7"), ("tanh", "2/3"), ("acosh", "7/3"),
+    ];
+    for (f, x) in cases {
+        let base = gmath_parse(x).unwrap();
+        let expr = match f {
+            "atanh" => base.atanh(),
+            "asinh" => base.asinh(),
+            "tanh" => base.tanh(),
+            "acosh" => base.acosh(),
+            _ => unreachable!(),
+        };
+        eprintln!("SYMB {f}({x}) = {}", evaluate(&expr).unwrap());
+    }
 }
 
 /// Pin the grader against decimal-scaled's rule for every (cls, mode, sign).

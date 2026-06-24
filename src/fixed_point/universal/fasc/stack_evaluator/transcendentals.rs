@@ -218,7 +218,7 @@ impl StackEvaluator {
     /// Integer exponentiation-by-squaring: x^n using multiply_values
     ///
     /// Exact for integer exponents. Negative exponents handled
-    /// via 1/x^|n| using binary_divide.
+    /// via 1/x^|n| using divide_at_compute.
     pub(crate) fn pow_integer(&mut self, base: StackValue, exp: i64) -> Result<StackValue, OverflowDetected> {
         let negative = exp < 0;
         let mut n = exp.unsigned_abs();
@@ -227,8 +227,8 @@ impl StackEvaluator {
             return Ok(self.make_int_like(&base, 1));
         }
 
-        // to_binary_value preserves decimal domain (returns DecimalCompute for decimal input)
-        let mut b = self.to_binary_value(&base)?;
+        // to_compute_value preserves decimal domain (returns DecimalCompute for decimal input)
+        let mut b = self.to_compute_value(&base)?;
         // Start with "1" in the same domain as base — avoids Binary×DecimalCompute mixing
         let mut result = self.make_int_like(&b, 1);
 
@@ -244,7 +244,7 @@ impl StackEvaluator {
 
         if negative {
             let one = self.make_int_like(&result, 1);
-            result = self.binary_divide(one, result)?;
+            result = self.divide_at_compute(one, result)?;
         }
 
         Ok(result)
@@ -292,17 +292,25 @@ impl StackEvaluator {
         }
     }
 
-    /// Convert any StackValue to a compute-tier form suitable for transcendental composition.
+    /// PATH: FASC (canonical) composed-transcendental machinery. Domain-agnostic
+    /// despite the legacy `binary` ancestry — the imperative `FixedPoint` /
+    /// `DecimalFixed` types do NOT use these helpers (they call the compute-tier
+    /// engines directly).
     ///
-    /// Routes preserving domain:
+    /// Convert any StackValue to a compute-tier form suitable for transcendental
+    /// composition, preserving domain:
     /// - `BinaryCompute` → unchanged (already at binary compute tier)
     /// - `DecimalCompute` → unchanged (already at decimal compute tier)
     /// - `Decimal` → `DecimalCompute` (upscale, preserve decimal identity)
-    /// - Everything else → `BinaryCompute` (via binary compute tier)
+    /// - Everything else (incl. `Symbolic`) → `BinaryCompute`
     ///
-    /// This ensures composed transcendentals (sinh, asinh, tan, etc.) stay in
-    /// their native domain through the entire composition chain.
-    pub(crate) fn to_binary_value(&mut self, val: &StackValue) -> Result<StackValue, OverflowDetected> {
+    /// This keeps composed transcendentals (sinh, asinh, tan, ...) in their
+    /// native domain through the whole chain. NOTE: the final arm sends a
+    /// `Symbolic` operand to binary compute; this is correct-rounded in practice
+    /// (the compute tier absorbs representation error — measured 0 ULP), but a
+    /// future guard could route `Symbolic` through decimal compute for domain
+    /// consistency. See tests/oracle_golden/FINDINGS.md.
+    pub(crate) fn to_compute_value(&mut self, val: &StackValue) -> Result<StackValue, OverflowDetected> {
         match val {
             StackValue::BinaryCompute(..) => Ok(val.clone()),
             StackValue::DecimalCompute(..) => Ok(val.clone()),
@@ -320,8 +328,11 @@ impl StackEvaluator {
         }
     }
 
-    /// Halve a binary StackValue (divide by 2 via right-shift) — avoids rational conversion
-    pub(crate) fn halve_binary(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
+    /// PATH: FASC composed-transcendental helper. Domain-agnostic divide-by-2:
+    /// `DecimalCompute` → `decimal_compute_halve`, `BinaryCompute`/`Binary` →
+    /// arithmetic right-shift. Preserves the operand's domain (the `binary` in
+    /// the old name was a misnomer).
+    pub(crate) fn halve_value(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, _) => {
                 Ok(StackValue::BinaryCompute(tier, compute_halve(val), CompactShadow::None))
@@ -362,8 +373,14 @@ impl StackEvaluator {
         }
     }
 
-    /// Divide a binary value by another in Q-format (native binary division)
-    pub(crate) fn binary_divide(&self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    /// PATH: FASC composed-transcendental helper — the compute-tier divide used
+    /// inside transcendental composition. Distinct from `arithmetic::divide_values`
+    /// (the general `&mut self` arithmetic divide with UGOD/rational fallback);
+    /// this one is `&self` and stays at the compute tier. Domain-agnostic
+    /// `left / right`: `DecimalCompute` operands stay decimal
+    /// (`decimal_compute_div`), `BinaryCompute` stay binary; unrecognized domains
+    /// fall back to binary Q-format division. (Old name `binary_divide`.)
+    pub(crate) fn divide_at_compute(&self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
         // DecimalCompute propagation — mirror the BinaryCompute pattern for decimal
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
             decimal_compute_div, decimal_upscale_to_compute,
@@ -461,7 +478,7 @@ impl StackEvaluator {
         let neg_x = self.negate_value(value)?;
         let exp_neg_x = self.evaluate_exp(neg_x)?;
         let diff = self.subtract_values(exp_x, exp_neg_x)?;
-        self.halve_binary(diff)
+        self.halve_value(diff)
     }
 
     /// cosh(x) = (exp(x) + exp(-x)) / 2
@@ -470,26 +487,26 @@ impl StackEvaluator {
         let neg_x = self.negate_value(value)?;
         let exp_neg_x = self.evaluate_exp(neg_x)?;
         let sum = self.add_values(exp_x, exp_neg_x)?;
-        self.halve_binary(sum)
+        self.halve_value(sum)
     }
 
     /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
     /// Optimized: only 1 exp call instead of 3
     pub(crate) fn evaluate_tanh(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
-        let value = self.to_binary_value(&value)?;
+        let value = self.to_compute_value(&value)?;
         let two = self.make_int_like(&value, 2);
         let two_x = self.multiply_values(two, value.clone())?;
         let exp_2x = self.evaluate_exp(two_x)?;
         let one = self.make_int_like(&value, 1);
         let numerator = self.subtract_values(exp_2x.clone(), one.clone())?;
         let denominator = self.add_values(exp_2x, one)?;
-        self.binary_divide(numerator, denominator)
+        self.divide_at_compute(numerator, denominator)
     }
 
     /// asinh(x) = ln(x + sqrt(x² + 1))
     pub(crate) fn evaluate_asinh(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
-        // to_binary_value preserves decimal domain (returns DecimalCompute for decimal input)
-        let value = self.to_binary_value(&value)?;
+        // to_compute_value preserves decimal domain (returns DecimalCompute for decimal input)
+        let value = self.to_compute_value(&value)?;
         let x_sq = self.multiply_values(value.clone(), value.clone())?;
         let one = self.make_int_like(&value, 1);
         let x_sq_plus_1 = self.add_values(x_sq, one)?;
@@ -506,8 +523,8 @@ impl StackEvaluator {
         let one_binary = self.to_binary_storage(&self.make_binary_int(1))?;
         if binary_val < one_binary { return Err(OverflowDetected::DomainError); }
 
-        // to_binary_value preserves decimal domain
-        let value = self.to_binary_value(&value)?;
+        // to_compute_value preserves decimal domain
+        let value = self.to_compute_value(&value)?;
         let x_sq = self.multiply_values(value.clone(), value.clone())?;
         let one = self.make_int_like(&value, 1);
         let x_sq_minus_1 = self.subtract_values(x_sq, one)?;
@@ -557,14 +574,14 @@ impl StackEvaluator {
             }
         }
 
-        // to_binary_value preserves decimal domain
-        let value = self.to_binary_value(&value)?;
+        // to_compute_value preserves decimal domain
+        let value = self.to_compute_value(&value)?;
         let one = self.make_int_like(&value, 1);
         let one_plus_x = self.add_values(one.clone(), value.clone())?;
         let one_minus_x = self.subtract_values(one, value)?;
-        let ratio = self.binary_divide(one_plus_x, one_minus_x)?;
+        let ratio = self.divide_at_compute(one_plus_x, one_minus_x)?;
         let ln_ratio = self.evaluate_ln(ratio)?;
-        self.halve_binary(ln_ratio)
+        self.halve_value(ln_ratio)
     }
 
     // ============================================================================
@@ -650,7 +667,7 @@ impl StackEvaluator {
                 return Err(OverflowDetected::DomainError);
             }
         }
-        self.binary_divide(sin_val, cos_val)
+        self.divide_at_compute(sin_val, cos_val)
     }
 
     /// asin(x) = atan(x / sqrt(1 - x²)) — FASC-composed at compute tier
@@ -709,13 +726,13 @@ impl StackEvaluator {
         }
 
         // asin(x) = atan(x / sqrt(1 - x²))
-        // to_binary_value preserves decimal domain
-        let value = self.to_binary_value(&value)?;
+        // to_compute_value preserves decimal domain
+        let value = self.to_compute_value(&value)?;
         let one = self.make_int_like(&value, 1);
         let x_sq = self.multiply_values(value.clone(), value.clone())?;
         let one_minus_x_sq = self.subtract_values(one, x_sq)?;
         let sqrt_val = self.evaluate_sqrt(one_minus_x_sq)?;
-        let ratio = self.binary_divide(value, sqrt_val)?;
+        let ratio = self.divide_at_compute(value, sqrt_val)?;
         self.evaluate_atan(ratio)
     }
 
