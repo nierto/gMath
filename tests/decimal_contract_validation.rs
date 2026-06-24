@@ -554,6 +554,20 @@ fn arm_b_fasc_probe() {
     std::panic::set_hook(prev);
 }
 
+/// Regression: a negative decimal with a zero integer part (e.g. -0.5) must
+/// keep its sign. The parser previously keyed the fractional sign off
+/// `integer_part < 0`, which is false for `-0`, silently flipping -0.x to +0.x.
+#[test]
+fn parse_negative_subunit_sign() {
+    use g_math::canonical::{evaluate, gmath_parse};
+    for s in ["-0.5", "-0.999", "-0.0001", "-1.5", "-2.0"] {
+        let out = format!("{}", evaluate(&gmath_parse(s).unwrap()).unwrap());
+        assert!(out.starts_with('-'), "parse({s}) lost its sign: got {out}");
+    }
+    let p = format!("{}", evaluate(&gmath_parse("0.5").unwrap()).unwrap());
+    assert!(!p.starts_with('-'), "parse(0.5) wrongly negative: {p}");
+}
+
 /// Pin the grader against decimal-scaled's rule for every (cls, mode, sign).
 /// This proves the grader independently of whether the fixtures contain ties.
 #[test]
