@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.4.23**
+Current version: **0.4.24**
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise — this is a working list for a solo-maintained project.
 
@@ -76,8 +76,8 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 - `tucker_decompose(t, ranks)` — HOSVD: mode-n unfolding → SVD per mode → core tensor
 - `cp_decompose(t, rank, max_iter, tol)` — Alternating Least Squares for rank-R canonical polyadic
 
-**Composed transcendental direct bypass (complete FASC elimination):**
-- ALL 18 FixedPoint transcendentals now bypass FASC entirely
+**Composed transcendental direct bypass:**
+- All *infallible* FixedPoint transcendentals bypass FASC entirely (the fallible `try_*` variants still route through FASC — see 0.5.0)
 - Composed functions (tan, sinh, asin, etc.) use direct compute-tier arithmetic
 - `pow(x, y) = direct_exp(direct_ln(x) * y)` — zero FASC overhead
 
@@ -85,7 +85,7 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 
 ### v0.4.1 — Fused `sinhcosh` hyperbolic pair
 
-Filed by the Geo dev team (`GMATH_TODO_SUGGESTIONS_GEO-DEVTEAM.md`, P2): Geo's `exp_map` at Q22.10 realtime showed ~9 ULP closure drift at θ ≈ 2, driven by independently-rounded `sinh(θ)` and `cosh(θ)` values failing to cancel in `r = cosh(θ)·p + (sinh(θ)/θ)·v`. Fix: expose a fused pair sharing one `(exp(x), exp(-x))` evaluation.
+Independently-rounded `sinh(θ)` and `cosh(θ)` fail to cancel in expressions like `r = cosh(θ)·p + (sinh(θ)/θ)·v`, producing closure drift on hyperbolic-geometry round-trips at low-precision profiles. Fix: expose a fused pair sharing one `(exp(x), exp(-x))` evaluation so the rounding bias is correlated.
 
 **Delivered:**
 
@@ -103,7 +103,7 @@ Filed by the Geo dev team (`GMATH_TODO_SUGGESTIONS_GEO-DEVTEAM.md`, P2): Geo's `
 
 **Validation:** mpmath-backed tests in `tests/sinhcosh_validation.rs` on realtime (Q16.16) + compact (Q32.32) profiles. Binary identity `cosh²−sinh² = 1` holds to ≤8 ULP at Q16.16 storage, ≤64 ULP at Q32.32 (both dominated by cosh² amplification of input-representation ULP).
 
-**Deferred for future:** Dedicated mpmath-backed `sinhcosh` validation passes on embedded (Q64.64), balanced (Q128.128), and scientific (Q256.256) profiles. The underlying compute-tier kernels are profile-agnostic and already exercised by the existing per-profile `sinh` + `cosh` validation suites; the fused pair's correctness inherits from those. Run dedicated passes if consumer demand emerges (e.g., Geo escalates from P2 to P1 after gate G0.B stress-testing).
+**Deferred for future:** Dedicated mpmath-backed `sinhcosh` validation passes on embedded (Q64.64), balanced (Q128.128), and scientific (Q256.256) profiles. The underlying compute-tier kernels are profile-agnostic and already exercised by the existing per-profile `sinh` + `cosh` validation suites; the fused pair's correctness inherits from those. Run dedicated passes if consumer demand emerges for those profiles.
 
 ### v0.4.2 — Internal adoption of `try_sinhcosh` in `HyperbolicSpace`
 
@@ -112,11 +112,39 @@ gMath now consumes its own fused primitive internally. `HyperbolicSpace::exp_map
 - `exp_map`: `r = cosh(θ)·p + (sinh(θ)/θ)·v`
 - `parallel_transport`: `correction = sinh(θ)·p + (cosh(θ)-1)·u`
 
-Swapping to `try_sinhcosh` shares one `(exp(θ), exp(-θ))` pair at compute tier, so the two rounding errors cancel in the downstream sum instead of accumulating. This directly addresses the 9 ULP closure drift the Geo team filed against their Q22.10 `exp_map`.
+Swapping to `try_sinhcosh` shares one `(exp(θ), exp(-θ))` pair at compute tier, so the two rounding errors cancel in the downstream sum instead of accumulating. This directly addresses the closure drift hyperbolic-geometry round-trips can show at low-precision profiles.
 
 **API-compatible:** no surface change — both methods retain their `Result<FixedVector, OverflowDetected>` signatures. Downstream consumers get the tighter bound transparently via `cargo update`.
 
 **Regression-tested:** `tests/l1c_l1d_l3a_validation.rs` (24 tests) and `tests/sinhcosh_validation.rs` (8 tests) pass cleanly on realtime and compact profiles.
+
+### v0.4.24 — Decimal arithmetic correctness + contract validation
+
+Built a contract-validation harness (`tests/decimal_contract_validation.rs`)
+grading gMath's decimal domain against mootable/decimal-scaled's independent
+mpmath corpus (pinned), under gMath's own declared rounding rule. It surfaced —
+and this release root-causes — three bug classes:
+
+- **Composed decimal transcendentals** (tan, asin, acos, sinh, cosh, tanh,
+  asinh, acosh, atanh) composed at storage tier with raw i128 arithmetic,
+  overflowing for large operands and panicking. Rewritten to compose at the
+  compute tier with a single downscale — now correctly rounded.
+- **Parser sign drop**: `gmath_parse` lost the sign of negative decimals with a
+  zero integer part (`-0.5` parsed as `+0.5`), via `integer_part < 0` being
+  false for `-0`. Fixed at the source.
+- **Decimal mul/div overflow**: `divmod_d256_by_i128` overflowed its u128
+  remainder for divisors > 2^64, and `banker_round_decimal_i128` mis-rounded odd
+  divisors and exact scale-0 results. Both fixed; mul/div rewritten UGOD-shaped
+  (narrow i128 tier → widen to a 256-bit intermediate on overflow → saturate,
+  never panic), banker's rounding preserved.
+
+Both user-reachable decimal paths — imperative `DecimalFixed` and canonical
+`gmath()`/FASC — grade **0 LSB** across all 15 transcendentals, atan2, and
+add/sub/mul/div over decimal-scaled's d18+d38 tiers and all scales. Audited
+every tier×op across decimal/binary/ternary: the bug class was contained to the
+imperative `DecimalFixed` path (the tiered arithmetic already widened correctly).
+CI (`.github/workflows/decimal-precision.yml`) gates the harness plus
+multi-profile lib tests on every push.
 
 ---
 
@@ -134,7 +162,7 @@ Verify that UGOD overflow promotion tries at least 2 subsequent tiers before fal
 **Priority:** MEDIUM — throughput for inference consumers
 **Effort:** ~300 lines, 1 session
 
-Currently tan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh still route through FASC (`apply_unary(LazyExpr::tan)` etc.). These are FASC-composed (e.g., tan = sin/cos, sinh = (exp(x)-exp(-x))/2). Implement direct compositions using the already-direct exp/ln/sqrt/sin/cos/atan engines. Avoids the FASC pipeline overhead per call.
+The infallible composed methods (tan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh) are already direct, but their fallible `try_*` variants still route through FASC (`try_apply_unary(LazyExpr::tan)` etc.). Implement direct compositions for the `try_*` variants using the already-direct exp/ln/sqrt/sin/cos/atan engines. Avoids the FASC pipeline overhead per call.
 
 ### 3. Stack evaluator `profile_dispatch!` macro
 
@@ -165,7 +193,7 @@ The third compute domain after Binary and Decimal. Transcendental chains where A
 
 ### n-D Clifford algebra with Vahlen matrices (L4B) — 0.5.0
 
-Cl(n,0,1) Clifford algebra with Vahlen matrix representation. Multivector arithmetic, geometric product, inner/outer products, grade extraction, and Vahlen matrix Mobius transformations. High novelty — no zero-float Clifford algebra exists in Rust. Targeted for v0.5.0 release.
+Cl(n,0,1) Clifford algebra with Vahlen matrix representation. Multivector arithmetic, geometric product, inner/outer products, grade extraction, and Vahlen matrix Mobius transformations. Fills a gap I'm not aware of an existing zero-float Rust crate addressing. Targeted for v0.5.0 release.
 
 ### Custom FRAC_BITS for non-realtime profiles
 
@@ -174,6 +202,16 @@ Extending `GMATH_FRAC_BITS` to compact (i64), embedded (i128), and higher profil
 ### Public API stabilization
 
 Pre-1.0 audit of exports, feature gating, StackValue extraction methods. Five API tiers documented (FASC, Imperative, Fused, Geometric, TQ1.9) but export hygiene not yet audited.
+
+### Additional decimal operations
+
+decimal-scaled's corpus covers several functions gMath doesn't expose in the
+decimal domain yet, all composable from the existing ln/exp/sqrt compute-tier
+engines: `powf` (xʸ — financially core, already present on binary `FixedPoint`),
+`rem` (modulo), and the `log2` / `log10` / `exp2` / `log(base)` family (trivial
+ln/exp compositions). `cbrt` and `hypot` are lower priority. Implement the
+subset that serves real use cases (finance: `powf`/`rem`; ML: `log2`) — not for
+corpus parity.
 
 ### Decimal sin/cos 3-stage tables
 
