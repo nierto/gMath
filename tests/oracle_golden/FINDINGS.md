@@ -18,9 +18,21 @@ Root cause confirmed during the fix: `*self * *self` at storage tier overflowed
 i128 (e.g. `1.466e19² = 2.15e38 > i128::MAX`) producing garbage; compute-tier
 `decimal_compute_mul` widens to I1024 and cannot overflow.
 
-Still open (tracked below): FASC `atanh` sign bug for negative argument; the
-`binary_*` helper misnaming + Symbolic→binary silent fallback in
-`to_binary_value`/`binary_divide`.
+### The "atanh sign bug" was a parser bug (more serious)
+
+Tracing the FASC atanh sign flip led upstream: `gmath_parse` dropped the sign of
+**any negative decimal with a zero integer part** — `-0.5` parsed to `+0.5`,
+`-0.999` to `+0.999`. Root cause (parsing.rs:142,157): the fractional part's
+sign was keyed off `integer_part < 0`, which is false for `-0`, so the negative
+sign was silently lost. Fixed to key off the leading-`-` flag (`is_negative`),
+matching the already-correct >38-digit path. atanh only surfaced it because its
+probe was the one input with |x|<1 and a negative sign; the imperative sweep
+never caught it because it uses `from_raw` (a signed i128), not string parsing.
+This affected the primary public entry point (`gmath`/`gmath_parse`) for all
+sub-unit negatives — e.g. -$0.50. Regression test: `parse_negative_subunit_sign`.
+
+Still open (tracked below): the `binary_*` helper misnaming + Symbolic→binary
+silent fallback in `to_binary_value`/`binary_divide`.
 
 ---
 

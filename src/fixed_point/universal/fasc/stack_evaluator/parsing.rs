@@ -139,7 +139,7 @@ impl StackEvaluator {
             let scale = 10_i128.pow(decimals as u32);
             let scaled_opt = integer_part
                 .checked_mul(scale)
-                .and_then(|v| v.checked_add(if integer_part < 0 { -fractional_part } else { fractional_part }));
+                .and_then(|v| v.checked_add(if is_negative { -fractional_part } else { fractional_part }));
             if let Some(scaled) = scaled_opt {
                 let shadow = CompactShadow::from_rational(scaled, scale as u128);
                 Ok(StackValue::Decimal(decimals, to_binary_storage(scaled), shadow))
@@ -154,7 +154,7 @@ impl StackEvaluator {
                 let scale_256 = I256::from_i128(scale);
                 #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
                 let scaled_256 = I256::from_i128(integer_part) * scale_256
-                    + I256::from_i128(if integer_part < 0 { -fractional_part } else { fractional_part });
+                    + I256::from_i128(if is_negative { -fractional_part } else { fractional_part });
                 // Convert directly to binary Q-format (Decimal domain can't hold this)
                 #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
                 let tier = self.profile_max_binary_tier();
