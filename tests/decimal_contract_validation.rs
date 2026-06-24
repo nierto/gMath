@@ -411,12 +411,12 @@ fn report_o2(label: &str, r: &O2) {
 /// to compose at the compute tier, move them into the gated set.
 fn gate_policy(func: &str) -> Option<i128> {
     match func {
-        // Dedicated native engines — correctly rounded.
-        "exp" | "ln" | "sqrt" | "sin" | "cos" | "atan" => Some(0),
-        // Composed but faithful (<=1 LSB, no panics).
-        "sinh" | "cosh" => Some(1),
-        // Storage-tier composition, bypasses compute tier + UGOD — broken.
-        _ => None, // tan, asin, acos, tanh, asinh, acosh, atanh
+        // Dedicated native engines + composed functions rewritten to compose at
+        // the compute tier (single downscale) — all correctly rounded.
+        "exp" | "ln" | "sqrt" | "sin" | "cos" | "atan" | "tan" | "asin" | "acos"
+        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => Some(0),
+        // (none currently report-only — all gated after the compute-tier rewrite)
+        _ => None,
     }
 }
 

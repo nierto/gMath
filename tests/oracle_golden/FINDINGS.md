@@ -1,5 +1,30 @@
 # Decimal validation — Phase 1 & 2 findings
 
+## RESOLUTION (imperative composed transcendentals)
+
+The 9 composed imperative `DecimalFixed` methods (tan, asin, acos, sinh, cosh,
+tanh, asinh, acosh, atanh) were rewritten to compose at the compute tier (single
+downscale), mirroring the binary `FixedPoint` pattern, with the domain/boundary
+guards FASC has but the imperative path lacked. `acos` shares an `asin_compute`
+core so it never re-rounds at storage tier. `tanh` saturates to ±1 on exp
+overflow.
+
+Result across the same 21,884 adversarial inputs: **all 15 native unary
+transcendentals now 0 LSB, 0 panics** (was: 2,592 panics, max error 3.5e27,
+asinh ~47% wrong). The sweep gate (`gate_policy`) now requires 0 LSB for all 15,
+so this is locked against regression.
+
+Root cause confirmed during the fix: `*self * *self` at storage tier overflowed
+i128 (e.g. `1.466e19² = 2.15e38 > i128::MAX`) producing garbage; compute-tier
+`decimal_compute_mul` widens to I1024 and cannot overflow.
+
+Still open (tracked below): FASC `atanh` sign bug for negative argument; the
+`binary_*` helper misnaming + Symbolic→binary silent fallback in
+`to_binary_value`/`binary_divide`.
+
+---
+
+
 Branch `validation/decimal-scaled`. Harness: `tests/decimal_contract_validation.rs`.
 Oracle #1: our mpmath fixtures (`tests/oracle_golden/*_s28.txt`).
 Oracle #2: mootable/decimal-scaled corpus, pinned `e6c7497` (env-gated, not vendored).

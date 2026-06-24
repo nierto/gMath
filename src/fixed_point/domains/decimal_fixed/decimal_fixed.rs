@@ -759,10 +759,14 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
     }
 
-    /// `tan(x)` — native decimal tangent (sin/cos).
+    /// `tan(x)` = sin(x)/cos(x), composed entirely at the compute tier.
     pub fn tan(&self) -> Self {
-        let (s, c) = self.sincos();
-        Self { value: (s.value * Self::SCALE) / c.value }
+        use super::transcendental::decimal_sincos;
+        use super::transcendental::decimal_compute::{decimal_compute_div, decimal_compute_to_i128};
+        let xc = self.to_decimal_compute();
+        let (s, c) = decimal_sincos(xc).expect("decimal tan: range-reduction overflow");
+        let q = decimal_compute_div(s, c).expect("decimal tan: undefined (cos x = 0 at a pole)");
+        Self { value: decimal_compute_to_i128(q, DECIMALS) }
     }
 
     /// `atan(x)` — native decimal arctangent.
@@ -782,38 +786,63 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `asin(x)` — via atan(x / sqrt(1 - x^2)).
-    pub fn asin(&self) -> Self {
-        // asin(x) = atan(x / sqrt(1 - x^2))
-        let x2 = *self * *self;
-        let one_minus_x2 = Self::ONE - x2;
-        let denom = one_minus_x2.sqrt();
-        let ratio = Self { value: (self.value * Self::SCALE) / denom.value };
-        ratio.atan()
+    /// `asin(x)` at the compute tier (not yet downscaled). Domain |x| <= 1;
+    /// the boundaries x = ±1 return ±pi/2 exactly. Shared by `asin` and `acos`
+    /// so `acos` composes entirely at the compute tier (single downscale).
+    fn asin_compute(&self) -> super::transcendental::decimal_compute::ComputeStorage {
+        use super::transcendental::{decimal_atan, decimal_sqrt, pi_at_decimal_compute};
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, decimal_compute_mul, decimal_compute_sub,
+            decimal_compute_div, decimal_compute_halve, decimal_compute_neg,
+        };
+        assert!(self.value.abs() <= Self::SCALE, "asin: domain error (|x| > 1)");
+        if self.value == Self::SCALE {
+            return decimal_compute_halve(pi_at_decimal_compute().expect("pi"));
+        }
+        if self.value == -Self::SCALE {
+            return decimal_compute_neg(decimal_compute_halve(pi_at_decimal_compute().expect("pi")));
+        }
+        let xc = self.to_decimal_compute();
+        let x2 = decimal_compute_mul(xc, xc);
+        let one_minus_x2 = decimal_compute_sub(decimal_compute_one(), x2);
+        let denom = decimal_sqrt(one_minus_x2).expect("asin: sqrt domain");
+        let ratio = decimal_compute_div(xc, denom).expect("asin: division");
+        decimal_atan(ratio).expect("asin: atan")
     }
 
-    /// `acos(x)` — pi/2 - asin(x).
+    /// `asin(x)` = atan(x / sqrt(1 - x^2)), composed at the compute tier.
+    pub fn asin(&self) -> Self {
+        use super::transcendental::decimal_compute::decimal_compute_to_i128;
+        Self { value: decimal_compute_to_i128(self.asin_compute(), DECIMALS) }
+    }
+
+    /// `acos(x)` = pi/2 - asin(x), composed at the compute tier (single
+    /// downscale, so no storage-tier cancellation). Domain |x| <= 1.
     pub fn acos(&self) -> Self {
         use super::transcendental::pi_at_decimal_compute;
-        use super::transcendental::decimal_compute::{decimal_compute_halve, decimal_compute_to_i128};
-        let pi = pi_at_decimal_compute().expect("pi computation");
-        let pi_half = decimal_compute_halve(pi);
-        let pi_half_val = Self { value: decimal_compute_to_i128(pi_half, DECIMALS) };
-        pi_half_val - self.asin()
+        use super::transcendental::decimal_compute::{
+            decimal_compute_halve, decimal_compute_sub, decimal_compute_to_i128,
+        };
+        assert!(self.value.abs() <= Self::SCALE, "acos: domain error (|x| > 1)");
+        let pi_half = decimal_compute_halve(pi_at_decimal_compute().expect("pi"));
+        let result = decimal_compute_sub(pi_half, self.asin_compute());
+        Self { value: decimal_compute_to_i128(result, DECIMALS) }
     }
 
-    /// `sinh(x)` — (exp(x) - exp(-x)) / 2.
+    /// `sinh(x)` — fused (exp(x) - exp(-x)) / 2 at the compute tier.
     pub fn sinh(&self) -> Self {
-        let e_pos = self.exp();
-        let e_neg = (-*self).exp();
-        Self { value: (e_pos.value - e_neg.value) / 2 }
+        use super::transcendental::decimal_sinhcosh;
+        use super::transcendental::decimal_compute::decimal_compute_to_i128;
+        let (s, _) = decimal_sinhcosh(self.to_decimal_compute()).expect("decimal sinh: overflow");
+        Self { value: decimal_compute_to_i128(s, DECIMALS) }
     }
 
-    /// `cosh(x)` — (exp(x) + exp(-x)) / 2.
+    /// `cosh(x)` — fused (exp(x) + exp(-x)) / 2 at the compute tier.
     pub fn cosh(&self) -> Self {
-        let e_pos = self.exp();
-        let e_neg = (-*self).exp();
-        Self { value: (e_pos.value + e_neg.value) / 2 }
+        use super::transcendental::decimal_sinhcosh;
+        use super::transcendental::decimal_compute::decimal_compute_to_i128;
+        let (_, c) = decimal_sinhcosh(self.to_decimal_compute()).expect("decimal cosh: overflow");
+        Self { value: decimal_compute_to_i128(c, DECIMALS) }
     }
 
     /// `sinhcosh(x)` — fused hyperbolic pair sharing one exp-pair evaluation at
@@ -830,40 +859,79 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
     }
 
-    /// `tanh(x)` — (exp(2x) - 1) / (exp(2x) + 1).
+    /// `tanh(x)` — (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to
+    /// ±1 when exp(2x) overflows (|tanh| is then 1 to full storage precision).
     pub fn tanh(&self) -> Self {
-        let two_x = Self { value: self.value * 2 };
-        let e2x = two_x.exp();
-        let num = e2x.value - Self::SCALE;
-        let den = e2x.value + Self::SCALE;
-        Self { value: (num * Self::SCALE) / den }
+        use super::transcendental::decimal_exp;
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, decimal_compute_add, decimal_compute_sub,
+            decimal_compute_div, decimal_compute_is_negative, decimal_compute_to_i128,
+        };
+        let xc = self.to_decimal_compute();
+        let two_x = decimal_compute_add(xc, xc);
+        match decimal_exp(two_x) {
+            Ok(e2x) => {
+                let one = decimal_compute_one();
+                let num = decimal_compute_sub(e2x, one);
+                let den = decimal_compute_add(e2x, one);
+                let q = decimal_compute_div(num, den).expect("tanh: division");
+                Self { value: decimal_compute_to_i128(q, DECIMALS) }
+            }
+            Err(_) => {
+                if decimal_compute_is_negative(&xc) { -Self::ONE } else { Self::ONE }
+            }
+        }
     }
 
-    /// `asinh(x)` — ln(x + sqrt(x^2 + 1)).
+    /// `asinh(x)` = ln(x + sqrt(x^2 + 1)), composed at the compute tier.
     pub fn asinh(&self) -> Self {
-        let x2 = *self * *self;
-        let inner = Self { value: x2.value + Self::SCALE }; // x^2 + 1
-        let root = inner.sqrt();
-        let arg = Self { value: self.value + root.value };
-        arg.ln()
+        use super::transcendental::{decimal_ln, decimal_sqrt};
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, decimal_compute_mul, decimal_compute_add, decimal_compute_to_i128,
+        };
+        let xc = self.to_decimal_compute();
+        let x2 = decimal_compute_mul(xc, xc);
+        let inner = decimal_compute_add(x2, decimal_compute_one());
+        let root = decimal_sqrt(inner).expect("asinh: sqrt");
+        let arg = decimal_compute_add(xc, root);
+        let result = decimal_ln(arg).expect("asinh: ln");
+        Self { value: decimal_compute_to_i128(result, DECIMALS) }
     }
 
-    /// `acosh(x)` — ln(x + sqrt(x^2 - 1)). Requires x >= 1.
+    /// `acosh(x)` = ln(x + sqrt(x^2 - 1)), composed at the compute tier.
+    /// Domain x >= 1; acosh(1) = 0.
     pub fn acosh(&self) -> Self {
-        let x2 = *self * *self;
-        let inner = Self { value: x2.value - Self::SCALE }; // x^2 - 1
-        let root = inner.sqrt();
-        let arg = Self { value: self.value + root.value };
-        arg.ln()
+        use super::transcendental::{decimal_ln, decimal_sqrt};
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, decimal_compute_mul, decimal_compute_sub,
+            decimal_compute_add, decimal_compute_to_i128,
+        };
+        assert!(self.value >= Self::SCALE, "acosh: domain error (x < 1)");
+        let xc = self.to_decimal_compute();
+        let x2 = decimal_compute_mul(xc, xc);
+        let inner = decimal_compute_sub(x2, decimal_compute_one());
+        let root = decimal_sqrt(inner).expect("acosh: sqrt");
+        let arg = decimal_compute_add(xc, root);
+        let result = decimal_ln(arg).expect("acosh: ln");
+        Self { value: decimal_compute_to_i128(result, DECIMALS) }
     }
 
-    /// `atanh(x)` — ln((1+x)/(1-x)) / 2. Requires |x| < 1.
+    /// `atanh(x)` = ln((1+x)/(1-x)) / 2, composed at the compute tier.
+    /// Domain |x| < 1.
     pub fn atanh(&self) -> Self {
-        let one_plus = Self { value: Self::SCALE + self.value };
-        let one_minus = Self { value: Self::SCALE - self.value };
-        let ratio = one_plus / one_minus;
-        let ln_ratio = ratio.ln();
-        Self { value: ln_ratio.value / 2 }
+        use super::transcendental::decimal_ln;
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, decimal_compute_add, decimal_compute_sub,
+            decimal_compute_div, decimal_compute_halve, decimal_compute_to_i128,
+        };
+        assert!(self.value.abs() < Self::SCALE, "atanh: domain error (|x| >= 1)");
+        let xc = self.to_decimal_compute();
+        let one = decimal_compute_one();
+        let num = decimal_compute_add(one, xc); // 1 + x
+        let den = decimal_compute_sub(one, xc); // 1 - x
+        let ratio = decimal_compute_div(num, den).expect("atanh: division");
+        let ln_ratio = decimal_ln(ratio).expect("atanh: ln");
+        Self { value: decimal_compute_to_i128(decimal_compute_halve(ln_ratio), DECIMALS) }
     }
 }
 
