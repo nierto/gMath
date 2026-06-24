@@ -1,8 +1,18 @@
 name: decimal-precision
 
-# Continuously proves the decimal-domain precision contract on every push/PR:
-# grades gMath's decimal transcendentals against mootable/decimal-scaled's
-# independent mpmath corpus (pinned), under gMath's own declared rounding rule.
+# Publicly proves gMath's decimal-domain correctness on every push/PR. Two jobs:
+#
+#  1. lib-tests — the decimal_fixed module tests (incl. the d256 divmod
+#     root-cause regression, banker's rounding, and DecimalFixed mul/div) across
+#     the embedded/balanced/scientific profiles. DecimalFixed is i128-backed on
+#     every profile, so the arithmetic fixes are profile-agnostic; this confirms
+#     they hold across the cfg-gated profile code.
+#
+#  2. contract-harness — the full contract sweep against mootable/decimal-scaled's
+#     independent, adversarial mpmath corpus (pinned). Grades BOTH user-reachable
+#     decimal paths — imperative DecimalFixed (Arm A) and canonical gmath()/FASC
+#     (Arm B) — for all 15 transcendentals, plus atan2 and add/sub/mul/div, under
+#     gMath's own declared rounding rule. Gated at 0 LSB.
 #
 # Free on this public repo (GitHub-hosted runners are unlimited for public repos).
 
@@ -11,17 +21,27 @@ on:
   pull_request:
 
 jobs:
-  decimal-contract:
+  lib-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [embedded, balanced, scientific]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout gMath
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --lib decimal_fixed (${{ matrix.profile }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --lib decimal_fixed
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
+  contract-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       # Oracle #2: decimal-scaled's adversarial golden corpus, pinned to the
       # exact commit gMath was validated against. Not vendored into this repo.
@@ -30,10 +50,10 @@ jobs:
           git clone https://github.com/mootable/decimal-scaled.git "${{ runner.temp }}/decimal-scaled"
           git -C "${{ runner.temp }}/decimal-scaled" checkout e6c7497832be437cf464d07b841609a0b92aac87
 
-      # Balanced profile: DecimalFixed<28> needs compute dp 77 for guard digits.
-      # Single-threaded: the sweep swaps the panic hook around catch_unwind.
-      # Prebuilt lookup tables are committed, so the build is ~seconds, not minutes.
-      - name: Decimal contract validation (balanced, vs oracle #1 + oracle #2)
+      # Balanced profile: the harness is cfg-gated to q128_128 (DecimalFixed<28>
+      # needs compute dp 77 for guard digits). Single-threaded: the sweep swaps
+      # the panic hook around catch_unwind. Prebuilt tables -> build is seconds.
+      - name: Decimal contract validation (balanced, oracle #1 + oracle #2)
         env:
           GMATH_PROFILE: balanced
           GMATH_DECIMAL_SCALED_GOLDEN: ${{ runner.temp }}/decimal-scaled

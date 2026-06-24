@@ -63,6 +63,33 @@ operators through the wide intermediate (or add overflow-detect-and-promote,
 UGOD-style). Financially relevant (large value × rate). Gated: add/sub/atan2 at
 0; mul/div report-only until fixed.
 
+### Decimal mul/div overflow — two root causes, fixed; tier audit clean
+
+The 4-column sweep surfaced wrong results in `DecimalFixed` mul/div for large
+operands. Root causes (both in shared decimal primitives):
+- `divmod_d256_by_i128` kept the partial remainder in a u128 and shifted it left
+  64 each step; for divisors > 2^64 (SCALE >= 10^20) the remainder overflowed
+  u128 and dropped bits. Fixed: delegate to the bit-by-bit 256/256 division
+  (full-D256 remainder, cannot overflow).
+- `banker_round_decimal_i128` compared against `divisor / 2` (truncated),
+  misclassifying odd-divisor non-ties as ties and corrupting exact results at
+  scale 0 (divisor == 1). Fixed: parity-aware compare.
+
+mul/div rewritten UGOD-shaped: narrow i128 tier (checked_mul) -> widen to 256-bit
+on overflow -> saturate (never panic). Banker's rounding preserved. 256-bit
+intermediate (128x128=256), not the compute tier's I1024. ~350 lines of dead
+digit-array code removed.
+
+**Tier audit (does the bug class exist elsewhere?): no.** Audited all 18
+tier x op combinations across decimal (Tier1-6), binary (Tier1-6), and ternary
+(Tier1-6): every multiply widens to a 2x intermediate, every divide widens the
+dividend before scaling, and the rounding idioms are robust (binary uses
+`2*rem >= div`; decimal tiers divide exactly-or-Err; ternary truncates). The bug
+was contained to the imperative `DecimalFixed<N>` path + its two shared helpers
+(the only caller of them) — the tiered arithmetic was already correct. Same
+through-line as every decimal bug this session: the imperative layer was written
+outside the compute-tier / UGOD discipline the rest of the library follows.
+
 ### Helper renames (clarity)
 
 The domain-polymorphic FASC helpers were misnamed `binary_*` despite preserving
