@@ -94,7 +94,7 @@ impl DomainMatrix {
                     Some(raw) => data.push(FixedPoint::from_raw(raw)),
                     None => {
                         // Convert to binary via evaluator's domain conversion
-                        let binary_sv = eval.to_binary_value(sv)?;
+                        let binary_sv = eval.to_compute_value(sv)?;
                         let materialized = eval.materialize_compute(binary_sv)?;
                         match materialized.as_binary_storage() {
                             Some(raw) => data.push(FixedPoint::from_raw(raw)),

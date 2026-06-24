@@ -31,8 +31,46 @@ never caught it because it uses `from_raw` (a signed i128), not string parsing.
 This affected the primary public entry point (`gmath`/`gmath_parse`) for all
 sub-unit negatives — e.g. -$0.50. Regression test: `parse_negative_subunit_sign`.
 
-Still open (tracked below): the `binary_*` helper misnaming + Symbolic→binary
-silent fallback in `to_binary_value`/`binary_divide`.
+### Helper renames (clarity)
+
+The domain-polymorphic FASC helpers were misnamed `binary_*` despite preserving
+the operand's domain. Renamed: `to_binary_value`→`to_compute_value`,
+`binary_divide`→`divide_at_compute`, `halve_binary`→`halve_value`, each with a
+doc comment stating PATH membership (FASC composed-transcendental machinery, not
+used by the imperative `FixedPoint`/`DecimalFixed` types). `make_binary_int` /
+`to_binary_storage` are genuinely binary and kept.
+
+### Symbolic→binary fallback: cost-benefit (Bayesian)
+
+Question: replace the silent Symbolic→binary fallback in `to_compute_value`
+with (1) a minimal guard (route Symbolic→decimal compute) or (2) a proper fix
+(stay symbolic through the rational-arithmetic sub-steps, approximate only at
+the irrational step)?
+
+Findings:
+- **Symbolic arithmetic already stays exact** (`add_via_rational` + fractal
+  router coercion). No correctness bug. The fallback only affects composed
+  *transcendentals*, whose result is irrational and must approximate regardless.
+- **Measured accuracy of the current binary fallback** (balanced, vs mpmath,
+  full 38-digit storage): atanh(1/3), atanh(1/10), atanh(1/4), asinh(1/7),
+  tanh(2/3), acosh(7/3) — all **0 ULP**. Even decimal-exact-but-binary-inexact
+  inputs (1/10, 1/4) are correctly rounded: the compute tier (~77 digits)
+  absorbs the binary representation error before the downscale to 38 digits.
+- **Base rate** of symbolic-operand→composed-transcendental is very low
+  (transcendentals are applied to measured decimals/binaries, not exact
+  fractions).
+
+Expected accuracy gain = base_rate × per-call-gain ≈ (rare) × (0 measured) ≈ 0.
+- **Proper fix (2): REJECT** — over-engineering. ~0 accuracy gain at storage
+  tier, but adds BigInt-rational arithmetic on the (rare) symbolic path
+  (slower) and real structural complexity/risk.
+- **Minimal guard (1): optional, cleanliness-only** — no measurable accuracy
+  benefit; its only merit is removing the silent binary drop for domain
+  consistency. Thin-guard profiles (realtime/compact) *might* show ≤1 ULP where
+  the minimal guard helps, but symbolic transcendentals there are rarer still.
+
+Decision recorded in `to_compute_value`'s doc comment; guard deferred as a
+cleanliness nicety, not a correctness or accuracy fix.
 
 ---
 
