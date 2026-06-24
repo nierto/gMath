@@ -10,11 +10,14 @@ name: decimal-precision
 #
 #  2. contract-harness — the full contract sweep against mootable/decimal-scaled's
 #     independent, adversarial mpmath corpus (pinned). Grades BOTH user-reachable
-#     decimal paths — imperative DecimalFixed (Arm A) and canonical gmath()/FASC
-#     (Arm B) — for all 15 transcendentals, plus atan2 and add/sub/mul/div, under
-#     gMath's own declared rounding rule. Gated at 0 LSB.
+#     decimal paths (imperative DecimalFixed + canonical gmath()/FASC) for all 15
+#     transcendentals, plus atan2 and add/sub/mul/div, at 0 LSB.
 #
-# Free on this public repo (GitHub-hosted runners are unlimited for public repos).
+# Uses NO third-party or GitHub-authored actions — checkout is a plain `git fetch`
+# (gMath is a public repo) and the ubuntu runner already ships stable Rust. This
+# keeps the repo runnable under the most restrictive "Allow <owner> actions"
+# policy (and trivially satisfies "require actions pinned to a full SHA", since no
+# actions are used). Free on this public repo.
 
 on:
   push:
@@ -28,9 +31,13 @@ jobs:
         profile: [embedded, balanced, scientific]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Checkout (plain git — no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
       - name: cargo test --lib decimal_fixed (${{ matrix.profile }})
         env:
           GMATH_PROFILE: ${{ matrix.profile }}
@@ -39,9 +46,12 @@ jobs:
   contract-harness:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Checkout (plain git — no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
 
       # Oracle #2: decimal-scaled's adversarial golden corpus, pinned to the
       # exact commit gMath was validated against. Not vendored into this repo.
