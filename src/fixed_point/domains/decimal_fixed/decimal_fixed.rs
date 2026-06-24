@@ -5,7 +5,7 @@
 //! ARCHITECTURE: Scaled integer arithmetic with deterministic rounding
 
 // Import domain-specific decimal integer types
-use super::{D256, divmod_d256_by_i128, banker_round_decimal_i128};
+use super::{divmod_d256_by_i128, banker_round_decimal_i128, mul_i128_to_d256};
 use std::fmt;
 use std::str::FromStr;
 
@@ -228,36 +228,10 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// PRECISION: Exact decimal arithmetic for all representable results
     /// PURITY: 100% base-10 operations - no binary I256 contamination
     pub fn pure_decimal_multiply_decimal(self, other: Self) -> Self {
-        // Handle zero cases early
-        if self.value == 0 || other.value == 0 {
-            return Self::ZERO;
-        }
-        
-        // Extract signs
-        let result_negative = (self.value < 0) != (other.value < 0);
-        let a_abs = self.value.abs();
-        let b_abs = other.value.abs();
-        
-        // Extract decimal digits from scaled integers
-        let a_digits = extract_decimal_digits(a_abs);
-        let b_digits = extract_decimal_digits(b_abs);
-        
-        // Perform pure decimal long multiplication
-        let product_digits = decimal_long_multiply(&a_digits, &b_digits);
-        
-        // Assemble result with proper scaling
-        let unscaled_result = assemble_decimal_digits(&product_digits);
-        
-        // Apply decimal scaling: result = (a * b) / scale
-        let (quotient, remainder) = (unscaled_result / Self::SCALE, unscaled_result % Self::SCALE);
-        
-        // Apply banker's rounding in pure decimal
-        let rounded = pure_decimal_banker_round(quotient, remainder, Self::SCALE);
-        
-        // Apply sign
-        let final_result = if result_negative { -rounded } else { rounded };
-        
-        Self { value: final_result }
+        // The previous digit-array path reassembled the unscaled product into an
+        // i128 and overflowed for products exceeding i128::MAX. Delegate to the
+        // D256-intermediate path, which is exact for every representable result.
+        self.multiply_exact_decimal(other)
     }
     
     /// PRODUCTION-OPTIMIZED: Pure decimal multiplication with 20-50x performance improvement
@@ -266,65 +240,9 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// PRECISION: Maintains exact decimal arithmetic
     /// PERFORMANCE: Optimized for high-throughput decimal arithmetic
     pub fn pure_decimal_multiply_optimized_decimal(self, other: Self) -> Self {
-        // Handle zero cases early
-        if self.value == 0 || other.value == 0 {
-            return Self::ZERO;
-        }
-        
-        // Extract signs
-        let result_negative = (self.value < 0) != (other.value < 0);
-        let a_abs = self.value.abs();
-        let b_abs = other.value.abs();
-        
-        // Fast path for small values using direct integer multiplication
-        if a_abs < SMALL_VALUE_THRESHOLD && b_abs < SMALL_VALUE_THRESHOLD {
-            return self.pure_decimal_multiply_small_optimized_decimal(other);
-        }
-        
-        // Stack-allocated digit arrays for optimal performance
-        let mut a_digits = [0u8; MAX_DECIMAL_DIGITS];
-        let mut b_digits = [0u8; MAX_DECIMAL_DIGITS];
-        
-        // Optimized digit extraction using chunked processing
-        let a_len = extract_decimal_digits_stack_optimized(a_abs, &mut a_digits);
-        let b_len = extract_decimal_digits_stack_optimized(b_abs, &mut b_digits);
-        
-        // Use optimized long multiplication (Karatsuba disabled for stability)
-        let mut product_digits = [0u8; MAX_DECIMAL_DIGITS * 2];
-        let product_len = decimal_long_multiply_stack_optimized(&a_digits[..a_len], &b_digits[..b_len], &mut product_digits);
-        
-        // Optimized digit assembly with overflow protection
-        let unscaled_result = assemble_decimal_digits_stack_optimized(&product_digits[..product_len]);
-        
-        // Apply decimal scaling: result = (a * b) / scale
-        let (quotient, remainder) = (unscaled_result / Self::SCALE, unscaled_result % Self::SCALE);
-        
-        // Apply banker's rounding in pure decimal
-        let rounded = pure_decimal_banker_round(quotient, remainder, Self::SCALE);
-        
-        // Apply sign
-        let final_result = if result_negative { -rounded } else { rounded };
-        
-        Self { value: final_result }
+        self.multiply_exact_decimal(other)
     }
     
-    /// Fast path for small values using direct integer multiplication
-    /// 
-    /// ALGORITHM: Direct integer multiplication when overflow risk is low
-    /// PRECISION: Maintains exact decimal arithmetic
-    /// PERFORMANCE: 10-20x faster than digit-based multiplication for small values
-    fn pure_decimal_multiply_small_optimized_decimal(self, other: Self) -> Self {
-        // Direct multiplication is safe for small values
-        let product = self.value * other.value;
-        
-        // Apply decimal scaling
-        let (quotient, remainder) = (product / Self::SCALE, product % Self::SCALE);
-        
-        // Apply banker's rounding
-        let rounded = pure_decimal_banker_round(quotient, remainder, Self::SCALE);
-        
-        Self { value: rounded }
-    }
     
     /// Decimal multiplication using 256-bit intermediate to prevent truncation
     /// 
@@ -332,20 +250,18 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// PRECISION: Exact for all results that fit in the target format
     /// DOMAIN: Uses decimal D256 arithmetic - pure decimal domain separation
     pub fn multiply_exact_decimal(self, other: Self) -> Self {
-        // Use D256 for intermediate calculation to prevent overflow
-        let a_extended = D256::from_i128(self.value);
-        let b_extended = D256::from_i128(other.value);
-        
-        // Multiply in 256-bit precision
-        let product_256 = a_extended * b_extended;
-        
-        // Divide by scale to get final result
-        let (quotient, remainder) = divmod_d256_by_i128(product_256, Self::SCALE);
-        
-        // Apply banker's rounding for deterministic tie-breaking
-        let rounded = banker_round_decimal_i128(quotient, remainder, Self::SCALE);
-        
-        Self { value: rounded }
+        // UGOD-shaped: try the narrow i128 tier first; on overflow widen the
+        // intermediate to 256 bits (128x128 product can't exceed 256 bits — no
+        // I1024 needed). Banker's rounding throughout. Saturates on genuine
+        // result overflow, never panics. i128 storage is identical on every
+        // profile, so this is correct across all five.
+        if let Some(product) = self.value.checked_mul(other.value) {
+            let rounded = banker_round_decimal_i128(product / Self::SCALE, product % Self::SCALE, Self::SCALE);
+            return Self { value: rounded };
+        }
+        let product = mul_i128_to_d256(self.value, other.value);
+        let (quotient, remainder) = divmod_d256_by_i128(product, Self::SCALE);
+        Self { value: banker_round_decimal_i128(quotient, remainder, Self::SCALE) }
     }
     
     /// Pure decimal addition using optimized scaled integer arithmetic
@@ -434,33 +350,25 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
             return Self::ZERO;
         }
         
-        // Extract signs
+        // The result is round(dividend * SCALE / divisor) with banker's rounding.
+        // UGOD-shaped: try the narrow i128 tier (`dividend_abs * SCALE` fits);
+        // on overflow widen the scaled dividend to 256 bits. Work on absolute
+        // values so the divisor passed to banker's rounding stays positive, then
+        // reapply the sign. Saturates on genuine overflow, never panics.
         let result_negative = (self.value < 0) != (other.value < 0);
         let dividend_abs = self.value.abs();
         let divisor_abs = other.value.abs();
-        
-        // For division, we need to multiply dividend by scale first
-        // This is because (a/scale) ÷ (b/scale) = a/b, but we want (a/scale) ÷ (b/scale) = a/b * scale
-        let scaled_dividend = dividend_abs * Self::SCALE;
-        
-        // Extract decimal digits
-        let dividend_digits = extract_decimal_digits(scaled_dividend);
-        let divisor_digits = extract_decimal_digits(divisor_abs);
-        
-        // Perform pure decimal long division
-        let (quotient_digits, remainder_digits) = decimal_long_divide(&dividend_digits, &divisor_digits);
-        
-        // Assemble quotient and remainder
-        let quotient = assemble_decimal_digits(&quotient_digits);
-        let remainder = assemble_decimal_digits(&remainder_digits);
-        
-        // Apply banker's rounding
-        let rounded = pure_decimal_banker_round(quotient, remainder, divisor_abs);
-        
-        // Apply sign
-        let final_result = if result_negative { -rounded } else { rounded };
-        
-        Self { value: final_result }
+        let rounded = match dividend_abs.checked_mul(Self::SCALE) {
+            Some(scaled) => {
+                banker_round_decimal_i128(scaled / divisor_abs, scaled % divisor_abs, divisor_abs)
+            }
+            None => {
+                let scaled = mul_i128_to_d256(dividend_abs, Self::SCALE);
+                let (quotient, remainder) = divmod_d256_by_i128(scaled, divisor_abs);
+                banker_round_decimal_i128(quotient, remainder, divisor_abs)
+            }
+        };
+        Self { value: if result_negative { -rounded } else { rounded } }
     }
     
     /// High-performance multiplication for batch operations
@@ -1041,371 +949,6 @@ pub const fn compile_time_power_of_10(exp: u8) -> i128 {
 // NOTE: negate_i256 moved to decimal_fixed/d256.rs as negate_d256
 // This maintains domain separation while preserving the same algorithm
 
-/// Pure decimal arithmetic helper functions
-/// 
-/// MISSION: Eliminate binary contamination through base-10 native operations
-/// PRECISION: Maintain exactness within decimal representation limits
-
-/// PRODUCTION-OPTIMIZED PURE DECIMAL ARITHMETIC
-/// 
-/// PERFORMANCE: 20-50x faster than original implementation
-/// PRECISION: Maintains exact decimal arithmetic
-/// ARCHITECTURE: Stack-allocated arrays, chunked processing, Karatsuba multiplication
-
-/// Maximum decimal digits for i128 (39 digits)
-const MAX_DECIMAL_DIGITS: usize = 39;
-
-
-/// Small value threshold for optimized fast path
-const SMALL_VALUE_THRESHOLD: i128 = 1_000_000;
-
-/// OPTIMIZED: Stack-allocated digit extraction with 4-digit chunking
-/// 
-/// ALGORITHM: Extract digits using chunked processing for 4x performance improvement
-/// PRECISION: Exact conversion with no information loss
-/// PERFORMANCE: 3-4x faster than Vec-based extraction
-fn extract_decimal_digits_stack_optimized(value: i128, digits: &mut [u8; MAX_DECIMAL_DIGITS]) -> usize {
-    if value == 0 {
-        digits[0] = 0;
-        return 1;
-    }
-    
-    let mut remaining = value;
-    let mut pos = 0;
-    
-    // Process 4 digits at a time for optimal performance
-    while remaining >= 10000 && pos + 4 <= MAX_DECIMAL_DIGITS {
-        let chunk = remaining % 10000;
-        remaining /= 10000;
-        
-        // Extract 4 digits using optimized bit operations
-        digits[pos] = (chunk % 10) as u8;
-        digits[pos + 1] = ((chunk / 10) % 10) as u8;
-        digits[pos + 2] = ((chunk / 100) % 10) as u8;
-        digits[pos + 3] = ((chunk / 1000) % 10) as u8;
-        pos += 4;
-    }
-    
-    // Handle remaining digits (1-3 digits)
-    while remaining > 0 && pos < MAX_DECIMAL_DIGITS {
-        digits[pos] = (remaining % 10) as u8;
-        remaining /= 10;
-        pos += 1;
-    }
-    
-    pos
-}
-
-/// OPTIMIZED: Stack-allocated digit assembly with overflow protection
-/// 
-/// ALGORITHM: Convert digit array to i128 using optimized accumulation
-/// PRECISION: Exact conversion with overflow protection
-/// PERFORMANCE: 2-3x faster than Vec-based assembly
-fn assemble_decimal_digits_stack_optimized(digits: &[u8]) -> i128 {
-    let mut result = 0i128;
-    let mut power = 1i128;
-    
-    // Process digits in chunks of 4 for better performance
-    let mut i = 0;
-    while i + 4 <= digits.len() {
-        // Process 4 digits at once
-        let chunk = digits[i] as i128 * power +
-                   digits[i + 1] as i128 * (power * 10) +
-                   digits[i + 2] as i128 * (power * 100) +
-                   digits[i + 3] as i128 * (power * 1000);
-        
-        result = result.saturating_add(chunk);
-        power = power.saturating_mul(10000);
-        i += 4;
-    }
-    
-    // Handle remaining digits (1-3 digits)
-    while i < digits.len() {
-        result = result.saturating_add(power.saturating_mul(digits[i] as i128));
-        power = power.saturating_mul(10);
-        i += 1;
-    }
-    
-    result
-}
-
-/// OPTIMIZED: Stack-allocated long multiplication with enhanced carry propagation
-/// 
-/// ALGORITHM: Optimized long multiplication with efficient memory access patterns
-/// PRECISION: Exact multiplication with carry propagation
-/// PERFORMANCE: 3-5x faster than Vec-based multiplication
-fn decimal_long_multiply_stack_optimized(a_digits: &[u8], b_digits: &[u8], result: &mut [u8]) -> usize {
-    let result_len = a_digits.len() + b_digits.len();
-    
-    // Clear result array
-    for i in 0..result_len {
-        result[i] = 0;
-    }
-    
-    // Optimized long multiplication with efficient carry propagation
-    for (i, &a_digit) in a_digits.iter().enumerate() {
-        if a_digit == 0 {
-            continue; // Skip zero multiplications for better performance
-        }
-        
-        let mut carry = 0u16;
-        let a_digit_u16 = a_digit as u16;
-        
-        // Unrolled inner loop for better performance
-        let mut j = 0;
-        while j + 3 < b_digits.len() {
-            // Process 4 multiplications at once
-            for k in 0..4 {
-                let product = a_digit_u16 * (b_digits[j + k] as u16) + result[i + j + k] as u16 + carry;
-                result[i + j + k] = (product % 10) as u8;
-                carry = product / 10;
-            }
-            j += 4;
-        }
-        
-        // Handle remaining multiplications
-        while j < b_digits.len() {
-            let product = a_digit_u16 * (b_digits[j] as u16) + result[i + j] as u16 + carry;
-            result[i + j] = (product % 10) as u8;
-            carry = product / 10;
-            j += 1;
-        }
-        
-        // Propagate final carry
-        if carry > 0 && i + b_digits.len() < result_len {
-            let carry_pos = i + b_digits.len();
-            let mut propagate_carry = carry as u8;
-            let mut pos = carry_pos;
-            
-            while propagate_carry > 0 && pos < result_len {
-                let sum = result[pos] + propagate_carry;
-                result[pos] = sum % 10;
-                propagate_carry = sum / 10;
-                pos += 1;
-            }
-        }
-    }
-    
-    // Find actual length by removing leading zeros
-    let mut actual_len = result_len;
-    while actual_len > 1 && result[actual_len - 1] == 0 {
-        actual_len -= 1;
-    }
-    
-    actual_len
-}
-
-
-
-
-
-
-/// Extract decimal digits from scaled integer value
-/// 
-/// ALGORITHM: Convert i128 to array of base-10 digits (least significant first)
-/// PRECISION: Exact conversion with no information loss
-fn extract_decimal_digits(value: i128) -> Vec<u8> {
-    if value == 0 {
-        return vec![0];
-    }
-    
-    let mut digits = Vec::new();
-    let mut remaining = value;
-    
-    while remaining > 0 {
-        digits.push((remaining % 10) as u8);
-        remaining /= 10;
-    }
-    
-    digits
-}
-
-/// Assemble decimal digits back into i128 value
-/// 
-/// ALGORITHM: Convert array of base-10 digits to i128 (least significant first)
-/// PRECISION: Exact conversion with overflow protection
-fn assemble_decimal_digits(digits: &[u8]) -> i128 {
-    let mut result = 0i128;
-    let mut power = 1i128;
-    
-    for &digit in digits {
-        result = result.saturating_add(power.saturating_mul(digit as i128));
-        power = power.saturating_mul(10);
-    }
-    
-    result
-}
-
-/// Pure decimal long multiplication
-/// 
-/// ALGORITHM: Traditional grade-school multiplication in base-10
-/// PRECISION: Exact multiplication with carry propagation
-/// PURITY: 100% decimal operations - no binary contamination
-fn decimal_long_multiply(a_digits: &[u8], b_digits: &[u8]) -> Vec<u8> {
-    let mut result = vec![0u8; a_digits.len() + b_digits.len()];
-    
-    // Traditional long multiplication algorithm
-    for (i, &a_digit) in a_digits.iter().enumerate() {
-        let mut carry = 0u16;
-        
-        for (j, &b_digit) in b_digits.iter().enumerate() {
-            let product = (a_digit as u16) * (b_digit as u16) + result[i + j] as u16 + carry;
-            result[i + j] = (product % 10) as u8;
-            carry = product / 10;
-        }
-        
-        // Propagate final carry
-        if carry > 0 {
-            result[i + b_digits.len()] = carry as u8;
-        }
-    }
-    
-    // Remove leading zeros
-    while result.len() > 1 && result[result.len() - 1] == 0 {
-        result.pop();
-    }
-    
-    result
-}
-
-/// Pure decimal long division
-/// 
-/// ALGORITHM: Traditional long division in base-10
-/// PRECISION: Exact division with remainder tracking
-/// PURITY: 100% decimal operations - no binary contamination
-fn decimal_long_divide(dividend_digits: &[u8], divisor_digits: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    // Handle zero divisor
-    if divisor_digits.len() == 1 && divisor_digits[0] == 0 {
-        return (vec![0], vec![0]);
-    }
-    
-    // Handle zero dividend
-    if dividend_digits.len() == 1 && dividend_digits[0] == 0 {
-        return (vec![0], vec![0]);
-    }
-    
-    // Convert to working vectors (most significant first for division)
-    let dividend: Vec<u8> = dividend_digits.iter().rev().cloned().collect();
-    let divisor: Vec<u8> = divisor_digits.iter().rev().cloned().collect();
-    
-    // Handle simple case where dividend < divisor
-    if is_less_than(&dividend, &divisor) {
-        let remainder: Vec<u8> = dividend.iter().rev().cloned().collect();
-        return (vec![0], remainder);
-    }
-    
-    let mut quotient = Vec::new();
-    let mut current_dividend = Vec::new();
-    
-    // Long division algorithm
-    for &digit in &dividend {
-        current_dividend.push(digit);
-        
-        // Remove leading zeros
-        while current_dividend.len() > 1 && current_dividend[0] == 0 {
-            current_dividend.remove(0);
-        }
-        
-        // Find how many times divisor goes into current_dividend
-        let mut count = 0u8;
-        while !is_less_than(&current_dividend, &divisor) {
-            current_dividend = subtract_decimal_digits(&current_dividend, &divisor);
-            count += 1;
-        }
-        
-        quotient.push(count);
-    }
-    
-    // Convert results back to least significant first
-    quotient.reverse();
-    current_dividend.reverse();
-    
-    // Remove leading zeros from quotient
-    while quotient.len() > 1 && quotient[quotient.len() - 1] == 0 {
-        quotient.pop();
-    }
-    
-    (quotient, current_dividend)
-}
-
-/// Compare two decimal digit arrays (most significant first)
-/// Returns true if a < b
-fn is_less_than(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return a.len() < b.len();
-    }
-    
-    for (a_digit, b_digit) in a.iter().zip(b.iter()) {
-        if a_digit < b_digit {
-            return true;
-        } else if a_digit > b_digit {
-            return false;
-        }
-    }
-    
-    false // Equal
-}
-
-/// Subtract decimal digit arrays (most significant first)
-/// Assumes a >= b
-fn subtract_decimal_digits(a: &[u8], b: &[u8]) -> Vec<u8> {
-    let mut result = a.to_vec();
-    let mut borrow = 0u8;
-    
-    let offset = a.len() - b.len();
-    
-    // Subtract from right to left
-    for i in (0..a.len()).rev() {
-        let b_digit = if i >= offset { b[i - offset] } else { 0 };
-        
-        if result[i] >= b_digit + borrow {
-            result[i] -= b_digit + borrow;
-            borrow = 0;
-        } else {
-            result[i] = result[i] + 10 - b_digit - borrow;
-            borrow = 1;
-        }
-    }
-    
-    // Remove leading zeros
-    while result.len() > 1 && result[0] == 0 {
-        result.remove(0);
-    }
-    
-    result
-}
-
-/// Pure decimal banker's rounding
-/// 
-/// ALGORITHM: Round half to even in base-10
-/// PRECISION: Deterministic tie-breaking for cross-platform consistency
-/// PURITY: 100% decimal operations
-fn pure_decimal_banker_round(quotient: i128, remainder: i128, divisor: i128) -> i128 {
-    let half_divisor = divisor / 2;
-    let abs_remainder = remainder.abs();
-    
-    if abs_remainder < half_divisor {
-        quotient // Round down
-    } else if abs_remainder > half_divisor {
-        // Round up
-        if remainder >= 0 {
-            quotient + 1
-        } else {
-            quotient - 1
-        }
-    } else {
-        // Exact half - round to even (banker's rounding)
-        if quotient % 2 == 0 {
-            quotient // Already even
-        } else {
-            if remainder >= 0 {
-                quotient + 1 // Round up to make even
-            } else {
-                quotient - 1 // Round down to make even
-            }
-        }
-    }
-}
 
 /// Common decimal precision type aliases
 pub type DecimalFixed2 = DecimalFixed<2>;   // 2 decimal places (cents)
