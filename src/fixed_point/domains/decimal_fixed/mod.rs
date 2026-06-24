@@ -54,29 +54,27 @@ pub type D128 = i128;
 /// DETERMINISM: Identical results across all platforms
 /// SEPARATION: Isolated from binary domain rounding functions
 pub fn banker_round_decimal_i128(quotient: i128, remainder: i128, divisor: i128) -> i128 {
-    let half_divisor = divisor / 2;
+    let abs_divisor = divisor.abs();
     let abs_remainder = remainder.abs();
+    // `abs_divisor / 2` truncates; comparing against it directly would (a) treat
+    // every exact result as a tie when divisor == 1 (half == 0) and (b) misjudge
+    // odd divisors, where the true midpoint is `(D-1)/2 + 0.5`. Compare the
+    // floored half and use the divisor parity to resolve the boundary. (We avoid
+    // `2 * abs_remainder`, which overflows i128 for large divisors.)
+    let half = abs_divisor / 2;
+    let bump = if remainder >= 0 { quotient + 1 } else { quotient - 1 };
 
-    if abs_remainder < half_divisor {
-        // Round down
+    if abs_remainder < half {
+        quotient // strictly below the midpoint -> round down
+    } else if abs_remainder > half {
+        bump // strictly above the midpoint -> round up
+    } else if abs_divisor % 2 != 0 {
+        // Odd divisor: remainder == (D-1)/2 is below the true midpoint D/2.
+        // (Covers divisor == 1, where half == 0 and exact results round down.)
         quotient
-    } else if abs_remainder > half_divisor {
-        // Round up
-        if remainder >= 0 {
-            quotient + 1
-        } else {
-            quotient - 1
-        }
+    } else if quotient % 2 == 0 {
+        quotient // exact half, even quotient -> round to even
     } else {
-        // Exact half - round to even
-        if quotient % 2 == 0 {
-            quotient
-        } else {
-            if remainder >= 0 {
-                quotient + 1
-            } else {
-                quotient - 1
-            }
-        }
+        bump // exact half, odd quotient -> round to even
     }
 }

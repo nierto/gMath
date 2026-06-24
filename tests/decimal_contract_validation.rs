@@ -706,12 +706,11 @@ fn op_mode(op: &str) -> Mode {
     }
 }
 
-/// add/sub/atan2 are correctly rounded and gated at 0. mul/div are report-only:
-/// the `*`/`/` operators reassemble the unscaled product/dividend into an i128
-/// that overflows for large operands (the D256-based multiply_exact_decimal does
-/// not). Known bug — see FINDINGS.md.
-fn arith_gated(op: &str) -> bool {
-    matches!(op, "add" | "sub" | "atan2")
+/// All decimal binary ops are gated at 0 after routing mul/div through the
+/// D256-intermediate path (the `*`/`/` operators previously overflowed the
+/// unscaled product/dividend in i128 for large operands).
+fn arith_gated(_op: &str) -> bool {
+    true
 }
 
 fn compute_binary<const S: u8>(op: &str, a: i128, b: i128) -> Option<i128> {

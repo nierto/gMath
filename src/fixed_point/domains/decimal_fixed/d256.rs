@@ -393,62 +393,22 @@ pub fn divmod_d256_by_i128(dividend: D256, divisor: i128) -> (i128, i128) {
         return (quotient, remainder);
     }
     
-    // Determine signs
-    let dividend_negative = dividend.is_negative();
-    let divisor_negative = divisor < 0;
-    let result_negative = dividend_negative != divisor_negative;
-    
-    // Work with absolute values using proper D256 negation
-    let abs_dividend = if dividend_negative {
-        negate_d256(dividend)
+    // General case. The previous word-wise long division kept the partial
+    // remainder in a u128 and shifted it left by 64 each step; when the divisor
+    // exceeds 2^64 (i.e. SCALE >= 10^20, common at high decimal precision) the
+    // remainder exceeds 2^64 and `remainder << 64` overflowed u128, silently
+    // dropping bits and corrupting the quotient. Delegate to the bit-by-bit
+    // 256/256 division, whose remainder lives in a full D256 and cannot overflow.
+    let (q, r) = divmod_d256_by_d256(dividend, D256::from_i128(divisor));
+    let quotient = if q.fits_in_i128() {
+        q.as_i128()
+    } else if q.is_negative() {
+        i128::MIN
     } else {
-        dividend
+        i128::MAX
     };
-    
-    let abs_divisor = divisor.unsigned_abs() as u128;
-    
-    // PROPER 256-bit by 128-bit long division algorithm for decimal domain
-    let mut quotient = 0u128;
-    let mut remainder = 0u128;
-    
-    // Process from most significant to least significant 64-bit word
-    for word_idx in (0..4).rev() {
-        // Shift remainder by 64 bits and add next word
-        remainder = (remainder << 64) + abs_dividend.words[word_idx] as u128;
-        
-        // Divide remainder by divisor
-        let word_quotient = remainder / abs_divisor;
-        remainder = remainder % abs_divisor;
-        
-        // Add word quotient to total (if it fits)
-        if word_idx < 2 { // Only accumulate if result fits in 128 bits
-            quotient = (quotient << 64) + word_quotient;
-        } else if word_quotient != 0 {
-            // Overflow case - quotient too large for i128
-            let saturated_quotient = if result_negative { i128::MIN } else { i128::MAX };
-            let saturated_remainder = if dividend_negative { -(remainder as i128) } else { remainder as i128 };
-            return (saturated_quotient, saturated_remainder);
-        }
-    }
-    
-    // Convert results to signed values with proper bounds checking
-    let final_quotient = if quotient > i128::MAX as u128 {
-        // Overflow case
-        if result_negative { i128::MIN } else { i128::MAX }
-    } else {
-        let signed_quotient = quotient as i128;
-        if result_negative { -signed_quotient } else { signed_quotient }
-    };
-    
-    let final_remainder = if remainder > i128::MAX as u128 {
-        // This should never happen with proper divisor, but guard against it
-        0
-    } else {
-        let signed_remainder = remainder as i128;
-        if dividend_negative { -signed_remainder } else { signed_remainder }
-    };
-    
-    (final_quotient, final_remainder)
+    let remainder = if r.fits_in_i128() { r.as_i128() } else { 0 };
+    (quotient, remainder)
 }
 
 /// Division with remainder for D256 by D256 (decimal-specific)
@@ -654,5 +614,30 @@ mod tests {
         let (quotient, remainder) = divmod_d256_by_i128(dividend, divisor);
         assert_eq!(quotient, 100);
         assert_eq!(remainder, 7);
+    }
+
+    /// Root-cause regression: products exceeding i128 with divisors exceeding
+    /// 2^64. The old word-wise divmod overflowed its u128 remainder here.
+    #[test]
+    fn mul_and_divmod_large_divisor() {
+        let two_e37: i128 = 20000000000000000000000000000000000000; // 2e37
+        let one_e37: i128 = 10000000000000000000000000000000000000; // 1e37 (> 2^64)
+        let three_e37: i128 = 30000000000000000000000000000000000000; // 3e37
+
+        // 2e37 * 1e37 = 2e74 (exceeds i128); /1e37 round-trips to 2e37.
+        let p = mul_i128_to_d256(two_e37, one_e37);
+        assert_eq!(divmod_d256_by_i128(p, one_e37).0, two_e37);
+        // 2e74 / 3e37 = 6.666...e36 (floor).
+        assert_eq!(
+            divmod_d256_by_i128(p, three_e37).0,
+            6666666666666666666666666666666666666
+        );
+        // Sign handling.
+        let pn = mul_i128_to_d256(-two_e37, one_e37);
+        assert_eq!(divmod_d256_by_i128(pn, one_e37).0, -two_e37);
+
+        // The general D256::Mul path must agree (it routes through mul_i128_to_d256).
+        let pd = D256::from_i128(two_e37) * D256::from_i128(one_e37);
+        assert_eq!(divmod_d256_by_i128(pd, one_e37).0, two_e37);
     }
 }
