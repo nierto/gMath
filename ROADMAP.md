@@ -183,6 +183,37 @@ SIMD-friendly array processing for FixedPoint operations beyond TQ1.9. Bulk exp,
 
 Balanced ternary arithmetic lacks a dedicated validation suite. The domain works but needs stress-testing against reference values. Low effort, fills a known quality gap.
 
+### Interval arithmetic — certified enclosures
+
+A first-class interval type ([lo, hi] guaranteed to enclose the true value) built
+on the existing tier-N+1 machinery. The downscale step already rounds once;
+adding round-toward-−∞ and round-toward-+∞ modes beside the current
+round-to-nearest is a branch on the discarded bits, not new math — that directed
+(outward) rounding is what makes enclosures sound. With gMath's correctly-rounded
+transcendentals, interval versions come nearly for free: evaluate f at the
+endpoints, widen by the known ≤1-ULP rounding error. Turns "correctly rounded"
+into "certified bound" — the error-transparency story for validation/anomaly
+consumers (e.g. interval-certified scores: d² ∈ [lo, hi], "certainly outside" vs
+"within numerical noise"). Real work is the dependency problem (centered/affine
+arithmetic to curb interval widening) and non-monotonic extrema; ship a
+monotonic-first v1. Reference: Moore/Kearfott; IEEE 1788-2015 (decorations).
+
+### Exact geometric predicates
+
+Certified orient2d/orient3d, incircle/insphere, segment intersection, and
+containment, built on the exact rational (BigInt a/b) and integer fixed-point
+domains. Each predicate is the sign of a determinant polynomial in the inputs,
+and only the sign matters — so exact arithmetic makes the verdict provably
+correct, including the exact-zero degenerate cases (collinear/cocircular) that
+floating point cannot decide reliably. Speed via the standard filter→fallback
+pattern: the interval type (above) resolves the common case, exact arithmetic
+runs only near zero. The same sign-of-determinant primitive certifies matrix
+positive-definiteness/rank (a real need for any SPD/Cholesky consumer — replaces
+blind diagonal regularization). Enables a topological "shape over a point cloud"
+layer (Delaunay / alpha-complex / persistent homology — integer reduction, zero
+float) in low dimension. Provenance: Delone (1934, "Sur la sphère vide") +
+Voronoy; Shewchuk adaptive predicates; CGAL exact-computation paradigm.
+
 ### Imperative geometry methods — UGOD + FASC integration
 
 Upstream `square()`, `reciprocal()`, `powi()`, `manhattan_distance()`, `mul_vector()` etc. as first-class UGOD-dispatched, FASC-computed methods. ~800 lines.
