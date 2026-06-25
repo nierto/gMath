@@ -2,18 +2,18 @@ name: decimal-precision
 
 # Publicly proves gMath's decimal-domain correctness on every push/PR. Two jobs:
 #
-#  1. lib-tests — the decimal_fixed module tests (incl. the d256 divmod
+#  1. lib-tests - the decimal_fixed module tests (incl. the d256 divmod
 #     root-cause regression, banker's rounding, and DecimalFixed mul/div) across
 #     the embedded/balanced/scientific profiles. DecimalFixed is i128-backed on
 #     every profile, so the arithmetic fixes are profile-agnostic; this confirms
 #     they hold across the cfg-gated profile code.
 #
-#  2. contract-harness — the full contract sweep against mootable/decimal-scaled's
+#  2. contract-harness - the full contract sweep against mootable/decimal-scaled's
 #     independent, adversarial mpmath corpus (pinned). Grades BOTH user-reachable
 #     decimal paths (imperative DecimalFixed + canonical gmath()/FASC) for all 15
 #     transcendentals, plus atan2 and add/sub/mul/div, at 0 LSB.
 #
-# Uses NO third-party or GitHub-authored actions — checkout is a plain `git fetch`
+# Uses NO third-party or GitHub-authored actions - checkout is a plain `git fetch`
 # (gMath is a public repo) and the ubuntu runner already ships stable Rust. This
 # keeps the repo runnable under the most restrictive "Allow <owner> actions"
 # policy (and trivially satisfies "require actions pinned to a full SHA", since no
@@ -31,7 +31,7 @@ jobs:
         profile: [embedded, balanced, scientific]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (plain git — no external actions)
+      - name: Checkout (plain git - no external actions)
         run: |
           git init -q
           git remote add origin "https://github.com/${{ github.repository }}.git"
@@ -46,7 +46,7 @@ jobs:
   contract-harness:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (plain git — no external actions)
+      - name: Checkout (plain git - no external actions)
         run: |
           git init -q
           git remote add origin "https://github.com/${{ github.repository }}.git"
