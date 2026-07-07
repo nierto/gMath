@@ -37,10 +37,15 @@
 //!
 //! Detection is automatic at runtime with scalar fallback.
 
+mod hybrid;
 mod ops;
+mod planar;
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod simd;
+
+pub use hybrid::{HybridTQ19, HYBRID_LOW_TRITS, LOW_BIAS, LOW_MOD};
+pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_THRESHOLD};
 
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::imperative::FixedPoint;

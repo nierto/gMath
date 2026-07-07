@@ -26,7 +26,7 @@ use super::{SCALE, TRIT_DECODE_TABLE};
 
 /// Widen i16 weight value to ComputeStorage (type-widen only, no Q-format shift).
 #[inline(always)]
-fn widen_weight(w: i16) -> ComputeStorage {
+pub(super) fn widen_weight(w: i16) -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
     { w as i64 }
     #[cfg(table_format = "q32_32")]
@@ -41,7 +41,7 @@ fn widen_weight(w: i16) -> ComputeStorage {
 
 /// Widen BinaryStorage activation to ComputeStorage (type-widen only).
 #[inline(always)]
-fn widen_activation(a: BinaryStorage) -> ComputeStorage {
+pub(super) fn widen_activation(a: BinaryStorage) -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
     { a as i64 }
     #[cfg(table_format = "q32_32")]
@@ -56,7 +56,7 @@ fn widen_activation(a: BinaryStorage) -> ComputeStorage {
 
 /// SCALE constant at ComputeStorage width.
 #[inline(always)]
-fn compute_scale() -> ComputeStorage {
+pub(super) fn compute_scale() -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
     { SCALE as i64 }
     #[cfg(table_format = "q32_32")]
@@ -71,7 +71,7 @@ fn compute_scale() -> ComputeStorage {
 
 /// Zero at ComputeStorage width.
 #[inline(always)]
-fn compute_zero() -> ComputeStorage {
+pub(super) fn compute_zero() -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
     { 0i64 }
     #[cfg(table_format = "q32_32")]
@@ -87,7 +87,7 @@ fn compute_zero() -> ComputeStorage {
 /// Narrow ComputeStorage to BinaryStorage (type-narrow only, no Q-format shift).
 /// Truncates upper bits if value exceeds storage range.
 #[inline(always)]
-fn narrow_to_storage(v: ComputeStorage) -> BinaryStorage {
+pub(super) fn narrow_to_storage(v: ComputeStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
     { v as i32 }
     #[cfg(table_format = "q32_32")]
