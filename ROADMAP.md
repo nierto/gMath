@@ -173,6 +173,30 @@ Extract macro to replace the 5-way `#[cfg(table_format)]` blocks across all stac
 
 ---
 
+## Requested by consumers (gHyper/gFile) — U2: cross-profile rounding contract
+
+Different profile bit-widths necessarily round to different values (a Q32.32
+result cannot hold Q64.64 digits) — that divergence is inherent and out of
+scope. What IS in scope is stating and CI-testing the contract BETWEEN
+profiles:
+
+1. **Widening is exact**: every narrower-profile value embeds losslessly in
+   any wider profile (pure bit-shift; test it).
+2. **Narrowing is a single correct rounding**: because transcendentals are
+   computed at the compute tier and rounded once to storage, a narrow
+   profile's result should equal round_narrow(exact) — i.e. no
+   double-rounding artifacts (round_32(round_64(x)) != round_32(x) edge
+   cases). State it, and CI-gate it with cross-profile fixture comparisons.
+3. **Serialization semantics for foreign profiles**: `profile_tag()` exists;
+   document whether a reader encountering a foreign-profile raw value must
+   reject or may convert (widening ok, narrowing rounds — and say which
+   rounding mode).
+
+Context: gFile's `.htt` format pins Q64.64 and byte-determinism is CI-gated
+per platform; this contract is what would make any future cross-profile
+tooling (e.g. compact-profile analytics over embedded-written data) sound
+rather than accidental.
+
 ## Future — High Priority
 
 ### Batch/vectorized API
