@@ -297,7 +297,7 @@ impl FixedVector {
 
     /// Access the underlying data slice (for compute-tier operations).
     #[inline]
-    pub(crate) fn as_slice(&self) -> &[FixedPoint] {
+    pub fn as_slice(&self) -> &[FixedPoint] {
         &self.data
     }
 }

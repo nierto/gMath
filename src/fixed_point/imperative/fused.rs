@@ -174,6 +174,89 @@ pub fn silu(x: FixedPoint) -> FixedPoint {
     }
 }
 
+/// Fused softmax + weighted value mix, entirely at compute tier:
+///
+/// ```text
+/// out[d] = Σⱼ softmax(scores)ⱼ · values[j][d]
+/// ```
+///
+/// The softmax weights are **never materialized to storage tier** on the mix
+/// path — they stay at compute-tier resolution through the value accumulation,
+/// and only the mixed output vector is downscaled (one rounding per output
+/// element). This removes the storage-tier resolution floor on attention
+/// weights: with FRAC_BITS fractional bits, a materialized weight below
+/// 2^-FRAC_BITS truncates to zero and its value vector vanishes from the mix
+/// entirely — the cause of long-context attention starvation. Here a weight
+/// of any compute-representable magnitude still contributes.
+///
+/// Returns `(mixed_output[dim], weights[n])`. The returned weights ARE
+/// storage-quantized — they are for observers (attention recording,
+/// diagnostics), not what the mix used.
+///
+/// **Use case**: single-query attention `softmax(Q·Kᵀ/√d) · V` — the hot path
+/// of autoregressive transformer inference.
+pub fn softmax_mix(
+    scores: &[FixedPoint],
+    values: &[&[FixedPoint]],
+) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
+    assert_eq!(
+        scores.len(),
+        values.len(),
+        "softmax_mix: scores/values length mismatch"
+    );
+    if scores.is_empty() {
+        return Ok((vec![], vec![]));
+    }
+    let dim = values[0].len();
+
+    // Phase 1: find max at storage tier
+    let mut max_raw = scores[0].raw();
+    for s in &scores[1..] {
+        if s.raw() > max_raw {
+            max_raw = s.raw();
+        }
+    }
+    let max_compute = upscale_to_compute(max_raw);
+
+    // Phase 2: exp(s_i - max) at compute tier, accumulate sum
+    let mut exp_values: Vec<ComputeStorage> = Vec::with_capacity(scores.len());
+    let mut sum = compute_zero();
+    for s in scores {
+        let shifted = compute_subtract(upscale_to_compute(s.raw()), max_compute);
+        let e = exp_at_compute_tier(shifted);
+        sum = compute_add(sum, e);
+        exp_values.push(e);
+    }
+    if compute_is_zero(&sum) {
+        return Err(OverflowDetected::DivisionByZero);
+    }
+
+    // Phase 3: accumulate numerators at compute tier, value-row-major for
+    // cache locality: num[d] = Σⱼ eⱼ · v[j][d]
+    let mut num: Vec<ComputeStorage> = vec![compute_zero(); dim];
+    for (j, v) in values.iter().enumerate() {
+        debug_assert_eq!(v.len(), dim, "softmax_mix: value dimension mismatch");
+        let e = exp_values[j];
+        for d in 0..dim {
+            num[d] = compute_add(num[d], compute_multiply(e, upscale_to_compute(v[d].raw())));
+        }
+    }
+
+    // Phase 4: single downscale per output element
+    let mut out = Vec::with_capacity(dim);
+    for n in &num {
+        out.push(FixedPoint::from_raw(round_to_storage(compute_divide(*n, sum)?)));
+    }
+
+    // Phase 5: observer weights (storage-quantized, NOT used by the mix)
+    let mut weights = Vec::with_capacity(scores.len());
+    for e in &exp_values {
+        weights.push(FixedPoint::from_raw(round_to_storage(compute_divide(*e, sum)?)));
+    }
+
+    Ok((out, weights))
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -296,5 +379,100 @@ mod tests {
         // SiLU(x) ≈ 0 for large negative x (sigmoid ≈ 0)
         let result = silu(fp("-10"));
         assert!(result.abs() < fp("0.001"), "silu(-10) = {}, expected ~0", result);
+    }
+
+    #[test]
+    fn test_softmax_mix_one_hot() {
+        // One dominant score → output ≈ that value row.
+        let scores = vec![fp("20"), fp("0"), fp("0")];
+        let rows = [
+            vec![fp("1"), fp("2")],
+            vec![fp("-5"), fp("7")],
+            vec![fp("3"), fp("-3")],
+        ];
+        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+        let (out, w) = softmax_mix(&scores, &refs).unwrap();
+        assert!((out[0] - fp("1")).abs() < fp("0.01"), "out[0] = {}", out[0]);
+        assert!((out[1] - fp("2")).abs() < fp("0.01"), "out[1] = {}", out[1]);
+        assert!((w[0] - fp("1")).abs() < fp("0.01"), "w[0] = {}", w[0]);
+    }
+
+    #[test]
+    fn test_softmax_mix_uniform_matches_mean() {
+        // Equal scores → output = mean of value rows.
+        let scores = vec![FixedPoint::ZERO; 4];
+        let rows = [
+            vec![fp("4")],
+            vec![fp("8")],
+            vec![fp("-4")],
+            vec![fp("0")],
+        ];
+        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+        let (out, _) = softmax_mix(&scores, &refs).unwrap();
+        assert!((out[0] - fp("2")).abs() < fp("0.01"), "out[0] = {}", out[0]);
+    }
+
+    #[test]
+    fn test_softmax_mix_agrees_with_materialized_at_short_length() {
+        // At short lengths (weights well above 2^-FRAC_BITS) the fused mix
+        // must closely match softmax-then-materialized-mix.
+        let scores = vec![fp("1.5"), fp("0.5"), fp("-0.25"), fp("2")];
+        let rows = [
+            vec![fp("1"), fp("-2")],
+            vec![fp("0.5"), fp("3")],
+            vec![fp("-1.5"), fp("0.25")],
+            vec![fp("2"), fp("1")],
+        ];
+        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+        let (fused_out, _) = softmax_mix(&scores, &refs).unwrap();
+
+        let w = softmax(&scores).unwrap();
+        for d in 0..2 {
+            let mut acc = FixedPoint::ZERO;
+            for j in 0..4 {
+                acc = acc + w[j] * rows[j][d];
+            }
+            let diff = (fused_out[d] - acc).abs();
+            assert!(
+                diff < fp("0.01"),
+                "fused vs materialized dim {}: {} vs {}",
+                d, fused_out[d], acc
+            );
+        }
+    }
+
+    #[test]
+    fn test_softmax_mix_survives_below_storage_floor() {
+        // THE regression test for the long-context attention floor.
+        // n = 3000 uniform scores → each weight = 0.000333, below HALF the
+        // Q22.10 quantum (2^-11 ≈ 0.00049), so round-to-nearest storage
+        // materialization sends every weight to zero → mix collapses.
+        // Fused path: must recover the true mean of the value rows.
+        let n = 3000;
+        let scores = vec![FixedPoint::ZERO; n];
+        let rows: Vec<Vec<FixedPoint>> = (0..n)
+            .map(|j| vec![if j % 2 == 0 { fp("2") } else { fp("4") }])
+            .collect();
+        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+
+        // Materialized path collapses to zero (documents the floor):
+        let w = softmax(&scores).unwrap();
+        let mut materialized = FixedPoint::ZERO;
+        for j in 0..n {
+            materialized = materialized + w[j] * rows[j][0];
+        }
+        assert!(
+            materialized.abs() < fp("0.01"),
+            "expected materialized mix to collapse (floor), got {}",
+            materialized
+        );
+
+        // Fused path recovers the mean (= 3.0):
+        let (out, _) = softmax_mix(&scores, &refs).unwrap();
+        assert!(
+            (out[0] - fp("3")).abs() < fp("0.05"),
+            "fused mix should recover mean 3.0, got {}",
+            out[0]
+        );
     }
 }
