@@ -31,6 +31,23 @@ impl I1024 {
         I1024 { words: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
     }
 
+    /// Checked addition - returns None on signed overflow.
+    #[inline(always)]
+    pub fn checked_add(self, rhs: I1024) -> Option<I1024> {
+        let result = self + rhs;
+
+        // Overflow: operands share a sign but the result's sign differs.
+        let self_negative = (self.words[15] as i64) < 0;
+        let rhs_negative = (rhs.words[15] as i64) < 0;
+        let result_negative = (result.words[15] as i64) < 0;
+
+        if (self_negative == rhs_negative) && (self_negative != result_negative) {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
     /// Maximum value for signed 1024-bit integer (2^1023 - 1)
     #[inline(always)]
     pub const fn max_value() -> Self {

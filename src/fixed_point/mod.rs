@@ -41,8 +41,9 @@ pub mod tq19;
 };
 #[doc(hidden)] pub use domains::binary_fixed::{i256, i512, i1024};
 
-// Decimal domain types (used in rational_conversion)
-#[doc(hidden)] pub use domains::decimal_fixed::DecimalFixed;
+// Decimal domain: `g_math::fixed_point::DecimalFixed` is a supported public type
+// (the `domains` module itself stays doc-hidden — this is the documented path).
+pub use domains::decimal_fixed::DecimalFixed;
 
 // Rational arithmetic types (used in stack_evaluator)
 #[doc(hidden)] pub use domains::symbolic::rational::{RationalNumber, OverflowDetected};

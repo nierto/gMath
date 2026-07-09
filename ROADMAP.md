@@ -199,6 +199,35 @@ rather than accidental.
 
 ## Future — High Priority
 
+### Complete the imperative (non-routed) layer for every domain
+
+**Priority:** HIGH — the largest ergonomics gap in the public surface
+
+The imperative layer (`FixedPoint`, `FixedVector`, `FixedMatrix`, and everything
+built on them — decompositions, matrix functions, manifolds, Lie groups, ODE,
+tensors) is the direct, no-routing, `Copy`-semantics path: one call is one engine
+invocation, no lazy tree, no fractal-router dispatch. Today it exists **only for
+the binary domain**. `DecimalFixed` covers decimal *scalars* with native
+transcendentals, but there is no `DecimalVector`/`DecimalMatrix`, and balanced
+ternary and symbolic rational have no imperative vector/matrix surface at all.
+
+The goal is parity: give each domain gMath already supports (decimal, balanced
+ternary, symbolic rational) the same direct imperative surface binary has, so a
+consumer who knows their domain can skip the router overhead in *any* domain, not
+just binary. Concretely:
+
+- `DecimalVector` / `DecimalMatrix` over `DecimalFixed<N>`, with compute-tier dot
+  accumulation mirroring `FixedVector`/`FixedMatrix`.
+- An imperative surface for balanced ternary vectors/matrices (beyond the current
+  TQ1.9 inference path).
+- Symbolic rational vectors/matrices for exact linear algebra.
+- Where a domain lacks native transcendentals (ternary, symbolic), document the
+  binary-compute bridge explicitly rather than silently routing.
+
+This is a multi-session track; sequence decimal first (highest consumer demand),
+then ternary, then symbolic. Relates to *Symbolic rational transcendentals* and
+*Imperative geometry methods* below.
+
 ### Batch/vectorized API
 
 SIMD-friendly array processing for FixedPoint operations beyond TQ1.9. Bulk exp, sqrt, and arithmetic over vectors would accelerate softmax, RMSNorm, and embedding decode. Compelling with Q32.32 (8x i32 per AVX2 register) and Q16.16/Q8.24 (16x i16).

@@ -11,7 +11,7 @@
 //! ("plane"), with a per-plane encoding chosen by density:
 //!
 //! - **Empty**  — no nonzero trits: zero storage.
-//! - **Sparse** — density below [`SPARSE_DENSITY_THRESHOLD`]: CSR column
+//! - **Sparse** — density below [`SPARSE_DENSITY_PERCENT`]: CSR column
 //!   indices, split into positive and negative sets (no sign storage).
 //! - **Dense**  — row-aligned packed trits, 5 per byte (1.6 bits/weight),
 //!   decoded via [`TRIT_DECODE_TABLE`].
@@ -47,8 +47,9 @@ pub const POW3: [i16; NUM_PLANES] = [1, 3, 9, 27, 81, 243, 729, 2187, 6561, 1968
 /// Density below which a plane is stored sparse (CSR) instead of dense packed.
 ///
 /// In-memory break-even: dense costs 1.6 bits/weight, sparse costs ~32 bits
-/// per nonzero (u32 column index) → 1.6/32 = 0.05.
-pub const SPARSE_DENSITY_THRESHOLD: f64 = 0.05;
+/// per nonzero (u32 column index) → 1.6/32 = 0.05, i.e. 5%. Expressed as an
+/// integer percentage so plane selection stays float-free (see FLOAT_BAN).
+pub const SPARSE_DENSITY_PERCENT: u64 = 5;
 
 /// Base-243 packing weights for trit positions within a byte (MSB-first,
 /// matching [`TRIT_DECODE_TABLE`]).
@@ -174,6 +175,16 @@ impl PlanarTQ19 {
         let data = m.data();
         let total = rows * cols;
 
+        // Precondition: every weight must be a valid TQ1.9 raw (|raw| <= MAX_RAW),
+        // i.e. representable in NUM_PLANES balanced-ternary digits. TQ19Matrix does
+        // not enforce this at construction, so validate here — otherwise an
+        // out-of-range weight makes bt_digits write an 11th digit and panic with a
+        // cryptic out-of-bounds index instead of a clear precondition failure.
+        assert!(
+            data.iter().all(|&raw| (MIN_RAW..=MAX_RAW).contains(&raw)),
+            "PlanarTQ19::from_tq19: every weight must satisfy |raw| <= {MAX_RAW} (valid TQ1.9 range)"
+        );
+
         // Pass 1: count nonzero trits per plane.
         let mut nnz = [0u64; NUM_PLANES];
         for &raw in data {
@@ -196,7 +207,7 @@ impl PlanarTQ19 {
         for k in 0..NUM_PLANES {
             modes[k] = if nnz[k] == 0 {
                 Mode::Empty
-            } else if (nnz[k] as f64) < SPARSE_DENSITY_THRESHOLD * total as f64 {
+            } else if nnz[k] * 100 < SPARSE_DENSITY_PERCENT * total as u64 {
                 Mode::Sparse
             } else {
                 Mode::Dense
@@ -598,6 +609,16 @@ mod tests {
         let m = TQ19Matrix::new(rows, cols, data.clone());
         let planar = PlanarTQ19::from_tq19(&m);
         assert_eq!(planar.to_tq19().data(), m.data());
+    }
+
+    #[test]
+    #[should_panic(expected = "valid TQ1.9 range")]
+    fn from_tq19_rejects_out_of_range_weight() {
+        // TQ19Matrix::new does not validate |raw| <= MAX_RAW, so an 11-digit
+        // weight would make bt_digits write past the 10 planes. from_tq19 must
+        // reject it with a clear precondition error, not a cryptic OOB index.
+        let m = TQ19Matrix::new(1, 1, vec![MAX_RAW + 1]);
+        let _ = PlanarTQ19::from_tq19(&m);
     }
 
     #[test]

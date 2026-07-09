@@ -23,5 +23,8 @@ __pycache__/
 ECOSYSTEM_INTEGRATION_NOTES.md
 CLIENT_INTEGRATION_MISSION_BRIEF.md
 GMATH_TODO_SUGGESTIONS_*.md
+# Consumer / internal dev docs — never public, never packaged
+NOTE_FROM_*.md
+*MISSION*.md
 g_math_macros/
 tests/gmath_macro_test.rs

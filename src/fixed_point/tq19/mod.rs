@@ -45,7 +45,7 @@ mod planar;
 pub(crate) mod simd;
 
 pub use hybrid::{HybridTQ19, HYBRID_LOW_TRITS, LOW_BIAS, LOW_MOD};
-pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_THRESHOLD};
+pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT};
 
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::imperative::FixedPoint;

@@ -1,0 +1,89 @@
+name: fused-tq19-precision
+
+# Publicly proves the fused compute-tier ops and the TQ1.9 trit-plane formats
+# (PlanarTQ19 / HybridTQ19) on every push/PR.
+#
+#  1. fused-oracle - fused_ops_validation across all five profiles. Includes the
+#     softmax_mix oracle: exact-rational uniform-mean (long-n, the storage-floor
+#     survival property) plus mpmath 60-digit references for distinct-scores and
+#     near-one-hot mixes. Also runs the in-crate fused tests (incl. the
+#     below-floor regression) and, for realtime, the FRAC_BITS=10 (Q22.10)
+#     configuration where the naive weight floor actually collapses.
+#
+#  2. tq19-exactness - PlanarTQ19 + HybridTQ19 lib tests across all five
+#     profiles: balanced-ternary digit extraction over the full i16 TQ1.9 range,
+#     lossless roundtrip, and matvec bit-identical to dense TQ19Matrix::matvec
+#     (cross-profile, plus AVX2/scalar equivalence exercised by the realtime
+#     matvec tests).
+#
+# Uses NO third-party or GitHub-authored actions - checkout is a plain `git fetch`
+# (gMath is a public repo) and the ubuntu runner already ships stable Rust. Free
+# on this public repo; satisfies the most restrictive actions-allowlist policy.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fused-oracle:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: fused_ops_validation (${{ matrix.profile }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --features inference --test fused_ops_validation
+
+      - name: in-crate fused tests incl. below-floor regression (${{ matrix.profile }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --features inference --lib fused
+
+  fused-realtime-floor:
+    # Q22.10: the profile where a materialized 1/n attention weight actually
+    # rounds to zero, so softmax_mix's floor-survival guarantee is load-bearing.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: fused tests at realtime FRAC_BITS=10 (Q22.10)
+        env:
+          GMATH_PROFILE: realtime
+          GMATH_FRAC_BITS: "10"
+        run: |
+          cargo test --features inference --lib fused
+          cargo test --features inference --test fused_ops_validation softmax_mix
+
+  tq19-exactness:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: PlanarTQ19 + HybridTQ19 exactness (${{ matrix.profile }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --features inference --lib tq19

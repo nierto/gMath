@@ -305,3 +305,96 @@ fn test_fused_norm_precision_vs_unfused() {
     assert!(diff < tight(),
         "50D norm: fused={} naive={} diff={}", fused_len, naive_len, diff);
 }
+
+// ============================================================================
+// softmax_mix — fused softmax + value mix (attention hot path)
+//
+// Oracle: softmax_mix vs exact-rational softmax-dot-V across profiles, covering
+// long-n uniform and near-one-hot cases. References from mpmath at 60-digit
+// precision.
+// ============================================================================
+
+// mix matrix V (dim=3) shared by the mpmath-referenced cases below.
+fn mix_rows() -> Vec<Vec<FixedPoint>> {
+    vec![
+        vec![fp("1"),  fp("-2"), fp("0.5")],
+        vec![fp("2"),  fp("0"),  fp("-1")],
+        vec![fp("-1"), fp("3"),  fp("0.25")],
+        vec![fp("0.5"), fp("1"), fp("-0.5")],
+    ]
+}
+
+fn as_refs(rows: &[Vec<FixedPoint>]) -> Vec<&[FixedPoint]> {
+    rows.iter().map(|r| r.as_slice()).collect()
+}
+
+#[test]
+fn test_softmax_mix_mpmath_distinct_scores() {
+    // scores = [0, 0.5, 1.0, 1.5] (all dyadic → profile-independent reference)
+    let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
+    let rows = mix_rows();
+    let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+    // mpmath 50-digit: Σⱼ softmax(scores)ⱼ · V[j]
+    assert_fp(out[0], fp("0.38786929090355042852673480927074604798583495025821"), tight(), "mix_distinct[0]");
+    assert_fp(out[1], fp("1.0799946198600885464123755232489173856295230092078"),  tight(), "mix_distinct[1]");
+    assert_fp(out[2], fp("-0.27516296601772463318591156832035660977693791008551"), tight(), "mix_distinct[2]");
+}
+
+#[test]
+fn test_softmax_mix_mpmath_near_one_hot() {
+    // One dominant score (8.0): weight mass concentrates on row 2 but the
+    // sub-dominant rows still contribute — the case where storage-tier weight
+    // rounding would zero the tails. Reference computed at full real precision.
+    let scores = [fp("0"), fp("0"), fp("8"), fp("0")];
+    let rows = mix_rows();
+    let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+    assert_fp(out[0], fp("-0.99782168514830731674125594160540560423650472692288"), tight(), "mix_onehot[0]");
+    assert_fp(out[1], fp("2.9966487463820112565250091409313932372869303491121"),  tight(), "mix_onehot[1]");
+    assert_fp(out[2], fp("0.24941353061685196989187659966299381652521281109462"), tight(), "mix_onehot[2]");
+}
+
+#[test]
+fn test_softmax_mix_uniform_recovers_exact_mean() {
+    // Uniform scores ⇒ softmax is exactly uniform (1/n each) regardless of the
+    // transcendental exp value, so the mix is the EXACT arithmetic mean of the
+    // value rows — a pure rational oracle needing no mpmath. Rows alternate
+    // M±A so the mean is exactly M (dyadic). Long n is where the naive path's
+    // storage-tier weight floor (2^-FRAC_BITS) collapses 1/n to zero; the fused
+    // path must still return M on every profile.
+    let m = [fp("0.5"), fp("-1.5")];
+    let a = [fp("0.25"), fp("2")];
+    for &n in &[2usize, 100, 3000] {
+        let scores = vec![fp("1"); n]; // all equal
+        let rows: Vec<Vec<FixedPoint>> = (0..n)
+            .map(|j| if j % 2 == 0 {
+                vec![m[0] + a[0], m[1] + a[1]]
+            } else {
+                vec![m[0] - a[0], m[1] - a[1]]
+            })
+            .collect();
+        let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+        assert_fp(out[0], m[0], tight(), &format!("uniform_mean n={n} [0]"));
+        assert_fp(out[1], m[1], tight(), &format!("uniform_mean n={n} [1]"));
+    }
+}
+
+#[test]
+fn test_softmax_mix_observer_weights_sum_to_one() {
+    let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
+    let rows = mix_rows();
+    let (_out, w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+    let sum = w.iter().fold(FixedPoint::ZERO, |acc, &x| acc + x);
+    assert_fp(sum, fp("1"), tight(), "observer weights Σ=1");
+}
+
+#[test]
+#[should_panic(expected = "value row")]
+fn test_softmax_mix_ragged_rows_panic() {
+    // Row-length mismatch is now a hard assert (was debug_assert): a ragged
+    // value matrix would silently mix wrong dimensions in release otherwise.
+    let scores = [fp("0"), fp("1")];
+    let r0 = [fp("1"), fp("2")];
+    let r1 = [fp("3")]; // wrong length
+    let rows: Vec<&[FixedPoint]> = vec![&r0, &r1];
+    let _ = fused::softmax_mix(&scores, &rows);
+}

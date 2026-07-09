@@ -14,7 +14,7 @@
 use super::FixedPoint;
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_add, compute_subtract, compute_multiply, compute_divide,
+    compute_add, compute_checked_add, compute_subtract, compute_multiply, compute_divide,
     compute_negate, compute_is_zero,
     sqrt_at_compute_tier, exp_at_compute_tier,
 };
@@ -218,13 +218,16 @@ pub fn softmax_mix(
     }
     let max_compute = upscale_to_compute(max_raw);
 
-    // Phase 2: exp(s_i - max) at compute tier, accumulate sum
+    // Phase 2: exp(s_i - max) at compute tier, accumulate sum. The sum is
+    // Σ eⱼ (each eⱼ ≤ 1.0 at compute tier), so it only overflows for
+    // astronomically large n — but check it anyway so a wrapped denominator
+    // can never masquerade as a valid divisor.
     let mut exp_values: Vec<ComputeStorage> = Vec::with_capacity(scores.len());
     let mut sum = compute_zero();
     for s in scores {
         let shifted = compute_subtract(upscale_to_compute(s.raw()), max_compute);
         let e = exp_at_compute_tier(shifted);
-        sum = compute_add(sum, e);
+        sum = compute_checked_add(sum, e)?;
         exp_values.push(e);
     }
     if compute_is_zero(&sum) {
@@ -232,13 +235,21 @@ pub fn softmax_mix(
     }
 
     // Phase 3: accumulate numerators at compute tier, value-row-major for
-    // cache locality: num[d] = Σⱼ eⱼ · v[j][d]
+    // cache locality: num[d] = Σⱼ eⱼ · v[j][d]. This is the module's largest
+    // accumulation (scaled by |v|, not bounded by 1.0 like the denominator),
+    // so a long context × large activations can exceed the compute envelope —
+    // use checked adds and surface TierOverflow rather than wrap silently.
     let mut num: Vec<ComputeStorage> = vec![compute_zero(); dim];
     for (j, v) in values.iter().enumerate() {
-        debug_assert_eq!(v.len(), dim, "softmax_mix: value dimension mismatch");
+        assert_eq!(
+            v.len(),
+            dim,
+            "softmax_mix: value row {j} has length {}, expected {dim}",
+            v.len()
+        );
         let e = exp_values[j];
         for d in 0..dim {
-            num[d] = compute_add(num[d], compute_multiply(e, upscale_to_compute(v[d].raw())));
+            num[d] = compute_checked_add(num[d], compute_multiply(e, upscale_to_compute(v[d].raw())))?;
         }
     }
 
@@ -455,24 +466,32 @@ mod tests {
             .collect();
         let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
 
-        // Materialized path collapses to zero (documents the floor):
-        let w = softmax(&scores).unwrap();
-        let mut materialized = FixedPoint::ZERO;
-        for j in 0..n {
-            materialized = materialized + w[j] * rows[j][0];
-        }
-        assert!(
-            materialized.abs() < fp("0.01"),
-            "expected materialized mix to collapse (floor), got {}",
-            materialized
-        );
-
-        // Fused path recovers the mean (= 3.0):
+        // Fused path recovers the true mean (= 3.0) on EVERY profile — this is
+        // the guarantee, and it is asserted unconditionally.
         let (out, _) = softmax_mix(&scores, &refs).unwrap();
         assert!(
             (out[0] - fp("3")).abs() < fp("0.05"),
             "fused mix should recover mean 3.0, got {}",
             out[0]
         );
+
+        // The floor only bites when the storage quantum is coarser than ~1/n
+        // (realtime at small FRAC_BITS, e.g. Q22.10): there the *materialized*
+        // mix collapses toward zero and the fused path must strictly beat it.
+        // On high-precision profiles there is no floor to survive, so this half
+        // is conditional on the collapse actually occurring.
+        let w = softmax(&scores).unwrap();
+        let mut materialized = FixedPoint::ZERO;
+        for j in 0..n {
+            materialized = materialized + w[j] * rows[j][0];
+        }
+        if materialized.abs() < fp("0.5") {
+            assert!(
+                (out[0] - fp("3")).abs() < (out[0] - materialized).abs(),
+                "fused mix ({}) should beat the collapsed materialized mix ({})",
+                out[0],
+                materialized
+            );
+        }
     }
 }

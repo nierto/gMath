@@ -391,7 +391,7 @@ mod tests {
         for raw in MIN_RAW..=MAX_RAW {
             let (hi, biased) = split_raw(raw);
             assert!(biased <= 2186, "biased out of 12-bit range for {raw}");
-            assert!((-14..=14).contains(&(hi as i32)), "hi out of range for {raw}");
+            assert!((-13..=13).contains(&(hi as i32)), "hi out of range for {raw}");
             let lo = biased as i32 - LOW_BIAS as i32;
             assert_eq!(hi as i32 * LOW_MOD + lo, raw as i32, "raw {raw} split mismatch");
         }

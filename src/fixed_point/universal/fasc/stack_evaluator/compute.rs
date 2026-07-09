@@ -555,6 +555,20 @@ pub(crate) fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorag
     a + b
 }
 
+/// Add two compute-tier values, detecting signed overflow instead of wrapping.
+///
+/// `compute_add` wraps silently (native ints in release, schoolbook wrap on the
+/// wide types). Long accumulations that can legitimately exceed the compute-tier
+/// envelope — e.g. `Σⱼ eⱼ·vⱼ` in `fused::softmax_mix` over a long context — must
+/// surface the overflow as an error rather than return wrapped garbage.
+#[inline]
+pub(crate) fn compute_checked_add(
+    a: ComputeStorage,
+    b: ComputeStorage,
+) -> Result<ComputeStorage, OverflowDetected> {
+    a.checked_add(b).ok_or(OverflowDetected::TierOverflow)
+}
+
 /// Subtract two compute-tier values
 #[inline]
 pub(crate) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {

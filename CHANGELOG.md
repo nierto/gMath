@@ -5,6 +5,44 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.25] - 2026-07-09
+
+Hardening of the trit-plane inference formats and the fused attention op, and a
+documentation overhaul to the Geodineum README standard.
+
+> Note: the changelog was not maintained between 0.1.0 and 0.4.24; see the git
+> history and `ROADMAP.md` for the intervening milestones (five profiles, TQ1.9,
+> decimal transcendentals, fractal router, geometric extension).
+
+### Fixed
+
+- `fused::softmax_mix`: the `Σⱼ eⱼ·vⱼ` numerator and the exp-sum now accumulate
+  with overflow detection and return `OverflowDetected::TierOverflow` instead of
+  silently wrapping on long-context × large-activation inputs.
+- `fused::softmax_mix`: value-row length mismatch is now a hard `assert!` (was a
+  `debug_assert!`), so a ragged value matrix cannot silently mix wrong dimensions
+  in release builds.
+
+### Added
+
+- `I1024::checked_add` — signed overflow-detecting addition (mirrors
+  `I256`/`I512`), enabling overflow-safe compute-tier accumulation on the
+  scientific profile.
+- `softmax_mix` oracle tests (`tests/fused_ops_validation.rs`): exact-rational
+  uniform-mean (long-n, the storage-floor survival property) plus mpmath 60-digit
+  references for distinct-scores and near-one-hot mixes, validated on all five
+  profiles.
+- CI workflow `fused-tq19-precision.yml`: fused oracle and PlanarTQ19/HybridTQ19
+  bit-exactness across all five profiles, plus the realtime Q22.10 floor branch.
+- Documentation: `README.md` rewritten to the Geodineum README standard; per-layer
+  guides under `docs/`; `CONTRACT.md` (integration/precision/determinism contract)
+  and `CONTRACT.scn.md` (agent primer); generated `PUBLIC_API.md` with its
+  regenerable extractor `scripts/gen-public-api.rs`.
+
+### Changed
+
+- `HybridTQ19` exhaustive split test tightened to the true invariant `hi ∈ [-13, 13]`.
+
 ## [0.1.0] - 2026-03-01
 
 Initial open-source release.

@@ -1,0 +1,33 @@
+name: public-api-freshness
+
+# Enforces the anti-drift rule for the generated public-API index: PUBLIC_API.md
+# must equal what scripts/gen-public-api.rs produces from the current source. If a
+# public symbol was added/removed/renamed without regenerating, this job fails.
+#
+# Uses NO third-party or GitHub-authored actions - checkout is a plain `git fetch`
+# (gMath is a public repo) and the ubuntu runner already ships stable Rust. Free on
+# this public repo; satisfies the most restrictive actions-allowlist policy.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  public-api-index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Regenerate PUBLIC_API.md and check it is committed up to date
+        run: |
+          rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api
+          /tmp/gen-public-api
+          if ! git diff --exit-code -- PUBLIC_API.md; then
+            echo "::error::PUBLIC_API.md is stale. Run: rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /tmp/gen-public-api" >&2
+            exit 1
+          fi
