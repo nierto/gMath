@@ -75,10 +75,13 @@ cargo test --release
 
 ## Limits worth knowing
 
-- **Input representation.** Values like `0.3` or `1/3` are repeating fractions in
-  binary and carry up to half an ULP of representation error before any
-  computation. No finite-precision system avoids this; the decimal and symbolic
-  domains exist so you can pick a representation in which your inputs *are* exact.
+- **Input representation.** Within a single fixed representation some values
+  aren't exact — `0.3` and `1/3` repeat in binary, so the binary domain
+  approximates them (up to half an ULP before any computation). The canonical
+  `gmath(...)` router sidesteps this by classifying each literal and routing it to
+  a domain where it *is* exact (decimal for `0.3`, symbolic for `1/3`) and
+  preserving the exact value in a shadow; the limit applies only when the binary
+  domain is pinned (the imperative `FixedPoint` path or a forced binary mode).
 - **Conditioning.** Error in a solved system scales with the condition number of
   the matrix. An ill-conditioned system (e.g. a Hilbert matrix) amplifies input
   error by orders of magnitude in any finite precision; iterative refinement

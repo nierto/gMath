@@ -107,9 +107,12 @@ for direct hot-loop arithmetic.
 
 ## Limits worth knowing
 
-- **Inputs inexact in their domain carry error in.** `0.3` and `1/3` are repeating
-  fractions in binary; pick the decimal or symbolic domain when you need your
-  inputs to be exact.
+- **The binary domain can't hold every literal exactly.** `0.3` and `1/3` repeat
+  in binary, so the direct `FixedPoint` path approximates them. The canonical
+  `gmath(...)` router avoids this for you: it classifies each literal and routes it
+  to a domain where it is exact (`0.3`→decimal, `1/3`→symbolic), carrying the exact
+  value in a `CompactShadow` — the limit only applies when you pin the binary
+  domain.
 - **Ill-conditioned systems amplify input error.** Solver error scales with the
   matrix condition number; this is a property of finite precision, not of the
   implementation.

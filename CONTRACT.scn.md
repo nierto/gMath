@@ -71,8 +71,10 @@ Code wins over docs.
 @VALIDATION: mpmath refs 50-250 digits as exact strings (no floats). Decimal paths
   CI-graded vs mootable/decimal-scaled adversarial corpus.
 
-@LIMITS: input-representation error (0.3, 1/3 inexact in binary → pick exact domain)
-  | conditioning amplifies input error O(κ) | error is deterministic everywhere.
+@LIMITS: input-representation error ONLY when a domain is pinned (0.3, 1/3 inexact
+  in binary); canonical router auto-classifies + routes each literal to an exact
+  domain and keeps a shadow | conditioning amplifies input error O(κ) | error is
+  deterministic everywhere.
 ```
 
 ---

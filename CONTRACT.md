@@ -91,7 +91,8 @@ as not-yet-guaranteed.
 
 Accuracy is defined by the test suite against mpmath references (50–250 digits,
 embedded as exact strings), not by adjectives. The methodology and the honest
-limits — input-representation error for values inexact in the chosen domain,
+limits — input-representation error for values inexact in a pinned domain (the
+canonical router auto-routes each literal to a domain where it is exact),
 condition-number amplification for ill-conditioned systems, and the determinism of
 whatever error remains — are documented in
 [the precision guide](docs/README_PRECISION.md). Both user-reachable decimal paths

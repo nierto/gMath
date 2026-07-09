@@ -74,10 +74,11 @@ Transcendental methods appear on each surface's entry in the index:
   round-trip through binary.
 - Accuracy is defined by the test suite against mpmath references, not by slogans;
   see [the precision guide](README_PRECISION.md) and the validation methodology in
-  **[CONTRACT.md](../CONTRACT.md)**. Inputs that are inexact in the chosen
-  representation (e.g. `0.3` in binary) carry representation error into the result
-  regardless of the engine's accuracy — pick a domain in which your inputs are
-  exact.
+  **[CONTRACT.md](../CONTRACT.md)**. Inputs that are inexact in a *pinned*
+  representation (e.g. `0.3` forced into binary) carry representation error into
+  the result regardless of the engine's accuracy; the canonical
+  [router](README_ROUTING.md) routes such literals to an exact domain
+  automatically, and `DecimalFixed` computes decimals natively at 0 ULP.
 
 ## Disclaimer
 
