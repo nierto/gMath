@@ -72,6 +72,82 @@ pub fn euclidean_distance(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
 }
 
+/// Fused Σ (a_i − b_i)² — SQUARED Euclidean distance, entirely at compute
+/// tier, no sqrt (U1 — requested by gHyper).
+///
+/// The no-transcendental half of `euclidean_distance`: metric-tree scoring,
+/// squared-space pruning, and Möbius-ratio numerators need the squared
+/// value only, and paying a fixed-point sqrt (~15 µs at Q64.64) to
+/// immediately re-square it wastes the dominant cost of the kernel.
+/// Accumulates at tier N+1, single downscale at the end.
+///
+/// **Use case**: VP-tree proxy scoring, hyperbolic Möbius-ratio kernels,
+/// any comparison that is monotone in the distance.
+pub fn euclidean_distance_squared(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
+    assert_eq!(a.len(), b.len(), "euclidean_distance_squared: dimension mismatch");
+    let mut acc = compute_zero();
+    for i in 0..a.len() {
+        let da = upscale_to_compute(a[i].raw());
+        let db = upscale_to_compute(b[i].raw());
+        let diff = compute_subtract(da, db);
+        acc = compute_add(acc, compute_multiply(diff, diff));
+    }
+    FixedPoint::from_raw(round_to_storage(acc))
+}
+
+/// Fused Σ a_i·b_i — dot product entirely at compute tier (U1).
+///
+/// Accumulates products at tier N+1 width, single downscale at the end —
+/// the accumulator cannot wrap the way a storage-tier fold can for large
+/// coordinates or many dimensions.
+///
+/// **Use case**: Möbius denominators, power-diagram distances, cosine
+/// numerators.
+pub fn dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
+    assert_eq!(a.len(), b.len(), "dot: dimension mismatch");
+    let mut acc = compute_zero();
+    for i in 0..a.len() {
+        let da = upscale_to_compute(a[i].raw());
+        let db = upscale_to_compute(b[i].raw());
+        acc = compute_add(acc, compute_multiply(da, db));
+    }
+    FixedPoint::from_raw(round_to_storage(acc))
+}
+
+/// Fused squared Möbius denominator `|1 − p̄q|² = 1 − 2⟨p,q⟩ + |p|²·|q|²`
+/// for real vectors, entirely at compute tier (U1 — requested by gHyper).
+///
+/// The denominator of the Poincaré-disk distance ratio
+/// `d(p,q) = 2·atanh(|p−q| / |1−p̄q|)`. Computing it fused keeps the
+/// dot product, both squared norms, and the combination at tier N+1 with
+/// a single downscale — one materialization instead of four, and no
+/// intermediate can wrap.
+///
+/// **Use case**: hyperbolic distance/ratio kernels; combine with
+/// [`euclidean_distance_squared`] for a one-sqrt exact kernel:
+/// `r = √(dist² / den²)`.
+pub fn mobius_denominator_sq(p: &[FixedPoint], q: &[FixedPoint]) -> FixedPoint {
+    assert_eq!(p.len(), q.len(), "mobius_denominator_sq: dimension mismatch");
+    let mut dot_acc = compute_zero();
+    let mut p_sq = compute_zero();
+    let mut q_sq = compute_zero();
+    for i in 0..p.len() {
+        let dp = upscale_to_compute(p[i].raw());
+        let dq = upscale_to_compute(q[i].raw());
+        dot_acc = compute_add(dot_acc, compute_multiply(dp, dq));
+        p_sq = compute_add(p_sq, compute_multiply(dp, dp));
+        q_sq = compute_add(q_sq, compute_multiply(dq, dq));
+    }
+    let one = compute_one();
+    let two_dot = compute_add(dot_acc, dot_acc);
+    // 1 − 2⟨p,q⟩ + |p|²·|q|², all at tier N+1, one downscale.
+    let result = compute_add(
+        compute_subtract(one, two_dot),
+        compute_multiply(p_sq, q_sq),
+    );
+    FixedPoint::from_raw(round_to_storage(result))
+}
+
 /// Stable softmax entirely at compute tier.
 ///
 /// Algorithm: find max → subtract max → exp → sum → divide.
@@ -325,6 +401,60 @@ mod tests {
         let dist = euclidean_distance(&a, &a);
         assert!(dist.is_zero() || dist.abs() < tight(),
             "distance to self should be 0, got {}", dist);
+    }
+
+    #[test]
+    fn test_euclidean_distance_squared_matches_distance() {
+        // dist²([0,0],[3,4]) = 25, and must equal euclidean_distance²
+        // within tolerance across varied vectors.
+        let cases: [(&[FixedPoint; 2], &[FixedPoint; 2]); 3] = [
+            (&[FixedPoint::ZERO, FixedPoint::ZERO], &[fp("3"), fp("4")]),
+            (&[fp("0.25"), fp("-0.5")], &[fp("-0.125"), fp("0.75")]),
+            (&[fp("100"), fp("-200")], &[fp("-300"), fp("400")]),
+        ];
+        for (a, b) in cases {
+            let sq = euclidean_distance_squared(a, b);
+            let d = euclidean_distance(a, b);
+            let diff = (sq - d * d).abs();
+            assert!(diff < fp("0.0001"),
+                "dist_sq {} vs dist² {} diverged", sq, d * d);
+        }
+        let same = [fp("1"), fp("2")];
+        assert!(euclidean_distance_squared(&same, &same).abs() < tight());
+    }
+
+    #[test]
+    fn test_dot_basic() {
+        // ⟨(1,2,3),(4,5,6)⟩ = 32; orthogonal → 0; sign handling.
+        let a = [fp("1"), fp("2"), fp("3")];
+        let b = [fp("4"), fp("5"), fp("6")];
+        assert!((dot(&a, &b) - fp("32")).abs() < tight());
+        let e1 = [fp("1"), FixedPoint::ZERO];
+        let e2 = [FixedPoint::ZERO, fp("1")];
+        assert!(dot(&e1, &e2).abs() < tight());
+        let c = [fp("-0.5"), fp("0.25")];
+        let d = [fp("0.5"), fp("0.25")];
+        // -0.25 + 0.0625 = -0.1875
+        assert!((dot(&c, &d) - fp("-0.1875")).abs() < tight());
+    }
+
+    #[test]
+    fn test_mobius_denominator_sq() {
+        // Against the definition computed at storage tier for small inputs:
+        // p=(0.3,0.4), q=(-0.2,0.5): dot=0.14, |p|²=0.25, |q|²=0.29
+        // → 1 − 0.28 + 0.0725 = 0.7925
+        let p = [fp("0.3"), fp("0.4")];
+        let q = [fp("-0.2"), fp("0.5")];
+        let den = mobius_denominator_sq(&p, &q);
+        assert!((den - fp("0.7925")).abs() < tight(),
+            "mobius_denominator_sq = {}, expected 0.7925", den);
+        // p = q = origin → exactly 1.
+        let o = [FixedPoint::ZERO, FixedPoint::ZERO];
+        assert!((mobius_denominator_sq(&o, &o) - fp("1")).abs() < tight());
+        // Identical interior points: 1 − 2|p|² + |p|⁴ = (1 − |p|²)².
+        let den_pp = mobius_denominator_sq(&p, &p);
+        let w = fp("1") - fp("0.25");
+        assert!((den_pp - w * w).abs() < tight());
     }
 
     #[test]

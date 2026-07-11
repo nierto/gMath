@@ -243,6 +243,9 @@ Modules: g_math::fixed_point::imperative::fused
 | --- | --- | --- |
 | `sqrt_sum_sq` | fn | Fused sqrt(Σ x_i²) — norm of a slice, entirely at compute tier. |
 | `euclidean_distance` | fn | Fused sqrt(Σ (a_i - b_i)²) — Euclidean distance, entirely at compute tier. |
+| `euclidean_distance_squared` | fn | Fused Σ (a_i - b_i)² — squared distance, no sqrt (U1: VP-tree proxy scoring, Möbius numerators). |
+| `dot` | fn | Fused Σ a_i·b_i — dot product at compute tier (no storage-tier accumulator wrap). |
+| `mobius_denominator_sq` | fn | Fused \|1 − p̄q\|² = 1 − 2⟨p,q⟩ + \|p\|²·\|q\|² — Poincaré ratio denominator (U1). |
 | `softmax` | fn | Stable softmax entirely at compute tier. |
 | `rms_norm_factor` | fn | Fused 1/sqrt(mean(x²) + eps) — RMSNorm scaling factor at compute tier. |
 | `silu` | fn | Fused SiLU activation: x / (1 + exp(-x)) entirely at compute tier. |

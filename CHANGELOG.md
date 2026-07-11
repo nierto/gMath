@@ -5,6 +5,25 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.26] - 2026-07-11
+
+The U1 consumer asks from gHyper/gFile (see their ROADMAPs): the fused
+no-transcendental kernels that hyperbolic metric trees and Möbius-ratio
+distance kernels score with.
+
+### Added
+
+- `fused::euclidean_distance_squared` — Σ (a−b)² at compute tier, no sqrt.
+  The no-transcendental half of `euclidean_distance`: squared-space VP-tree
+  scoring and Möbius-ratio numerators need only the squared value, and a
+  fixed-point sqrt (~15 µs at Q64.64) immediately re-squared is the
+  dominant waste in those kernels.
+- `fused::dot` — Σ a·b at compute tier; replaces consumers' storage-tier
+  hand-rolled accumulators (wrap-prone for large coordinates/dimensions).
+- `fused::mobius_denominator_sq` — |1 − p̄q|² = 1 − 2⟨p,q⟩ + |p|²·|q|²
+  fused end-to-end (one downscale). With `euclidean_distance_squared` this
+  gives consumers the one-sqrt Poincaré kernel: r = √(dist²/den²).
+
 ## [0.4.25] - 2026-07-09
 
 Hardening of the trit-plane inference formats and the fused attention op, and a
