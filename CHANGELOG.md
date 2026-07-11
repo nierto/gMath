@@ -5,7 +5,19 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.26] - 2026-07-11
+## [0.4.27] - 2026-07-11
+
+### Fixed
+
+- `FixedPoint::try_ln` / `FixedPoint::try_sqrt`: out-of-domain inputs
+  (ln(x ≤ 0), sqrt(x < 0)) again return `OverflowDetected::DomainError` as
+  documented. Since the v0.4.0 direct-engine-call rewrite these methods
+  bypassed the FASC domain checks and misreported out-of-domain input as
+  `TierOverflow` (the raw engine's MIN sentinel failing the storage
+  downscale). The domain check now runs before the engine call on the
+  direct path; valid inputs are unaffected.
+
+## [0.4.26] - 2026-07-11 (unpublished)
 
 The U1 consumer asks from gHyper/gFile (see their ROADMAPs): the fused
 no-transcendental kernels that hyperbolic metric trees and Möbius-ratio

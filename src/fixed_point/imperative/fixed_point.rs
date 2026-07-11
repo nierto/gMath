@@ -602,9 +602,18 @@ impl FixedPoint {
     /// Fallible e^x — returns `Err(TierOverflow)` if result exceeds storage tier.
     pub fn try_exp(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_exp) }
     /// Fallible ln(x) — returns `Err(DomainError)` if x <= 0.
-    pub fn try_ln(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_ln) }
+    pub fn try_ln(self) -> Result<Self, OverflowDetected> {
+        // Domain check before the engine: the raw engine is infallible and
+        // signals out-of-domain input with a MIN sentinel that downscale
+        // would misreport as TierOverflow.
+        if self <= Self::ZERO { return Err(OverflowDetected::DomainError); }
+        self.try_direct_unary(direct_ln)
+    }
     /// Fallible sqrt(x) — returns `Err(DomainError)` if x < 0.
-    pub fn try_sqrt(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_sqrt) }
+    pub fn try_sqrt(self) -> Result<Self, OverflowDetected> {
+        if self < Self::ZERO { return Err(OverflowDetected::DomainError); }
+        self.try_direct_unary(direct_sqrt)
+    }
     /// Fallible sin(x).
     pub fn try_sin(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_sin) }
     /// Fallible cos(x).
