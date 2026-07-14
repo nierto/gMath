@@ -11,7 +11,7 @@ Built by **Niels Erik Toren** · published as `g_math` on [crates.io](https://cr
 `g_math` computes with scaled integers only. No `f32`/`f64` appears anywhere in
 the arithmetic, validation, or comparison paths (float conversions exist solely as
 caller-convenience `from_f64`/`to_f64` wrappers). Because every operation is
-integer arithmetic, results are bit-identical on every architecture — which makes
+integer arithmetic, results are bit-identical on every architecture - which makes
 the crate suitable for blockchain consensus, financial auditing, and reproducible
 scientific computation.
 
@@ -25,24 +25,24 @@ ecosystem and is consumed by its geometric and inference projects.
 
 The build-with surface is five layers; everything beneath them is internal.
 
-- **Canonical / router** — `g_math::canonical`: `gmath("…")` builds a lazy
+- **Canonical / router** - `g_math::canonical`: `gmath("…")` builds a lazy
   expression, `evaluate(…)` runs it with cross-domain routing and chain
   persistence.
-- **Imperative** — `g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix}`
+- **Imperative** - `g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix}`
   and `DecimalFixed<DECIMALS>`: direct `Copy` types, one call is one engine
   invocation.
-- **Fused** — `g_math::fixed_point::imperative::fused`: whole accumulation patterns
+- **Fused** - `g_math::fixed_point::imperative::fused`: whole accumulation patterns
   at the wide compute tier.
-- **Geometric** — `imperative::{decompose, derived, matrix_functions, manifold,
+- **Geometric** - `imperative::{decompose, derived, matrix_functions, manifold,
   lie_group, curvature, projective, fiber_bundle, ode, tensor, tensor_decompose,
   serialization}`.
-- **TQ1.9** — `g_math::tq19` (feature `inference`): standalone ternary inference.
-- **Internal** — the `universal`/`fasc` evaluator, the domain implementations
+- **TQ1.9** - `g_math::tq19` (feature `inference`): standalone ternary inference.
+- **Internal** - the `universal`/`fasc` evaluator, the domain implementations
   beneath `DecimalFixed` and the ternary types, the wide-integer types, and the
   shadow/router internals are not part of the surface and may change between
   releases.
 
-The complete per-symbol index — every public item and a one-line summary — is
+The complete per-symbol index - every public item and a one-line summary - is
 **generated** from source into **[`PUBLIC_API.md`](PUBLIC_API.md)**
 (`rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /tmp/gen-public-api`).
 Live signatures are on [docs.rs](https://docs.rs/g_math). This README never
@@ -65,26 +65,26 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
 
 ## Capabilities
 
-- **Four numeric domains** — each value is held in the representation that is exact
+- **Four numeric domains** - each value is held in the representation that is exact
   for it (binary, decimal, balanced ternary, or symbolic rational), routed
   automatically.
-- **18 transcendentals** — computed one tier wider than storage and rounded once,
+- **18 transcendentals** - computed one tier wider than storage and rounded once,
   reachable lazily (`gmath`), directly (`FixedPoint`), or natively in decimal
   (`DecimalFixed`).
-- **Two computation paths** — a routed canonical layer for mixed or chained work
+- **Two computation paths** - a routed canonical layer for mixed or chained work
   and a direct imperative layer for known-domain hot loops. Results are
   path-independent.
-- **Numerics on top** — fused ML ops, dense linear algebra, differential geometry
+- **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
   and Lie groups, and standalone TQ1.9 ternary inference.
-- **Five precision profiles** — Q16.16 through Q256.256, chosen at compile time;
+- **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;
   results are bit-identical across platforms within a profile.
 - **Zero float internally, zero runtime dependencies by default.**
 
 ## Contract
 
-The precise contract — the supported surface and its stability boundary, the
+The precise contract - the supported surface and its stability boundary, the
 determinism guarantee, the per-domain rounding rules, cross-profile semantics, and
-what the crate requires — is in **[`CONTRACT.md`](CONTRACT.md)**. Agents should
+what the crate requires - is in **[`CONTRACT.md`](CONTRACT.md)**. Agents should
 prime from **[`CONTRACT.scn.md`](CONTRACT.scn.md)**.
 
 ## Quick start
@@ -111,7 +111,7 @@ for direct hot-loop arithmetic.
   in binary, so the direct `FixedPoint` path approximates them. The canonical
   `gmath(...)` router avoids this for you: it classifies each literal and routes it
   to a domain where it is exact (`0.3`→decimal, `1/3`→symbolic), carrying the exact
-  value in a `CompactShadow` — the limit only applies when you pin the binary
+  value in a `CompactShadow` - the limit only applies when you pin the binary
   domain.
 - **Ill-conditioned systems amplify input error.** Solver error scales with the
   matrix condition number; this is a property of finite precision, not of the
