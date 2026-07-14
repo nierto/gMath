@@ -50,9 +50,6 @@ pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::imperative::FixedPoint;
 
-// rayon is always available when inference feature is enabled
-use rayon::prelude::*;
-
 // ============================================================================
 // Constants
 // ============================================================================
