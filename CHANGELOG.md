@@ -5,6 +5,21 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.28] - 2026-07-18
+
+### Fixed
+
+- `round_to_storage` (shared downscale for the fused kernels, linalg dot,
+  and decompositions): results exceeding the storage tier's range now
+  panic — matching the infallible imperative transcendentals — instead of
+  silently wrapping via the old shift-and-cast fallback. On narrow
+  profiles the wrap produced garbage (e.g. a squared distance of 520,000
+  returned as −4288 on Q16.16). Valid-range results are unaffected.
+- Fused test suite made multi-profile compliant: test magnitudes fit the
+  narrowest profile, and tolerances are representable at Q22.10 (the old
+  `0.0001` tolerance rounded to 0 raw, failing identical values) and
+  account for input quantization of non-representable decimal literals.
+
 ## [0.4.27] - 2026-07-11
 
 ### Fixed
