@@ -36,28 +36,15 @@ pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::si
 
 /// Downscale a compute-tier accumulator to storage tier with round-to-nearest.
 /// This matches FASC's `downscale_to_storage` behavior — NOT truncation.
+///
+/// Panics if the result exceeds the storage tier's range, matching the
+/// infallible imperative transcendentals. The previous shift-and-cast
+/// fallback silently wrapped, which on narrow profiles turned an oversized
+/// fused result into garbage (e.g. a negative squared distance).
 #[inline]
 pub(crate) fn round_to_storage(acc: ComputeStorage) -> BinaryStorage {
-    // Use the existing FASC downscale which includes rounding.
-    // If the value overflows storage tier, this returns Err — we unwrap
-    // because accumulator overflow should have been caught earlier.
-    // For decomposition inner sums, overflow is extremely unlikely.
-    match downscale_to_storage(acc) {
-        Ok(v) => v,
-        Err(_) => {
-            // Fallback: truncate without rounding (matches old behavior)
-            #[cfg(table_format = "q64_64")]
-            { (acc >> 64u32).as_i128() }
-            #[cfg(table_format = "q32_32")]
-            { (acc >> 32) as i64 }
-            #[cfg(table_format = "q16_16")]
-            { (acc >> frac_config::FRAC_BITS) as i32 }
-            #[cfg(table_format = "q128_128")]
-            { (acc >> 128usize).as_i256() }
-            #[cfg(table_format = "q256_256")]
-            { (acc >> 256usize).as_i512() }
-        }
-    }
+    downscale_to_storage(acc)
+        .expect("round_to_storage: result exceeds storage tier range")
 }
 
 /// Upscale a storage-tier value to compute tier (shift left by FRAC_BITS).

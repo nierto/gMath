@@ -197,7 +197,7 @@ mod tests {
             return; // Skip on non-AVX2 hardware
         }
 
-        let weights: Vec<i16> = (0..16).map(|i| ((i * 1000 - 8000) as i16)).collect();
+        let weights: Vec<i16> = (0..16).map(|i| (i * 1000 - 8000) as i16).collect();
         let activations: Vec<i32> = (0..16).map(|i| (i * 5000 + 1000) as i32).collect();
 
         // Scalar reference

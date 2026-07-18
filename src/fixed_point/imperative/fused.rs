@@ -407,20 +407,37 @@ mod tests {
     fn test_euclidean_distance_squared_matches_distance() {
         // dist²([0,0],[3,4]) = 25, and must equal euclidean_distance²
         // within tolerance across varied vectors.
+        // Values kept small so dist² fits the narrowest profile (Q8.24
+        // integer range is ±127); tolerance scales with d because the
+        // d*d side re-quantizes d at storage tier (error ~ d·LSB).
         let cases: [(&[FixedPoint; 2], &[FixedPoint; 2]); 3] = [
             (&[FixedPoint::ZERO, FixedPoint::ZERO], &[fp("3"), fp("4")]),
             (&[fp("0.25"), fp("-0.5")], &[fp("-0.125"), fp("0.75")]),
-            (&[fp("100"), fp("-200")], &[fp("-300"), fp("400")]),
+            (&[fp("3"), fp("-4")], &[fp("-3"), fp("4")]),
         ];
         for (a, b) in cases {
             let sq = euclidean_distance_squared(a, b);
             let d = euclidean_distance(a, b);
             let diff = (sq - d * d).abs();
-            assert!(diff < fp("0.0001"),
+            let tol = (d.abs() + fp("1")) * tight();
+            assert!(diff < tol,
                 "dist_sq {} vs dist² {} diverged", sq, d * d);
         }
         let same = [fp("1"), fp("2")];
         assert!(euclidean_distance_squared(&same, &same).abs() < tight());
+    }
+
+    /// Oversized fused results must panic loudly, never wrap silently.
+    /// Before the round_to_storage fix, this returned a NEGATIVE squared
+    /// distance on realtime profiles. from_raw(i32::MAX) keeps the input
+    /// constructible and the square out of range at every GMATH_FRAC_BITS.
+    #[test]
+    #[cfg(table_format = "q16_16")]
+    #[should_panic(expected = "exceeds storage tier")]
+    fn test_euclidean_distance_squared_overflow_panics() {
+        let a = [FixedPoint::from_raw(i32::MAX)];
+        let b = [FixedPoint::ZERO];
+        let _ = euclidean_distance_squared(&a, &b);
     }
 
     #[test]
@@ -443,10 +460,15 @@ mod tests {
         // Against the definition computed at storage tier for small inputs:
         // p=(0.3,0.4), q=(-0.2,0.5): dot=0.14, |p|²=0.25, |q|²=0.29
         // → 1 − 0.28 + 0.0725 = 0.7925
+        // 0.3/0.4/0.2 are not exactly representable in binary: the inputs
+        // quantize to the storage grid, so the correctly rounded result can
+        // legitimately sit 1 LSB away from the rounded decimal literal at
+        // coarse FRAC_BITS (seen at Q22.10). Allow 2 LSB.
         let p = [fp("0.3"), fp("0.4")];
         let q = [fp("-0.2"), fp("0.5")];
+        let quant_tol = tight() + tight();
         let den = mobius_denominator_sq(&p, &q);
-        assert!((den - fp("0.7925")).abs() < tight(),
+        assert!((den - fp("0.7925")).abs() < quant_tol,
             "mobius_denominator_sq = {}, expected 0.7925", den);
         // p = q = origin → exactly 1.
         let o = [FixedPoint::ZERO, FixedPoint::ZERO];
@@ -454,7 +476,7 @@ mod tests {
         // Identical interior points: 1 − 2|p|² + |p|⁴ = (1 − |p|²)².
         let den_pp = mobius_denominator_sq(&p, &p);
         let w = fp("1") - fp("0.25");
-        assert!((den_pp - w * w).abs() < tight());
+        assert!((den_pp - w * w).abs() < quant_tol);
     }
 
     #[test]
