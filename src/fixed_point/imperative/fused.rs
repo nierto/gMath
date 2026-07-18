@@ -72,8 +72,7 @@ pub fn euclidean_distance(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
 }
 
-/// Fused Σ (a_i − b_i)² — SQUARED Euclidean distance, entirely at compute
-/// tier, no sqrt (U1 — requested by gHyper).
+/// Fused Σ (a_i − b_i)² — squared Euclidean distance at compute tier, no sqrt (U1).
 ///
 /// The no-transcendental half of `euclidean_distance`: metric-tree scoring,
 /// squared-space pruning, and Möbius-ratio numerators need the squared
@@ -114,8 +113,7 @@ pub fn dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(acc))
 }
 
-/// Fused squared Möbius denominator `|1 − p̄q|² = 1 − 2⟨p,q⟩ + |p|²·|q|²`
-/// for real vectors, entirely at compute tier (U1 — requested by gHyper).
+/// Fused squared Möbius denominator `|1 − p̄q|² = 1 − 2⟨p,q⟩ + |p|²·|q|²` (U1).
 ///
 /// The denominator of the Poincaré-disk distance ratio
 /// `d(p,q) = 2·atanh(|p−q| / |1−p̄q|)`. Computing it fused keeps the
