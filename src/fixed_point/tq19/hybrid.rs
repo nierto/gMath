@@ -28,8 +28,12 @@
 //! to their exact i16 weights, then the standard `tq19_dot` runs.
 
 use super::ops::tq19_dot;
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+use super::ops::tq19_dot_q2f;
 use super::{TQ19Matrix, MAX_RAW, MIN_RAW};
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
 
 use rayon::prelude::*;
 
@@ -348,10 +352,65 @@ impl HybridTQ19 {
             .collect();
         transpose(by_row, batch.len())
     }
+
+    // ========================================================================
+    // Wide-output (q2f) variants — see TQ19Matrix::matvec_q2f for the contract
+    // ========================================================================
+
+    /// Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding.
+    ///
+    /// `q2f / (1 << FRAC_BITS)` reproduces [`HybridTQ19::matvec`] bit-for-bit.
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn matvec_q2f(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+        assert_eq!(activations.len(), self.cols, "HybridTQ19::matvec_q2f: activation length mismatch");
+        let mut buf = vec![0i16; self.buf_len()];
+        (0..self.rows)
+            .map(|row| {
+                self.reconstruct_row_into(row, &mut buf);
+                tq19_dot_q2f(&buf[..self.cols], activations)
+            })
+            .collect()
+    }
+
+    /// Row-parallel wide-output matvec. See [`HybridTQ19::matvec_q2f`].
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn matvec_q2f_par(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+        assert_eq!(activations.len(), self.cols, "HybridTQ19::matvec_q2f_par: activation length mismatch");
+        (0..self.rows)
+            .into_par_iter()
+            .map_init(
+                || vec![0i16; self.buf_len()],
+                |buf, row| {
+                    self.reconstruct_row_into(row, buf);
+                    tq19_dot_q2f(&buf[..self.cols], activations)
+                },
+            )
+            .collect()
+    }
+
+    /// Row-parallel wide-output batch matvec. See [`HybridTQ19::matvec_q2f`].
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn matvec_q2f_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<ComputeStorage>> {
+        for (i, v) in batch.iter().enumerate() {
+            assert_eq!(v.len(), self.cols, "HybridTQ19::matvec_q2f_batch_par: activation[{i}] length mismatch");
+        }
+        let by_row: Vec<Vec<ComputeStorage>> = (0..self.rows)
+            .into_par_iter()
+            .map_init(
+                || vec![0i16; self.buf_len()],
+                |buf, row| {
+                    self.reconstruct_row_into(row, buf);
+                    let w = &buf[..self.cols];
+                    batch.iter().map(|acts| tq19_dot_q2f(w, acts)).collect()
+                },
+            )
+            .collect();
+        transpose(by_row, batch.len())
+    }
 }
 
 /// Transpose row-major per-row results into one output vector per batch input.
-fn transpose(by_row: Vec<Vec<BinaryStorage>>, batch_len: usize) -> Vec<Vec<BinaryStorage>> {
+fn transpose<T: Copy>(by_row: Vec<Vec<T>>, batch_len: usize) -> Vec<Vec<T>> {
     (0..batch_len)
         .map(|b| by_row.iter().map(|r| r[b]).collect())
         .collect()
@@ -395,6 +454,34 @@ mod tests {
             let lo = biased as i32 - LOW_BIAS as i32;
             assert_eq!(hi as i32 * LOW_MOD + lo, raw as i32, "raw {raw} split mismatch");
         }
+    }
+
+    /// Wide-output contract: narrow(q2f) == matvec bit-for-bit, and the
+    /// hybrid wide path is bit-identical to the dense wide path.
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    #[test]
+    fn q2f_narrow_reproduces_matvec_and_matches_dense() {
+        fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
+            #[cfg(table_format = "q16_16")]
+            { (v / (1i64 << crate::fixed_point::frac_config::FRAC_BITS)) as i32 }
+            #[cfg(table_format = "q32_32")]
+            { (v / (1i128 << 32)) as i64 }
+        }
+        let mut rng = Lcg(1234);
+        let (rows, cols) = (11, 97);
+        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
+        let m = TQ19Matrix::new(rows, cols, data);
+        let h = HybridTQ19::from_tq19(&m);
+        let x: Vec<BinaryStorage> = (0..cols).map(|_| rng.activation()).collect();
+        let narrow = h.matvec(&x);
+        let wide = h.matvec_q2f(&x);
+        for r in 0..rows {
+            assert_eq!(narrow_q2f(wide[r]), narrow[r], "row {r}");
+        }
+        assert_eq!(wide, m.matvec_q2f(&x), "hybrid wide != dense wide");
+        assert_eq!(wide, h.matvec_q2f_par(&x));
+        let batch: Vec<&[BinaryStorage]> = vec![&x];
+        assert_eq!(h.matvec_q2f_batch_par(&batch)[0], wide);
     }
 
     #[test]

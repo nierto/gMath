@@ -15,6 +15,9 @@
 //! - [`TQ19Matrix::matvec`] — matrix-vector product with compute-tier accumulation
 //! - [`TQ19Matrix::matvec_batch`] — batch matvec (weight matrix stays in cache)
 //! - [`tq19_dot`] — single dot product (weights × activations / SCALE)
+//! - `matvec_q2f` family (q16_16/q32_32) — wide-output matvec at 2·FRAC_BITS
+//!   precision with exactly one rounding; `q2f >> narrowing division`
+//!   reproduces the narrow matvec bit-for-bit
 //! - [`trit_dot`] — zero-multiply dot for pre-decoded trits
 //! - [`packed_trit_dot`] — zero-multiply dot for packed trits (5/byte)
 //! - [`packed_trit_matvec`] — matvec for packed trit format with per-row scales
@@ -51,6 +54,8 @@ pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT
 pub use rowscaled::RowScaledTQ19;
 
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
 use crate::fixed_point::imperative::FixedPoint;
 
 // ============================================================================
@@ -221,6 +226,40 @@ impl TQ19Matrix {
         }
         ops::tq19_matvec_batch_par(&self.data, self.rows, self.cols, batch)
     }
+
+    // ========================================================================
+    // Wide-output (q2f) variants — exact accumulator at 2·FRAC_BITS precision
+    // ========================================================================
+
+    /// Wide-output matvec: each row at 2·FRAC_BITS fractional precision with exactly one rounding.
+    ///
+    /// Returns `trunc(Σ W[i][j]·x[j] · 2^FRAC_BITS / SCALE)` per row — the
+    /// exact accumulator value the narrow epilogue would round to storage.
+    /// **Narrowing contract**: `q2f / (1 << FRAC_BITS)` (Rust truncating
+    /// division) reproduces [`TQ19Matrix::matvec`] bit-for-bit. Same inner
+    /// loops and SIMD; zero cost on the narrow path. Motivation: fine-grained
+    /// MoE expert outputs can live below the storage rounding floor.
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn matvec_q2f(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+        assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec_q2f: activation length mismatch");
+        ops::tq19_matvec_q2f(&self.data, self.rows, self.cols, activations)
+    }
+
+    /// Row-parallel wide-output matvec. See [`TQ19Matrix::matvec_q2f`].
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn matvec_q2f_par(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+        assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec_q2f_par: activation length mismatch");
+        ops::tq19_matvec_q2f_par(&self.data, self.rows, self.cols, activations)
+    }
+
+    /// Row-parallel wide-output batch matvec. See [`TQ19Matrix::matvec_q2f`].
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn matvec_q2f_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<ComputeStorage>> {
+        for (i, v) in batch.iter().enumerate() {
+            assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_q2f_batch_par: activation[{i}] length mismatch");
+        }
+        ops::tq19_matvec_q2f_batch_par(&self.data, self.rows, self.cols, batch)
+    }
 }
 
 // ============================================================================
@@ -237,6 +276,16 @@ impl TQ19Matrix {
 #[inline]
 pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage {
     ops::tq19_dot(weights, activations)
+}
+
+/// Wide-output TQ1.9 dot: the exact dot value at 2·FRAC_BITS fractional precision.
+///
+/// `trunc(sum(weights[i]·activations[i]) · 2^FRAC_BITS / SCALE)` — exactly one
+/// rounding. `q2f / (1 << FRAC_BITS)` reproduces [`tq19_dot`] bit-for-bit.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[inline]
+pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeStorage {
+    ops::tq19_dot_q2f(weights, activations)
 }
 
 /// Zero-multiply trit dot product for pre-decoded trits.

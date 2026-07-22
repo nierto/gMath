@@ -239,7 +239,7 @@ pub fn silu(x: FixedPoint) -> FixedPoint {
     // If 1 + exp(−x) overflows the compute tier, exp(−x) is at the tier's
     // ceiling (x deeply negative) and silu(x) = x/(1+exp(−x)) rounds to zero
     // at every storage width. Pre-guard, the wrapped sum produced huge
-    // garbage for x ≲ −30 (Maniference O26).
+    // garbage for x ≲ −30.
     let one_plus_exp = match compute_checked_add(compute_one(), exp_neg) {
         Ok(v) => v,
         Err(_) => return FixedPoint::ZERO,
@@ -532,7 +532,7 @@ mod tests {
         // every x past the exp saturation threshold |silu(x)| is below half
         // an LSB at all storage widths. Pre-fix, the wrapping exp downscale
         // returned huge garbage for x ≲ −30 on realtime profiles
-        // (Maniference O26: Mixtral expert gates reach ±70).
+        // (MoE expert gate values can reach ±70).
         for s in ["-30", "-40", "-70", "-100"] {
             let v = silu(fp(s));
             assert!(v.abs() < tight(), "silu({}) = {}, expected ~0", s, v);

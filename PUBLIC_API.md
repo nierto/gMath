@@ -903,13 +903,17 @@ Modules: g_math::tq19 _(feature: inference)_
 | `MIN_RAW` | const | Minimum raw i16 value. |
 | `TRIT_DECODE_TABLE` | const | Pre-decoded trit table: maps each byte to 5 balanced trits in {-1, 0, +1}. |
 | `tq19_dot` | fn | TQ1.9 dot product: `sum(weights[i] * activations[i]) / SCALE` |
+| `tq19_dot_q2f` | fn | Wide-output TQ1.9 dot: the exact dot value at 2·FRAC_BITS fractional precision. |
 | `trit_dot` | fn | Zero-multiply trit dot product for pre-decoded trits. |
 | `packed_trit_dot` | fn | Packed trit dot product with per-block scale factor. |
 | `packed_trit_matvec` | fn | Packed trit matrix-vector product with per-row scale factors. |
 | `packed_trit_matvec_par` | fn | Row-parallel packed trit matvec. |
 | `tq19_matvec` | fn | TQ1.9 matrix-vector product (sequential). |
 | `tq19_matvec_batch` | fn | Batch TQ1.9 matvec with tiled accumulation. |
+| `tq19_matvec_q2f` | fn | Wide-output TQ1.9 matvec (sequential) — 2·FRAC_BITS precision, one rounding. |
 | `tq19_matvec_par` | fn | Row-parallel TQ1.9 matvec. |
+| `tq19_matvec_q2f_par` | fn | Row-parallel wide-output TQ1.9 matvec — 2·FRAC_BITS precision, one rounding. |
+| `tq19_matvec_q2f_batch_par` | fn | Row-parallel wide-output batch TQ1.9 matvec with tiled accumulation. |
 | `tq19_matvec_batch_par` | fn | Row-parallel batch TQ1.9 matvec with tiled accumulation. |
 | `NUM_PLANES` | const | Number of balanced-ternary digit planes in a TQ1.9 value. |
 | `POW3` | const | Powers of three, 3^0 .. 3^9. |
@@ -942,6 +946,9 @@ Row-major TQ1.9 weight matrix.
 | `matvec_fp` | Convenience: matvec returning `FixedPoint` values. |
 | `matvec_par` | Row-parallel matvec. Each row computed independently via rayon. |
 | `matvec_batch_par` | Row-parallel batch matvec. |
+| `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS fractional precision with exactly one rounding. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. See [`TQ19Matrix::matvec_q2f`]. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`TQ19Matrix::matvec_q2f`]. |
 
 ### PlaneData
 
@@ -968,6 +975,9 @@ A TQ1.9 weight matrix decomposed into 10 balanced-ternary trit planes.
 | `matvec_par` | Row-parallel matvec (rayon). One reconstruction buffer per worker. |
 | `matvec_batch` | Batch matvec: same weights applied to multiple activation vectors. |
 | `matvec_batch_par` | Row-parallel batch matvec: rows in parallel, reconstruction amortized |
+| `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. See [`PlanarTQ19::matvec_q2f`]. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`PlanarTQ19::matvec_q2f`]. |
 
 ### HybridTQ19
 
@@ -987,6 +997,9 @@ A TQ1.9 weight matrix in hybrid 12-bit + sparse-correction form.
 | `matvec_par` | Row-parallel matvec (rayon). One reconstruction buffer per worker. |
 | `matvec_batch` | Batch matvec: each row reconstructed once, dotted per batch vector. |
 | `matvec_batch_par` | Row-parallel batch matvec. |
+| `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. See [`HybridTQ19::matvec_q2f`]. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`HybridTQ19::matvec_q2f`]. |
 
 ## Serialization
 

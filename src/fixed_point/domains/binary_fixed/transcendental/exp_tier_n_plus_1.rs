@@ -813,7 +813,7 @@ pub(crate) fn downscale_q64_to_q32(val: i128) -> i64 {
     // overflow sentinel i128::MAX — must stay at the i64 ceiling so the
     // eventual storage downscale detects them; the old `as i64` cast wrapped
     // them into plausible garbage (fused::silu returned huge values for
-    // x ≲ −30; Maniference O26 Mixtral blast radius).
+    // x ≲ −30).
     if result > i64::MAX as i128 { i64::MAX }
     else if result < i64::MIN as i128 { i64::MIN }
     else { result as i64 }

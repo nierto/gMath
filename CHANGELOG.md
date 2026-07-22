@@ -5,6 +5,29 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.31] - 2026-07-22
+
+### Added
+
+- Wide-output `matvec_q2f` family for all four TQ1.9 forms (`TQ19Matrix`,
+  `RowScaledTQ19`, `HybridTQ19`, `PlanarTQ19`), plus `tq19_dot_q2f`, gated
+  to the q16_16/q32_32 profiles under `inference`. Each returns the exact
+  row accumulator at 2·FRAC_BITS fractional precision with exactly one
+  rounding (truncation toward zero of `acc·2^FRAC_BITS / SCALE`) instead
+  of rounding to storage in the epilogue — for consumers whose signal sits
+  below the storage rounding floor (e.g. fine-grained-MoE expert outputs).
+  Inner loops, SIMD dispatch, and rayon parallelism are unchanged; zero
+  cost on the narrow path.
+- Narrowing contract, pinned by property tests on every gated profile:
+  `q2f / (1 << FRAC_BITS)` (Rust truncating division) reproduces the
+  narrow `matvec` bit-for-bit for `TQ19Matrix`/`HybridTQ19`/`PlanarTQ19`
+  (nested truncation toward zero is exact). `RowScaledTQ19::matvec_q2f`
+  applies the per-row scale to the wide dot — strictly more precise, so
+  narrowing it may differ from the narrow path by ±1 storage LSB for
+  non-unit scales (exact for unit scales); its wide value is pinned
+  against an independent i128 oracle. Out-of-range wide outputs fail
+  loud, never wrap.
+
 ## [0.4.30] - 2026-07-22
 
 ### Added

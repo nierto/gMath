@@ -100,6 +100,50 @@ pub(super) fn narrow_to_storage(v: ComputeStorage) -> BinaryStorage {
     { v.as_i512() }
 }
 
+/// Wide matvec epilogue: the exact row value at 2·FRAC_BITS fractional
+/// precision with EXACTLY ONE rounding — truncation toward zero of
+/// `acc · 2^FRAC_BITS / SCALE`.
+///
+/// **Narrowing spec**: Rust's truncating division `q2f / (1 << FRAC_BITS)`
+/// reproduces the narrow epilogue `acc / SCALE` bit-for-bit — nested
+/// truncation toward zero is exact: `trunc(trunc(a·2^F/S)/2^F) ≡ trunc(a/S)`.
+/// Downstream consumers narrowing wide outputs must use this rule.
+///
+/// Gated to q16_16/q32_32: on wider profiles the storage rounding floor is
+/// ≤ 2^-64 and the problem this API addresses does not arise.
+///
+/// # Panics
+/// Panics if the wide value exceeds the compute-tier range (fail loud,
+/// never wrap). Unreachable at FRAC_BITS ≤ 14 (|acc| ≤ i64::MAX implies
+/// |q2f| < 2^63 there); reachable and guarded at larger FRAC_BITS.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[inline(always)]
+pub(super) fn wide_output(acc: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    {
+        // i64 acc → i128 intermediate: acc·2^F is exact, one division.
+        let q2f = ((acc as i128) << frac_config::FRAC_BITS) / (SCALE as i128);
+        if q2f > i64::MAX as i128 || q2f < i64::MIN as i128 {
+            panic!("matvec_q2f: wide output exceeds compute-tier range");
+        }
+        q2f as i64
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        // i128 acc: acc·2^32 can overflow i128, so stage the single
+        // truncating division as q·2^32 + trunc(r·2^32/S) with q = acc/S,
+        // r = acc % S (|r| < S, sign of acc) — algebraically identical to
+        // trunc(acc·2^32/S) for truncation toward zero.
+        let s = SCALE as i128;
+        let q = acc / s;
+        let frac = ((acc % s) << 32) / s;
+        match q.checked_mul(1i128 << 32).and_then(|hi| hi.checked_add(frac)) {
+            Some(v) => v,
+            None => panic!("matvec_q2f: wide output exceeds compute-tier range"),
+        }
+    }
+}
+
 /// Multiply two Q-format BinaryStorage values at compute tier.
 ///
 /// `result = (a * b) >> FRAC_BITS` with round-to-nearest.
@@ -206,6 +250,16 @@ pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage
     debug_assert_eq!(weights.len(), activations.len());
     let acc = tq19_dot_compute(weights, activations);
     narrow_to_storage(acc / compute_scale())
+}
+
+/// Wide-output TQ1.9 dot: `trunc(sum(weights[i]·activations[i]) · 2^FRAC_BITS / SCALE)`.
+///
+/// Same inner loop (and SIMD dispatch) as [`tq19_dot`]; only the epilogue
+/// differs — see [`wide_output`] for the exact rounding/narrowing contract.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeStorage {
+    debug_assert_eq!(weights.len(), activations.len());
+    wide_output(tq19_dot_compute(weights, activations))
 }
 
 /// Zero-multiply trit dot for pre-decoded trits.
@@ -335,6 +389,25 @@ pub fn tq19_matvec_batch(
     results
 }
 
+/// Wide-output TQ1.9 matvec (sequential) — 2·FRAC_BITS precision, one rounding.
+///
+/// Same inner loops as [`tq19_matvec`]; only the epilogue differs — see
+/// [`wide_output`] for the exact rounding/narrowing contract.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+pub fn tq19_matvec_q2f(
+    data: &[i16],
+    rows: usize,
+    cols: usize,
+    activations: &[BinaryStorage],
+) -> Vec<ComputeStorage> {
+    (0..rows)
+        .map(|row| {
+            let row_weights = &data[row * cols..(row + 1) * cols];
+            wide_output(tq19_dot_compute(row_weights, activations))
+        })
+        .collect()
+}
+
 /// Packed trit matvec (sequential).
 pub fn packed_trit_matvec(
     packed_trits: &[u8],
@@ -377,6 +450,66 @@ pub fn tq19_matvec_par(
             narrow_to_storage(acc / scale)
         })
         .collect()
+}
+
+/// Row-parallel wide-output TQ1.9 matvec — 2·FRAC_BITS precision, one rounding.
+///
+/// Epilogue-only variant of [`tq19_matvec_par`] — see [`wide_output`].
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+pub fn tq19_matvec_q2f_par(
+    data: &[i16],
+    rows: usize,
+    cols: usize,
+    activations: &[BinaryStorage],
+) -> Vec<ComputeStorage> {
+    (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let row_weights = &data[row * cols..(row + 1) * cols];
+            wide_output(tq19_dot_compute(row_weights, activations))
+        })
+        .collect()
+}
+
+/// Row-parallel wide-output batch TQ1.9 matvec with tiled accumulation.
+/// Epilogue-only variant of [`tq19_matvec_batch_par`] — see [`wide_output`].
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+pub fn tq19_matvec_q2f_batch_par(
+    data: &[i16],
+    rows: usize,
+    cols: usize,
+    batch: &[&[BinaryStorage]],
+) -> Vec<Vec<ComputeStorage>> {
+    let batch_size = batch.len();
+    let row_results: Vec<Vec<ComputeStorage>> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let row_start = row * cols;
+            let mut accs = vec![compute_zero(); batch_size];
+            let mut tile_start = 0;
+            while tile_start < cols {
+                let tile_end = (tile_start + BATCH_TILE).min(cols);
+                let tile_weights = &data[row_start + tile_start..row_start + tile_end];
+                for b in 0..batch_size {
+                    let tile_acts = &batch[b][tile_start..tile_end];
+                    for i in 0..tile_weights.len() {
+                        accs[b] = accs[b] + widen_weight(tile_weights[i]) * widen_activation(tile_acts[i]);
+                    }
+                }
+                tile_start = tile_end;
+            }
+            accs.into_iter().map(wide_output).collect()
+        })
+        .collect();
+    let mut results: Vec<Vec<ComputeStorage>> = (0..batch_size)
+        .map(|_| Vec::with_capacity(rows))
+        .collect();
+    for row_result in row_results {
+        for (b, val) in row_result.into_iter().enumerate() {
+            results[b].push(val);
+        }
+    }
+    results
 }
 
 /// Row-parallel batch TQ1.9 matvec with tiled accumulation.
@@ -489,6 +622,75 @@ mod tests {
         let diff = if result > act { result - act } else { act - result };
         // Allow 1 ULP tolerance
         assert!(diff <= bs_one(), "identity weight: diff = {diff:?}");
+    }
+
+    /// Contract pin for the wide epilogue:
+    /// `q2f / (1 << FRAC_BITS)` (truncating division) must reproduce the
+    /// narrow matvec BIT-FOR-BIT — a theorem for nested truncation toward
+    /// zero, pinned here on random full-range signed data.
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    #[test]
+    fn q2f_narrow_reproduces_matvec_bit_for_bit() {
+        fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
+            #[cfg(table_format = "q16_16")]
+            { (v / (1i64 << crate::fixed_point::frac_config::FRAC_BITS)) as i32 }
+            #[cfg(table_format = "q32_32")]
+            { (v / (1i128 << 32)) as i64 }
+        }
+        let rows = 9;
+        let cols = 131; // not divisible by SIMD lane widths
+        let data: Vec<i16> = (0..rows * cols)
+            .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
+            .collect();
+        let x: Vec<BinaryStorage> = (0..cols)
+            .map(|i| ((i as i64 * 40503 % 8191) - 4095) as BinaryStorage)
+            .collect();
+        let narrow = tq19_matvec(&data, rows, cols, &x);
+        let wide = tq19_matvec_q2f(&data, rows, cols, &x);
+        for r in 0..rows {
+            assert_eq!(narrow_q2f(wide[r]), narrow[r], "row {r}: narrow(q2f) != matvec");
+        }
+        // Parallel and batch variants must agree with sequential exactly.
+        assert_eq!(wide, tq19_matvec_q2f_par(&data, rows, cols, &x));
+        let batch: Vec<&[BinaryStorage]> = vec![&x, &x];
+        let wb = tq19_matvec_q2f_batch_par(&data, rows, cols, &batch);
+        assert_eq!(wb[0], wide);
+        assert_eq!(wb[1], wide);
+    }
+
+    /// wide_output against a direct i128 reference, including the
+    /// fail-loud guard at the compute-range boundary.
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    #[test]
+    fn wide_output_matches_reference_and_guards_overflow() {
+        #[cfg(table_format = "q16_16")]
+        {
+            let f = crate::fixed_point::frac_config::FRAC_BITS;
+            for acc in [0i64, 1, -1, 12345, -987654321, 1 << 40, -(1i64 << 40)] {
+                let reference = ((acc as i128) << f) / (SCALE as i128);
+                assert_eq!(wide_output(acc) as i128, reference, "acc = {acc}");
+            }
+            // i64::MAX: in range for FRAC_BITS ≤ 14 (SCALE > 2^14), must
+            // panic above — branch on the actual FRAC configuration.
+            let exact = ((i64::MAX as i128) << f) / (SCALE as i128);
+            if exact <= i64::MAX as i128 {
+                assert_eq!(wide_output(i64::MAX) as i128, exact);
+            } else {
+                assert!(std::panic::catch_unwind(|| wide_output(i64::MAX)).is_err(),
+                    "wide_output must fail loud past the compute range");
+            }
+        }
+        #[cfg(table_format = "q32_32")]
+        {
+            // Staged division must equal the single division wherever the
+            // single division is directly computable in i128.
+            for acc in [0i128, 1, -1, 12345, -987654321, (i64::MAX as i128) * 1000, -(i64::MAX as i128) * 1000] {
+                let reference = (acc << 32) / (SCALE as i128);
+                assert_eq!(wide_output(acc), reference, "acc = {acc}");
+            }
+            assert!(std::panic::catch_unwind(|| wide_output(i128::MAX)).is_err(),
+                "wide_output must fail loud past the compute range");
+        }
     }
 
     #[test]
