@@ -807,9 +807,16 @@ pub(crate) fn downscale_q64_to_q32(val: i128) -> i64 {
     let shift = 32u32;
 
     let round_bit = (val & (1i128 << (shift - 1))) != 0;
-    let mut result = (val >> shift) as i64;
+    let mut result = val >> shift;
     if round_bit { result += 1; }
-    result
+    // Saturate instead of wrapping. Oversized results — including the exp
+    // overflow sentinel i128::MAX — must stay at the i64 ceiling so the
+    // eventual storage downscale detects them; the old `as i64` cast wrapped
+    // them into plausible garbage (fused::silu returned huge values for
+    // x ≲ −30; Maniference O26 Mixtral blast radius).
+    if result > i64::MAX as i128 { i64::MAX }
+    else if result < i64::MIN as i128 { i64::MIN }
+    else { result as i64 }
 }
 
 /// Upscale compute tier (i64) to Q64.64 (i128) for native transcendental computation.

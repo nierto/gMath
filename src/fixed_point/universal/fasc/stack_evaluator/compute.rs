@@ -569,6 +569,24 @@ pub(crate) fn compute_checked_add(
     a.checked_add(b).ok_or(OverflowDetected::TierOverflow)
 }
 
+/// The compute tier's maximum value — the ceiling that saturating downscales
+/// (`downscale_q64_to_q32`) and the exp overflow sentinel land on. Consumers
+/// that would add to a ceiling value (tanh/cosh denominators) check against
+/// this to fail loud instead of wrapping.
+#[inline]
+pub(crate) fn compute_ceiling() -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { i64::MAX }
+    #[cfg(table_format = "q32_32")]
+    { i128::MAX }
+    #[cfg(table_format = "q64_64")]
+    { I256::max_value() }
+    #[cfg(table_format = "q128_128")]
+    { I512::max_value() }
+    #[cfg(table_format = "q256_256")]
+    { I1024::max_value() }
+}
+
 /// Subtract two compute-tier values
 #[inline]
 pub(crate) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
@@ -808,7 +826,11 @@ pub(crate) fn sinhcosh_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, Co
     let ep = exp_at_compute_tier(x);
     let en = exp_at_compute_tier(compute_negate(x));
     let sinh_c = compute_halve(compute_subtract(ep, en));
-    let cosh_c = compute_halve(compute_add(ep, en));
+    // A ceiling exp (saturated downscale or overflow sentinel) would wrap the
+    // cosh add; pin the sum at the ceiling instead — cosh already exceeds the
+    // storage tier there, so the caller's downscale reports TierOverflow.
+    let cosh_sum = compute_checked_add(ep, en).unwrap_or_else(|_| compute_ceiling());
+    let cosh_c = compute_halve(cosh_sum);
     (sinh_c, cosh_c)
 }
 

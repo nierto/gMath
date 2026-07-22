@@ -16,7 +16,8 @@ fn make_activations(n: usize) -> Vec<BinaryStorage> {
 }
 
 fn make_weights(rows: usize, cols: usize) -> Vec<i16> {
-    (0..rows * cols).map(|i| ((i as i32 * 137 - 5000) % (SCALE / 2)) as i16).collect()
+    // i64: at 4096×4096, i·137 exceeds i32::MAX (debug-mode overflow panic).
+    (0..rows * cols).map(|i| ((i as i64 * 137 - 5000) % (SCALE as i64 / 2)) as i16).collect()
 }
 
 fn make_trits(n: usize) -> Vec<i8> {

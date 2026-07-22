@@ -143,6 +143,7 @@ fn direct_atan2(y: ComputeStorage, x: ComputeStorage) -> ComputeStorage {
 use crate::fixed_point::universal::fasc::stack_evaluator::{
     compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide, compute_halve,
 };
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_checked_add;
 
 #[inline] fn compute_add_direct(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage { compute_add(a, b) }
 #[inline] fn compute_sub_direct(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage { compute_subtract(a, b) }
@@ -530,7 +531,10 @@ impl FixedPoint {
         let c = upscale_to_compute(self.raw);
         let ep = direct_exp(c);
         let en = direct_exp(compute_neg_direct(c));
-        let result = compute_halve_direct(compute_add_direct(ep, en));
+        // A ceiling exp means cosh already exceeds the storage tier; the
+        // wrapping add would corrupt it before the downscale could notice.
+        let sum = compute_checked_add(ep, en).expect("cosh overflow");
+        let result = compute_halve_direct(sum);
         Self { raw: downscale_to_storage(result).expect("cosh overflow") }
     }
     /// Fused (sinh(x), cosh(x)) — single shared exp-pair evaluation at compute tier.
@@ -548,8 +552,14 @@ impl FixedPoint {
         let two_x = compute_add_direct(c, c);
         let e2x = direct_exp(two_x);
         let one = compute_one();
+        // exp(2x) at the compute-tier ceiling (saturated downscale or overflow
+        // sentinel): tanh = 1 − 2/(exp(2x)+1) rounds to exactly 1 at every
+        // storage width — and the denominator add below would wrap.
+        let den = match compute_checked_add(e2x, one) {
+            Ok(v) => v,
+            Err(_) => return Self::one(),
+        };
         let num = compute_sub_direct(e2x, one);
-        let den = compute_add_direct(e2x, one);
         Self { raw: downscale_to_storage(compute_divide_direct(num, den)).expect("tanh overflow") }
     }
     /// asinh(x) = ln(x + sqrt(x^2 + 1)) — direct composition

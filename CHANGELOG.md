@@ -5,6 +5,40 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.29] - 2026-07-22
+
+Root-cause fix for a latent exp-overflow corruption reported by the
+Maniference project (their O26: Mixtral-8x7B expert gates reach ±70 and
+tripped a path dense models never reach).
+
+### Fixed
+
+- `downscale_q64_to_q32` (the Q64.64 → compute-tier downscale used by the
+  q16_16 and q32_32 exp/trig wrappers) wrapped oversized results via a plain
+  `as i64` cast — including the exp overflow sentinel `i128::MAX`. It now
+  saturates to `i64::MAX`/`i64::MIN`, so oversized results stay detectable
+  and every later storage downscale reports them instead of materializing
+  wrapped garbage. Measured pre-fix corruption at Q22.10: `fused::silu(-70)`
+  returned `-70` (the gate value passed through unsquashed — a 200× residual
+  spike in Maniference's Mixtral run) and `tanh(25)` returned `-1`.
+- Ceiling guards for every exp consumer whose follow-up add could wrap (or
+  panic in debug builds) on a saturated/sentinel exp:
+  `fused::silu` returns 0 (correctly rounded for every such input),
+  `FixedPoint::tanh` returns 1 (likewise), `FixedPoint::cosh` and the FASC
+  cosh path fail loud (`cosh overflow` / `TierOverflow`), the FASC tanh path
+  returns 1, and `sinhcosh_at_compute_tier` pins the cosh sum at the ceiling
+  so materialization reports overflow. Softmax paths were audited and are
+  safe (max-subtraction bounds exp inputs at 1).
+- `tests/tq19_bench.rs` weight generator overflowed i32 at 4096×4096 in
+  debug builds (pre-existing, test-infrastructure only).
+
+### Added
+
+- Regression tests: exp monotonicity property over the full storage range
+  (the wrap broke monotonicity), silu deep-negative (−30 … −100, all
+  profiles), tanh saturation/sentinel region = 1 (all profiles), and FASC
+  try_tanh/try_cosh behavior on narrow profiles.
+
 ## [0.4.28] - 2026-07-18
 
 ### Fixed

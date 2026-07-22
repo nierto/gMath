@@ -25,6 +25,12 @@ use crate::fixed_point::I1024;
 use crate::fixed_point::universal::tier_types::CompactShadow;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
 
+/// True when a binary exp result sits at the compute-tier ceiling (saturating
+/// downscale or overflow sentinel) — adding to it would wrap the compute type.
+fn exp_at_compute_ceiling(v: &StackValue) -> bool {
+    matches!(v, StackValue::BinaryCompute(_, val, _) if *val == compute_ceiling())
+}
+
 // Transcendental functions called directly (not re-exported through compute::*)
 #[cfg(table_format = "q256_256")]
 use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i1024;
@@ -486,6 +492,11 @@ impl StackEvaluator {
         let exp_x = self.evaluate_exp(value.clone())?;
         let neg_x = self.negate_value(value)?;
         let exp_neg_x = self.evaluate_exp(neg_x)?;
+        // A ceiling exp (saturated downscale / overflow sentinel) means cosh
+        // already exceeds the storage tier — and the add below would wrap.
+        if exp_at_compute_ceiling(&exp_x) || exp_at_compute_ceiling(&exp_neg_x) {
+            return Err(OverflowDetected::TierOverflow);
+        }
         let sum = self.add_values(exp_x, exp_neg_x)?;
         self.halve_value(sum)
     }
@@ -497,6 +508,11 @@ impl StackEvaluator {
         let two = self.make_int_like(&value, 2);
         let two_x = self.multiply_values(two, value.clone())?;
         let exp_2x = self.evaluate_exp(two_x)?;
+        // exp(2x) at the compute-tier ceiling: tanh = 1 − 2/(exp(2x)+1) rounds
+        // to exactly 1 at every storage width, and the +1 below would wrap.
+        if exp_at_compute_ceiling(&exp_2x) {
+            return Ok(self.make_int_like(&value, 1));
+        }
         let one = self.make_int_like(&value, 1);
         let numerator = self.subtract_values(exp_2x.clone(), one.clone())?;
         let denominator = self.add_values(exp_2x, one)?;

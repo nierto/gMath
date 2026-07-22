@@ -653,6 +653,64 @@ fn test_try_exp_near_boundary_succeeds() {
     assert!(result.is_ok(), "exp(43) should fit in Q64.64, got {:?}", result);
 }
 
+/// The wrapping `downscale_q64_to_q32` made exp non-monotone on realtime
+/// profiles: past the wrap threshold (x ≳ 29.8 at FRAC_BITS=10), huge results
+/// wrapped into small values that could materialize as Ok(garbage).
+/// Property: over an ascending integer grid, Ok values never decrease, and
+/// once storage overflow begins no larger input may succeed again.
+#[test]
+#[cfg(table_format = "q16_16")]
+fn test_try_exp_monotone_and_overflow_terminal() {
+    let mut prev: Option<FixedPoint> = None;
+    let mut overflowed = false;
+    for i in 0..=120 {
+        match FixedPoint::from_int(i).try_exp() {
+            Ok(v) => {
+                assert!(!overflowed, "exp({}) succeeded after smaller inputs overflowed", i);
+                if let Some(p) = prev {
+                    assert!(v >= p, "exp({}) = {} decreased below {}", i, v, p);
+                }
+                prev = Some(v);
+            }
+            Err(_) => overflowed = true,
+        }
+    }
+    assert!(overflowed, "grid never reached storage overflow");
+}
+
+/// tanh must return 1 (to storage precision) when exp(2x) saturates the
+/// compute tier or hits the overflow sentinel — the wrapping path returned
+/// garbage. Covers both the saturation region and the sentinel region
+/// (2x > 40), plus sign symmetry.
+#[test]
+fn test_tanh_saturating_region_is_one() {
+    #[cfg(table_format = "q16_16")]
+    let tol = fp("0.001");
+    #[cfg(not(table_format = "q16_16"))]
+    let tol = fp("0.000000001");
+    for s in ["20", "25", "60"] {
+        let t = fp(s).tanh();
+        assert!((t - fp("1")).abs() < tol, "tanh({}) = {}, expected 1", s, t);
+        let tn = (-fp(s)).tanh();
+        assert!((tn + fp("1")).abs() < tol, "tanh(-{}) = {}, expected -1", s, tn);
+    }
+}
+
+/// FASC-path twins of the saturation guards: try_tanh must return Ok(1),
+/// try_cosh must fail loud with TierOverflow (cosh(30) exceeds both narrow
+/// profiles' storage range), never wrap.
+#[test]
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+fn test_try_tanh_try_cosh_saturating_region() {
+    #[cfg(table_format = "q16_16")]
+    let tol = fp("0.001");
+    #[cfg(not(table_format = "q16_16"))]
+    let tol = fp("0.000000001");
+    let t = fp("20").try_tanh().expect("tanh(20) must not error");
+    assert!((t - fp("1")).abs() < tol, "try_tanh(20) = {}, expected 1", t);
+    assert!(fp("30").try_cosh().is_err(), "cosh(30) must overflow narrow storage");
+}
+
 #[test]
 fn test_try_ln_domain_error() {
     let val = fp("-5");

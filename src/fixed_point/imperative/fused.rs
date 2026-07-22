@@ -236,7 +236,14 @@ pub fn silu(x: FixedPoint) -> FixedPoint {
     let x_compute = upscale_to_compute(x.raw());
     let neg_x = compute_negate(x_compute);
     let exp_neg = exp_at_compute_tier(neg_x);
-    let one_plus_exp = compute_add(compute_one(), exp_neg);
+    // If 1 + exp(−x) overflows the compute tier, exp(−x) is at the tier's
+    // ceiling (x deeply negative) and silu(x) = x/(1+exp(−x)) rounds to zero
+    // at every storage width. Pre-guard, the wrapped sum produced huge
+    // garbage for x ≲ −30 (Maniference O26).
+    let one_plus_exp = match compute_checked_add(compute_one(), exp_neg) {
+        Ok(v) => v,
+        Err(_) => return FixedPoint::ZERO,
+    };
 
     if compute_is_zero(&one_plus_exp) {
         return FixedPoint::ZERO;
@@ -517,6 +524,19 @@ mod tests {
         // Expected: 1/sqrt(4 + 0.000001) ≈ 1/2 = 0.5
         let diff = (factor - fp("0.5")).abs();
         assert!(diff < fp("0.001"), "rms_norm_factor = {}, expected ~0.5", factor);
+    }
+
+    #[test]
+    fn test_silu_deep_negative_is_zero() {
+        // silu(x) = x/(1+exp(−x)) → 0 super-exponentially as x → −∞: for
+        // every x past the exp saturation threshold |silu(x)| is below half
+        // an LSB at all storage widths. Pre-fix, the wrapping exp downscale
+        // returned huge garbage for x ≲ −30 on realtime profiles
+        // (Maniference O26: Mixtral expert gates reach ±70).
+        for s in ["-30", "-40", "-70", "-100"] {
+            let v = silu(fp(s));
+            assert!(v.abs() < tight(), "silu({}) = {}, expected ~0", s, v);
+        }
     }
 
     #[test]
