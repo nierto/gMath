@@ -40,12 +40,15 @@
 mod hybrid;
 mod ops;
 mod planar;
+mod rowscaled;
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod simd;
 
 pub use hybrid::{HybridTQ19, HYBRID_LOW_TRITS, LOW_BIAS, LOW_MOD};
 pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT};
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+pub use rowscaled::RowScaledTQ19;
 
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::imperative::FixedPoint;
