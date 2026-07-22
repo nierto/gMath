@@ -918,6 +918,12 @@ Modules: g_math::tq19 _(feature: inference)_
 | `LOW_MOD` | const | 3^7 — modulus of the low part. |
 | `LOW_BIAS` | const | Bias added to the balanced low remainder: biased = lo + 1093 ∈ [0, 2186]. |
 
+**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+
+| Item | Re-exported from |
+| --- | --- |
+| `RowScaledTQ19` | `rowscaled` |
+
 ### TQ19Matrix
 
 Row-major TQ1.9 weight matrix.

@@ -18,7 +18,7 @@
 //! with an i128 multiply and >>32 arithmetic shift. Fully deterministic;
 //! truncation error ≤ ~1.5 storage units per output element.
 //!
-//! Profile support: q16_16 (realtime) and q32_32 (balanced) — the i128
+//! Profile support: q16_16 (realtime) and q32_32 (compact) — the i128
 //! multiply covers BinaryStorage = i32/i64. Wider profiles need bigint
 //! scale arithmetic and are deliberately not implemented yet.
 
@@ -64,8 +64,15 @@ impl RowScaledTQ19 {
     #[inline(always)]
     fn scale_row(dot: BinaryStorage, s_q32: u64) -> BinaryStorage {
         // (dot × s_rel) at Q32.32, arithmetic-shifted back. i128 covers
-        // i32/i64 storage × u64 scale with headroom.
-        ((dot as i128 * s_q32 as i128) >> 32) as BinaryStorage
+        // i32/i64 storage × u64 scale with headroom: |i64|·u64 < 2^127.
+        let scaled = (dot as i128 * s_q32 as i128) >> 32;
+        // Oversized scales via from_parts could exceed the storage range;
+        // fail loud rather than wrap (house rule — silent wraps corrupted
+        // fused dist² and exp downscales before 0.4.28/0.4.29).
+        if scaled > BinaryStorage::MAX as i128 || scaled < BinaryStorage::MIN as i128 {
+            panic!("RowScaledTQ19: scaled output exceeds storage range");
+        }
+        scaled as BinaryStorage
     }
 
     /// Row-scaled matvec: `out[r] = tq19_dot(row_r, x) × s_rel[r]`.
@@ -134,6 +141,45 @@ mod tests {
             .map(|i| ((i as i64 * 40503 % 2049) - 1024) as BinaryStorage)
             .collect();
         assert_eq!(tq.matvec(&x), rs.matvec(&x));
+    }
+
+    /// Independent oracle: recompute the matvec with plain i128 arithmetic
+    /// (no tq19_dot, no SIMD) — Σ raw·x accumulated at i128, then the same
+    /// Q32.32 multiply-shift. Pins both the tq19_dot reuse and the scale
+    /// application against a path that shares no code with the kernel.
+    #[test]
+    fn rowscaled_matvec_matches_i128_oracle() {
+        let rows = 5;
+        let cols = 97; // not divisible by SIMD lane widths
+        let data: Vec<i16> = (0..rows * cols)
+            .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
+            .collect();
+        // Scales around 1.0: 0.5×, 1×, ~1.3×, tiny, and exactly 1 LSB above 1.
+        let scales: Vec<u64> = vec![
+            1u64 << 31,
+            1u64 << 32,
+            (1u64 << 32) + (1u64 << 30) + 12345,
+            1u64 << 20,
+            (1u64 << 32) + 1,
+        ];
+        let x: Vec<BinaryStorage> = (0..cols)
+            .map(|i| ((i as i64 * 69621 % 4001) - 2000) as BinaryStorage)
+            .collect();
+        let rs = RowScaledTQ19::from_parts(rows, cols, data.clone(), scales.clone());
+        let got = rs.matvec(&x);
+        for r in 0..rows {
+            let mut acc: i128 = 0;
+            for c in 0..cols {
+                acc += data[r * cols + c] as i128 * x[c] as i128;
+            }
+            // tq19_dot spec: truncate-toward-zero division by the global
+            // SCALE, narrow, THEN the Q32.32 row-scale multiply-shift.
+            let dot = acc / SCALE as i128;
+            let expected = ((dot * scales[r] as i128) >> 32) as BinaryStorage;
+            assert_eq!(got[r], expected, "row {} diverged from i128 oracle", r);
+        }
+        // matvec_par must agree with sequential.
+        assert_eq!(got, rs.matvec_par(&x));
     }
 
     /// Scaling all weights up and the row scale down must approximate the

@@ -5,6 +5,21 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.30] - 2026-07-22
+
+### Added
+
+- `tq19::RowScaledTQ19` ("TQ1.9-R") — TQ1.9 with one quantization scale per
+  row (Maniference O27 contribution). Per-row scales adapt the quantization
+  step to each row's own max: measured on Mixtral-8x7B, matvec output error
+  drops ~20× and wrong-expert routing drops 6.4% → 0.22% of tokens, at
+  unchanged 2 bytes/weight plus one i128 multiply-shift per output element.
+  Matvec reuses the existing SIMD `tq19_dot` verbatim. Gated to the q16_16
+  and q32_32 profiles (wider profiles would need bigint scale arithmetic).
+  Review hardening on merge: the scaled output now fails loud if it exceeds
+  the storage range instead of wrapping, and an independent i128-oracle test
+  (no shared code with the SIMD path) pins matvec and scale application.
+
 ## [0.4.29] - 2026-07-22
 
 Root-cause fix for a latent exp-overflow corruption reported by the
