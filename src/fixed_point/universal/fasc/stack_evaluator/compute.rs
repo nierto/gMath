@@ -963,6 +963,9 @@ pub(crate) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
 /// Returns ComputeStorage directly (no StackValue wrapping).
 /// Propagates the kernel's domain sentinel (type MIN) for x <= 0 —
 /// callers must domain-check before calling or handle the sentinel.
+/// Only consumed by the feature-gated `compute_tier` module, hence the
+/// dead_code allowance for no-feature builds (same as `make_compute_int`).
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn ln_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     #[cfg(table_format = "q256_256")]
