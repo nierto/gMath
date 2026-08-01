@@ -26,7 +26,11 @@ use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
 /// Target domain for an operation, determined by the routing table.
 ///
 /// Precedence: Binary (fastest for integers) < Decimal (exact base-10) < Symbolic (always exact).
-/// Ternary routing is deferred (ternary-exact values currently fall through to Binary).
+/// Ternary routing is deliberately sequenced, not abandoned: the classifier already
+/// computes `TERNARY_BIT`, but no table column consumes it (ternary-exact values fall
+/// through to Binary) until the balanced-ternary domain has its dedicated validation
+/// suite. Adding `Ternary` here plus a table column then rescues denominator-3^k
+/// values (e.g. 1/3 + 1/3) from the symbolic fallback into exact fixed-point.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DomainChoice {

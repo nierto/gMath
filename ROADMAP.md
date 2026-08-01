@@ -209,6 +209,41 @@ can be retired. Same review bar as 0.4.30/0.4.31.
 
 ---
 
+## Planned: 0.4.33 — Balanced ternary contract + dedicated validation suite
+
+Make the balanced-ternary domain formally defended rather than merely
+supported:
+
+- `docs/design/BALANCED_TERNARY_CONTRACT.md` — representation invariants,
+  canonicalization, and the **tie-free rounding theorem**: for values with a
+  finite balanced-ternary representation, truncating trits is round-to-nearest
+  with error strictly below ulp/2 (discarded tail ≤ ½·(1−3⁻ᵐ)·ulp), so
+  ternary-closed add/sub/mul need no tie-breaking logic and satisfy
+  `round(−x) = −round(x)` by construction. The contract also pins the
+  boundary cases where ties *do* reappear (conversion into ternary — binary ½
+  is `0.111…` repeating — and division) and specifies the rule used there.
+  Sibling invariant: ranges are symmetric `[−(3ⁿ−1)/2, +(3ⁿ−1)/2]`, so
+  negation can never overflow (no two's-complement MIN edge case).
+- Reference trit-vector oracle (test-only, deliberately simple `Vec<i8>`).
+- Exhaustive small-width add/sub/mul vs the oracle; boundary families
+  (±3ⁿ, ±3ⁿ±1, long runs of ±1 trits, alternating patterns).
+- Theorem tests: tie-free truncation, negation symmetry/no-overflow, the
+  conversion-tie case pinned as documented behavior.
+- UGOD promotion at 3ⁿ tier boundaries; canonical↔imperative path
+  equivalence; ternary↔binary/decimal coercion.
+- CI job (no table rebuild needed — cheap on every push).
+
+## Planned: 0.4.34 — Ternary routing column
+
+The fractal router's classifier already computes `TERNARY_BIT`, but no
+routing-table column consumes it: ternary-exact values (denominator 3ᵏ) fall
+through to Binary — where they are *inexact* — or to the symbolic fallback.
+Once 0.4.33 proves the domain, add `DomainChoice::Ternary` and a table column
+for exact 3-adic add/sub/mul (transcendentals keep routing to binary),
+plus coercion paths and routing tests. Gated on the 0.4.33 suite.
+
+---
+
 ## Next: 0.5.0 — Correctness audit + remaining composed transcendental bypass
 
 ### 1. UGOD multi-tier promotion verification
@@ -295,7 +330,7 @@ SIMD-friendly array processing for FixedPoint operations beyond TQ1.9. Bulk exp,
 
 ### Ternary test coverage
 
-Balanced ternary arithmetic lacks a dedicated validation suite. The domain works but needs stress-testing against reference values. Low effort, fills a known quality gap.
+Balanced ternary arithmetic lacks a dedicated validation suite. The domain works but needs stress-testing against reference values. Low effort, fills a known quality gap. **Now scheduled: see "Planned: 0.4.33" above.**
 
 ### Interval arithmetic — certified enclosures
 

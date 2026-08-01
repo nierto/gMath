@@ -68,7 +68,10 @@ const lookup table. A `CompactShadow` (0–32 bytes, stack-only) can ride alongs
 an approximated value carrying its exact rational identity or a constant reference
 (π, e, √2, φ, ln 2, ln 10, γ); the router reads shadows to classify domain
 exactness without reparsing. Only when no shared domain exists does arithmetic
-fall back to exact rational.
+fall back to exact rational. Note: ternary exactness is currently *classified*
+but not yet a routing destination — ternary-exact values dispatch to binary or
+symbolic until the balanced-ternary domain gains its dedicated validation suite
+(see ROADMAP).
 
 **Mode routing.** `set_gmath_mode("compute:output")` forces the compute and output
 domains independently (`auto`, `binary`, `decimal`, `symbolic`, `ternary`);
