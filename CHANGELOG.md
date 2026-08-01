@@ -5,6 +5,36 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.32] - 2026-08-01
+
+### Added
+
+- `g_math::compute_tier` (feature `inference`) — public compute-tier
+  (tier N+1) transcendentals over raw `ComputeStorage` values at
+  2·FRAC_BITS fractional precision: `exp`, `ln`, `sqrt`, `sinhcosh`
+  primitives plus `sigmoid`, `softplus`, `ln1p` compositions, with
+  `from_fixed`/`to_fixed`/`try_to_fixed` conversions and the `one`/
+  `ceiling` constants. These are the same engines every other API path
+  uses — results are path-independent with the canonical and imperative
+  surfaces (pinned by test) — exposed so wide-precision inference
+  consumers no longer re-derive integer-only exp/sigmoid/softplus/ln1p
+  on top of the storage-tier API. The format matches the wide-output
+  `matvec_q2f` family (0.4.31), so those accumulators feed these
+  functions directly with no conversion.
+- Contract: `exp` saturates at `ceiling()` and never wraps; `ln`/`sqrt`/
+  `ln1p` panic on domain violations; `to_fixed` panics (and
+  `try_to_fixed` returns `None`) when a value does not fit storage —
+  nothing wraps silently. `sigmoid` and `softplus` use sign-split stable
+  forms whose intermediates cannot overflow for any input.
+- Validation (`tests/compute_tier_validation.rs`): mpmath 60-digit
+  references at q16_16 and q32_32, gated at measured maxima — storage
+  level exact (0 LSB) for every function at both profiles; compute-tier
+  raw kernel output within 0–4 ULP (primitives) / 1–5 ULP (compositions)
+  of the true value. Plus path-independence, saturation, domain-panic,
+  and symmetry-identity gates.
+- Free `ln_at_compute_tier` kernel wrapper (crate-internal), completing
+  the exp/sqrt/sinhcosh free-function set.
+
 ## [0.4.31] - 2026-07-22
 
 ### Added

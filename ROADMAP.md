@@ -199,13 +199,19 @@ the three unscaled forms; `RowScaledTQ19` applies the scale to the wide dot
 
 ---
 
-## Requested by consumers — public compute-tier transcendentals (target 0.4.32)
+### v0.4.32 — Public compute-tier transcendentals
 
-`exp_at_compute_tier` and friends are `pub(crate)`, so downstream inference
-consumers re-derive integer-only wide-tier exp/sigmoid/softplus/ln1p rather
-than reusing gMath's engines. Expose a curated public compute-tier surface
-(exp, ln, sqrt at tier N+1) under the `inference` feature so the duplication
-can be retired. Same review bar as 0.4.30/0.4.31.
+`g_math::compute_tier` (feature `inference`): the tier-N+1 engines exposed
+directly over raw `ComputeStorage` at 2·FRAC_BITS precision — `exp`, `ln`,
+`sqrt`, `sinhcosh` plus `sigmoid`/`softplus`/`ln1p` stable compositions,
+with `from_fixed`/`to_fixed`/`try_to_fixed` conversions. Same engines as
+every other path (path independence pinned by test); format-compatible
+with the wide-output `matvec_q2f` accumulators. exp saturates at
+`ceiling()` and never wraps; domain violations panic; storage conversions
+fail loud. mpmath-gated at q16_16/q32_32 with measured tolerances —
+storage level exact (0 LSB) for all functions at both profiles. Closes
+the consumer ask that had downstream re-deriving integer-only wide-tier
+exp/sigmoid/softplus/ln1p.
 
 ---
 

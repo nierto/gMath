@@ -85,6 +85,7 @@ const SURFACE: &[(&str, &str, &str, Option<&str>)] = &[
     ("src/fixed_point/tq19/ops.rs", "g_math::tq19", "tq19", Some("inference")),
     ("src/fixed_point/tq19/planar.rs", "g_math::tq19", "tq19", Some("inference")),
     ("src/fixed_point/tq19/hybrid.rs", "g_math::tq19", "tq19", Some("inference")),
+    ("src/fixed_point/compute_tier.rs", "g_math::compute_tier", "compute_tier", Some("inference")),
     ("src/fixed_point/domains/balanced_ternary/mod.rs", "g_math::fixed_point::domains::balanced_ternary", "ternary", None),
     ("src/fixed_point/domains/balanced_ternary/trit_packing.rs", "g_math::fixed_point::domains::balanced_ternary", "ternary", None),
 ];
@@ -103,6 +104,7 @@ const SECTIONS: &[(&str, &str)] = &[
     ("tensors", "Tensors"),
     ("ternary", "Balanced ternary"),
     ("tq19", "TQ1.9 inference"),
+    ("compute_tier", "Compute-tier transcendentals"),
     ("serialization", "Serialization"),
 ];
 

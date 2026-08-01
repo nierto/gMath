@@ -31,6 +31,12 @@ pub use fixed_point::canonical;
 #[cfg(feature = "inference")]
 pub use fixed_point::tq19;
 
+/// Compute-tier (tier N+1) transcendentals over raw wide integers — exp, ln,
+/// sqrt, sinhcosh, sigmoid, softplus, ln1p at 2×FRAC_BITS precision.
+/// Requires the `inference` feature flag.
+#[cfg(feature = "inference")]
+pub use fixed_point::compute_tier;
+
 // gmath!() macro — available when g_math_macros is published as a separate crate.
 // See g_math_macros/ directory for the proc-macro implementation.
 

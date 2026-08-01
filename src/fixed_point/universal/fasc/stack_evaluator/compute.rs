@@ -958,6 +958,40 @@ pub(crate) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     }
 }
 
+/// Compute ln at compute tier (tier N+1) — free function variant.
+///
+/// Returns ComputeStorage directly (no StackValue wrapping).
+/// Propagates the kernel's domain sentinel (type MIN) for x <= 0 —
+/// callers must domain-check before calling or handle the sentinel.
+#[inline]
+pub(crate) fn ln_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q256_256")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i1024;
+        ln_binary_i1024(x)
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i512;
+        ln_binary_i512(x)
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i256;
+        ln_binary_i256(x)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i128;
+        ln_binary_i128(x)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        use crate::fixed_point::domains::binary_fixed::transcendental::ln_binary_i64;
+        ln_binary_i64(x)
+    }
+}
+
 /// Return π/2 at compute tier (tier N+1) with full precision
 ///
 /// Uses the build.rs-generated constants at compute-tier resolution.

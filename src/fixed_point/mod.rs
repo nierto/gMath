@@ -16,6 +16,11 @@ pub use imperative::{FixedPoint, FixedVector, FixedMatrix};
 #[cfg(feature = "inference")]
 pub mod tq19;
 
+/// Public compute-tier (tier N+1) transcendentals over raw `ComputeStorage`.
+/// Gated behind the `inference` feature flag.
+#[cfg(feature = "inference")]
+pub mod compute_tier;
+
 /// Build-time Q-format configuration (FRAC_BITS and derived constants).
 #[doc(hidden)] pub mod frac_config;
 

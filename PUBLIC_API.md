@@ -1001,6 +1001,33 @@ A TQ1.9 weight matrix in hybrid 12-bit + sparse-correction form.
 | `matvec_q2f_par` | Row-parallel wide-output matvec. See [`HybridTQ19::matvec_q2f`]. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`HybridTQ19::matvec_q2f`]. |
 
+## Compute-tier transcendentals
+
+Modules: g_math::compute_tier _(feature: inference)_
+
+| Item | Kind | Summary |
+| --- | --- | --- |
+| `one` | fn | The value `1.0` at compute-tier scale (`1 << COMPUTE_FRAC_BITS`). |
+| `ceiling` | fn | The compute tier's maximum value — the saturation ceiling for [`exp`]. |
+| `from_fixed` | fn | Promote a `FixedPoint` (storage tier) to the compute tier. Exact. |
+| `to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint` (single rounding). |
+| `try_to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint`, or `None` on storage overflow. |
+| `exp` | fn | `e^x` at the compute tier. |
+| `ln` | fn | `ln(x)` at the compute tier. |
+| `sqrt` | fn | `sqrt(x)` at the compute tier. |
+| `sinhcosh` | fn | `(sinh(x), cosh(x))` at the compute tier from one shared exponential pair. |
+| `sigmoid` | fn | `1 / (1 + e^-x)` at the compute tier. |
+| `softplus` | fn | `ln(1 + e^x)` (softplus) at the compute tier. |
+| `ln1p` | fn | `ln(1 + x)` at the compute tier. |
+
+**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+
+| Item | Re-exported from |
+| --- | --- |
+| `ComputeStorage` | `crate::fixed_point::universal::fasc::stack_evaluator` |
+| `FRAC_BITS` | `crate::fixed_point::frac_config` |
+| `COMPUTE_FRAC_BITS` | `crate::fixed_point::frac_config` |
+
 ## Serialization
 
 Modules: g_math::fixed_point::imperative::serialization

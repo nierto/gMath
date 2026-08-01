@@ -66,6 +66,14 @@ Transcendental methods appear on each surface's entry in the index:
 `sincos`/`sinhcosh` (imperative) and `evaluate_sincos`/`evaluate_sinhcosh`
 (canonical). Live signatures on [docs.rs](https://docs.rs/g_math).
 
+With the `inference` feature, **[g_math::compute_tier](../PUBLIC_API.md#compute-tier-transcendentals)**
+exposes the tier-N+1 engines directly over raw `ComputeStorage` values at
+2·FRAC_BITS precision — `exp`/`ln`/`sqrt`/`sinhcosh` plus `sigmoid`/`softplus`/`ln1p`
+compositions — for wide-precision consumers (e.g. chaining on the wide-output
+`matvec_q2f` accumulators without an intermediate storage rounding). Results are
+path-independent with the surfaces above: `to_fixed(compute_tier::exp(from_fixed(x)))`
+is bit-identical to `x.exp()`.
+
 ## Behaviour & limits
 
 - On `FixedPoint`, every function also has a fallible `try_*` variant returning
