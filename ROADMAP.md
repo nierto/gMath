@@ -146,6 +146,67 @@ imperative `DecimalFixed` path (the tiered arithmetic already widened correctly)
 CI (`.github/workflows/decimal-precision.yml`) gates the harness plus
 multi-profile lib tests on every push.
 
+### v0.4.25 — Trit-plane weight formats + fused attention hardening
+
+`PlanarTQ19` (per-digit ternary planes, density-chosen encodings) and
+`HybridTQ19` (12-bit packed low part + sparse high corrections) — lossless
+re-encodings of `TQ19Matrix` with bit-identical matvec at 25–29% fewer weight
+bytes. `fused::softmax_mix` numerator/exp-sum accumulate with overflow
+detection. CI: `fused-tq19-precision` workflow gates fused ops and TQ1.9
+exactness across all five profiles plus a Q22.10 floor job.
+
+### v0.4.26–v0.4.27 — U1 fused kernels + try_* domain-error contract
+
+`fused::{euclidean_distance_squared, dot, mobius_denominator_sq}` (U1 consumer
+asks: squared-space scoring and Möbius-ratio kernels without the sqrt
+round-trip). `try_ln`/`try_sqrt` again return `DomainError` for out-of-domain
+inputs — the v0.4.0 direct-engine switch had bypassed the FASC domain checks
+and misreported them as `TierOverflow`.
+
+### v0.4.28 — round_to_storage overflow-panic
+
+The shared fused/linalg downscale silently wrapped results exceeding the
+storage tier (a squared distance of 520,000 returned as −4288 on Q16.16). Now
+panics like every other infallible downscale. Fused test suite made
+multi-profile compliant (representable tolerances, narrow-profile-safe data).
+
+### v0.4.29 — Saturating exp downscale + ceiling guards
+
+`downscale_q64_to_q32` wrapped oversized Q64.64 results (including the exp
+overflow sentinel) via a plain cast: `fused::silu(x)` for x ≲ −30 returned the
+input unsquashed, `tanh(25)` returned −1. Now saturates; every exp consumer
+whose follow-up add could wrap on a saturated exp is guarded (silu → 0,
+tanh → 1, cosh → loud overflow, imperative + FASC paths). Property test pins
+exp monotonicity over the full storage range.
+
+### v0.4.30 — RowScaledTQ19 (TQ1.9-R)
+
+Per-row quantization scales (`s_rel` in unsigned Q32.32 relative to the global
+step): adapts the step to each row's max, ~20× matvec output error reduction
+on BF16-trained MoE weight distributions at unchanged 2 bytes/weight. Gated to
+q16_16/q32_32. Review hardening: loud range check on the scale multiply,
+independent i128-oracle test.
+
+### v0.4.31 — Wide-output matvec_q2f family
+
+`matvec_q2f`/`_par`/`_batch_par` on all four TQ1.9 forms plus `tq19_dot_q2f`:
+the exact row accumulator at 2·FRAC_BITS fractional precision with exactly one
+rounding, for consumers whose signal sits below the storage rounding floor
+(fine-grained-MoE expert outputs). Narrowing contract pinned by property
+tests: `q2f / (1 << FRAC_BITS)` reproduces the narrow matvec bit-for-bit for
+the three unscaled forms; `RowScaledTQ19` applies the scale to the wide dot
+(±1 storage LSB vs the narrow path for non-unit scales, exact at unit scale).
+
+---
+
+## Requested by consumers — public compute-tier transcendentals (target 0.4.32)
+
+`exp_at_compute_tier` and friends are `pub(crate)`, so downstream inference
+consumers re-derive integer-only wide-tier exp/sigmoid/softplus/ln1p rather
+than reusing gMath's engines. Expose a curated public compute-tier surface
+(exp, ln, sqrt at tier N+1) under the `inference` feature so the duplication
+can be retired. Same review bar as 0.4.30/0.4.31.
+
 ---
 
 ## Next: 0.5.0 — Correctness audit + remaining composed transcendental bypass

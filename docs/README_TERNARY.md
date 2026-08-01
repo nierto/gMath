@@ -13,7 +13,19 @@ decoupled, standalone format for neural-network weights: 1 integer trit + 9
 fractional trits per weight (2 bytes, range ±1.5). Because weights are {−1, 0, +1}
 at the trit level, a dot product needs no multiplications. `PlanarTQ19` and
 `HybridTQ19` are lossless re-encodings of a `TQ19Matrix` that trade layout for
-fewer weight bytes at bit-identical matvec results.
+fewer weight bytes at bit-identical matvec results. `RowScaledTQ19`
+(q16_16/q32_32) carries one quantization scale per row instead of the single
+global step, adapting resolution to each row's own max at unchanged
+2 bytes/weight.
+
+All four forms also expose a **wide-output matvec** (`matvec_q2f`, `_par`,
+`_batch_par`; q16_16/q32_32): the exact row accumulator at 2·FRAC_BITS
+fractional precision with exactly one rounding, for consumers whose signal
+sits below the storage rounding floor. `q2f / (1 << FRAC_BITS)` (truncating
+division) reproduces the narrow `matvec` bit-for-bit for `TQ19Matrix`,
+`HybridTQ19`, and `PlanarTQ19`; `RowScaledTQ19` applies its per-row scale to
+the wide dot, which is strictly more precise and may differ from the narrow
+path by at most 1 storage LSB for non-unit scales.
 
 ## Usage
 
