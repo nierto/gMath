@@ -9,9 +9,31 @@ marked **[theorem]** for mathematical facts the tests prove independently of
 the implementation. Nothing in this document describes behavior the suite
 does not check.
 
-## 1. Representation law
+## 1. Representation law — two coexisting forms
 
-The domain stores **scaled integers**, not trit vectors:
+The domain carries balanced ternary in **two distinct representations**, and
+which invariants apply depends on which one you are holding.
+
+### 1a. Native trits (storage + inference path)
+
+Genuinely native balanced ternary: the digits *are* the representation and
+the arithmetic exploits {−1, 0, +1} directly.
+
+- `Trit` — `#[repr(i8)] enum { Neg = -1, Zero = 0, Pos = 1 }`
+  (`trit_packing.rs`).
+- `pack_trits` / `unpack_trits` — 5 trits per byte, base-3
+  (`d₀·81 + d₁·27 + d₂·9 + d₃·3 + d₄`, digits offset +1 for unsigned
+  storage), 1.6 bits/trit against the 1.585 information-theoretic minimum.
+- `trit_dot`, `packed_trit_dot`, `packed_trit_matvec` — **zero-multiply**
+  arithmetic: the inner loop branches on the trit and accumulates
+  `acc ± activation`, never a multiply. `TRIT_DECODE_TABLE` unpacks a
+  byte into 5 trits by table lookup; an AVX2 path exists for the realtime
+  profile. This is the Setun property doing real work — a ternary digit
+  needs no multiplier.
+
+### 1b. Scaled integers (UGOD tier arithmetic path)
+
+The six UGOD tiers store a radix-3 **scaled integer** in binary storage:
 
 ```
 value = raw / 3^F        raw ∈ native signed integer storage
@@ -26,24 +48,38 @@ value = raw / 3^F        raw ∈ native signed integer storage
 | 5    | TQ128.128| 128            | 3^128  | I512    |
 | 6    | TQ256.256| 256            | 3^256  | I1024   |
 
-The trit view is a *derived* representation: any raw integer has a unique
-canonical balanced-ternary digit expansion (digits in {−1, 0, +1}), and the
-oracle in the validation suite converts between the two forms exhaustively.
-Packed trit encodings exist only in `trit_q1_9.rs` / `trit_packing.rs`
-(the TQ1.9 inference formats, covered by their own suite).
+Here the arithmetic is binary integer arithmetic on `raw` (add is
+`checked_add`; multiply is a double-width product rescaled by 3^F). The
+trit expansion still exists and is unique — every integer has exactly one
+canonical balanced-ternary form — but it is *derived*, not stored, and no
+tier operation materializes it. §4's theorem is what guarantees the two
+views agree; `theorem_trit_truncation_is_round_nearest` proves that
+agreement exhaustively (the suite's oracle is itself a native trit
+implementation, so the test bridges 1a and 1b directly).
 
-**Range honesty.** Doc comments describe tier ranges by nominal trit window
-(e.g. Tier 1 "±(3^8−1)/2"), but the implementation bounds values by *binary
-storage*, not by trit count: `TernaryTier1::from_integer` accepts any i16
-whose scaled raw fits i32, which exceeds the 8-integer-trit window by ~100×.
-The representable set of a tier is exactly
+### 1c. TQ1.9 — scaled, but trit-window enforced
+
+`TritQ1_9 { raw: i16 }` stores `value × 3^9` (scaled, like 1b) but —
+unlike the UGOD tiers — **enforces the 10-trit window**:
+`MAX_RAW = (3^10 − 1)/2 = 29524` is range-checked in every constructor,
+conversion, and arithmetic method. Its weights are repacked into the
+native-trit form of 1a for the zero-multiply matvec paths.
+
+**Range honesty (1b only).** Tier doc comments describe ranges by nominal
+trit window (Tier 1: "±(3^8−1)/2 ≈ ±3280"), but the UGOD tiers bound values
+by *binary storage*, not trit count. The representable set of a tier is
+exactly
 
 ```
 { n / 3^F : n ∈ [STORAGE_MIN, STORAGE_MAX] }
 ```
 
-The nominal trit window describes precision structure, not an enforced
-invariant. **[current behavior]**
+For Tier 1 that admits values up to `(2^31−1)/3^8 ≈ 327,310` — about **100×**
+the nominal ±3280 window (and `from_integer`, capped by its `i16` parameter,
+still reaches ±32,767, about **10×** the window). For the UGOD tiers the
+nominal trit window describes precision structure, not an enforced
+invariant. TQ1.9 (1c) is the exception that does enforce it.
+**[current behavior]**
 
 ## 2. Exactness class
 
@@ -57,7 +93,13 @@ ternary-inexact**, and the flagship case is ½. Since every scale 3^F is odd,
 neighboring grid points — conversion into ternary is where genuine rounding
 ties live (§5). Inside the domain no such tie can occur (§4).
 
-## 3. Operation semantics (verified against the shipping code)
+## 3. Operation semantics — UGOD tiers (§1b)
+
+The table below covers the **scaled-integer tier arithmetic**. The
+native-trit operations of §1a have their own contract: they are exact
+integer accumulations at compute tier with a single narrowing (validated
+by `tests/tq19_validation.rs` and the `matvec_q2f` wide-output property
+tests), and being multiply-free they introduce no rescaling error at all.
 
 | Op | Semantics | Error | Failure mode |
 |----|-----------|-------|--------------|
@@ -157,9 +199,13 @@ routing column.
 | mul3/div3 shift semantics incl. truncation pin | `mul3_div3_shift_semantics` |
 
 Suite: `tests/ternary_domain_validation.rs` (profile-independent — Tier 1/2
-functions are plain integer ops, no `table_format` gating). UGOD tier
-promotion, canonical↔imperative path equivalence, and cross-domain coercion
-are items 5–6 of the 0.4.33 plan, tracked in ROADMAP.
+functions are plain integer ops, no `table_format` gating). It validates the
+§1b scaled-integer path *and* its agreement with the §1a trit view, since
+the oracle is a native trit implementation. The §1a operations themselves
+(packing, zero-multiply dots, matvec) are covered by
+`tests/tq19_validation.rs` and the `fused-tq19-precision` CI workflow.
+UGOD tier promotion, canonical↔imperative path equivalence, and cross-domain
+coercion are items 5–6 of the 0.4.33 plan, tracked in ROADMAP.
 
 ## Disclaimer
 
