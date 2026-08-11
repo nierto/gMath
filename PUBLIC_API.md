@@ -84,6 +84,8 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `atan2` | atan2(self=y, x) — direct binary engine |
 | `try_exp` | Fallible e^x — returns `Err(TierOverflow)` if result exceeds storage tier. |
 | `try_ln` | Fallible ln(x) — returns `Err(DomainError)` if x <= 0. |
+| `inv_sqrt` | 1/√x computed at compute tier without materializing √x at storage. |
+| `try_inv_sqrt` | Fallible 1/√x — `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if |
 | `try_sqrt` | Fallible sqrt(x) — returns `Err(DomainError)` if x < 0. |
 | `try_sin` | Fallible sin(x). |
 | `try_cos` | Fallible cos(x). |
@@ -242,6 +244,7 @@ Modules: g_math::fixed_point::imperative::fused
 | Item | Kind | Summary |
 | --- | --- | --- |
 | `sqrt_sum_sq` | fn | Fused sqrt(Σ x_i²) — norm of a slice, entirely at compute tier. |
+| `inv_sqrt_sum_sq` | fn | Fused 1/√(Σ vᵢ²) — the reciprocal norm, entirely at compute tier. |
 | `euclidean_distance` | fn | Fused sqrt(Σ (a_i - b_i)²) — Euclidean distance, entirely at compute tier. |
 | `euclidean_distance_squared` | fn | Fused Σ (a_i − b_i)² — squared Euclidean distance at compute tier, no sqrt (U1). |
 | `dot` | fn | Fused Σ a_i·b_i — dot product entirely at compute tier (U1). |

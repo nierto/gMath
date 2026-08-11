@@ -15,7 +15,7 @@ use super::FixedPoint;
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_add, compute_checked_add, compute_subtract, compute_multiply, compute_divide,
-    compute_negate, compute_is_zero,
+    compute_negate, compute_is_zero, make_compute_int,
     sqrt_at_compute_tier, exp_at_compute_tier,
 };
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -52,6 +52,28 @@ pub fn sqrt_sum_sq(values: &[FixedPoint]) -> FixedPoint {
         acc = compute_add(acc, compute_multiply(vc, vc));
     }
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
+}
+
+/// Fused 1/√(Σ vᵢ²) — the reciprocal norm, entirely at compute tier.
+///
+/// Accumulates squares, takes the square root, and forms the reciprocal all
+/// at tier N+1, with one rounding at the final downscale. This is the form
+/// normalization actually wants: `inv_sqrt_sum_sq(&v)` then N multiplies
+/// replaces a `length()` plus N per-component divisions.
+///
+/// # Panics
+/// Panics if all values are zero (the norm is zero, reciprocal undefined),
+/// or if the reciprocal does not fit the storage tier.
+pub fn inv_sqrt_sum_sq(values: &[FixedPoint]) -> FixedPoint {
+    let mut acc = compute_zero();
+    for v in values {
+        let vc = upscale_to_compute(v.raw());
+        acc = compute_add(acc, compute_multiply(vc, vc));
+    }
+    let s = sqrt_at_compute_tier(acc);
+    let inv = compute_divide(make_compute_int(1), s)
+        .expect("inv_sqrt_sum_sq: zero norm has no reciprocal");
+    FixedPoint::from_raw(round_to_storage(inv))
 }
 
 /// Fused sqrt(Σ (a_i - b_i)²) — Euclidean distance, entirely at compute tier.

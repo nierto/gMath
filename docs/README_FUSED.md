@@ -37,6 +37,7 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | Function | Computes |
 | -------- | -------- |
 | `sqrt_sum_sq(&[x])` | √(Σ xᵢ²) |
+| `inv_sqrt_sum_sq(&[x])` | 1/√(Σ xᵢ²) — the reciprocal norm; one call + N multiplies replaces N per-component divisions in normalization |
 | `euclidean_distance(&a, &b)` | √(Σ (aᵢ−bᵢ)²) |
 | `softmax(&scores)` | numerically stable softmax |
 | `softmax_mix(&scores, &values)` | softmax(scores) · V, weights never materialized to storage |

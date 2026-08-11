@@ -641,6 +641,18 @@ pub struct UniversalTernaryFixed {
 impl UniversalTernaryFixed {
     /// Create from string with automatic precision detection
     pub fn from_str(input: &str) -> Result<Self, OverflowDetected> {
+        // Sign is handled here, once: "-0.5" used to parse as +0.5 because
+        // "-0".parse::<i64>() loses the sign before the fraction is applied.
+        // Parse the magnitude, then negate — identical results for inputs
+        // with a nonzero integer part, correct results for "-0.x".
+        let trimmed = input.trim();
+        if let Some(rest) = trimmed.strip_prefix('-') {
+            if rest.starts_with('-') {
+                return Err(OverflowDetected::InvalidInput);
+            }
+            return Self::from_str(rest)?.negate();
+        }
+
         // Parse the decimal string and convert to balanced ternary
         let (integer_part, fractional_part) = Self::parse_decimal_string(input)?;
 

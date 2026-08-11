@@ -49,7 +49,7 @@ impl StackEvaluator {
                 // Full-precision ternary negation with UGOD tier promotion
                 let ternary = ternary_from_storage(tier, &val)?;
                 let result = ternary.negate()?;
-                let (new_tier, storage) = ternary_to_storage(&result);
+                let (new_tier, storage) = ternary_to_storage(&result)?;
                 Ok(StackValue::Ternary(new_tier, storage, shadow_negate(shadow)))
             }
             StackValue::Symbolic(s) => {
@@ -133,7 +133,7 @@ impl StackEvaluator {
                     let ternary_a = ternary_from_storage(*t1, v1)?;
                     let ternary_b = ternary_from_storage(*t2, v2)?;
                     let result = ternary_a.add(&ternary_b)?;
-                    let (tier, storage) = ternary_to_storage(&result);
+                    let (tier, storage) = ternary_to_storage(&result)?;
                     Ok(StackValue::Ternary(tier, storage, shadow_add(s1, s2)))
                 }
                 _ => {
@@ -231,7 +231,7 @@ impl StackEvaluator {
                     let ternary_a = ternary_from_storage(*t1, v1)?;
                     let ternary_b = ternary_from_storage(*t2, v2)?;
                     let result = ternary_a.subtract(&ternary_b)?;
-                    let (tier, storage) = ternary_to_storage(&result);
+                    let (tier, storage) = ternary_to_storage(&result)?;
                     Ok(StackValue::Ternary(tier, storage, shadow_subtract(s1, s2)))
                 }
                 _ => {
@@ -330,7 +330,7 @@ impl StackEvaluator {
                     let ternary_a = ternary_from_storage(*t1, v1)?;
                     let ternary_b = ternary_from_storage(*t2, v2)?;
                     let result = ternary_a.multiply(&ternary_b)?;
-                    let (tier, storage) = ternary_to_storage(&result);
+                    let (tier, storage) = ternary_to_storage(&result)?;
                     Ok(StackValue::Ternary(tier, storage, shadow_multiply(s1, s2)))
                 }
                 _ => {
@@ -425,7 +425,7 @@ impl StackEvaluator {
                 let ternary_a = ternary_from_storage(*t1, v1)?;
                 let ternary_b = ternary_from_storage(*t2, v2)?;
                 let result = ternary_a.divide(&ternary_b)?;
-                let (tier, storage) = ternary_to_storage(&result);
+                let (tier, storage) = ternary_to_storage(&result)?;
                 Ok(StackValue::Ternary(tier, storage, shadow_divide(s1, s2)))
             }
             _ => {

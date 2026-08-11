@@ -215,10 +215,18 @@ exp/sigmoid/softplus/ln1p.
 
 ---
 
-## Planned: 0.4.33 — Balanced ternary contract + dedicated validation suite
+### v0.4.33 — Balanced ternary contract + validation; inv_sqrt family
 
-Make the balanced-ternary domain formally defended rather than merely
-supported:
+**DELIVERED 2026-08-11.** The balanced-ternary domain is now formally
+defended rather than merely supported (contract + oracle + exhaustive +
+theorem suites + `ternary-domain` CI), two latent ternary defects found by
+the suite are fixed (`-0.x` sign loss in `from_str`; silent wrap in
+`ternary_to_storage` on narrow profiles — now loud `TierOverflow`), and the
+consumer-requested reciprocal-norm family shipped additively:
+`FixedPoint::inv_sqrt`/`try_inv_sqrt` and `fused::inv_sqrt_sum_sq`
+(compute-tier throughout, one rounding; one inv_sqrt + N multiplies
+replaces N per-component divisions in normalization). Original scope
+below for reference:
 
 - `docs/design/BALANCED_TERNARY_CONTRACT.md` — representation invariants,
   canonicalization, and the **tie-free rounding theorem**: for values with a

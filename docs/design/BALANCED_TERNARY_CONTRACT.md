@@ -162,12 +162,20 @@ It does **not** cover:
 ## 5. Boundary rules
 
 - Conversion into ternary from values with denominators outside {3}
-  (e.g. ½) requires a tie rule; the FASC cross-domain path handles such
-  values by classification (ternary-exact values only — currently routed to
-  Binary; see ROADMAP 0.4.34), so no silent tie-breaking ships today.
-  Any future direct converter MUST document its tie rule; this contract
-  reserves **ties toward +∞** as the default (matching the binary
-  round-bit convention used in `downscale_to_storage`).
+  (e.g. ½) requires a tie rule. The shipping direct converter
+  (`UniversalTernaryFixed::from_str`, used by `0t` literals) **truncates
+  toward zero** — measured and pinned: `0.5 → 3280/3^8` (the tie resolves
+  low), `1.5 → 9841/3^8` — and is sign-symmetric
+  (`parse(-s) = -parse(s)`; the `-0.x` sign-loss defect was fixed in
+  0.4.33). Any future converter with different rounding MUST document its
+  tie rule.
+- Tier raws must fit the profile's FASC storage: `ternary_to_storage` is
+  checked (0.4.33) and returns `TierOverflow` for a Tier-2+ raw on a
+  profile whose `BinaryStorage` cannot hold it, where it previously
+  wrapped silently. Values *reached by arithmetic* stay at their operand
+  tier, so e.g. `0t3280 + 0t1` is representable everywhere while the
+  literal `0t3281` window-gates to Tier 2 and errors loudly on realtime —
+  an asymmetry pinned by test.
 - Storage overflow is always an error (`TierOverflow`), never a wrap —
   the wrap-defect rule applies to this domain as everywhere else.
 
@@ -197,15 +205,22 @@ routing column.
 | boundary families ±3^k, ±(3^k±1), trit runs, alternating | `boundary_families` |
 | overflow/domain failures loud, never wrapped | `overflow_and_domain_failures` |
 | mul3/div3 shift semantics incl. truncation pin | `mul3_div3_shift_semantics` |
+| UGOD promotion on raw overflow, value-exact | `ugod_promotion_on_multiply_overflow`, `ugod_promotion_preserves_value_exactly` |
+| mixed-tier alignment; from_str window gate | `ugod_mixed_tier_alignment`, `ugod_window_boundaries_exact` |
+| FASC `0t` arithmetic ≡ imperative UGOD | `fasc_ternary_arithmetic_stays_ternary_and_exact`, `fasc_ternary_negation_symmetry` |
+| cross-domain coercion is value-neutral | `cross_domain_coercion_matches_plain_expressions` |
+| conversion truncation + sign symmetry pins | `fractional_literal_conversion_boundary`, `negative_fractional_literal_sign_regression` |
+| storage narrowing loud on narrow profiles | `ternary_literal_tier2_storage_limit_is_loud` |
 
-Suite: `tests/ternary_domain_validation.rs` (profile-independent — Tier 1/2
-functions are plain integer ops, no `table_format` gating). It validates the
-§1b scaled-integer path *and* its agreement with the §1a trit view, since
-the oracle is a native trit implementation. The §1a operations themselves
-(packing, zero-multiply dots, matvec) are covered by
-`tests/tq19_validation.rs` and the `fused-tq19-precision` CI workflow.
-UGOD tier promotion, canonical↔imperative path equivalence, and cross-domain
-coercion are items 5–6 of the 0.4.33 plan, tracked in ROADMAP.
+Suites: `tests/ternary_domain_validation.rs` (oracle + theorem tests,
+profile-independent) and `tests/ternary_path_equivalence.rs` (UGOD
+promotion, FASC↔imperative equivalence, coercion, conversion pins) — both
+run per-push by the `ternary-domain` CI workflow on realtime + compact.
+The oracle being a native trit implementation means the suite validates
+the §1b scaled-integer path *and* its agreement with the §1a trit view.
+The §1a operations themselves (packing, zero-multiply dots, matvec) are
+covered by `tests/tq19_validation.rs` and the `fused-tq19-precision`
+workflow.
 
 ## Disclaimer
 

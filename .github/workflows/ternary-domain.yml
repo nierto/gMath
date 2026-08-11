@@ -1,0 +1,45 @@
+name: ternary-domain
+
+# Publicly proves the balanced-ternary domain on every push/PR — the 0.4.33
+# contract suite (docs/design/BALANCED_TERNARY_CONTRACT.md):
+#
+#  1. ternary_domain_validation — native trit-vector reference oracle,
+#     exhaustive small-range add/sub/mul/neg equivalence, boundary families,
+#     and the tie-free rounding theorem (3^m odd => round-to-nearest onto a
+#     3-adic grid never ties; trit truncation IS round-to-nearest).
+#
+#  2. ternary_path_equivalence — UGOD tier promotion at raw-overflow
+#     boundaries, canonical (FASC 0t literals) vs imperative (UGOD)
+#     equivalence, cross-domain coercion neutrality, and the fractional
+#     0t-literal conversion pins (incl. the "-0.x" sign regression).
+#
+# Both suites are profile-independent; realtime + compact cover the two
+# cheap-build profiles (pre-built tables, ~2s builds). Uses NO third-party
+# or GitHub-authored actions — checkout is a plain `git fetch` (gMath is a
+# public repo) and the ubuntu runner already ships stable Rust.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ternary-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Ternary contract suites
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: |
+          cargo test --test ternary_domain_validation
+          cargo test --test ternary_path_equivalence

@@ -80,66 +80,90 @@ pub(super) fn ternary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<
     }
 }
 
-/// Convert UniversalTernaryFixed result back to (tier, BinaryStorage) — full precision
-pub(super) fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> (u8, BinaryStorage) {
+/// Checked narrowing of an i128 tier raw into BinaryStorage.
+///
+/// Returns TierOverflow instead of wrapping — the bare `as i32`/`as i64`
+/// casts this replaces silently corrupted Tier-2+ ternary values on the
+/// realtime/compact profiles (wrap-defect class, fixed 0.4.33).
+fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDetected> {
+    #[cfg(table_format = "q256_256")]
+    { Ok(I512::from_i128(val)) }
+
+    #[cfg(table_format = "q128_128")]
+    { Ok(I256::from_i128(val)) }
+
+    #[cfg(table_format = "q64_64")]
+    { Ok(val) }
+
+    #[cfg(table_format = "q32_32")]
+    { i64::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+
+    #[cfg(table_format = "q16_16")]
+    { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+}
+
+/// Convert UniversalTernaryFixed result back to (tier, BinaryStorage) — full precision.
+///
+/// Fallible: a tier raw that does not fit the profile\'s BinaryStorage is a
+/// TierOverflow error, never a silent wrap (e.g. `0t3281` parses to Tier 2
+/// with raw 3281·3^16 ≈ 1.4e11, which cannot live in realtime\'s i32).
+pub(super) fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
     let (tier, raw) = ternary.to_tier_raw();
-    match raw {
-        TernaryRaw::Small(v) => (tier, to_binary_storage(v)),
+    let storage = match raw {
+        TernaryRaw::Small(v) => i128_to_binary_storage_checked(v)?,
         TernaryRaw::Medium(v) => {
             // I256 → BinaryStorage
             #[cfg(table_format = "q256_256")]
-            { (tier, I512::from_i256(v)) }
+            { I512::from_i256(v) }
 
             #[cfg(table_format = "q128_128")]
-            { (tier, v) }
+            { v }
 
-            #[cfg(table_format = "q64_64")]
-            { (tier, v.as_i128()) }
-
-            #[cfg(table_format = "q32_32")]
-            { (tier, v.as_i128() as i64) }
-
-            #[cfg(table_format = "q16_16")]
-            { (tier, v.as_i128() as i32) }
-
+            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
+            {
+                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                i128_to_binary_storage_checked(v.as_i128())?
+            }
         }
         TernaryRaw::Large(v) => {
             // I512 → BinaryStorage
             #[cfg(table_format = "q256_256")]
-            { (tier, v) }
+            { v }
 
             #[cfg(table_format = "q128_128")]
-            { (tier, v.as_i256()) }
+            {
+                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+                v.as_i256()
+            }
 
-            #[cfg(table_format = "q64_64")]
-            { (tier, v.as_i128()) }
-
-            #[cfg(table_format = "q32_32")]
-            { (tier, v.as_i128() as i64) }
-
-            #[cfg(table_format = "q16_16")]
-            { (tier, v.as_i128() as i32) }
-
+            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
+            {
+                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                i128_to_binary_storage_checked(v.as_i128())?
+            }
         }
         TernaryRaw::XLarge(v) => {
             // I1024 → BinaryStorage
             #[cfg(table_format = "q256_256")]
-            { (tier, v.as_i512()) }
+            {
+                if !v.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
+                v.as_i512()
+            }
 
             #[cfg(table_format = "q128_128")]
-            { (tier, v.as_i256()) }
+            {
+                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+                v.as_i256()
+            }
 
-            #[cfg(table_format = "q64_64")]
-            { (tier, v.as_i128()) }
-
-            #[cfg(table_format = "q32_32")]
-            { (tier, v.as_i128() as i64) }
-
-            #[cfg(table_format = "q16_16")]
-            { (tier, v.as_i128() as i32) }
-
+            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
+            {
+                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                i128_to_binary_storage_checked(v.as_i128())?
+            }
         }
-    }
+    };
+    Ok((tier, storage))
 }
 
 /// Convert ternary StackValue fields to RationalNumber.

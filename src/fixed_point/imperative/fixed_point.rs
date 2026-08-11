@@ -619,6 +619,31 @@ impl FixedPoint {
         if self <= Self::ZERO { return Err(OverflowDetected::DomainError); }
         self.try_direct_unary(direct_ln)
     }
+    /// 1/√x computed at compute tier without materializing √x at storage.
+    ///
+    /// Reciprocal norms (`1/‖v‖`) are the dominant consumer: one `inv_sqrt`
+    /// plus N multiplies replaces N per-component divisions in normalization.
+    /// Both the square root and the reciprocal stay at tier N+1; the single
+    /// rounding happens at the final downscale.
+    ///
+    /// # Panics
+    /// Panics if `x <= 0`, or if `1/√x` does not fit the storage tier.
+    pub fn inv_sqrt(self) -> Self {
+        self.try_inv_sqrt().expect("inv_sqrt: domain error or overflow")
+    }
+
+    /// Fallible 1/√x — `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if
+    /// the result does not fit the storage tier.
+    pub fn try_inv_sqrt(self) -> Result<Self, OverflowDetected> {
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
+            compute_divide, make_compute_int, sqrt_at_compute_tier,
+        };
+        if self <= Self::ZERO { return Err(OverflowDetected::DomainError); }
+        let s = sqrt_at_compute_tier(upscale_to_compute(self.raw));
+        let inv = compute_divide(make_compute_int(1), s)?;
+        Ok(Self { raw: downscale_to_storage(inv)? })
+    }
+
     /// Fallible sqrt(x) — returns `Err(DomainError)` if x < 0.
     pub fn try_sqrt(self) -> Result<Self, OverflowDetected> {
         if self < Self::ZERO { return Err(OverflowDetected::DomainError); }

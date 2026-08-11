@@ -466,7 +466,7 @@ impl StackEvaluator {
     pub(crate) fn parse_ternary_value(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
         use crate::fixed_point::domains::balanced_ternary::UniversalTernaryFixed;
         let ternary = UniversalTernaryFixed::from_str(s)?;
-        let (tier, storage) = ternary_to_storage(&ternary);
+        let (tier, storage) = ternary_to_storage(&ternary)?;
 
         // Create shadow: raw_value / 3^frac_trits (when both fit in i128/u128)
         let shadow = {

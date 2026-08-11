@@ -398,3 +398,113 @@ fn test_softmax_mix_ragged_rows_panic() {
     let rows: Vec<&[FixedPoint]> = vec![&r0, &r1];
     let _ = fused::softmax_mix(&scores, &rows);
 }
+
+// ============================================================================
+// inv_sqrt / try_inv_sqrt / inv_sqrt_sum_sq — reciprocal norm family (0.4.33)
+// ============================================================================
+
+#[test]
+fn test_inv_sqrt_exact_values() {
+    // 1/sqrt(4) = 0.5, 1/sqrt(0.25) = 2, 1/sqrt(1) = 1 — exactly representable.
+    assert_fp(fp("4").inv_sqrt(), fp("0.5"), tight(), "1/sqrt(4)");
+    assert_fp(fp("0.25").inv_sqrt(), fp("2"), tight(), "1/sqrt(0.25)");
+    assert_fp(fp("1").inv_sqrt(), fp("1"), tight(), "1/sqrt(1)");
+}
+
+#[test]
+fn test_inv_sqrt_mpmath_references() {
+    // mpmath 60-digit: 1/sqrt(2), 1/sqrt(3), 1/sqrt(0.1)
+    assert_fp(
+        fp("2").inv_sqrt(),
+        fp("0.707106781186547524400844362104849039284835937688474036588339"),
+        tight(),
+        "1/sqrt(2)",
+    );
+    assert_fp(
+        fp("3").inv_sqrt(),
+        fp("0.577350269189625764509148780501957455647601751270126876018602"),
+        tight(),
+        "1/sqrt(3)",
+    );
+    assert_fp(
+        fp("0.1").inv_sqrt(),
+        fp("3.16227766016837933199889354443271853371955513932521682685750"),
+        tight(),
+        "1/sqrt(0.1)",
+    );
+}
+
+#[test]
+fn test_inv_sqrt_times_sqrt_is_one() {
+    for s in ["0.5", "2", "3", "7.75", "100"] {
+        let x = fp(s);
+        let product = x.inv_sqrt() * x.sqrt();
+        assert_fp(product, fp("1"), tight(), "inv_sqrt·sqrt at x");
+    }
+}
+
+#[test]
+fn test_inv_sqrt_matches_unfused_path() {
+    // Same engines, one fewer storage rounding: must agree within tight().
+    for s in ["0.5", "2", "42", "1000"] {
+        let x = fp(s);
+        let unfused = fp("1") / x.sqrt();
+        assert_fp(x.inv_sqrt(), unfused, tight(), "inv_sqrt vs 1/sqrt");
+    }
+}
+
+#[test]
+fn test_try_inv_sqrt_domain_errors() {
+    assert!(fp("0").try_inv_sqrt().is_err(), "1/sqrt(0) must be DomainError");
+    assert!(fp("-1").try_inv_sqrt().is_err(), "1/sqrt(-1) must be DomainError");
+    assert!(fp("2").try_inv_sqrt().is_ok());
+}
+
+#[test]
+fn test_inv_sqrt_sum_sq_3_4_5() {
+    // 1/sqrt(3² + 4²) = 0.2 exactly.
+    let result = fused::inv_sqrt_sum_sq(&[fp("3"), fp("4")]);
+    assert_fp(result, fp("0.2"), tight(), "1/sqrt(3²+4²)");
+}
+
+#[test]
+fn test_inv_sqrt_sum_sq_matches_scalar_path() {
+    // GeoH normalization pattern: inv_sqrt_sum_sq(v) vs length then inv_sqrt.
+    let v = [fp("1.5"), fp("-2.25"), fp("0.75"), fp("3")];
+    let fused_inv = fused::inv_sqrt_sum_sq(&v);
+    // Scalar path: sum of squares at storage tier, then inv_sqrt — the
+    // GeoH sketch `length_squared().try_inv_sqrt()`.
+    let mut ss = fp("0");
+    for x in &v {
+        ss = ss + *x * *x;
+    }
+    let scalar_inv = ss.inv_sqrt();
+    assert_fp(fused_inv, scalar_inv, tight(), "fused vs scalar reciprocal norm");
+    // And normalizing with it yields a unit vector.
+    let mut sum_sq = fp("0");
+    for x in &v {
+        let n = *x * fused_inv;
+        sum_sq = sum_sq + n * n;
+    }
+    assert_fp(sum_sq, fp("1"), tight(), "normalized length");
+}
+
+#[test]
+#[should_panic(expected = "zero norm")]
+fn test_inv_sqrt_sum_sq_zero_vector_panics() {
+    let _ = fused::inv_sqrt_sum_sq(&[fp("0"), fp("0")]);
+}
+
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[test]
+fn test_inv_sqrt_extreme_small_input() {
+    // x = 1 raw LSB = 2^-FRAC_BITS: 1/sqrt(x) = 2^(FRAC_BITS/2), exactly
+    // representable. Pins that the wide reciprocal cannot wrap for any
+    // storage-derived input (contract: fail loud, never wrap).
+    let x = FixedPoint::from_raw(1);
+    #[cfg(table_format = "q16_16")]
+    let expected = fp("256"); // 2^(16/2) at default FRAC_BITS=16
+    #[cfg(table_format = "q32_32")]
+    let expected = fp("65536"); // 2^(32/2)
+    assert_fp(x.inv_sqrt(), expected, tight(), "1/sqrt(1 raw LSB)");
+}

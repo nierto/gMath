@@ -1149,7 +1149,7 @@ impl StackEvaluator {
                         let stored = int_part * scale + (remainder * scale) / den512;
                         let (t, bs) = ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Large(stored))?
-                        );
+                        )?;
                         return Ok(StackValue::Ternary(t, bs, shadow));
                     }
                 }
@@ -1188,7 +1188,7 @@ impl StackEvaluator {
                         let stored = (num256 * scale) / den256;
                         let (t, bs) = ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Medium(stored))?
-                        );
+                        )?;
                         Ok(StackValue::Ternary(t, bs, shadow))
                     }
                     // Tier 5: TQ128.128 — handled by cfg block above on Q256.256
@@ -1204,7 +1204,7 @@ impl StackEvaluator {
                         let stored = (num512 * scale) / den512;
                         let (t, bs) = ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Large(stored))?
-                        );
+                        )?;
                         Ok(StackValue::Ternary(t, bs, shadow))
                     }
                     // Fallback: use tier 3 for any unexpected tier value

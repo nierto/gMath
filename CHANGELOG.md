@@ -5,6 +5,49 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.33] - 2026-08-11
+
+### Added
+
+- **Balanced ternary contract + dedicated validation** (closes the
+  long-standing ternary-coverage gap): `docs/design/BALANCED_TERNARY_CONTRACT.md`
+  specifies both shipping representations (native trits for packing and
+  zero-multiply inference kernels; radix-3 scaled integers for the UGOD
+  tiers, with TQ1.9 as the window-enforced hybrid), verified operation
+  semantics, and the tie-free rounding theorem (3^m is odd, so
+  round-to-nearest onto a 3-adic grid never ties; trit truncation IS
+  round-to-nearest). Suites: `ternary_domain_validation` (trit-vector
+  reference oracle, exhaustive small-range equivalence, boundary families,
+  theorem tests) and `ternary_path_equivalence` (UGOD promotion at
+  raw-overflow boundaries, canonical-vs-imperative equivalence over `0t`
+  literals, cross-domain coercion neutrality, conversion pins). New
+  `ternary-domain` CI workflow runs both on every push.
+- `FixedPoint::inv_sqrt` / `try_inv_sqrt` — 1/√x at the compute tier
+  (square root and reciprocal both at tier N+1, one rounding at the final
+  downscale). `try_` returns `DomainError` for x ≤ 0, `TierOverflow` if
+  the result exceeds storage. Reciprocal norms are the target use:
+  one `inv_sqrt` plus N multiplies replaces N per-component divisions in
+  normalization (division is ~200× a multiply at Q64.64).
+- `fused::inv_sqrt_sum_sq` — 1/√(Σ vᵢ²) entirely at the compute tier; the
+  reciprocal-norm form vector normalization actually wants. Panics on a
+  zero vector (documented), matching the fused family's conventions.
+  Both additions are purely additive: no existing output bits move.
+
+### Fixed
+
+- `UniversalTernaryFixed::from_str` dropped the sign of `-0.x` inputs
+  (`"-0".parse::<i64>()` is 0): `-0.5` parsed as +0.5. The sign is now
+  stripped once and the parsed magnitude negated — identical results for
+  every input with a nonzero integer part, correct results for `-0.x`.
+- `ternary_to_storage` narrowed tier raws with bare `as` casts: on the
+  realtime/compact profiles a Tier-2+ ternary value silently wrapped
+  (`0t3281` displayed as `-11.56021` on realtime). Conversion is now
+  checked end-to-end and returns `TierOverflow` instead — wrap-defect
+  class, same family as the 0.4.28–0.4.31 fixes. Note the asymmetry pinned
+  by test: values reached by arithmetic stay at their operand tier
+  (0t3280 + 0t1 is fine everywhere), while `from_str` window-gates
+  literals upward (a bare `0t3281` literal errors loudly on realtime).
+
 ## [0.4.32] - 2026-08-01
 
 ### Added
