@@ -57,29 +57,34 @@ over the same domain do not all share one rule — see the caveat below):
 
 | Path | Multiply | Divide | Wide-tier downscale |
 | ---- | -------- | ------ | ------------------- |
-| Binary, imperative `FixedPoint` kernel | round-half-even (banker's) | round-half-away-from-zero | round-to-nearest, ties toward +∞ |
+| Binary, imperative `FixedPoint` | **profile-dependent**: floor (realtime/compact), half-even (embedded), truncate toward zero (balanced/scientific) | truncate toward zero (all profiles) | round-to-nearest, ties toward +∞ |
 | Binary, canonical/UGOD tier arithmetic | round-to-nearest, ties toward +∞ | round-half-away-from-zero | round-to-nearest, ties toward +∞ |
 | Decimal, imperative `DecimalFixed<D>` | round-half-even (banker's) | round-half-even (banker's) | — |
-| Decimal, canonical domain | exact (decimal places grow, no rounding) | truncate toward zero | round-half-away at dp cap |
+| Decimal, canonical domain | exact (decimal places grow, no rounding) | truncate toward zero | (dp-cap rule pinned during unification) |
 | Balanced ternary | truncate toward zero | truncate toward zero | — (transcendentals route via binary) |
 
-The per-op tie rules differ by operation AND by path for historical reasons
-(each was validated independently during development and never retroactively
-unified); this is a documented artifact, not numerical intent. Consequence,
-stated plainly: **on an exact half-ULP tie in a direct storage-tier binary
-multiply, the imperative and canonical paths can differ by one ULP**
-(banker's vs ties-up — e.g. raw 1 × raw 2^63 at Q64.64 yields raw 0
-imperatively and raw 1 canonically; measured 2026-08-14). This is the one
-known exception to the path-independence statement in the
-[routing guide](docs/README_ROUTING.md), is deterministic
-on both paths individually, and is scheduled for unification in the 0.5.0
-correctness audit (an owner decision, since either direction changes
-results for one path). It is **observable only on exact half-ULP ties in
-direct storage-tier arithmetic**. Every compound path — every
-transcendental, dot product, decomposition, matrix chain, and fused op —
-computes at tier N+1 (double the fractional bits) and rounds to storage
-exactly once; that single wide→storage downscale is the only rounding those
-results see, and the tie rules above never fire. The reasoning is expanded in
+The full per-site evidence is in
+[docs/design/ROUNDING_CENSUS.md](docs/design/ROUNDING_CENSUS.md)
+(2026-08-14): the imperative binary multiply was found to use *three*
+different rules across profiles, and the imperative divide truncates on
+every profile. This table states shipping behavior; the unification target
+(one rule per domain on every path — binary nearest-ties-up, decimal
+banker's, ternary nearest/tie-free) is ROADMAP 0.5.0 item 0c.
+
+The rules differ by operation, by path, AND (imperatively) by profile —
+historical artifacts, never retroactively unified. Consequence, measured
+2026-08-14: **direct storage-tier multiply differs between the imperative
+and canonical paths on ~half of all inexact products** (1 ulp, floor vs
+nearest — 48.7% of 44,044 sampled pairs on compact), and divide diverges
+analogously on every profile (truncate vs half-away). Path independence
+currently holds for compound results but NOT for direct storage-tier
+mul/div; unification (ROADMAP 0.5.0 item 0c — one rule per domain on
+every path) repairs this. Each individual path remains fully
+deterministic and bit-identical cross-platform. Every compound path —
+every transcendental, dot product, decomposition, matrix chain, and fused
+op — computes at tier N+1 (double the fractional bits) and rounds to
+storage exactly once through the shared ties-up downscale; those results
+are path-independent today and stay so. The reasoning is expanded in
 [the precision guide](docs/README_PRECISION.md).
 
 ## 4. Cross-profile semantics

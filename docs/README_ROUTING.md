@@ -92,14 +92,16 @@ domain-tagged values for mixed-domain matrices.
 
 ## Behaviour & limits
 
-- Correctness is **path-independent**: the router and the imperative surface
-  compute through the same compute-tier engines and round the same way. Choose by
-  cost and ergonomics, not by correctness. One known, documented exception:
-  on an *exact half-ULP tie* in a direct storage-tier binary multiply the two
-  paths use different tie rules (banker's vs ties-up) and can differ by one
-  ULP — see the rounding table in [CONTRACT.md](../CONTRACT.md); unification
-  is scheduled for the 0.5.0 correctness audit. Compound and tier-N+1 paths
-  are unaffected (they round once at the wide downscale).
+- **Compound results are path-independent**: transcendentals, fused ops, and
+  chains compute through the same compute-tier engines on every path and
+  round once through the same downscale. **Direct storage-tier multiply and
+  divide are NOT yet path-independent**: the imperative kernels and the
+  canonical/UGOD tier arithmetic use different rounding rules (profile- and
+  op-dependent; measured divergence on ~half of inexact products, 1 ULP max
+  — full evidence in [the rounding census](design/ROUNDING_CENSUS.md) and
+  [CONTRACT.md](../CONTRACT.md) §3). Unification to one rule per domain is
+  ROADMAP 0.5.0 item 0c. Each path individually remains deterministic and
+  bit-identical cross-platform.
 - Routing adds dispatch overhead per operation relative to the imperative path;
   for known-domain hot loops use the [imperative layer](README_IMPERATIVE.md).
 - Literals may be decimals (`"0.1"`), integers, fractions (`"1/3"`), repeating
