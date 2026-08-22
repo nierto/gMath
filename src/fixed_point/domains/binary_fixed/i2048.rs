@@ -429,11 +429,20 @@ impl Mul for I2048 {
             let result = crate::fixed_point::i256::mul_i128_to_i256(a, b);
             I2048::from_i256(result)
         } else if self.fits_in_i512() && rhs.fits_in_i512() {
-            // Use I512 multiplication
+            // I512::mul_to_i1024 is UNSIGNED word arithmetic (house
+            // convention: call sites sign-wrap — same family as
+            // mul_to_i2048). This path fed negative I512s straight in,
+            // corrupting the product's sign extension; caught via
+            // tier6 ternary division of negative values. Compute on
+            // magnitudes, restore the sign at the end.
             let a = self.as_i512();
             let b = rhs.as_i512();
-            let result = a.mul_to_i1024(b);
-            I2048::from_i1024(result)
+            let negative = a.is_negative() ^ b.is_negative();
+            let abs_a = if a.is_negative() { -a } else { a };
+            let abs_b = if b.is_negative() { -b } else { b };
+            let result = abs_a.mul_to_i1024(abs_b);
+            let out = I2048::from_i1024(result);
+            if negative { -out } else { out }
         } else {
             // Fallback to simple multiplication for very large values
             self.mul_simple(rhs)

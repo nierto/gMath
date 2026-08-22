@@ -5,6 +5,28 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `multiply_ternary_tq256_256` (Tier-6 balanced ternary) passed operands
+  straight into the unsigned `mul_to_i2048`, so any negative operand
+  produced a product with corrupted sign extension. Now sign-wrapped
+  (magnitudes in, sign restored) per the widening-multiply convention.
+- `I2048::Mul`'s I512 fast path had the same defect via `mul_to_i1024`,
+  corrupting Tier-6 ternary division of negative values. Sign-wrapped the
+  same way. Scientific-profile transcendental validation (18/18) re-run
+  clean after the change.
+
+### Added
+
+- Wide-tier ternary coverage closing the 0.4.33 gaps: Tiers 2–6
+  arithmetic against exact integer models with every sign combination
+  (the adversarial axis for the unsigned-word defect class), wide
+  `ternary_to_storage` arm unit tests (exact-or-loud on every profile),
+  FASC-transcendental-on-ternary path equivalence, and the pin that `0t`
+  literals cap at Tier 3. All five profiles green.
+
 ## [0.4.33] - 2026-08-11
 
 ### Added

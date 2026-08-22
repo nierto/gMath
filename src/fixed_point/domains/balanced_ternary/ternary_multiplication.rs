@@ -159,7 +159,17 @@ pub fn multiply_ternary_tq128_128(a: I512, b: I512) -> Result<I512, OverflowDete
 /// Since 3^128 fits in I512, each stage is I2048/I1024->I1024 (tractable)
 #[inline]
 pub fn multiply_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
-    let product = a.mul_to_i2048(b);
+    // mul_to_i2048 is UNSIGNED word arithmetic by house convention — call
+    // sites must sign-wrap (see stack_evaluator/compute.rs "MUST use signed
+    // multiply" and decimal_compute.rs). This site did not: a negative
+    // operand corrupted the product's high words (sign extension lost),
+    // caught by tier6_integer_lattice_all_sign_combinations. Compute on
+    // magnitudes, restore the sign at the end.
+    let zero = I1024::zero();
+    let negative = (a < zero) ^ (b < zero);
+    let abs_a = if a < zero { -a } else { a };
+    let abs_b = if b < zero { -b } else { b };
+    let product = abs_a.mul_to_i2048(abs_b);
     // Divide I2048 by 3^256 = (3^128)^2
     // Stage 1: product / 3^128 -> I2048 quotient (using i2048_div_by_i1024)
     let scale_128 = scale_tq128_128_i1024();
@@ -168,7 +178,8 @@ pub fn multiply_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
     // stage1 is I2048 but should fit close to I1024 range now
     let stage2 = i2048_div_by_i1024(stage1, scale_128);
     // Result should fit in I1024
-    stage2.as_i1024()
+    let magnitude = stage2.as_i1024();
+    if negative { -magnitude } else { magnitude }
 }
 
 // ============================================================================

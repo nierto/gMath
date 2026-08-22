@@ -211,6 +211,19 @@ routing column.
 | cross-domain coercion is value-neutral | `cross_domain_coercion_matches_plain_expressions` |
 | conversion truncation + sign symmetry pins | `fractional_literal_conversion_boundary`, `negative_fractional_literal_sign_regression` |
 | storage narrowing loud on narrow profiles | `ternary_literal_tier2_storage_limit_is_loud` |
+| Tiers 2–6 ops vs exact models, all sign combos | `tier2_ops_match_exact_i128_model` … `tier6_integer_lattice_all_sign_combinations` |
+| literals cap at Tier 3 (i64 int part ⟹ raw fits i128) | `ternary_literals_cap_at_tier3` |
+| wide storage arms (Medium/Large/XLarge) exact-or-loud | `ternary_storage_arm_tests` (unit, domain.rs) |
+| FASC transcendentals on ternary ≡ plain operands | `fasc_transcendentals_on_ternary_operands_match_plain` |
+
+Two further defects found by the wide-tier tests and fixed (post-0.4.33
+gap-closing): `multiply_ternary_tq256_256` fed operands into the UNSIGNED
+`mul_to_i2048` without sign-wrapping (negative Tier-6 products lost their
+sign extension), and `I2048::Mul`'s I512 fast path did the same via
+`mul_to_i1024` (corrupting negative Tier-6 division). Both now compute on
+magnitudes and restore the sign — the house convention for the widening-
+multiply family. Scientific-profile 18/18 transcendental validation re-run
+clean after the `I2048::Mul` change.
 
 Suites: `tests/ternary_domain_validation.rs` (oracle + theorem tests,
 profile-independent) and `tests/ternary_path_equivalence.rs` (UGOD

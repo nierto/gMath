@@ -392,3 +392,174 @@ fn mul3_div3_shift_semantics() {
     // 2·3^8 / 3 = 4374 exactly (2·3^8 ≡ 0 mod 3): still exact here.
     assert_eq!(redecoded, two);
 }
+
+// ============================================================================
+// Wide-tier coverage (gap-closing, post-0.4.33): Tiers 2–6 arithmetic against
+// exact integer models, adversarial NEGATIVE operands prioritized — the
+// historical wide-integer defect class is unsigned word arithmetic that
+// corrupts signed products (mul_to_i512/i1024/i2048 family).
+// ============================================================================
+
+use g_math::fixed_point::domains::balanced_ternary::{
+    add_ternary_tq16_16, add_ternary_tq32_32,
+    subtract_ternary_tq16_16, subtract_ternary_tq32_32,
+    multiply_ternary_tq16_16, multiply_ternary_tq32_32,
+    divide_ternary_tq16_16, divide_ternary_tq32_32,
+    negate_ternary_tq16_16, negate_ternary_tq32_32,
+    multiply_ternary_tq64_64, multiply_ternary_tq64_64_checked,
+    multiply_ternary_tq128_128, multiply_ternary_tq256_256,
+    divide_ternary_tq64_64, divide_ternary_tq128_128, divide_ternary_tq256_256,
+    negate_ternary_tq64_64, negate_ternary_tq128_128, negate_ternary_tq256_256,
+    TernaryTier4, TernaryTier5, TernaryTier6,
+    SCALE_TQ16_16, SCALE_TQ32_32,
+};
+
+/// Signed integer pairs with every sign combination — the adversarial axis.
+const INT_PAIRS: &[(i64, i64)] = &[
+    (7, 5), (-7, 5), (7, -5), (-7, -5),
+    (1, 1), (-1, 1), (-1, -1),
+    (3280, 3), (-3280, 3), (3280, -3), (-3280, -3),
+    (43_046_721, 2), (-43_046_721, 2),          // 3^16 boundary
+    (1_853_020, -981), (-1_853_020, -981),
+    (123_456_789, -987), (-123_456_789, 987),
+];
+
+#[test]
+fn tier2_ops_match_exact_i128_model() {
+    let scale = SCALE_TQ16_16 as i128;
+    for &(a, b) in INT_PAIRS {
+        let (ra, rb) = (a * SCALE_TQ16_16 / 1, b * SCALE_TQ16_16 / 1);
+        assert_eq!(add_ternary_tq16_16(ra, rb).unwrap() as i128, ra as i128 + rb as i128);
+        assert_eq!(subtract_ternary_tq16_16(ra, rb).unwrap() as i128, ra as i128 - rb as i128);
+        assert_eq!(negate_ternary_tq16_16(ra).unwrap(), -ra);
+        assert_eq!(
+            multiply_ternary_tq16_16(ra, rb).unwrap() as i128,
+            (ra as i128 * rb as i128) / scale,
+            "tier2 mul at ({a},{b})"
+        );
+        if rb != 0 {
+            assert_eq!(
+                divide_ternary_tq16_16(ra, rb).unwrap() as i128,
+                (ra as i128 * scale) / rb as i128,
+                "tier2 div at ({a},{b})"
+            );
+        }
+    }
+}
+
+#[test]
+fn tier3_ops_match_exact_i128_model() {
+    let scale = SCALE_TQ32_32; // i128
+    for &(a, b) in INT_PAIRS {
+        let ra = a as i128 * scale;
+        let rb = b as i128 * scale;
+        assert_eq!(add_ternary_tq32_32(ra, rb).unwrap(), ra + rb);
+        assert_eq!(subtract_ternary_tq32_32(ra, rb).unwrap(), ra - rb);
+        assert_eq!(negate_ternary_tq32_32(ra).unwrap(), -ra);
+        // Integer-lattice product: (a·S)(b·S)/S = a·b·S exactly.
+        assert_eq!(
+            multiply_ternary_tq32_32(ra, rb).unwrap(),
+            a as i128 * b as i128 * scale,
+            "tier3 mul at ({a},{b})"
+        );
+        if rb != 0 && a % b == 0 {
+            assert_eq!(
+                divide_ternary_tq32_32(ra, rb).unwrap(),
+                (a / b) as i128 * scale,
+                "tier3 exact div at ({a},{b})"
+            );
+        }
+    }
+    // Truncation-toward-zero semantics at tier 3, both signs.
+    let seven = 7i128 * scale;
+    let two = 2i128 * scale;
+    let want = (7i128 * scale * scale) / (2i128 * scale); // 3.5 truncated in raw
+    assert_eq!(divide_ternary_tq32_32(seven, two).unwrap(), want);
+    assert_eq!(divide_ternary_tq32_32(-seven, two).unwrap(), -want);
+}
+
+#[test]
+fn tier4_integer_lattice_all_sign_combinations() {
+    for &(a, b) in INT_PAIRS {
+        let ta = TernaryTier4::from_integer(a as i128);
+        let tb = TernaryTier4::from_integer(b as i128);
+        let expected = TernaryTier4::from_integer(a as i128 * b as i128);
+        let got = multiply_ternary_tq64_64(*ta.raw(), *tb.raw());
+        assert_eq!(got, *expected.raw(), "tier4 mul at ({a},{b})");
+        let got_checked = multiply_ternary_tq64_64_checked(*ta.raw(), *tb.raw()).unwrap();
+        assert_eq!(got_checked, *expected.raw(), "tier4 checked mul at ({a},{b})");
+        if b != 0 && a % b == 0 {
+            // (a·b)/b == a and (a)/b == a/b, exactly on the integer lattice.
+            assert_eq!(
+                divide_ternary_tq64_64(*expected.raw(), *tb.raw()),
+                *ta.raw(),
+                "tier4 div (a*b)/b at ({a},{b})"
+            );
+            let q = TernaryTier4::from_integer((a / b) as i128);
+            assert_eq!(
+                divide_ternary_tq64_64(*ta.raw(), *tb.raw()),
+                *q.raw(),
+                "tier4 div a/b at ({a},{b})"
+            );
+        }
+        // Negation total on the lattice, exact.
+        assert_eq!(
+            negate_ternary_tq64_64(*ta.raw()),
+            *TernaryTier4::from_integer(-(a as i128)).raw(),
+            "tier4 neg at {a}"
+        );
+    }
+}
+
+#[test]
+fn tier5_integer_lattice_all_sign_combinations() {
+    for &(a, b) in INT_PAIRS {
+        let ta = TernaryTier5::from_integer(a as i128);
+        let tb = TernaryTier5::from_integer(b as i128);
+        let expected = TernaryTier5::from_integer(a as i128 * b as i128);
+        let got = multiply_ternary_tq128_128(ta.raw().clone(), tb.raw().clone())
+            .expect("tier5 lattice mul must not overflow");
+        assert_eq!(got, *expected.raw(), "tier5 mul at ({a},{b})");
+        if b != 0 && a % b == 0 {
+            let q = TernaryTier5::from_integer((a / b) as i128);
+            assert_eq!(
+                divide_ternary_tq128_128(ta.raw().clone(), tb.raw().clone())
+                    .expect("tier5 lattice div must not overflow"),
+                *q.raw(),
+                "tier5 div at ({a},{b})"
+            );
+        }
+        assert_eq!(
+            negate_ternary_tq128_128(ta.raw().clone()).expect("tier5 neg"),
+            *TernaryTier5::from_integer(-(a as i128)).raw(),
+            "tier5 neg at {a}"
+        );
+    }
+}
+
+#[test]
+fn tier6_integer_lattice_all_sign_combinations() {
+    // Tier 6 multiply routes through mul_to_i2048 — the widening multiply
+    // family with the historical unsigned-word negative-input defect. Every
+    // sign combination here is the adversarial case.
+    for &(a, b) in INT_PAIRS {
+        let ta = TernaryTier6::from_integer(a as i128);
+        let tb = TernaryTier6::from_integer(b as i128);
+        let expected = TernaryTier6::from_integer(a as i128 * b as i128);
+        let got = multiply_ternary_tq256_256(ta.raw().clone(), tb.raw().clone());
+        assert_eq!(got, *expected.raw(), "tier6 mul at ({a},{b})");
+        if b != 0 && a % b == 0 {
+            let q = TernaryTier6::from_integer((a / b) as i128);
+            assert_eq!(
+                divide_ternary_tq256_256(ta.raw().clone(), tb.raw().clone()),
+                *q.raw(),
+                "tier6 div at ({a},{b})"
+            );
+        }
+        assert_eq!(
+            negate_ternary_tq256_256(ta.raw().clone()),
+            *TernaryTier6::from_integer(-(a as i128)).raw(),
+            "tier6 neg at {a}"
+        );
+    }
+}

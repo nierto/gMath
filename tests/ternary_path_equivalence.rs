@@ -274,3 +274,80 @@ fn negative_fractional_literal_sign_regression() {
     // Double minus stays rejected.
     assert!(UniversalTernaryFixed::from_str("--5").is_err());
 }
+
+// ============================================================================
+// Gap-closing (post-0.4.33): wide ternary_to_storage arms + FASC
+// transcendentals on ternary operands
+// ============================================================================
+
+#[test]
+fn ternary_literals_cap_at_tier3() {
+    // from_str parses the integer part as i64 (≤ ~9.2e18), and Tier 3 has
+    // no window gate — any i64 integer's raw (≤ 9.2e18·3^32 ≈ 1.7e34) fits
+    // i128. Consequence, pinned here: 0t literals can NEVER land beyond
+    // Tier 3; the Medium/Large/XLarge storage arms are reachable only via
+    // internal from_tier_raw paths (unit-tested in domain.rs).
+    let v = UniversalTernaryFixed::from_str("9000000000000000000").expect("i64-max-ish");
+    assert_eq!(v.current_tier(), TernaryTier::Tier3);
+    // And the same literal through FASC: loud error on narrow storage,
+    // exact on i128+ storage.
+    let parsed = gmath_parse("0t9000000000000000000");
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    assert!(parsed.is_err(), "big Tier-3 literal must fail loud on narrow storage");
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    {
+        let expr = parsed.expect("i128+ storage holds Tier-3 raws");
+        assert_eq!(display(&expr), "9000000000000000000");
+    }
+}
+
+#[test]
+fn tier3_literal_storage_conversion_per_profile() {
+    // 9e14 is inside the Tier-3 window: raw = 9e14 · 3^32 ≈ 1.67e30 —
+    // fits i128 (embedded+) but not i64/i32 (realtime, compact).
+    let parsed = gmath_parse("0t900000000000000");
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    assert!(parsed.is_err(), "Tier-3 literal must fail loud on realtime/compact");
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    {
+        let expr = parsed.expect("i128+ storage holds Tier-3 raws");
+        assert_eq!(display(&expr), "900000000000000");
+    }
+}
+
+#[test]
+fn fasc_transcendentals_on_ternary_operands_match_plain() {
+    // Ternary operands route through the binary compute-tier engines; the
+    // result must be identical to the same computation on a plain literal
+    // (path independence across the ternary entry point).
+    let cases: &[(&str, &str)] = &[("0t2", "2"), ("0t9", "9"), ("0t3280", "3280")];
+    for &(t, p) in cases {
+        assert_eq!(
+            display(&g(t).sqrt()),
+            display(&g(p).sqrt()),
+            "sqrt diverges for ternary operand {t}"
+        );
+        assert_eq!(
+            display(&g(t).ln()),
+            display(&g(p).ln()),
+            "ln diverges for ternary operand {t}"
+        );
+    }
+    // exp/sin on a small ternary operand, plus a composed chain.
+    assert_eq!(display(&g("0t2").exp()), display(&g("2").exp()));
+    assert_eq!(display(&g("0t2").sin()), display(&g("2").sin()));
+    // Composed chain: the ternary-origin result may materialize back into
+    // the ternary domain ("2") while the plain path stays binary-formatted
+    // ("2.0000000000000000000") — same VALUE, different display. Compare
+    // through the router: the difference must be exactly zero.
+    let diff = display(&(g("0t2").exp().ln() - g("2").exp().ln()));
+    let trimmed = if diff.contains('.') {
+        diff.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        diff.as_str()
+    };
+    assert!(
+        trimmed == "0" || trimmed == "-0",
+        "composed chain diverges for ternary operand: diff = {diff:?}"
+    );
+}
