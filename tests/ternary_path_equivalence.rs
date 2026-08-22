@@ -351,3 +351,104 @@ fn fasc_transcendentals_on_ternary_operands_match_plain() {
         "composed chain diverges for ternary operand: diff = {diff:?}"
     );
 }
+
+// ============================================================================
+// 0.4.34 — ternary routing column (docs/design/TERNARY_ROUTING_COLUMN.md)
+// ============================================================================
+
+use g_math::fixed_point::router::fractal_topology::{
+    route_binary_op, DomainChoice, OpId, OperandClass, BINARY_BIT, DECIMAL_BIT,
+    SYMBOLIC_BIT, TERNARY_BIT,
+};
+
+fn class(bits: u8) -> OperandClass {
+    OperandClass { exact_in: bits }
+}
+
+#[test]
+fn routing_table_ternary_column_pins() {
+    let tern_sym = class(TERNARY_BIT | SYMBOLIC_BIT); // e.g. 1/3
+    let all = class(TERNARY_BIT | BINARY_BIT | DECIMAL_BIT | SYMBOLIC_BIT); // integers
+    let dec_sym = class(DECIMAL_BIT | SYMBOLIC_BIT); // e.g. 0.1
+
+    // Decision 1: Add/Sub of 3-adic classes route Ternary…
+    assert_eq!(route_binary_op(OpId::Add, tern_sym, tern_sym), DomainChoice::Ternary);
+    assert_eq!(route_binary_op(OpId::Sub, tern_sym, tern_sym), DomainChoice::Ternary);
+    assert_eq!(route_binary_op(OpId::Add, all, tern_sym), DomainChoice::Ternary);
+    assert_eq!(route_binary_op(OpId::Sub, tern_sym, all), DomainChoice::Ternary);
+    // …while Mul/Div of the same classes keep their pre-column routes.
+    assert_eq!(route_binary_op(OpId::Mul, tern_sym, tern_sym), DomainChoice::Symbolic);
+    assert_eq!(route_binary_op(OpId::Div, tern_sym, tern_sym), DomainChoice::Symbolic);
+    // Precedence unchanged elsewhere: integers stay Binary, decimals Decimal.
+    assert_eq!(route_binary_op(OpId::Add, all, all), DomainChoice::Binary);
+    assert_eq!(route_binary_op(OpId::Add, dec_sym, all), DomainChoice::Decimal);
+    // No shared non-symbolic exactness → Symbolic, as before.
+    assert_eq!(route_binary_op(OpId::Add, dec_sym, tern_sym), DomainChoice::Symbolic);
+}
+
+#[test]
+fn column_routes_cross_domain_3adic_add_exactly() {
+    // 0t2 (ternary, class ALL) + 1/3 (symbolic, class TERN|SYM) → Ternary.
+    let result = evaluate(&(g("0t2") + g("1/3"))).expect("routed add");
+    // Wide-enough profiles hold the coerced value and stay in-domain;
+    // narrow profiles may fall back (Decision 2) — the VALUE is pinned
+    // everywhere via router-difference-zero either way.
+    #[cfg(not(any(table_format = "q16_16")))]
+    assert!(is_ternary(&result), "expected ternary-domain result");
+    let _ = result;
+    let diff = display(&((g("0t2") + g("1/3")) - g("7/3")));
+    let trimmed = if diff.contains('.') {
+        diff.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        diff.as_str()
+    };
+    assert!(trimmed == "0" || trimmed == "-0", "2 + 1/3 != 7/3, diff {diff:?}");
+
+    // Exactness through a follow-up multiply: (1/3 + 2) · 3 == 7 exactly.
+    // (The multiply itself routes symbolic — Mul is outside the column.)
+    let seven = display(&((g("1/3") + g("2")) * g("3")));
+    let seven_trim = if seven.contains('.') {
+        seven.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        seven.as_str()
+    };
+    assert_eq!(seven_trim, "7", "exactness lost through the routed add");
+}
+
+#[test]
+fn column_fallback_on_narrow_storage_is_silent_and_correct() {
+    // 1e9/3 is 3-adic (routes Ternary) but its tier raw exceeds narrow
+    // storage — realtime must fall back silently to the rational path
+    // (Decision 2), never error, never wrap. Value identical everywhere.
+    let expr = || g("1000000000/3") + g("0t1");
+    let result = evaluate(&expr()).expect("must evaluate on every profile");
+    let _ = result;
+    let diff = display(&(expr() - g("1000000003/3")));
+    let trimmed = if diff.contains('.') {
+        diff.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        diff.as_str()
+    };
+    assert!(
+        trimmed == "0" || trimmed == "-0",
+        "fallback changed the value: diff {diff:?}"
+    );
+}
+
+#[test]
+fn convert_to_ternary_wrap_fix_is_loud_on_narrow_profiles() {
+    // Pre-fix: output-mode ternary conversion stored tier-3 raws through an
+    // UNCHECKED cast — 1/3 on realtime (raw 3^32/3 ≈ 6.2e14 > i32) wrapped
+    // silently. Now: loud error on narrow storage, exact value on wide.
+    use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
+    set_gmath_mode("auto:ternary");
+    let converted = evaluate(&g("1/3"));
+    reset_gmath_mode();
+    #[cfg(table_format = "q16_16")]
+    assert!(converted.is_err(), "narrow-profile conversion must fail loud");
+    #[cfg(not(table_format = "q16_16"))]
+    {
+        let v = converted.expect("wide profiles hold the tier-3 raw");
+        assert!(is_ternary(&v), "output mode must yield a ternary value");
+    }
+}

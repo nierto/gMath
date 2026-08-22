@@ -519,6 +519,18 @@ impl StackEvaluator {
                 let br = self.coerce_to_binary_sv(right).ok()?;
                 Some((bl, br))
             }
+            DomainChoice::Ternary => {
+                // Add/Sub of 3-adic values (denominator 3^k) — exact in
+                // ternary, replaces the rational-pair fallback. Coercion is
+                // exact for this class (num·3^F/den divides evenly). On
+                // narrow profiles a large value can overflow ternary
+                // storage: `.ok()?` makes that a silent fall-through to the
+                // rational path, so routing can never introduce a failure
+                // (docs/design/TERNARY_ROUTING_COLUMN.md, Decision 2).
+                let tl = self.convert_to_ternary(left.clone()).ok()?;
+                let tr = self.convert_to_ternary(right.clone()).ok()?;
+                Some((tl, tr))
+            }
             DomainChoice::Symbolic => None,
         }
     }

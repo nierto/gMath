@@ -1173,7 +1173,13 @@ impl StackEvaluator {
                             quotient.checked_mul(scale).ok_or(OverflowDetected::Overflow)?
                                 + remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)? / den
                         };
-                        Ok(StackValue::Ternary(tier, to_binary_storage(stored), shadow))
+                        // Checked narrowing — the bare to_binary_storage cast
+                        // silently wrapped tier-3 raws on narrow profiles
+                        // (same class as the 0.4.33 ternary_to_storage fix).
+                        let (t, bs) = ternary_to_storage(
+                            &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Small(stored))?
+                        )?;
+                        Ok(StackValue::Ternary(t, bs, shadow))
                     }
                     // Tier 4: TQ64.64 — 64 frac trits, I256 arithmetic
                     4 => {
@@ -1218,7 +1224,13 @@ impl StackEvaluator {
                             quotient.checked_mul(scale).ok_or(OverflowDetected::Overflow)?
                                 + remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)? / den
                         };
-                        Ok(StackValue::Ternary(3, to_binary_storage(stored), shadow))
+                        // Checked narrowing (see tier-3 arm above): on
+                        // realtime/compact a tier-3 raw beyond i32/i64 is a
+                        // loud TierOverflow, never a wrap.
+                        let (t, bs) = ternary_to_storage(
+                            &UniversalTernaryFixed::from_tier_raw(3, TernaryRaw::Small(stored))?
+                        )?;
+                        Ok(StackValue::Ternary(t, bs, shadow))
                     }
                 }
             }

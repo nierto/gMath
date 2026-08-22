@@ -25,12 +25,16 @@ use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
 
 /// Target domain for an operation, determined by the routing table.
 ///
-/// Precedence: Binary (fastest for integers) < Decimal (exact base-10) < Symbolic (always exact).
-/// Ternary routing is deliberately sequenced, not abandoned: the classifier already
-/// computes `TERNARY_BIT`, but no table column consumes it (ternary-exact values fall
-/// through to Binary) until the balanced-ternary domain has its dedicated validation
-/// suite. Adding `Ternary` here plus a table column then rescues denominator-3^k
-/// values (e.g. 1/3 + 1/3) from the symbolic fallback into exact fixed-point.
+/// Precedence: Binary (fastest for integers) < Decimal (exact base-10) <
+/// Ternary (exact base-3, add/sub only) < Symbolic (always exact).
+///
+/// The Ternary column (0.4.34) covers Add/Sub ONLY: sums of 3-adic values
+/// stay 3-adic (denominator ≤ max of operands), so routed add/sub is always
+/// exact. Products multiply denominators past the tier scale, where ternary
+/// truncates while symbolic stays exact — and the 4-bit class mask cannot
+/// see denominator exponents, so Mul/Div keep their previous routes (the
+/// fail-safe invariant: wrong routing costs performance, never correctness).
+/// See docs/design/TERNARY_ROUTING_COLUMN.md for the full reasoning.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DomainChoice {
@@ -38,6 +42,9 @@ pub enum DomainChoice {
     Binary = 0,
     /// Decimal fixed-point (scaled integer). Exact for base-10 values.
     Decimal = 1,
+    /// Balanced ternary fixed-point (scaled base-3 integer). Exact for
+    /// denominator-3^k values; routed for Add/Sub only.
+    Ternary = 3,
     /// Symbolic rational (a/b). Always exact, always available, slowest.
     Symbolic = 2,
 }
@@ -146,6 +153,20 @@ pub fn classify(value: &StackValue) -> OperandClass {
         };
     }
 
+    // Symbolic values carry no shadow (they ARE exact) — classify by the
+    // rational's own denominator, which is richer than any shadow. Without
+    // this, a Symbolic 1/3 read as SYMBOLIC_ONLY and the ternary column
+    // (0.4.34) could never fire for symbolic operands. Falls through for
+    // denominators beyond i128 (classified symbolic-only, as before).
+    if let StackValue::Symbolic(rat) = value {
+        if let Some(den) = rat.denominator_i128() {
+            if den > 0 {
+                return classify_denominator(den as u128);
+            }
+        }
+        return OperandClass::SYMBOLIC_ONLY;
+    }
+
     // No shadow: fall back to StackValue variant
     classify_by_variant(value)
 }
@@ -249,8 +270,17 @@ const fn build_routing_table() -> [[[DomainChoice; 16]; 16]; NUM_OPS] {
 
 /// Compute route for a single (op, left_class, right_class) triple.
 const fn compute_route(op: usize, left_class: u8, right_class: u8) -> DomainChoice {
-    if op <= 3 {
-        // Arithmetic (Add, Sub, Mul, Div): intersection → lowest rank
+    if op <= 1 {
+        // Add/Sub: intersection → lowest rank, ternary-aware. Sums of
+        // 3-adic values stay 3-adic — routed add/sub is always exact.
+        let intersection = left_class & right_class;
+        lowest_rank_domain_addsub(intersection)
+    } else if op <= 3 {
+        // Mul/Div: ternary column deliberately EXCLUDED — products multiply
+        // denominators past the tier scale, where ternary truncates while
+        // symbolic stays exact; the class mask cannot see exponents, so the
+        // compile-time table has no correct ternary mul column to offer.
+        // (docs/design/TERNARY_ROUTING_COLUMN.md, Decision 1)
         let intersection = left_class & right_class;
         lowest_rank_domain(intersection)
     } else {
@@ -262,12 +292,25 @@ const fn compute_route(op: usize, left_class: u8, right_class: u8) -> DomainChoi
 /// Pick the lowest-rank (most efficient) domain from an exact_in bitmask.
 ///
 /// Precedence: Binary < Decimal < Symbolic.
-/// Ternary routing deferred — ternary bit is skipped.
+/// Used for Mul/Div, where the ternary column does not apply.
 const fn lowest_rank_domain(exact_in: u8) -> DomainChoice {
     if exact_in & BINARY_BIT != 0 {
         DomainChoice::Binary
     } else if exact_in & DECIMAL_BIT != 0 {
         DomainChoice::Decimal
+    } else {
+        DomainChoice::Symbolic
+    }
+}
+
+/// Add/Sub ranking with the ternary column: Binary < Decimal < Ternary < Symbolic.
+const fn lowest_rank_domain_addsub(exact_in: u8) -> DomainChoice {
+    if exact_in & BINARY_BIT != 0 {
+        DomainChoice::Binary
+    } else if exact_in & DECIMAL_BIT != 0 {
+        DomainChoice::Decimal
+    } else if exact_in & TERNARY_BIT != 0 {
+        DomainChoice::Ternary
     } else {
         DomainChoice::Symbolic
     }
@@ -448,6 +491,9 @@ fn domain_to_class(domain: DomainChoice) -> OperandClass {
         DomainChoice::Binary => OperandClass::BINARY_ONLY,
         DomainChoice::Decimal => OperandClass {
             exact_in: DECIMAL_BIT,
+        },
+        DomainChoice::Ternary => OperandClass {
+            exact_in: TERNARY_BIT,
         },
         DomainChoice::Symbolic => OperandClass::SYMBOLIC_ONLY,
     }

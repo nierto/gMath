@@ -68,10 +68,14 @@ const lookup table. A `CompactShadow` (0–32 bytes, stack-only) can ride alongs
 an approximated value carrying its exact rational identity or a constant reference
 (π, e, √2, φ, ln 2, ln 10, γ); the router reads shadows to classify domain
 exactness without reparsing. Only when no shared domain exists does arithmetic
-fall back to exact rational. Note: ternary exactness is currently *classified*
-but not yet a routing destination — ternary-exact values dispatch to binary or
-symbolic until the balanced-ternary domain gains its dedicated validation suite
-(see ROADMAP).
+fall back to exact rational. Ternary is a routing destination for
+cross-domain **add/sub** of 3-adic values (denominator 3ᵏ), where routed
+arithmetic is exact by construction; mul/div deliberately keep their
+previous routes because products can leave the tier's exactness range,
+and the router must never trade correctness for speed (the design
+reasoning lives in `docs/design/TERNARY_ROUTING_COLUMN.md`). If a routed
+value cannot fit ternary storage on a narrow profile, dispatch silently
+falls back to the previous route.
 
 **Mode routing.** `set_gmath_mode("compute:output")` forces the compute and output
 domains independently (`auto`, `binary`, `decimal`, `symbolic`, `ternary`);

@@ -5,9 +5,42 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.34] - 2026-08-14
+
+### Added
+
+- **Ternary routing column** — the fractal router's classifier has computed
+  `TERNARY_BIT` since v0.4.0 with no table column consuming it; ternary-exact
+  values (denominator 3^k: 1/3, 2/3, 100/3…) fell through to the symbolic
+  rational fallback. `DomainChoice::Ternary` now exists and cross-domain
+  **Add/Sub** of 3-adic operands routes into the balanced-ternary domain,
+  where it is exact by construction (sums of 3-adic values stay 3-adic).
+  **Mul/Div are deliberately excluded**: products multiply denominators past
+  the tier scale, where ternary truncates while symbolic stays exact, and
+  the 4-bit class mask cannot see exponents — routing them would let routing
+  change results. Full reasoning: `docs/design/TERNARY_ROUTING_COLUMN.md`.
+- Coercion failure falls back silently to the previous route: on narrow
+  profiles a large 3-adic value can overflow ternary storage, and the
+  router must never introduce a failure the old path did not have.
+- The classifier now reads **Symbolic operands' denominators directly**
+  (they carry no shadow — the rational itself is richer than any shadow).
+  Side effect beyond ternary: symbolic operands with 2-adic/10-adic
+  denominators can now coerce into Binary/Decimal on Add/Sub/Mul/Div where
+  both operands are exact there — exactness preserved in every such case.
+- Measured (embedded, release, full evaluate pipeline including literal
+  parsing): routed `0t2 + 1/3` 334 ns vs rational-fallback `0t2 + 1/7`
+  355 ns (~1.06×). The win at expression scale is modest — parsing
+  dominates; the value is architectural: the 3-adic exactness class now
+  reaches its domain and results stay in fixed-point form.
 
 ### Fixed
+
+- `convert_to_ternary` (output-mode/coercion conversion) stored tier-3
+  raws through an **unchecked** narrowing cast in its tier-3 and fallback
+  arms — on realtime/compact, converting e.g. `1/3` with output mode
+  `ternary` silently wrapped (same defect class as the 0.4.33
+  `ternary_to_storage` fix). Both arms now use the checked conversion:
+  loud `TierOverflow`, never a wrap. Pinned by test.
 
 - `multiply_ternary_tq256_256` (Tier-6 balanced ternary) passed operands
   straight into the unsigned `mul_to_i2048`, so any negative operand
@@ -18,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same way. Scientific-profile transcendental validation (18/18) re-run
   clean after the change.
 
-### Added
+### Testing
 
 - Wide-tier ternary coverage closing the 0.4.33 gaps: Tiers 2–6
   arithmetic against exact integer models with every sign combination

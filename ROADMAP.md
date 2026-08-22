@@ -247,18 +247,43 @@ below for reference:
   equivalence; ternary↔binary/decimal coercion.
 - CI job (no table rebuild needed — cheap on every push).
 
-## Planned: 0.4.34 — Ternary routing column
+### v0.4.34 — Ternary routing column (Add/Sub)
 
-The fractal router's classifier already computes `TERNARY_BIT`, but no
-routing-table column consumes it: ternary-exact values (denominator 3ᵏ) fall
-through to Binary — where they are *inexact* — or to the symbolic fallback.
-Once 0.4.33 proves the domain, add `DomainChoice::Ternary` and a table column
-for exact 3-adic add/sub/mul (transcendentals keep routing to binary),
-plus coercion paths and routing tests. Gated on the 0.4.33 suite.
+**DELIVERED 2026-08-14.** `DomainChoice::Ternary` + table column for
+cross-domain Add/Sub of 3-adic operands (exact by construction), silent
+fallback when coercion overflows narrow storage, classifier now reads
+Symbolic denominators directly, and the unchecked-cast wrap in
+`convert_to_ternary` fixed. Mul/Div deliberately excluded — products can
+leave the tier's exactness range where ternary truncates but symbolic is
+exact, and the class mask cannot see denominator exponents; a
+dispatch-time shadow-exponent guard is the future path. Reasoning:
+`docs/design/TERNARY_ROUTING_COLUMN.md`. Measured end-to-end: ~1.06×
+vs the rational fallback (parse-dominated); the value is architectural.
 
 ---
 
 ## Next: 0.5.0 — Correctness audit + remaining composed transcendental bypass
+
+### 0. Narrow-profile integer-literal parse fallback (found 2026-08-14)
+
+**Priority:** HIGH — fail-safe violation in shipped behavior.
+On realtime (Q16.16), any integer literal beyond the binary storage range
+(`32768`+) fails PARSE with `Overflow` instead of falling back to the
+symbolic domain — so `evaluate(gmath("1000000") * gmath("0.001"))` errors
+on realtime while succeeding everywhere else. UGOD's contract says the
+symbolic ladder top never fails; the parse path should route oversized
+integers to Symbolic. Pre-existing at least since 0.4.32 (bisected);
+invisible because no CI job runs the router integration suite on realtime
+(`large_integer_times_decimal` fails there today). Fix parse routing, make
+the test profile-aware, and add a realtime router-integration CI job.
+
+### 0b. Unsigned widening-multiply call-site audit (flagged 2026-08-14)
+
+`mul_to_i512/i1024/i2048` are unsigned by convention; two unwrapped call
+sites were found and fixed post-0.4.33 (Tier-6 ternary mul, `I2048::Mul`
+I512 path). Remaining suspects: `pow_tier_n_plus_1.rs:119/192` feed
+`y·ln_x` — which CAN be negative — into `mul_to_i2048`. Audit every call
+site, add adversarial negative-operand tests per site.
 
 ### 1. UGOD multi-tier promotion verification
 
