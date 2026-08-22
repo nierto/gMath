@@ -264,9 +264,14 @@ vs the rational fallback (parse-dominated); the value is architectural.
 
 ## Next: 0.5.0 — Correctness audit + remaining composed transcendental bypass
 
-### 0. Narrow-profile integer-literal parse fallback (found 2026-08-14)
+### 0. Narrow-profile integer-literal parse fallback — DELIVERED 2026-08-14
 
-**Priority:** HIGH — fail-safe violation in shipped behavior.
+**Fixed on main** (post-0.4.34): oversized integer literals now fall back
+to the Symbolic domain in `parse_integer` (all three narrow-profile arms);
+regression test `oversized_integer_literal_falls_back_to_symbolic` runs on
+every profile, and the router/domain integration suites now run on
+realtime+compact in CI (ternary-domain workflow) so this class cannot hide
+again. Original finding:
 On realtime (Q16.16), any integer literal beyond the binary storage range
 (`32768`+) fails PARSE with `Overflow` instead of falling back to the
 symbolic domain — so `evaluate(gmath("1000000") * gmath("0.001"))` errors
@@ -285,15 +290,48 @@ I512 path). Remaining suspects: `pow_tier_n_plus_1.rs:119/192` feed
 `y·ln_x` — which CAN be negative — into `mul_to_i2048`. Audit every call
 site, add adversarial negative-operand tests per site.
 
-### 0c. Unify binary-multiply tie rounding across paths (found 2026-08-14)
+### 0c. Uniform rounding policy — one rule per domain, across every path
 
-On an exact half-ULP tie in a direct storage-tier binary multiply, the
-imperative kernel (`multiply_binary_i128`, round-half-even) and the
-canonical/UGOD tier path (round-bit add, ties toward +INF) differ by one
-ULP (measured: raw 1 x raw 2^63 at Q64.64 -> 0 imperatively, 1 canonically).
-Documented in CONTRACT.md as the one known path-independence exception.
-Unify (owner decision: either direction changes results for one path) and
-add tie-case tests to the path-independence suite.
+**Owner-directed 2026-08-14** ("having different rounding makes it a more
+difficult library to work with"). Today rounding differs not just per
+domain but per PATH within a domain (CONTRACT.md §3): binary multiply is
+banker's imperatively but ties-up canonically (1 ULP apart on exact ties,
+measured); DecimalFixed is banker's while the canonical decimal divide
+truncates; ternary truncates toward zero despite nearest being provably
+tie-free.
+
+**Analysis of the three options:**
+
+- *No rounding (exactness preservation)* is not an alternative — it is
+  deferral. It is superior wherever a result stays representable (the
+  canonical decimal multiply already grows decimal places instead of
+  rounding, and tier N+1 defers all compound rounding to one downscale),
+  but every domain eventually hits its scale cap and needs a rule. So the
+  policy is: **exact when representable, round once otherwise** — with
+  the remaining question being which tie rule fires on that one rounding.
+- *One global rule* is simplest to state but fights both convention and
+  the codebase: banker's everywhere would rewrite the wide-tier downscale
+  that every 0-ULP validation is pinned to (huge blast radius, zero
+  consumer benefit — compound paths never tie); ties-up everywhere would
+  break the banker's behavior financial consumers expect of DecimalFixed.
+- *One rule per domain, uniform across paths* matches convention AND
+  minimizes result churn. **Recommended:**
+
+| Domain | Rule everywhere | Rationale | What changes |
+|---|---|---|---|
+| Binary | nearest, ties toward +INF | the wide-tier downscale — the only rounding compound results ever see — is already ties-up everywhere; aligning the imperative mul kernel is a one-branch change | `multiply_binary_i128` (+ AVX2 twin): banker's -> ties-up; closes the measured 1-ULP path divergence |
+| Decimal | banker's (half-even) | the accounting convention, and what DecimalFixed already does on mul AND div | canonical decimal divide: truncation -> banker's; dp-cap rounding aligned |
+| Ternary | nearest (tie-free) | 3^m is odd — nearest can never tie (contract theorem); no rule needed at all | mul/div/div3: toward-zero (<1 ulp) -> nearest (<0.5 ulp); resolves the 0.4.33-flagged decision; div3 becomes a true trit shift |
+
+End state a consumer can memorize in one sentence: *binary rounds to
+nearest ties-up, decimal rounds banker's, ternary rounds to nearest
+(which cannot tie)* — identical on every path within each domain.
+
+All three alignments change results only on exact ties or by <1 ulp on
+currently-truncated ops: breaking-precision class, so they ship together
+in 0.5.0 with a consumer notice (consumers freezing hashed outputs should
+pin versions across the boundary). Add tie-case and cross-path
+equivalence tests per domain to the path-independence suite.
 
 ### 1. UGOD multi-tier promotion verification
 

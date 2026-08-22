@@ -7,7 +7,7 @@
 //! domain (not Symbolic/rational fallback), because 0.1 is decimal-exact
 //! and 255 is decimal-exact (integer = exact in all domains).
 
-use g_math::canonical::{gmath, evaluate};
+use g_math::canonical::{gmath, gmath_parse, evaluate};
 
 // ============================================================================
 // ROUTER CLASSIFICATION TESTS (via public API)
@@ -182,4 +182,48 @@ fn large_integer_times_decimal() {
     let result = evaluate(&expr).unwrap();
     let s = format!("{}", result);
     assert!(s.starts_with("1000"), "Expected 1000, got: {}", s);
+}
+
+/// 0.5.0 item 0 regression: integer literals beyond the profile's binary
+/// storage range must fall back to the Symbolic domain (UGOD's ladder top
+/// never fails) instead of erroring at parse. Pre-fix, realtime failed to
+/// parse "32768"+ with Overflow, so `1000000 * 0.001` errored on realtime
+/// while succeeding on every other profile (bisected to <=0.4.32).
+#[test]
+fn oversized_integer_literal_falls_back_to_symbolic() {
+    use g_math::canonical::StackValue;
+    for s in ["32768", "1000000", "9223372036854775807"] {
+        let v = evaluate(&gmath_parse(s).expect("must parse on every profile"))
+            .expect("must evaluate on every profile");
+        // Value must be exact regardless of the domain it landed in:
+        // v - s == 0 through the router.
+        let diff = format!("{}", evaluate(&(gmath_parse(s).unwrap() - gmath_parse(s).unwrap())).unwrap());
+        let trimmed = if diff.contains('.') {
+            diff.trim_end_matches('0').trim_end_matches('.')
+        } else {
+            diff.as_str()
+        };
+        assert!(trimmed == "0" || trimmed == "-0" || trimmed == "0/1", "self-diff of {s} = {diff:?}");
+        // On profiles whose integer range cannot hold the value, the
+        // fallback domain is Symbolic; wide profiles keep Binary.
+        let fits_binary = {
+            #[cfg(table_format = "q16_16")]
+            { s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << 15) }
+            #[cfg(table_format = "q32_32")]
+            { s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << 31) }
+            #[cfg(table_format = "q64_64")]
+            { s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << 63) }
+            #[cfg(not(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64")))]
+            { true }
+        };
+        match (&v, fits_binary) {
+            (StackValue::Binary(..), true) => {}
+            (StackValue::Symbolic(_), false) => {}
+            (other, fits) => panic!("{s}: unexpected variant {other:?} (fits_binary={fits})"),
+        }
+    }
+    // The original failing expression, end to end.
+    let r = evaluate(&(gmath_parse("1000000").unwrap() * gmath_parse("0.001").unwrap()))
+        .expect("1000000 * 0.001 must evaluate on every profile");
+    assert!(format!("{r}").starts_with("1000"), "got {r}");
 }

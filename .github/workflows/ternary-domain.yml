@@ -43,3 +43,14 @@ jobs:
         run: |
           cargo test --test ternary_domain_validation
           cargo test --test ternary_path_equivalence
+
+      # Router + cross-domain suites on the narrow profiles. These hid a
+      # realtime-only parse defect for months because no CI job ran them
+      # there (ROADMAP 0.5.0 item 0, fixed): oversized integer literals
+      # errored instead of falling back to Symbolic.
+      - name: Router + domain integration
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: |
+          cargo test --test fractal_router_integration
+          cargo test --test domain_arithmetic_validation

@@ -378,8 +378,12 @@ impl StackEvaluator {
         {
             // Guard: value << 64 wraps silently for |value| > i64::MAX.
             // Q64.64 has 64 integer bits (signed), so valid range is i64.
+            // Out-of-range integers fall back to the Symbolic domain — the
+            // UGOD ladder top never fails (0.5.0 item 0: parse used to
+            // error with Overflow here, so e.g. evaluate("1000000" * ...)
+            // failed on narrow profiles while succeeding everywhere else).
             if value > i64::MAX as i128 || value < i64::MIN as i128 {
-                return Err(OverflowDetected::Overflow);
+                return Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)));
             }
             let q_value = value << 64;
             Ok(StackValue::Binary(storage_tier, q_value, shadow))
@@ -388,8 +392,9 @@ impl StackEvaluator {
         #[cfg(table_format = "q32_32")]
         {
             // Q32.32 has 32 integer bits (signed), valid range is i32.
+            // Out-of-range integers fall back to Symbolic (see q64_64 arm).
             if value > i32::MAX as i128 || value < i32::MIN as i128 {
-                return Err(OverflowDetected::Overflow);
+                return Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)));
             }
             let q_value = (value as i64) << 32;
             Ok(StackValue::Binary(storage_tier, q_value, shadow))
@@ -400,8 +405,9 @@ impl StackEvaluator {
             // Integer range check: max integer = 2^(STORAGE_BITS - FRAC_BITS - 1) - 1
             let max_int = (1i128 << frac_config::INTEGER_BITS) - 1;
             let min_int = -(1i128 << frac_config::INTEGER_BITS);
+            // Out-of-range integers fall back to Symbolic (see q64_64 arm).
             if value > max_int || value < min_int {
-                return Err(OverflowDetected::Overflow);
+                return Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)));
             }
             let q_value = (value as i32) << frac_config::FRAC_BITS;
             Ok(StackValue::Binary(storage_tier, q_value, shadow))

@@ -5,6 +5,25 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Integer literals beyond the profile's binary integer range now fall
+  back to the Symbolic domain instead of failing parse with `Overflow`
+  (UGOD's ladder top never fails). Pre-fix, realtime could not parse
+  `32768`+ at Q16.16, so `1000000 * 0.001` errored there while
+  succeeding on every other profile. Regression-tested on every profile;
+  the router/domain integration suites now also run on realtime+compact
+  in CI, which is how this stayed hidden.
+
+### Planned
+
+- Uniform rounding policy (one rule per domain across every path —
+  binary nearest-ties-up, decimal banker's, ternary nearest/tie-free);
+  see ROADMAP 0.5.0 item 0c for the full analysis. Breaking-precision
+  class; ships in 0.5.0 with consumer notice.
+
 ## [0.4.34] - 2026-08-14
 
 ### Added
