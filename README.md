@@ -73,7 +73,8 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
   (`DecimalFixed`).
 - **Two computation paths** - a routed canonical layer for mixed or chained work
   and a direct imperative layer for known-domain hot loops. Results are
-  path-independent.
+  path-independent, with one documented tie-rule exception on exact half-ULP
+  storage-tier multiplies (see [CONTRACT.md](CONTRACT.md) §3).
 - **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
   and Lie groups, and standalone TQ1.9 ternary inference.
 - **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;

@@ -51,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same way. Scientific-profile transcendental validation (18/18) re-run
   clean after the change.
 
+### Documentation
+
+- CONTRACT.md's rounding table was wrong on two rows and is now stated
+  per-path, verified against source: binary multiply is round-half-even
+  in the imperative `FixedPoint` kernel but ties-toward-+∞ in the
+  canonical/UGOD tier path — **1 ULP apart on exact half-ULP ties**
+  (measured; the one known exception to path independence, scheduled for
+  unification in 0.5.0); `DecimalFixed<D>` is banker's (not half-away),
+  and the canonical decimal domain's multiply is exactness-preserving.
+  README and routing guide updated to carry the same caveat.
+
 ### Testing
 
 - Wide-tier ternary coverage closing the 0.4.33 gaps: Tiers 2–6

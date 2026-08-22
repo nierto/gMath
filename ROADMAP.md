@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.4.24**
+Current version: **0.4.34**
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise — this is a working list for a solo-maintained project.
 
@@ -284,6 +284,16 @@ sites were found and fixed post-0.4.33 (Tier-6 ternary mul, `I2048::Mul`
 I512 path). Remaining suspects: `pow_tier_n_plus_1.rs:119/192` feed
 `y·ln_x` — which CAN be negative — into `mul_to_i2048`. Audit every call
 site, add adversarial negative-operand tests per site.
+
+### 0c. Unify binary-multiply tie rounding across paths (found 2026-08-14)
+
+On an exact half-ULP tie in a direct storage-tier binary multiply, the
+imperative kernel (`multiply_binary_i128`, round-half-even) and the
+canonical/UGOD tier path (round-bit add, ties toward +INF) differ by one
+ULP (measured: raw 1 x raw 2^63 at Q64.64 -> 0 imperatively, 1 canonically).
+Documented in CONTRACT.md as the one known path-independence exception.
+Unify (owner decision: either direction changes results for one path) and
+add tie-case tests to the path-independence suite.
 
 ### 1. UGOD multi-tier promotion verification
 
