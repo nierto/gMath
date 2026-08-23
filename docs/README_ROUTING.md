@@ -92,16 +92,14 @@ domain-tagged values for mixed-domain matrices.
 
 ## Behaviour & limits
 
-- **Compound results are path-independent**: transcendentals, fused ops, and
-  chains compute through the same compute-tier engines on every path and
-  round once through the same downscale. **Direct storage-tier multiply and
-  divide are NOT yet path-independent**: the imperative kernels and the
-  canonical/UGOD tier arithmetic use different rounding rules (profile- and
-  op-dependent; measured divergence on ~half of inexact products, 1 ULP max
-  — full evidence in [the rounding census](design/ROUNDING_CENSUS.md) and
-  [CONTRACT.md](../CONTRACT.md) §3). Unification to one rule per domain is
-  ROADMAP 0.5.0 item 0c. Each path individually remains deterministic and
-  bit-identical cross-platform.
+- **Correctness is path-independent** — for compound results (same engines,
+  one shared downscale) AND for direct storage-tier arithmetic: since the
+  0.5.0 rounding unification every domain uses one rule on every path
+  (binary nearest-ties-+∞, decimal exact-then-banker's, ternary nearest),
+  gated permanently by `tests/rounding_unification.rs` with constructed
+  exact-tie inputs. The pre-unification divergence (~half of inexact
+  products, 1 ULP) is preserved as history in
+  [the rounding census](design/ROUNDING_CENSUS.md).
 - Routing adds dispatch overhead per operation relative to the imperative path;
   for known-domain hot loops use the [imperative layer](README_IMPERATIVE.md).
 - Literals may be decimals (`"0.1"`), integers, fractions (`"1/3"`), repeating

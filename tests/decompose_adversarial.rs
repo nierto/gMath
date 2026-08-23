@@ -154,14 +154,44 @@ fn test_adversarial_near_singular_det() {
 
 #[test]
 fn test_adversarial_truly_singular() {
-    // [[1,2,3],[4,5,6],[7,8,9]] — exactly singular
+    // Rows exactly proportional by DYADIC factors (2×, 4×): the pivoting
+    // multipliers (1/4, 2/4) are exact in binary, so elimination is exact
+    // under ANY rounding rule and the zero pivot must be detected.
+    // (The classic [[1..9]] matrix pivots on 7, making multipliers 1/7 and
+    // 4/7 storage-inexact; its exact-zero pivot under the old truncating
+    // divide was a cancellation coincidence — see the noise-bound test.)
+    let a = FixedMatrix::from_slice(3, 3, &[
+        fp("1"), fp("2"), fp("3"),
+        fp("2"), fp("4"), fp("6"),
+        fp("4"), fp("8"), fp("12"),
+    ]);
+    let result = lu_decompose(&a);
+    assert!(result.is_err(), "exactly singular matrix must fail LU");
+}
+
+#[test]
+fn test_adversarial_singular_nondyadic_noise_bound() {
+    // [[1,2,3],[4,5,6],[7,8,9]] is singular in the reals, but pivoting on 7
+    // yields storage-inexact multipliers (1/7, 4/7), so elimination carries
+    // ulp-scale noise under nearest rounding (0.5.0). Contract: either LU
+    // reports singular OR the determinant is within a few storage ulps of
+    // zero — never a plausibly-nonzero determinant.
     let a = FixedMatrix::from_slice(3, 3, &[
         fp("1"), fp("2"), fp("3"),
         fp("4"), fp("5"), fp("6"),
         fp("7"), fp("8"), fp("9"),
     ]);
-    let result = lu_decompose(&a);
-    assert!(result.is_err(), "exactly singular matrix must fail LU");
+    match lu_decompose(&a) {
+        Err(_) => {}
+        Ok(lu) => {
+            let det = lu.determinant();
+            let bound = fp("0.0000001"); // ~430 ulp at Q32.32, generous noise floor
+            assert!(
+                det.abs() < bound,
+                "singular det must be ulp-noise, got {det}"
+            );
+        }
+    }
 }
 
 // ============================================================================

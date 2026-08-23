@@ -104,11 +104,11 @@ tests), and being multiply-free they introduce no rescaling error at all.
 | Op | Semantics | Error | Failure mode |
 |----|-----------|-------|--------------|
 | add / sub | exact | 0 | `checked_add/sub` → `TierOverflow` at storage bound |
-| neg | exact | 0 | `checked_neg` → `TierOverflow` (binary MIN only; unreachable from any negatable value) |
-| mul | `(a·b) / 3^F` in a double-width intermediate, **truncated toward zero** | < 1 ulp, toward zero | range check → `TierOverflow` |
-| div | `(a·3^F) / b` in a double-width intermediate, **truncated toward zero** | < 1 ulp, toward zero | `DivisionByZero`; range check → `TierOverflow` |
+| neg | exact | 0 | fail-loud at binary MIN (unreachable from any valid value; Tier 4's silent `saturating_neg` fixed 0.5.0) |
+| mul | `(a·b) / 3^F`, **round-to-nearest** (0.5.0; was toward-zero) | ≤ ½ ulp; tie-free (odd scale, §4 theorem) — fully sign-symmetric | range check → `TierOverflow` |
+| div | `(a·3^F) / b`, **round-to-nearest, ties toward +∞** (0.5.0) | ≤ ½ ulp; ties possible (arbitrary divisor) | `DivisionByZero`; range check → `TierOverflow` |
 | mul3 | exact ternary up-shift | 0 | `checked_mul` → overflow error |
-| div3 | `raw / 3`, truncated toward zero | < 1 ulp | infallible |
+| div3 | true ternary right-shift: **nearest** (0.5.0; tie-free, 3 odd) | ≤ ½ ulp | infallible |
 
 Notes, all **[current behavior]**:
 
@@ -163,12 +163,13 @@ It does **not** cover:
 
 - Conversion into ternary from values with denominators outside {3}
   (e.g. ½) requires a tie rule. The shipping direct converter
-  (`UniversalTernaryFixed::from_str`, used by `0t` literals) **truncates
-  toward zero** — measured and pinned: `0.5 → 3280/3^8` (the tie resolves
-  low), `1.5 → 9841/3^8` — and is sign-symmetric
-  (`parse(-s) = -parse(s)`; the `-0.x` sign-loss defect was fixed in
-  0.4.33). Any future converter with different rounding MUST document its
-  tie rule.
+  (`UniversalTernaryFixed::from_str`, used by `0t` literals) rounds
+  **nearest with ties toward +∞** (0.5.0; was truncation) — pinned:
+  `0.5 → 3281/3^8`, `1.5 → 9842/3^8`, `-0.5 → -3280/3^8`. Sign symmetry
+  `parse(-s) = -parse(s)` holds for every non-tie input; exact ties break
+  it BY DESIGN (ties toward +∞ is not odd-symmetric) and both directions
+  are pinned by test. The final sign is threaded into the conversion so
+  the tie sees the signed value despite the magnitude-first parse.
 - Tier raws must fit the profile's FASC storage: `ternary_to_storage` is
   checked (0.4.33) and returns `TierOverflow` for a Tier-2+ raw on a
   profile whose `BinaryStorage` cannot hold it, where it previously
@@ -179,15 +180,14 @@ It does **not** cover:
 - Storage overflow is always an error (`TierOverflow`), never a wrap —
   the wrap-defect rule applies to this domain as everywhere else.
 
-## 6. Current behavior vs. theorem — the deliberate gap
+## 6. Current behavior vs. theorem — gap CLOSED (0.5.0)
 
-mul/div/div3 truncate toward zero (< 1 ulp) instead of the tie-free
-balanced-nearest (< ½ ulp) that §4 makes available at one extra comparison
-per operation. Switching would change results (a breaking precision change)
-and is therefore an **owner decision, out of scope for 0.4.33**. The suite
-tests what ships; the theorem tests prove the upgrade path exists and needs
-no tie logic. This gap is the concrete candidate for 0.4.34+ alongside the
-routing column.
+The 0.4.33 gap (mul/div/div3 truncating at < 1 ulp while the theorem
+offered tie-free nearest at < ½ ulp) was closed by the 0.5.0 rounding
+unification: mul and div3 now round nearest with no tie logic — exactly
+as §4 proves possible — and div rounds nearest with ties toward +∞ (its
+divisor is arbitrary, so ties exist there). The upgrade cost one
+comparison per operation, as predicted.
 
 ## 7. Invariant checklist (test map)
 

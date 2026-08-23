@@ -24,7 +24,12 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 #[inline]
 pub fn multiply_ternary_tq8_8(a: i32, b: i32) -> Result<i32, OverflowDetected> {
     let product = (a as i64) * (b as i64);
-    let scaled = product / SCALE_TQ8_8 as i64;
+    // 0.5.0: nearest (was truncation). Scale 3^8 is odd, so no tie exists
+    // (contract theorem) — a symmetric half-bump is total.
+    let scale = SCALE_TQ8_8 as i64;
+    let mut scaled = product / scale;
+    let rem = product - scaled * scale;
+    if (rem.unsigned_abs() << 1) > scale as u64 { scaled += rem.signum(); }
 
     if scaled >= i32::MIN as i64 && scaled <= i32::MAX as i64 {
         Ok(scaled as i32)
@@ -44,7 +49,11 @@ pub fn multiply_ternary_tq8_8(a: i32, b: i32) -> Result<i32, OverflowDetected> {
 #[inline]
 pub fn multiply_ternary_tq16_16(a: i64, b: i64) -> Result<i64, OverflowDetected> {
     let product = (a as i128) * (b as i128);
-    let scaled = product / SCALE_TQ16_16 as i128;
+    // Nearest, tie-free (odd scale) — see Tier 1.
+    let scale = SCALE_TQ16_16 as i128;
+    let mut scaled = product / scale;
+    let rem = product - scaled * scale;
+    if (rem.unsigned_abs() << 1) > scale as u128 { scaled += rem.signum(); }
 
     if scaled >= i64::MIN as i128 && scaled <= i64::MAX as i128 {
         Ok(scaled as i64)
@@ -68,9 +77,14 @@ pub fn multiply_ternary_tq32_32(a: i128, b: i128) -> Result<i128, OverflowDetect
     let b_extended = I256::from_i128(b);
     let product = a_extended * b_extended;
 
-    // Scale down by 3^32
+    // Scale down by 3^32 — nearest, tie-free (odd scale; 0.5.0 unification)
     let scale = I256::from_i128(SCALE_TQ32_32);
-    let scaled = product / scale;
+    let (mut scaled, rem) =
+        crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(product, scale);
+    let rem_abs = if rem.is_negative() { -rem } else { rem };
+    if rem_abs + rem_abs > scale {
+        scaled = if rem.is_negative() { scaled - I256::from_i128(1) } else { scaled + I256::from_i128(1) };
+    }
 
     // Check if result fits in i128
     if scaled.fits_in_i128() {
@@ -96,9 +110,14 @@ pub fn multiply_ternary_tq64_64(a: I256, b: I256) -> I256 {
     let b_extended = I512::from_i256(b);
     let product = a_extended * b_extended;
 
-    // Scale down by 3^64
+    // Scale down by 3^64 — nearest, tie-free (odd scale; 0.5.0 unification)
     let scale = compute_3_pow_64_i512();
-    let scaled = product / scale;
+    let (mut scaled, rem) =
+        crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(product, scale);
+    let rem_abs = if rem.is_negative() { -rem } else { rem };
+    if rem_abs + rem_abs > scale {
+        scaled = if rem.is_negative() { scaled - I512::from_i128(1) } else { scaled + I512::from_i128(1) };
+    }
 
     // Saturate back to I256
     scaled.as_i256_saturating()
@@ -115,7 +134,13 @@ pub fn multiply_ternary_tq64_64_checked(a: I256, b: I256) -> Result<I256, Overfl
     let b_extended = I512::from_i256(b);
     let product = a_extended * b_extended;
     let scale = compute_3_pow_64_i512();
-    let scaled = product / scale;
+    // Nearest, tie-free (odd scale) — matches the unchecked variant.
+    let (mut scaled, rem) =
+        crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(product, scale);
+    let rem_abs = if rem.is_negative() { -rem } else { rem };
+    if rem_abs + rem_abs > scale {
+        scaled = if rem.is_negative() { scaled - I512::from_i128(1) } else { scaled + I512::from_i128(1) };
+    }
 
     if scaled.fits_in_i256() {
         Ok(scaled.as_i256())
@@ -138,7 +163,14 @@ pub fn multiply_ternary_tq128_128(a: I512, b: I512) -> Result<I512, OverflowDete
     let b_extended = I1024::from_i512(b);
     let product = a_extended * b_extended;
     let scale = scale_tq128_128_i1024();
-    let scaled = product / scale;
+    // Nearest, tie-free (odd scale; 0.5.0 unification).
+    let mut scaled = product / scale;
+    let rem = product % scale;
+    let rem_neg = (rem.words[15] as i64) < 0;
+    let rem_abs = if rem_neg { -rem } else { rem };
+    if rem_abs + rem_abs > scale {
+        scaled = if rem_neg { scaled - I1024::from_i128(1) } else { scaled + I1024::from_i128(1) };
+    }
 
     if scaled.fits_in_i512() {
         Ok(scaled.as_i512())
@@ -178,7 +210,16 @@ pub fn multiply_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
     // stage1 is I2048 but should fit close to I1024 range now
     let stage2 = i2048_div_by_i1024(stage1, scale_128);
     // Result should fit in I1024
-    let magnitude = stage2.as_i1024();
+    let mut magnitude = stage2.as_i1024();
+    // Nearest, tie-free (odd scale 3^256; 0.5.0 unification): compare the
+    // true remainder product - q*3^256 against half the scale, all on
+    // non-negative magnitudes.
+    let s256 = scale_128 * scale_128; // 3^256 ≈ 2^406, exact in I1024
+    let qs = magnitude.mul_to_i2048(s256); // both non-negative — safe
+    let rem = product - qs;
+    if rem + rem > I2048::from_i1024(s256) {
+        magnitude = magnitude + I1024::from_i128(1);
+    }
     if negative { -magnitude } else { magnitude }
 }
 

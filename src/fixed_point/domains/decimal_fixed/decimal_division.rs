@@ -139,8 +139,24 @@ fn try_div_same_tier(a: &UniversalDecimalTiered, b: &UniversalDecimalTiered) -> 
             let s512 = I512::from_i128(scale);
             let scaled = I1024::from_i512(a512) * I1024::from_i512(s512);
             let b1024 = I1024::from_i512(b512);
-            let result = (scaled / b1024).as_i512();
-            // Tier 6: best-effort (no wider type available), accept truncated result
+            // Tier 6: best-effort (no wider type to promote into). 0.5.0
+            // unification: banker's (half-even) instead of truncation —
+            // the decimal domain's one rule (tiers 1–5 are exact-or-
+            // fallback and never round here at all).
+            let mut q = scaled / b1024;
+            let rem = scaled % b1024;
+            let rem_neg = (rem.words[15] as i64) < 0;
+            let b_neg = (b1024.words[15] as i64) < 0;
+            let sa_neg = (scaled.words[15] as i64) < 0;
+            let rem_abs = if rem_neg { -rem } else { rem };
+            let b_abs = if b_neg { -b1024 } else { b1024 };
+            let positive = sa_neg == b_neg;
+            let rem2 = rem_abs + rem_abs;
+            let q_odd = (q.words[0] & 1) == 1;
+            if rem2 > b_abs || (rem2 == b_abs && q_odd) {
+                q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
+            }
+            let result = q.as_i512();
             Ok(UniversalDecimalTiered { value: DecimalValueTiered::Tier6(DecimalTier6 { value: i512_to_d512(result), decimal_places: dp }) })
         }
         _ => Err(OverflowDetected::InvalidInput),

@@ -30,23 +30,19 @@ Code wins over docs.
   exception: from_f64/to_f64 = caller-convenience ONLY, never internal
   use-cases: consensus, financial-audit, reproducible-science
 
-@ROUNDING (deterministic, integer-only; per PATH, source-verified 2026-08-14 —
-  full census: docs/design/ROUNDING_CENSUS.md):
-  binary-imperative: mul=PROFILE-DEPENDENT(floor rt/compact | half-even embedded
-                     | trunc-0 balanced/scientific) | div=trunc-0 ALL profiles
-  binary-canonical/UGOD: mul=nearest-ties-+∞ | div=half-away
-  binary downscale (all compound paths): nearest-ties-+∞
-  decimal-imperative DecimalFixed: mul=banker's | div=banker's
-  decimal-canonical: mul=EXACT(dp grows) | div=trunc-0
-  ternary: mul=trunc-0 | div=trunc-0 | transcendentals→route-via-binary
-  MEASURED: imperative vs canonical storage-tier mul differ on ~half of inexact
-       products (48.7% of 44k sampled pairs, compact; 1 ulp max — floor vs
-       nearest); div diverges analogously everywhere (trunc vs half-away).
-       Direct storage-tier mul/div = NOT path-independent today. Compound paths
-       (transcendentals, dots, decomp, matrix chains, fused) compute at tier-N+1,
-       round ONCE through the shared ties-+∞ downscale → path-independent, stays.
-       Unification (one rule per domain, every path: binary nearest-ties-+∞,
-       decimal banker's, ternary nearest-tie-free) = ROADMAP 0.5.0 item 0c.
+@ROUNDING (deterministic, integer-only; UNIFIED 0.5.0 — one rule per domain,
+  every path; gate: tests/rounding_unification.rs; evidence:
+  docs/design/ROUNDING_CENSUS.md):
+  binary:  nearest-ties-+∞ EVERYWHERE (mul, div, downscales, decimal→binary
+           coercion; all profiles, imperative == canonical == fused)
+  decimal: exact-when-representable; banker's where rounding occurs
+           (canonical mul = dp-growth exact; canonical div t1-5 =
+           exact-or-rational-fallback; DecimalFixed + t6 div = banker's)
+  ternary: nearest — tie-free mul/div3 (odd scale); ties-+∞ at div and
+           conversion-in (0.5 → 3281, -0.5 → -3280: documented asymmetry)
+  EXCEPTION (contracted): tq19 matvec_q2f narrowing stays truncation
+           (0.4.31 bit-reproducibility contract).
+  Compound paths: tier-N+1, round ONCE at downscale (unchanged).
 
 @TIER-N+1: all transcendentals + accumulations compute one width above storage,
   single downscale at end. Chains (canonical layer) keep intermediates wide until
@@ -75,8 +71,8 @@ Code wins over docs.
   imperative → known-domain hot loops (direct, Copy, no routing)
   fused → ML accumulation shapes (softmax/silu/rms/distance, compute-tier)
   tq19 → ternary-quantized inference (feature=inference)
-  correctness: COMPOUND results PATH-INDEPENDENT (same engines, shared downscale);
-  direct storage-tier mul/div NOT yet (see @ROUNDING; unification 0.5.0/0c)
+  correctness: PATH-INDEPENDENT — compound results (same engines, shared
+  downscale) AND direct storage-tier arithmetic (unified 0.5.0, test-gated)
 
 @VALIDATION: mpmath refs 50-250 digits as exact strings (no floats). Decimal paths
   CI-graded vs mootable/decimal-scaled adversarial corpus.

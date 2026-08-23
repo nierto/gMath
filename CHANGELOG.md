@@ -7,7 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — 0.5.0 rounding unification (breaking-precision)
+
+One rounding rule per domain, identical on every path — imperative,
+canonical/UGOD, fused, and coercions — replacing rules that differed by
+operation, by path, and (imperatively) by profile. Gated permanently by
+`tests/rounding_unification.rs` (cross-path bit-equality sweeps plus
+constructed exact-tie inputs, per profile). All five profiles green,
+including the scientific 18/18 transcendental 0-ULP gate.
+
+- **Binary: nearest, ties toward +∞, everywhere.** Imperative multiply
+  was floor (realtime/compact), banker's (embedded), truncation
+  (balanced/scientific); imperative divide truncated on all profiles;
+  UGOD tier divide was half-away. All now match the wide-downscale rule.
+  This REPAIRS path independence for plain mul/div (measured divergence
+  before: 48.7% of sampled products, 1 ulp).
+- **Decimal: exact when representable; banker's where rounding occurs.**
+  Canonical divide tiers 1–5 discovered to be exact-or-rational-fallback
+  (kept — better than rounding); the tier-6 best-effort arm moved from
+  truncation to banker's; `decimal_to_binary_storage` coercion unified
+  from per-profile truncation/add-half to nearest ties-+∞.
+- **Ternary: nearest.** Multiply and `div3` are tie-free (odd scale —
+  the 0.4.33 contract theorem, now shipped: error halves to ≤ ½ ulp and
+  `div3` becomes a true trit shift); divide and conversion-in round
+  nearest with ties toward +∞ (`0.5` → raw 3281, `-0.5` → raw −3280 —
+  documented tie asymmetry, sign threaded through `from_str`).
+- Contracted exception: TQ1.9 `matvec_q2f` narrowing stays truncation
+  per its published 0.4.31 bit-reproducibility contract.
+- Consumer notice: results may move by up to 1 ulp on direct storage-tier
+  multiplies/divides (an accuracy improvement — nearest ≥ floor/trunc);
+  consumers freezing hashed or persisted outputs should pin versions
+  across this boundary. Compound/tier-N+1 results are unchanged.
+
 ### Fixed
+
+- UGOD binary tier divide mis-signed its rounding bump for exact
+  quotients in (−1, 0) raw units (branched on `quotient < 0`, which is 0
+  there) — e.g. an exact −0.75-ulp quotient rounded to **+1** raw instead
+  of −1. Fixed by deriving the sign from the operands; covered by the
+  unification gate's sub-ulp regression case.
+- Ternary Tier-4 negation used `saturating_neg` (the one tier silently
+  absorbing the binary-MIN edge); now fail-loud like every other tier.
 
 - Integer literals beyond the profile's binary integer range now fall
   back to the Symbolic domain instead of failing parse with `Overflow`

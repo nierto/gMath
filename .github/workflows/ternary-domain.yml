@@ -54,3 +54,8 @@ jobs:
         run: |
           cargo test --test fractal_router_integration
           cargo test --test domain_arithmetic_validation
+
+      - name: Rounding unification gate (one rule per domain, every path)
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --test rounding_unification

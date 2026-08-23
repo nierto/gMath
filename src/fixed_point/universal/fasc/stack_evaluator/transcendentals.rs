@@ -1118,6 +1118,20 @@ impl StackEvaluator {
     ///   - Embedded → Tier 3 TQ32.32 (i128 arithmetic, 32 frac trits)
     ///   - Balanced → Tier 4 TQ64.64 (I256 arithmetic, 64 frac trits)
     ///   - Scientific → Tier 5 TQ128.128 (I512 arithmetic, 128 frac trits)
+    /// (num * scale) / den rounded to nearest, ties toward +INF — the
+    /// documented ternary conversion-boundary rule (0.5.0 unification;
+    /// contract §5). i128 path used by the tier-3 and fallback arms.
+    fn ternary_convert_div_i128(scaled_num: i128, den: i128) -> i128 {
+        let mut q = scaled_num / den;
+        let rem2 = (scaled_num - q * den).unsigned_abs() << 1;
+        let dabs = den.unsigned_abs();
+        let positive = (scaled_num < 0) == (den < 0);
+        if if positive { rem2 >= dabs } else { rem2 > dabs } {
+            q += if positive { 1 } else { -1 };
+        }
+        q
+    }
+
     pub(crate) fn convert_to_ternary(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match &value {
             StackValue::Ternary(_, _, _) => Ok(value),
@@ -1146,7 +1160,20 @@ impl StackEvaluator {
                         // Split to avoid overflow: int_part * scale + (rem * scale) / den
                         let int_part = num512 / den512;
                         let remainder = num512 - int_part * den512;
-                        let stored = int_part * scale + (remainder * scale) / den512;
+                        // Nearest, ties toward +INF on the fractional part (0.5.0).
+                        let sn = remainder * scale;
+                        let (mut frac, rem) =
+                            crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(sn, den512);
+                        {
+                            let rem_abs = if rem.is_negative() { -rem } else { rem };
+                            let den_abs = if den512.is_negative() { -den512 } else { den512 };
+                            let positive = sn.is_negative() == den512.is_negative();
+                            let rem2 = rem_abs + rem_abs;
+                            if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+                                frac = if positive { frac + I512::from_i128(1) } else { frac - I512::from_i128(1) };
+                            }
+                        }
+                        let stored = int_part * scale + frac;
                         let (t, bs) = ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Large(stored))?
                         )?;
@@ -1166,12 +1193,13 @@ impl StackEvaluator {
                         // 3^32 = 1,853,020,188,851,841
                         let scale: i128 = 1_853_020_188_851_841;
                         let stored = if let Some(product) = num.checked_mul(scale) {
-                            product / den
+                            Self::ternary_convert_div_i128(product, den)
                         } else {
                             let quotient = num / den;
                             let remainder = num % den;
                             quotient.checked_mul(scale).ok_or(OverflowDetected::Overflow)?
-                                + remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)? / den
+                                + Self::ternary_convert_div_i128(
+                                    remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)?, den)
                         };
                         // Checked narrowing — the bare to_binary_storage cast
                         // silently wrapped tier-3 raws on narrow profiles
@@ -1191,7 +1219,19 @@ impl StackEvaluator {
                         };
                         let num256 = I256::from_i128(num);
                         let den256 = I256::from_i128(den);
-                        let stored = (num256 * scale) / den256;
+                        // Nearest, ties toward +INF (0.5.0; contract §5).
+                        let sn = num256 * scale;
+                        let (mut stored, rem) =
+                            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(sn, den256);
+                        {
+                            let rem_abs = if rem.is_negative() { -rem } else { rem };
+                            let den_abs = if den256.is_negative() { -den256 } else { den256 };
+                            let positive = sn.is_negative() == den256.is_negative();
+                            let rem2 = rem_abs + rem_abs;
+                            if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+                                stored = if positive { stored + I256::from_i128(1) } else { stored - I256::from_i128(1) };
+                            }
+                        }
                         let (t, bs) = ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Medium(stored))?
                         )?;
@@ -1207,7 +1247,19 @@ impl StackEvaluator {
                         };
                         let num512 = I512::from_i128(num);
                         let den512 = I512::from_i128(den);
-                        let stored = (num512 * scale) / den512;
+                        // Nearest, ties toward +INF (0.5.0; contract §5).
+                        let sn = num512 * scale;
+                        let (mut stored, rem) =
+                            crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(sn, den512);
+                        {
+                            let rem_abs = if rem.is_negative() { -rem } else { rem };
+                            let den_abs = if den512.is_negative() { -den512 } else { den512 };
+                            let positive = sn.is_negative() == den512.is_negative();
+                            let rem2 = rem_abs + rem_abs;
+                            if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+                                stored = if positive { stored + I512::from_i128(1) } else { stored - I512::from_i128(1) };
+                            }
+                        }
                         let (t, bs) = ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Large(stored))?
                         )?;
@@ -1217,12 +1269,13 @@ impl StackEvaluator {
                     _ => {
                         let scale: i128 = 1_853_020_188_851_841;
                         let stored = if let Some(product) = num.checked_mul(scale) {
-                            product / den
+                            Self::ternary_convert_div_i128(product, den)
                         } else {
                             let quotient = num / den;
                             let remainder = num % den;
                             quotient.checked_mul(scale).ok_or(OverflowDetected::Overflow)?
-                                + remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)? / den
+                                + Self::ternary_convert_div_i128(
+                                    remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)?, den)
                         };
                         // Checked narrowing (see tier-3 arm above): on
                         // realtime/compact a tier-3 raw beyond i32/i64 is a

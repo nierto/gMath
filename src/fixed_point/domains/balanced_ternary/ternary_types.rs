@@ -224,10 +224,14 @@ impl TernaryTier1 {
         }
     }
 
-    /// Exact division by 3 (shift operation in ternary)
+    /// Ternary right-shift: drop the lowest trit (nearest — tie-free since 3 is odd)
     pub fn div3(&self) -> Self {
+        // 0.5.0: nearest (true ternary shift — drop lowest trit). 3 is odd
+        // so no tie exists; |rem| >= 2 rounds away, |rem| <= 1 truncates.
+        let q = self.value / 3;
+        let r = self.value - q * 3;
         Self {
-            value: self.value / 3,
+            value: if r >= 2 { q + 1 } else if r <= -2 { q - 1 } else { q },
         }
     }
 
@@ -298,8 +302,12 @@ impl TernaryTier2 {
 
     /// Exact division by 3
     pub fn div3(&self) -> Self {
+        // 0.5.0: nearest (true ternary shift — drop lowest trit). 3 is odd
+        // so no tie exists; |rem| >= 2 rounds away, |rem| <= 1 truncates.
+        let q = self.value / 3;
+        let r = self.value - q * 3;
         Self {
-            value: self.value / 3,
+            value: if r >= 2 { q + 1 } else if r <= -2 { q - 1 } else { q },
         }
     }
 
@@ -370,8 +378,12 @@ impl TernaryTier3 {
 
     /// Exact division by 3
     pub fn div3(&self) -> Self {
+        // 0.5.0: nearest (true ternary shift — drop lowest trit). 3 is odd
+        // so no tie exists; |rem| >= 2 rounds away, |rem| <= 1 truncates.
+        let q = self.value / 3;
+        let r = self.value - q * 3;
         Self {
-            value: self.value / 3,
+            value: if r >= 2 { q + 1 } else if r <= -2 { q - 1 } else { q },
         }
     }
 
@@ -448,7 +460,16 @@ impl TernaryTier4 {
     /// Exact division by 3
     pub fn div3(&self) -> Self {
         Self {
-            value: &self.value / &I256::from_u8(3),
+            value: {
+                // Nearest ternary shift (0.5.0) — see the native-tier div3.
+                let three = I256::from_u8(3);
+                let q = &self.value / &three;
+                let r = self.value - q * three;
+                let two = I256::from_u8(2);
+                if r >= two { q + I256::from_u8(1) }
+                else if r <= -two { q - I256::from_u8(1) }
+                else { q }
+            },
         }
     }
 
@@ -524,7 +545,16 @@ impl TernaryTier5 {
     /// Exact division by 3
     pub fn div3(&self) -> Self {
         Self {
-            value: self.value / I512::from_i128(3),
+            value: {
+                // Nearest ternary shift (0.5.0) — see the native-tier div3.
+                let three = I512::from_i128(3);
+                let q = self.value / three;
+                let r = self.value - q * three;
+                let two = I512::from_i128(2);
+                if r >= two { q + I512::from_i128(1) }
+                else if r <= -two { q - I512::from_i128(1) }
+                else { q }
+            },
         }
     }
 
@@ -591,7 +621,16 @@ impl TernaryTier6 {
     /// Exact division by 3
     pub fn div3(&self) -> Self {
         Self {
-            value: self.value / I1024::from_i128(3),
+            value: {
+                // Nearest ternary shift (0.5.0) — see the native-tier div3.
+                let three = I1024::from_i128(3);
+                let q = self.value / three;
+                let r = self.value - q * three;
+                let two = I1024::from_i128(2);
+                if r >= two { q + I1024::from_i128(1) }
+                else if r <= -two { q - I1024::from_i128(1) }
+                else { q }
+            },
         }
     }
 
@@ -650,25 +689,33 @@ impl UniversalTernaryFixed {
             if rest.starts_with('-') {
                 return Err(OverflowDetected::InvalidInput);
             }
-            return Self::from_str(rest)?.negate();
+            // Parse the magnitude but thread the FINAL sign into the
+            // conversion, so the ties-toward-+∞ boundary rule (contract
+            // §5, 0.5.0 unification) sees the signed value: a positive
+            // tie rounds the magnitude up, a negative tie rounds the
+            // magnitude down (toward zero), then the result is negated.
+            return Self::from_str_signed(rest, true)?.negate();
         }
+        Self::from_str_signed(trimmed, false)
+    }
 
+    fn from_str_signed(input: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Parse the decimal string and convert to balanced ternary
         let (integer_part, fractional_part) = Self::parse_decimal_string(input)?;
 
         // Try to fit in most efficient tier first
-        if let Ok(value) = Self::try_create_tier1(integer_part, &fractional_part) {
+        if let Ok(value) = Self::try_create_tier1(integer_part, &fractional_part, final_neg) {
             return Ok(value);
         }
-        if let Ok(value) = Self::try_create_tier2(integer_part, &fractional_part) {
+        if let Ok(value) = Self::try_create_tier2(integer_part, &fractional_part, final_neg) {
             return Ok(value);
         }
-        if let Ok(value) = Self::try_create_tier3(integer_part, &fractional_part) {
+        if let Ok(value) = Self::try_create_tier3(integer_part, &fractional_part, final_neg) {
             return Ok(value);
         }
 
         // Fallback to maximum precision tier (never fails)
-        Ok(Self::create_tier4(integer_part, &fractional_part))
+        Ok(Self::create_tier4(integer_part, &fractional_part, final_neg))
     }
 
     /// Create zero value efficiently
@@ -882,13 +929,13 @@ impl UniversalTernaryFixed {
 
 impl UniversalTernaryFixed {
     /// Try to create in Tier 1 (TQ8.8) - most efficient
-    fn try_create_tier1(integer_part: i64, fractional_part: &str) -> Result<Self, OverflowDetected> {
+    fn try_create_tier1(integer_part: i64, fractional_part: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Check if value fits in Tier 1 range
         if integer_part.abs() > 3280 || fractional_part.len() > 8 {
             return Err(OverflowDetected::TierOverflow);
         }
 
-        let ternary_value = Self::convert_decimal_to_ternary_tier1(integer_part, fractional_part)?;
+        let ternary_value = Self::convert_decimal_to_ternary_tier1(integer_part, fractional_part, final_neg)?;
 
         Ok(Self {
             value: TernaryValue::Tier1(TernaryTier1::from_raw(ternary_value)),
@@ -897,13 +944,13 @@ impl UniversalTernaryFixed {
     }
 
     /// Try to create in Tier 2 (TQ16.16)
-    fn try_create_tier2(integer_part: i64, fractional_part: &str) -> Result<Self, OverflowDetected> {
+    fn try_create_tier2(integer_part: i64, fractional_part: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Check if value fits in Tier 2 range
         if integer_part.abs() > 21_523_360 || fractional_part.len() > 16 {
             return Err(OverflowDetected::TierOverflow);
         }
 
-        let ternary_value = Self::convert_decimal_to_ternary_tier2(integer_part, fractional_part)?;
+        let ternary_value = Self::convert_decimal_to_ternary_tier2(integer_part, fractional_part, final_neg)?;
 
         Ok(Self {
             value: TernaryValue::Tier2(TernaryTier2::from_raw(ternary_value)),
@@ -912,9 +959,9 @@ impl UniversalTernaryFixed {
     }
 
     /// Try to create in Tier 3 (TQ32.32)
-    fn try_create_tier3(integer_part: i64, fractional_part: &str) -> Result<Self, OverflowDetected> {
+    fn try_create_tier3(integer_part: i64, fractional_part: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Most values should fit in Tier 3
-        let ternary_value = Self::convert_decimal_to_ternary_tier3(integer_part, fractional_part)?;
+        let ternary_value = Self::convert_decimal_to_ternary_tier3(integer_part, fractional_part, final_neg)?;
 
         Ok(Self {
             value: TernaryValue::Tier3(TernaryTier3::from_raw(ternary_value)),
@@ -923,8 +970,8 @@ impl UniversalTernaryFixed {
     }
 
     /// Create in Tier 4 (TQ64.64) - never fails, maximum precision
-    fn create_tier4(integer_part: i64, fractional_part: &str) -> Self {
-        let ternary_value = Self::convert_decimal_to_ternary_tier4(integer_part, fractional_part);
+    fn create_tier4(integer_part: i64, fractional_part: &str, final_neg: bool) -> Self {
+        let ternary_value = Self::convert_decimal_to_ternary_tier4(integer_part, fractional_part, final_neg);
 
         Self {
             value: TernaryValue::Tier4(TernaryTier4::from_raw(ternary_value)),
@@ -1149,7 +1196,7 @@ impl UniversalTernaryFixed {
     /// **FORMAT**: value = integer_part x 3^8 + fractional_encoding
     /// **STORAGE**: i32
     /// **ALGORITHM**: Pure integer arithmetic -- scale factor is 3^8 = 6561
-    fn convert_decimal_to_ternary_tier1(integer: i64, fractional: &str) -> Result<i32, OverflowDetected> {
+    fn convert_decimal_to_ternary_tier1(integer: i64, fractional: &str, final_neg: bool) -> Result<i32, OverflowDetected> {
         let scale = SCALE_TQ8_8 as i64; // 3^8 = 6561
 
         // Integer part: integer x scale
@@ -1163,7 +1210,13 @@ impl UniversalTernaryFixed {
             let frac_digits = fractional.parse::<i64>()
                 .map_err(|_| OverflowDetected::InvalidInput)?;
             let ten_pow = 10_i64.pow(fractional.len() as u32);
-            (frac_digits * scale) / ten_pow
+            // Nearest; tie direction from the FINAL sign (ties toward +∞):
+            // positive value → magnitude up, negative value → magnitude down.
+            let sn = frac_digits * scale;
+            let mut q = sn / ten_pow;
+            let rem2 = (sn - q * ten_pow) << 1;
+            if rem2 > ten_pow || (rem2 == ten_pow && !final_neg) { q += 1; }
+            q
         };
 
         let total = if integer >= 0 {
@@ -1183,7 +1236,7 @@ impl UniversalTernaryFixed {
     ///
     /// **FORMAT**: value = integer_part x 3^16 + fractional_encoding
     /// **STORAGE**: i64
-    fn convert_decimal_to_ternary_tier2(integer: i64, fractional: &str) -> Result<i64, OverflowDetected> {
+    fn convert_decimal_to_ternary_tier2(integer: i64, fractional: &str, final_neg: bool) -> Result<i64, OverflowDetected> {
         let scale = SCALE_TQ16_16; // 3^16 = 43_046_721
 
         // Integer part: integer x scale (use i128 intermediate to avoid overflow)
@@ -1197,7 +1250,12 @@ impl UniversalTernaryFixed {
             let frac_digits = fractional.parse::<i128>()
                 .map_err(|_| OverflowDetected::InvalidInput)?;
             let ten_pow = 10_i128.pow(fractional.len() as u32);
-            (frac_digits * scale as i128) / ten_pow
+            // Nearest, ties toward +∞ via the final sign (see tier 1).
+            let sn = frac_digits * scale as i128;
+            let mut q = sn / ten_pow;
+            let rem2 = (sn - q * ten_pow) << 1;
+            if rem2 > ten_pow || (rem2 == ten_pow && !final_neg) { q += 1; }
+            q
         };
 
         let total = if integer >= 0 {
@@ -1217,7 +1275,7 @@ impl UniversalTernaryFixed {
     ///
     /// **FORMAT**: value = integer_part x 3^32 + fractional_encoding
     /// **STORAGE**: i128
-    fn convert_decimal_to_ternary_tier3(integer: i64, fractional: &str) -> Result<i128, OverflowDetected> {
+    fn convert_decimal_to_ternary_tier3(integer: i64, fractional: &str, final_neg: bool) -> Result<i128, OverflowDetected> {
         let scale = SCALE_TQ32_32; // 3^32 = 1_853_020_188_851_841
 
         // Integer part: integer x scale
@@ -1231,7 +1289,12 @@ impl UniversalTernaryFixed {
             let frac_digits = fractional.parse::<i128>()
                 .map_err(|_| OverflowDetected::InvalidInput)?;
             let ten_pow = 10_i128.pow(fractional.len() as u32);
-            (frac_digits * scale) / ten_pow
+            // Nearest, ties toward +∞ via the final sign (see tier 1).
+            let sn = frac_digits * scale;
+            let mut q = sn / ten_pow;
+            let rem2 = (sn - q * ten_pow) << 1;
+            if rem2 > ten_pow || (rem2 == ten_pow && !final_neg) { q += 1; }
+            q
         };
 
         let total = if integer >= 0 {
@@ -1247,7 +1310,7 @@ impl UniversalTernaryFixed {
     ///
     /// **FORMAT**: value = integer_part x 3^64 + fractional_encoding
     /// **STORAGE**: I256 (never overflows at this tier)
-    fn convert_decimal_to_ternary_tier4(integer: i64, fractional: &str) -> I256 {
+    fn convert_decimal_to_ternary_tier4(integer: i64, fractional: &str, final_neg: bool) -> I256 {
         // 3^64 = 3_433_683_820_292_512_484_657_849_089_281 (fits in i128)
         let scale = I256::from_i128(3_433_683_820_292_512_484_657_849_089_281_i128);
 
@@ -1262,7 +1325,14 @@ impl UniversalTernaryFixed {
             let frac_digits = fractional.parse::<i128>().unwrap_or(0);
             let ten_pow = 10_i128.pow(fractional.len() as u32);
             let frac_i256 = I256::from_i128(frac_digits);
-            (frac_i256 * scale) / I256::from_i128(ten_pow)
+            // Nearest, ties toward +∞ via the final sign (see tier 1).
+            let sn = frac_i256 * scale;
+            let tp = I256::from_i128(ten_pow);
+            let (mut q, rem) =
+                crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(sn, tp);
+            let rem2 = rem + rem;
+            if rem2 > tp || (rem2 == tp && !final_neg) { q = q + I256::from_i128(1); }
+            q
         };
 
         if integer >= 0 {

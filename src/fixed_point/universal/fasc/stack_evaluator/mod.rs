@@ -127,39 +127,81 @@ pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result
     #[cfg(table_format = "q256_256")]
     use formatting::pow10_i512;
 
+    // 0.5.0 rounding unification: the RESULT domain is binary, so this
+    // coercion rounds nearest, ties toward +∞ on every profile (was:
+    // truncation on four arms, add-half on q16_16 — per-profile drift).
     #[cfg(table_format = "q256_256")]
     {
-        let ten_pow = pow10_i512(dp);
-        let scaled_i1024 = I1024::from_i512(scaled) << 256;
-        Ok((scaled_i1024 / I1024::from_i512(ten_pow)).as_i512())
+        let ten_pow = I1024::from_i512(pow10_i512(dp));
+        let num = I1024::from_i512(scaled) << 256;
+        let mut q = num / ten_pow;
+        let rem = num % ten_pow;
+        let rem_neg = (rem.words[15] as i64) < 0;
+        let rem_abs = if rem_neg { -rem } else { rem };
+        let positive = (num.words[15] as i64) >= 0;
+        let rem2 = rem_abs + rem_abs;
+        if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
+            q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
+        }
+        Ok(q.as_i512())
     }
     #[cfg(table_format = "q128_128")]
     {
         let ten_pow = pow10_i256(dp);
         let num = I512::from_i256(scaled) << 128;
         let den = I512::from_i256(ten_pow);
-        Ok((num / den).as_i256())
+        let (mut q, rem) =
+            crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(num, den);
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let positive = !num.is_negative();
+        let rem2 = rem_abs + rem_abs;
+        if if positive { rem2 >= den } else { rem2 > den } {
+            q = if positive { q + I512::from_i128(1) } else { q - I512::from_i128(1) };
+        }
+        Ok(q.as_i256())
     }
     #[cfg(table_format = "q64_64")]
     {
         let ten_pow = pow10_i256(dp);
         let num = I256::from_i128(scaled) << 64;
-        Ok((num / ten_pow).as_i128())
+        let (mut q, rem) =
+            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, ten_pow);
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let positive = !num.is_negative();
+        let rem2 = rem_abs + rem_abs;
+        if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
+            q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
+        }
+        Ok(q.as_i128())
     }
     #[cfg(table_format = "q32_32")]
     {
         let ten_pow = pow10_i256(dp);
         let num = I256::from_i128(scaled as i128) << 32;
-        Ok((num / ten_pow).as_i128() as i64)
+        let (mut q, rem) =
+            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, ten_pow);
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let positive = !num.is_negative();
+        let rem2 = rem_abs + rem_abs;
+        if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
+            q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
+        }
+        Ok(q.as_i128() as i64)
     }
     #[cfg(table_format = "q16_16")]
     {
         use crate::fixed_point::frac_config;
         let ten_pow = pow10_i256(dp);
         let num = I256::from_i128(scaled as i128) << (frac_config::FRAC_BITS as usize);
-        let half = ten_pow >> 1;
-        let rounded = if num >= I256::zero() { num + half } else { num - half };
-        Ok((rounded / ten_pow).as_i128() as i32)
+        let (mut q, rem) =
+            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, ten_pow);
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let positive = !num.is_negative();
+        let rem2 = rem_abs + rem_abs;
+        if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
+            q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
+        }
+        Ok(q.as_i128() as i32)
     }
 }
 

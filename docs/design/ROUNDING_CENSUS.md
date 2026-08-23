@@ -1,4 +1,28 @@
-# Rounding-Site Census (0.5.0 item 0c, stage a)
+# Rounding-Site Census (0.5.0 item 0c)
+
+**STATUS: IMPLEMENTED 2026-08-23 (stage b).** Every "Change for 0c" row
+below has landed; `tests/rounding_unification.rs` gates cross-path
+bit-equality (sweeps + constructed exact ties) per profile, and all five
+profiles pass their full suites. Corrections discovered during
+implementation:
+
+- Canonical decimal divide tiers 1–5 were NOT truncating — they are
+  **exact-or-rational-fallback** (`PrecisionLoss` → symbolic), which is
+  better than any rounding rule and was kept; only the tier-6 best-effort
+  arm truncated, now banker's.
+- `decimal_to_binary_storage` truncated on four arms and add-half-rounded
+  on q16_16 — unified to nearest ties-+∞ (result domain rule).
+- The UGOD binary divide's old half-away adjust also mis-signed its bump
+  for exact quotients in (−1, 0) raw units (branched on `quotient < 0`,
+  which is 0 there) — fixed by deriving the sign from the operands.
+- Ternary Tier-4 `saturating_neg` → fail-loud MIN assert (0.4.33 flag).
+- LU singularity nuance surfaced: exact-zero pivots for matrices with
+  storage-inexact multipliers (e.g. pivoting on 7 → 1/7) were a
+  truncation-cancellation coincidence; nearest leaves honest ulp noise.
+  Tests updated: dyadic-multiplier matrices must still fail loud, the
+  non-dyadic classic asserts an ulp-noise determinant bound.
+
+Original census (stage a) follows.
 
 Every rounding site that determines result bits, catalogued from source
 2026-08-14. This is the evidence base for the uniform rounding policy

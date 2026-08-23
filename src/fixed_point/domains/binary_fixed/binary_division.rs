@@ -26,8 +26,13 @@ impl BinaryTier1 {
         let remainder = a_wide % b_wide;
         let abs_2rem = (remainder.wrapping_abs() as u64) << 1;
         let abs_div = b_wide.unsigned_abs();
-        let result = if abs_2rem >= abs_div {
-            if quotient < 0 { quotient - 1 } else { quotient + 1 }
+        // 0.5.0 rounding unification: nearest, ties toward +∞ (was
+        // half-away, which also mis-signed the bump for exact quotients
+        // in (-1, 0): it branched on quotient<0, but q==0 there).
+        let positive = (a_wide < 0) == (b_wide < 0);
+        let bump = if positive { abs_2rem >= abs_div } else { abs_2rem > abs_div };
+        let result = if bump {
+            if positive { quotient + 1 } else { quotient - 1 }
         } else {
             quotient
         };
@@ -49,8 +54,11 @@ impl BinaryTier2 {
         let remainder = a_wide % b_wide;
         let abs_2rem = (remainder.unsigned_abs()) << 1;
         let abs_div = b_wide.unsigned_abs();
-        let result = if abs_2rem >= abs_div {
-            if quotient < 0 { quotient - 1 } else { quotient + 1 }
+        // Nearest, ties toward +∞ (see Tier 1 note).
+        let positive = (a_wide < 0) == (b_wide < 0);
+        let bump = if positive { abs_2rem >= abs_div } else { abs_2rem > abs_div };
+        let result = if bump {
+            if positive { quotient + 1 } else { quotient - 1 }
         } else {
             quotient
         };
@@ -71,8 +79,11 @@ impl BinaryTier3 {
         let (quotient, remainder) = crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(a_wide, b_wide);
         let abs_2rem = if remainder.is_negative() { (-remainder) << 1 } else { remainder << 1 };
         let abs_div = if b_wide.is_negative() { -b_wide } else { b_wide };
-        let result = if abs_2rem >= abs_div {
-            if quotient.is_negative() { quotient - I256::from_i128(1) } else { quotient + I256::from_i128(1) }
+        // Nearest, ties toward +∞ (see Tier 1 note).
+        let positive = a_wide.is_negative() == b_wide.is_negative();
+        let bump = if positive { abs_2rem >= abs_div } else { abs_2rem > abs_div };
+        let result = if bump {
+            if positive { quotient + I256::from_i128(1) } else { quotient - I256::from_i128(1) }
         } else {
             quotient
         };
@@ -92,8 +103,11 @@ impl BinaryTier4 {
         let (quotient, remainder) = crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(a_wide, b_wide);
         let abs_2rem = if remainder.is_negative() { (-remainder) << 1 } else { remainder << 1 };
         let abs_div = if b_wide.is_negative() { -b_wide } else { b_wide };
-        let result = if abs_2rem >= abs_div {
-            if quotient.is_negative() { quotient - I512::from_i128(1) } else { quotient + I512::from_i128(1) }
+        // Nearest, ties toward +∞ (see Tier 1 note).
+        let positive = a_wide.is_negative() == b_wide.is_negative();
+        let bump = if positive { abs_2rem >= abs_div } else { abs_2rem > abs_div };
+        let result = if bump {
+            if positive { quotient + I512::from_i128(1) } else { quotient - I512::from_i128(1) }
         } else {
             quotient
         };
@@ -117,8 +131,14 @@ impl BinaryTier5 {
         let quot_neg = (quotient.words[15] as i64) < 0;
         let abs_2rem = if rem_neg { (-remainder) << 1 } else { remainder << 1 };
         let abs_div = if div_neg { -b_wide } else { b_wide };
-        let result = if abs_2rem >= abs_div {
-            if quot_neg { quotient - I1024::from_i128(1) } else { quotient + I1024::from_i128(1) }
+        // Nearest, ties toward +∞ (see Tier 1 note). Exact-result sign
+        // from the operand signs, NOT from quotient (wrong at q == 0).
+        let _ = quot_neg;
+        let a_neg = (a_wide.words[15] as i64) < 0;
+        let positive = a_neg == div_neg;
+        let bump = if positive { abs_2rem >= abs_div } else { abs_2rem > abs_div };
+        let result = if bump {
+            if positive { quotient + I1024::from_i128(1) } else { quotient - I1024::from_i128(1) }
         } else {
             quotient
         };
@@ -137,6 +157,22 @@ impl BinaryTier6 {
         let a_wide = I2048::from_i1024(self.value) << 512;
         let b_wide = I2048::from_i1024(other.value);
         let quotient = i2048_div(a_wide, b_wide);
+        // Nearest, ties toward +∞ (was bare truncation — the only tier
+        // without an adjust; unified 0.5.0).
+        let rem = a_wide - quotient * b_wide;
+        let rem_neg = (rem.words[31] as i64) < 0;
+        let a_neg = (a_wide.words[31] as i64) < 0;
+        let b_neg = (b_wide.words[31] as i64) < 0;
+        let abs_2rem = (if rem_neg { -rem } else { rem }) << 1;
+        let abs_div = if b_neg { -b_wide } else { b_wide };
+        let positive = a_neg == b_neg;
+        let bump = if positive { abs_2rem >= abs_div } else { abs_2rem > abs_div };
+        let one = I2048::from_i1024(I1024::from_i128(1));
+        let quotient = if bump {
+            if positive { quotient + one } else { quotient - one }
+        } else {
+            quotient
+        };
         Some(Self { value: quotient.as_i1024() })
     }
 }

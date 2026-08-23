@@ -51,41 +51,30 @@ error — is identical everywhere.
 
 ## 3. Rounding contract
 
-Each path has a defined rounding behavior, **verified against source
-2026-08-14** (rows state what the code does, per path, because two paths
-over the same domain do not all share one rule — see the caveat below):
+**Unified 2026-08-23 (0.5.0)**: one rule per domain, identical on every
+path (imperative, canonical/UGOD, fused, coercions), gated permanently by
+`tests/rounding_unification.rs` (cross-path bit-equality sweeps including
+constructed exact-tie inputs, per profile):
 
-| Path | Multiply | Divide | Wide-tier downscale |
-| ---- | -------- | ------ | ------------------- |
-| Binary, imperative `FixedPoint` | **profile-dependent**: floor (realtime/compact), half-even (embedded), truncate toward zero (balanced/scientific) | truncate toward zero (all profiles) | round-to-nearest, ties toward +∞ |
-| Binary, canonical/UGOD tier arithmetic | round-to-nearest, ties toward +∞ | round-half-away-from-zero | round-to-nearest, ties toward +∞ |
-| Decimal, imperative `DecimalFixed<D>` | round-half-even (banker's) | round-half-even (banker's) | — |
-| Decimal, canonical domain | exact (decimal places grow, no rounding) | truncate toward zero | (dp-cap rule pinned during unification) |
-| Balanced ternary | truncate toward zero | truncate toward zero | — (transcendentals route via binary) |
+| Domain | Rule (everywhere) | Notes |
+| ------ | ----------------- | ----- |
+| Binary | round-to-nearest, ties toward +∞ | multiply, divide, every wide-tier downscale, and decimal→binary coercion — one rule, all five profiles |
+| Decimal | exact when representable; banker's (half-even) where rounding occurs | canonical multiply grows decimal places (no rounding); canonical divide tiers 1–5 are exact-or-rational-fallback (`PrecisionLoss` → symbolic) and never round; `DecimalFixed<D>` and the tier-6 best-effort divide round banker's |
+| Balanced ternary | round-to-nearest | tie-free for multiply and `div3` (odd scale, contract theorem); ties toward +∞ where ties exist (divide, conversion in — e.g. `0.5` → raw 3281, `-0.5` → raw −3280, the documented +∞ tie asymmetry) |
 
-The full per-site evidence is in
-[docs/design/ROUNDING_CENSUS.md](docs/design/ROUNDING_CENSUS.md)
-(2026-08-14): the imperative binary multiply was found to use *three*
-different rules across profiles, and the imperative divide truncates on
-every profile. This table states shipping behavior; the unification target
-(one rule per domain on every path — binary nearest-ties-up, decimal
-banker's, ternary nearest/tie-free) is ROADMAP 0.5.0 item 0c.
+Exactness-first remains the prior rule everywhere: a result representable
+in its domain is returned exactly; rounding fires only at the single
+narrowing a path performs. Compound paths (transcendentals, dots,
+decompositions, chains, fused ops) still compute at tier N+1 and round
+exactly once. The one contracted exception to nearest is the TQ1.9
+wide-output `matvec_q2f` narrowing, which stays truncation by its own
+published 0.4.31 bit-reproducibility contract.
 
-The rules differ by operation, by path, AND (imperatively) by profile —
-historical artifacts, never retroactively unified. Consequence, measured
-2026-08-14: **direct storage-tier multiply differs between the imperative
-and canonical paths on ~half of all inexact products** (1 ulp, floor vs
-nearest — 48.7% of 44,044 sampled pairs on compact), and divide diverges
-analogously on every profile (truncate vs half-away). Path independence
-currently holds for compound results but NOT for direct storage-tier
-mul/div; unification (ROADMAP 0.5.0 item 0c — one rule per domain on
-every path) repairs this. Each individual path remains fully
-deterministic and bit-identical cross-platform. Every compound path —
-every transcendental, dot product, decomposition, matrix chain, and fused
-op — computes at tier N+1 (double the fractional bits) and rounds to
-storage exactly once through the shared ties-up downscale; those results
-are path-independent today and stay so. The reasoning is expanded in
-[the precision guide](docs/README_PRECISION.md).
+History: before unification the rules differed by operation, by path, and
+(imperatively) by profile — direct storage-tier multiply diverged between
+paths on ~half of inexact products (measured 48.7% of 44k pairs, 1 ulp).
+The full per-site before/after evidence is preserved in
+[docs/design/ROUNDING_CENSUS.md](docs/design/ROUNDING_CENSUS.md).
 
 ## 4. Cross-profile semantics
 

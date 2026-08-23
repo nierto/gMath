@@ -980,44 +980,61 @@ impl DivAssign for FixedPoint {
 fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
     {
-        // i32*i32→i64, >>FRAC_BITS, truncate to i32
+        // i32*i32→i64, >>FRAC_BITS with round-bit: nearest, ties toward +∞
+        // (0.5.0 rounding unification — was floor via bare shift)
         let wide = (a as i64) * (b as i64);
-        (wide >> FRAC_BITS) as i32
+        let round_bit = (wide >> (FRAC_BITS - 1)) & 1;
+        ((wide >> FRAC_BITS) + round_bit) as i32
     }
     #[cfg(table_format = "q32_32")]
     {
-        // i64*i64→i128, >>32, truncate to i64
+        // i64*i64→i128, >>32 with round-bit: nearest, ties toward +∞
+        // (0.5.0 rounding unification — was floor via bare shift)
         let wide = (a as i128) * (b as i128);
-        (wide >> 32) as i64
+        let round_bit = (wide >> 31) & 1;
+        ((wide >> 32) + round_bit) as i64
     }
     #[cfg(table_format = "q64_64")]
     {
-        // multiply_binary_i128 does: i128*i128→I256, >>64, banker's rounding
+        // multiply_binary_i128: i128*i128→I256, >>64, nearest ties toward +∞ (0.5.0)
         multiply_binary_i128(a, b)
     }
     #[cfg(table_format = "q128_128")]
     {
-        // I256*I256→I512, >>128, truncate to I256
-        // Sign-correct widening multiply
+        // I256*I256→I512, >>128: nearest, ties toward +∞ (0.5.0 rounding
+        // unification — was truncate toward zero). Computed on magnitudes
+        // (mul_to_i512 is unsigned): for a positive result round the
+        // magnitude up on remainder >= half (tie goes up = toward +∞);
+        // for a negative result round the magnitude up only on
+        // remainder > half (tie stays = toward +∞ after negation).
         let a_neg = a.is_negative();
         let b_neg = b.is_negative();
         let result_neg = a_neg != b_neg;
         let abs_a = if a_neg { -a } else { a };
         let abs_b = if b_neg { -b } else { b };
         let product = abs_a.mul_to_i512(abs_b);
-        let shifted = (product >> 128usize).as_i256();
-        if result_neg { -shifted } else { shifted }
+        let half = I512::from_i128(1) << 127usize;
+        let rem = product & ((I512::from_i128(1) << 128usize) - I512::from_i128(1));
+        let mut mag = (product >> 128usize).as_i256();
+        let bump = if result_neg { rem > half } else { rem >= half };
+        if bump { mag = mag + I256::from_i128(1); }
+        if result_neg { -mag } else { mag }
     }
     #[cfg(table_format = "q256_256")]
     {
-        // I512*I512→I1024, >>256, truncate to I512
+        // I512*I512→I1024, >>256: nearest, ties toward +∞ (0.5.0 rounding
+        // unification — was truncate toward zero; see q128_128 arm).
         let a_neg = a.is_negative();
         let b_neg = b.is_negative();
         let result_neg = a_neg != b_neg;
         let abs_a = if a_neg { -a } else { a };
         let abs_b = if b_neg { -b } else { b };
         let product = abs_a.mul_to_i1024(abs_b);
-        let shifted = (product >> 256usize).as_i512();
+        let half = I1024::from_i128(1) << 255usize;
+        let rem = product & ((I1024::from_i128(1) << 256usize) - I1024::from_i128(1));
+        let bump = if result_neg { rem > half } else { rem >= half };
+        let mut shifted = (product >> 256usize).as_i512();
+        if bump { shifted = shifted + I512::from_i128(1); }
         if result_neg { -shifted } else { shifted }
     }
 }
@@ -1028,7 +1045,11 @@ fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
 
 /// Divide two Q-format fixed-point values.
 ///
-/// Uses tier N+1 widening: (a << FRAC_BITS) / b.
+/// Uses tier N+1 widening: (a << FRAC_BITS) / b, rounded to nearest with
+/// ties toward +∞ (0.5.0 rounding unification — was truncation toward
+/// zero). The exact quotient's sign decides the tie direction: positive
+/// results bump on 2|rem| >= |den| (tie goes up), negative results bump
+/// only on 2|rem| > |den| (tie stays, which is toward +∞).
 /// Panics on division by zero.
 #[inline]
 fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
@@ -1037,34 +1058,68 @@ fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
         let num = (a as i64) << FRAC_BITS;
         let den = b as i64;
         assert!(den != 0, "FixedPoint: division by zero");
-        (num / den) as i32
+        let q = num / den;
+        let rem2 = (num - q * den).unsigned_abs() << 1;
+        let dabs = den.unsigned_abs();
+        let positive = (num < 0) == (den < 0);
+        let bump = if positive { rem2 >= dabs } else { rem2 > dabs };
+        (if bump { q + if positive { 1 } else { -1 } } else { q }) as i32
     }
     #[cfg(table_format = "q32_32")]
     {
         let num = (a as i128) << 32;
         let den = b as i128;
         assert!(den != 0, "FixedPoint: division by zero");
-        (num / den) as i64
+        let q = num / den;
+        let rem2 = (num - q * den).unsigned_abs() << 1;
+        let dabs = den.unsigned_abs();
+        let positive = (num < 0) == (den < 0);
+        let bump = if positive { rem2 >= dabs } else { rem2 > dabs };
+        (if bump { q + if positive { 1 } else { -1 } } else { q }) as i64
     }
     #[cfg(table_format = "q64_64")]
     {
         let num = I256::from_i128(a) << 64usize;
         let den = I256::from_i128(b);
         assert!(!den.is_zero(), "FixedPoint: division by zero");
-        (num / den).as_i128()
+        let q = num / den;
+        let rem = num - q * den;
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let den_abs = if den.is_negative() { -den } else { den };
+        let positive = num.is_negative() == den.is_negative();
+        let rem2 = rem_abs + rem_abs;
+        let bump = if positive { rem2 >= den_abs } else { rem2 > den_abs };
+        let one = I256::from_i128(1);
+        (if bump { if positive { q + one } else { q - one } } else { q }).as_i128()
     }
     #[cfg(table_format = "q128_128")]
     {
         let num = I512::from_i256(a) << 128usize;
         let den = I512::from_i256(b);
         assert!(!den.is_zero(), "FixedPoint: division by zero");
-        (num / den).as_i256()
+        let q = num / den;
+        let rem = num - q * den;
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let den_abs = if den.is_negative() { -den } else { den };
+        let positive = num.is_negative() == den.is_negative();
+        let rem2 = rem_abs + rem_abs;
+        let bump = if positive { rem2 >= den_abs } else { rem2 > den_abs };
+        let one = I512::from_i128(1);
+        (if bump { if positive { q + one } else { q - one } } else { q }).as_i256()
     }
     #[cfg(table_format = "q256_256")]
     {
         let num = I1024::from_i512(a) << 256usize;
         let den = I1024::from_i512(b);
         assert!(!den.is_zero(), "FixedPoint: division by zero");
-        (num / den).as_i512()
+        let q = num / den;
+        let rem = num - q * den;
+        let rem_abs = if rem < I1024::zero() { -rem } else { rem };
+        let den_abs = if den < I1024::zero() { -den } else { den };
+        let positive = (num < I1024::zero()) == (den < I1024::zero());
+        let rem2 = rem_abs + rem_abs;
+        let bump = if positive { rem2 >= den_abs } else { rem2 > den_abs };
+        let one = I1024::from_i128(1);
+        (if bump { if positive { q + one } else { q - one } } else { q }).as_i512()
     }
 }

@@ -290,7 +290,12 @@ I512 path). Remaining suspects: `pow_tier_n_plus_1.rs:119/192` feed
 `y·ln_x` — which CAN be negative — into `mul_to_i2048`. Audit every call
 site, add adversarial negative-operand tests per site.
 
-### 0c. Uniform rounding policy — one rule per domain, across every path
+### 0c. Uniform rounding policy — DELIVERED on main 2026-08-23
+
+**Implemented exactly as analyzed below**; permanent gate
+`tests/rounding_unification.rs`; per-site evidence and implementation
+corrections in `docs/design/ROUNDING_CENSUS.md`; CONTRACT.md §3 collapsed
+to one row per domain. Original analysis retained:
 
 **Owner-directed 2026-08-14** ("having different rounding makes it a more
 difficult library to work with"). Today rounding differs not just per

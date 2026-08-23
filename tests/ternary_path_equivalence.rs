@@ -223,12 +223,12 @@ fn fractional_literal_conversion_boundary() {
     let v = UniversalTernaryFixed::from_str("0.5").expect("parse 0.5");
     let (tier, raw) = v.to_tier_value();
     assert_eq!(tier, 1);
-    // MEASURED pin (contract §5): the shipped conversion truncates toward
-    // zero — 0.5·3^8 = 3280.5 lands on 3280 (the tie resolves low), and
-    // 1.5·3^8 = 9841.5 on 9841.
-    assert_eq!(raw, 3280, "0.5 conversion pin");
+    // Pin (contract §5, 0.5.0 unification): conversion rounds NEAREST with
+    // ties toward +∞ — 0.5·3^8 = 3280.5 is a genuine tie and resolves UP
+    // to 3281; 1.5·3^8 = 9841.5 → 9842.
+    assert_eq!(raw, 3281, "0.5 conversion pin (nearest, tie → +∞)");
     let (_, raw15) = UniversalTernaryFixed::from_str("1.5").expect("1.5").to_tier_value();
-    assert_eq!(raw15, 9841, "1.5 conversion pin");
+    assert_eq!(raw15, 9842, "1.5 conversion pin (nearest, tie → +∞)");
     // Exact-decimal values that ARE ternary-representable: integers only —
     // 0.5 is necessarily inexact (denominator 2 ∉ {3}).
     assert_ne!(raw as i128 * 2, (SCALE_TQ8_8 as i128) * 1, "0.5 cannot be exact");
@@ -257,6 +257,8 @@ fn negative_fractional_literal_sign_regression() {
     // REGRESSION (fixed in 0.4.33): "-0.5" parsed as +0.5 — the "-0"
     // integer part lost its sign before the fraction was applied. The fix
     // strips the sign once in from_str and negates the parsed magnitude.
+    // Nearest with ties toward +∞ (0.5.0): −0.5 is a tie and resolves UP
+    // (toward +∞) to −3280; −0.1 has no tie (656.1 → 656); −1.5 tie → −9841.
     for (s, expected_raw) in [("-0.5", -3280i128), ("-0.1", -656), ("-1.5", -9841)] {
         let (tier, raw) = UniversalTernaryFixed::from_str(s)
             .expect("parse negative fractional")
@@ -264,13 +266,18 @@ fn negative_fractional_literal_sign_regression() {
         assert_eq!(tier, 1);
         assert_eq!(raw, expected_raw, "sign-correct conversion of {s}");
     }
-    // Sign symmetry of conversion: parse(-s) == -parse(s), exactly.
-    for s in ["0.5", "0.1", "1.5", "3280", "0.0001"] {
+    // Sign symmetry of conversion holds for every NON-tie input;
+    // exact ties break it by design (ties toward +∞ is not odd-symmetric):
+    // parse(0.5) = 3281 but parse(-0.5) = −3280. Both directions pinned.
+    for s in ["0.1", "3280", "0.0001", "0.3", "1.7"] {
         let pos = UniversalTernaryFixed::from_str(s).expect("pos").to_tier_value();
         let neg = UniversalTernaryFixed::from_str(&format!("-{s}")).expect("neg").to_tier_value();
         assert_eq!(neg.0, pos.0, "tier symmetry for {s}");
         assert_eq!(neg.1, -pos.1, "raw symmetry for {s}");
     }
+    let tie_pos = UniversalTernaryFixed::from_str("0.5").unwrap().to_tier_value().1;
+    let tie_neg = UniversalTernaryFixed::from_str("-0.5").unwrap().to_tier_value().1;
+    assert_eq!((tie_pos, tie_neg), (3281, -3280), "documented tie asymmetry (+∞)");
     // Double minus stays rejected.
     assert!(UniversalTernaryFixed::from_str("--5").is_err());
 }

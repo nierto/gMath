@@ -72,11 +72,9 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
   reachable lazily (`gmath`), directly (`FixedPoint`), or natively in decimal
   (`DecimalFixed`).
 - **Two computation paths** - a routed canonical layer for mixed or chained work
-  and a direct imperative layer for known-domain hot loops. Compound results
-  (transcendentals, fused ops, chains) are path-independent; direct
-  storage-tier multiply/divide currently round differently per path (up to
-  1 ULP — measured, documented in [CONTRACT.md](CONTRACT.md) §3), with
-  unification scheduled for 0.5.0.
+  and a direct imperative layer for known-domain hot loops. Results are
+  path-independent: one rounding rule per domain on every path (unified
+  0.5.0, permanently test-gated — see [CONTRACT.md](CONTRACT.md) §3).
 - **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
   and Lie groups, and standalone TQ1.9 ternary inference.
 - **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;

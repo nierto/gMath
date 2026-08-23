@@ -27,7 +27,16 @@ pub fn divide_ternary_tq8_8(a: i32, b: i32) -> Result<i32, OverflowDetected> {
     // Scale numerator to preserve precision
     match (a as i64).checked_mul(SCALE_TQ8_8 as i64) {
         Some(scaled_a) => {
-            let result = scaled_a / (b as i64);
+            // 0.5.0: nearest, ties toward +∞ (was truncation). Divisor is
+            // arbitrary, so unlike multiply (odd scale) ties CAN occur here.
+            let den = b as i64;
+            let mut result = scaled_a / den;
+            let rem2 = (scaled_a - result * den).unsigned_abs() << 1;
+            let dabs = den.unsigned_abs();
+            let positive = (scaled_a < 0) == (den < 0);
+            if if positive { rem2 >= dabs } else { rem2 > dabs } {
+                result += if positive { 1 } else { -1 };
+            }
             if result >= i32::MIN as i64 && result <= i32::MAX as i64 {
                 Ok(result as i32)
             } else {
@@ -52,7 +61,15 @@ pub fn divide_ternary_tq16_16(a: i64, b: i64) -> Result<i64, OverflowDetected> {
     // Scale numerator to preserve precision
     match (a as i128).checked_mul(SCALE_TQ16_16 as i128) {
         Some(scaled_a) => {
-            let result = scaled_a / (b as i128);
+            // Nearest, ties toward +∞ (see Tier 1 note).
+            let den = b as i128;
+            let mut result = scaled_a / den;
+            let rem2 = (scaled_a - result * den).unsigned_abs() << 1;
+            let dabs = den.unsigned_abs();
+            let positive = (scaled_a < 0) == (den < 0);
+            if if positive { rem2 >= dabs } else { rem2 > dabs } {
+                result += if positive { 1 } else { -1 };
+            }
             if result >= i64::MIN as i128 && result <= i64::MAX as i128 {
                 Ok(result as i64)
             } else {
@@ -79,9 +96,17 @@ pub fn divide_ternary_tq32_32(a: i128, b: i128) -> Result<i128, OverflowDetected
     let b_extended = I256::from_i128(b);
     let scale = I256::from_i128(SCALE_TQ32_32);
 
-    // Scale numerator and divide
+    // Scale numerator and divide — nearest, ties toward +∞ (0.5.0)
     let scaled_a = a_extended * scale;
-    let result = scaled_a / b_extended;
+    let (mut result, rem) =
+        crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(scaled_a, b_extended);
+    let rem_abs = if rem.is_negative() { -rem } else { rem };
+    let den_abs = if b_extended.is_negative() { -b_extended } else { b_extended };
+    let positive = scaled_a.is_negative() == b_extended.is_negative();
+    let rem2 = rem_abs + rem_abs;
+    if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+        result = if positive { result + I256::from_i128(1) } else { result - I256::from_i128(1) };
+    }
 
     if result.fits_in_i128() {
         Ok(result.as_i128())
@@ -107,9 +132,17 @@ pub fn divide_ternary_tq64_64(a: I256, b: I256) -> I256 {
     let b_extended = I512::from_i256(b);
     let scale = compute_3_pow_64_i512();
 
-    // Scale numerator and divide
+    // Scale numerator and divide — nearest, ties toward +∞ (0.5.0)
     let scaled_a = a_extended * scale;
-    let result = scaled_a / b_extended;
+    let (mut result, rem) =
+        crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(scaled_a, b_extended);
+    let rem_abs = if rem.is_negative() { -rem } else { rem };
+    let den_abs = if b_extended.is_negative() { -b_extended } else { b_extended };
+    let positive = scaled_a.is_negative() == b_extended.is_negative();
+    let rem2 = rem_abs + rem_abs;
+    if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+        result = if positive { result + I512::from_i128(1) } else { result - I512::from_i128(1) };
+    }
 
     // Saturate back to I256
     result.as_i256_saturating()
@@ -130,7 +163,16 @@ pub fn divide_ternary_tq64_64_checked(a: I256, b: I256) -> Result<I256, Overflow
     let b_extended = I512::from_i256(b);
     let scale = compute_3_pow_64_i512();
     let scaled_a = a_extended * scale;
-    let result = scaled_a / b_extended;
+    // Nearest, ties toward +∞ — matches the unchecked variant.
+    let (mut result, rem) =
+        crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(scaled_a, b_extended);
+    let rem_abs = if rem.is_negative() { -rem } else { rem };
+    let den_abs = if b_extended.is_negative() { -b_extended } else { b_extended };
+    let positive = scaled_a.is_negative() == b_extended.is_negative();
+    let rem2 = rem_abs + rem_abs;
+    if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+        result = if positive { result + I512::from_i128(1) } else { result - I512::from_i128(1) };
+    }
 
     if result.fits_in_i256() {
         Ok(result.as_i256())
@@ -154,7 +196,19 @@ pub fn divide_ternary_tq128_128(a: I512, b: I512) -> Result<I512, OverflowDetect
     let b_extended = I1024::from_i512(b);
     let scale = scale_tq128_128_i1024();
     let scaled_a = a_extended * scale;
-    let result = scaled_a / b_extended;
+    // Nearest, ties toward +∞ (0.5.0).
+    let mut result = scaled_a / b_extended;
+    let rem = scaled_a % b_extended;
+    let rem_neg = (rem.words[15] as i64) < 0;
+    let den_neg = (b_extended.words[15] as i64) < 0;
+    let sa_neg = (scaled_a.words[15] as i64) < 0;
+    let rem_abs = if rem_neg { -rem } else { rem };
+    let den_abs = if den_neg { -b_extended } else { b_extended };
+    let positive = sa_neg == den_neg;
+    let rem2 = rem_abs + rem_abs;
+    if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+        result = if positive { result + I1024::from_i128(1) } else { result - I1024::from_i128(1) };
+    }
 
     if result.fits_in_i512() {
         Ok(result.as_i512())
@@ -185,8 +239,29 @@ pub fn divide_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
     let scale = I2048::from_i1024(scale_tq256_256());
     let scaled_a = a_ext * scale;
 
-    // Divide I2048 by I1024
-    i2048_div_by_i1024(scaled_a, b).as_i1024()
+    // Divide I2048 by I1024 — nearest, ties toward +∞ (0.5.0; was
+    // truncation). Work on magnitudes: i2048_div_by_i1024 already
+    // sign-handles the quotient, so recover the remainder magnitude via
+    // |scaled_a| − |q|·|b| and bump per the exact result's sign.
+    let q = i2048_div_by_i1024(scaled_a, b);
+    let sa_neg = (scaled_a.words[31] as i64) < 0;
+    let b_neg = (b.words[15] as i64) < 0;
+    let positive = sa_neg == b_neg;
+    let abs_sa = if sa_neg { -scaled_a } else { scaled_a };
+    let q_neg = (q.words[31] as i64) < 0;
+    let abs_q = if q_neg { -q } else { q };
+    let abs_b = if b_neg { -b } else { b };
+    let qb = abs_q.as_i1024().mul_to_i2048(abs_b); // non-negative magnitudes — safe
+    let rem = abs_sa - qb;
+    let rem2 = rem + rem;
+    let abs_b_wide = I2048::from_i1024(abs_b);
+    let one = I2048::from_i1024(I1024::from_i128(1));
+    let bumped = if if positive { rem2 >= abs_b_wide } else { rem2 > abs_b_wide } {
+        if positive { q + one } else { q - one }
+    } else {
+        q
+    };
+    bumped.as_i1024()
 }
 
 // ============================================================================

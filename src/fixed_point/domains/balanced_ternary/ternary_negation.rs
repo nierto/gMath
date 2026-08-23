@@ -43,10 +43,20 @@ pub fn negate_ternary_tq32_32(a: i128) -> Result<i128, OverflowDetected> {
     }
 }
 
-/// TQ64.64 negation (maximum precision, never fails)
+/// TQ64.64 negation.
+///
+/// 0.5.0 consistency fix: was `saturating_neg` — the one tier that silently
+/// absorbed the binary-MIN edge instead of failing loud like every other
+/// tier's `checked_neg`. I256::MIN is unreachable from any valid ternary
+/// value (the ternary window is symmetric), so panicking is the correct
+/// fail-loud behavior for the impossible case.
 #[inline]
 pub fn negate_ternary_tq64_64(a: I256) -> I256 {
-    a.saturating_neg()
+    assert!(
+        a != I256::min_value(),
+        "ternary Tier4 negate: I256::MIN is outside the balanced-ternary window"
+    );
+    -a
 }
 
 /// TQ128.128 negation

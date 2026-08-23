@@ -202,11 +202,13 @@ pub fn multiply_binary_i128_scalar(a: i128, b: i128) -> i128 {
     let result = mul_i128_to_i256(a, b);
     let scaled = result >> 64;
 
-    // Round to nearest even (IEEE 754 compliant)
     let remainder = result.words[0];
     let half = 1u64 << 63;
 
-    if remainder > half || (remainder == half && (scaled.words[0] & 1) == 1) {
+    // 0.5.0 rounding unification: nearest, ties toward +INF (was banker's).
+    // Adding 1 whenever the discarded low half >= 2^63 implements
+    // round-to-nearest-ties-up for all signs on the two's-complement product.
+    if remainder >= half {
         scaled.as_i128().wrapping_add(1)
     } else {
         scaled.as_i128()
@@ -271,12 +273,15 @@ unsafe fn multiply_binary_i128_avx2(a: i128, b: i128) -> i128 {
         }
     }
 
-    // Apply identical rounding logic to scalar version
+    // Identical rounding to the scalar version (nearest, ties toward +INF).
     let scaled = result >> 64;
     let remainder = result.words[0];
     let half = 1u64 << 63;
 
-    if remainder > half || (remainder == half && (scaled.words[0] & 1) == 1) {
+    // 0.5.0 rounding unification: nearest, ties toward +INF (was banker's).
+    // Adding 1 whenever the discarded low half >= 2^63 implements
+    // round-to-nearest-ties-up for all signs on the two's-complement product.
+    if remainder >= half {
         scaled.as_i128().wrapping_add(1)
     } else {
         scaled.as_i128()

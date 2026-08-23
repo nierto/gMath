@@ -212,26 +212,53 @@ fn oracle_mul_matches_exact_product() {
 // Shipping mul/div semantics: toward-zero truncation, odd symmetry
 // ============================================================================
 
+/// Round-to-nearest model for p/q: mul uses the symmetric form (odd scale,
+/// tie-free); div uses ties toward +∞ (arbitrary divisor CAN tie) —
+/// contract §3 as unified in 0.5.0.
+fn nearest_symmetric(p: i128, q: i128) -> i128 {
+    let t = p / q;
+    let r = p - t * q;
+    if 2 * r.abs() > q.abs() { t + r.signum() * q.signum() } else { t }
+}
+fn nearest_ties_up(p: i128, q: i128) -> i128 {
+    let t = p / q;
+    let r2 = 2 * (p - t * q).abs();
+    let qa = q.abs();
+    let positive = (p < 0) == (q < 0);
+    if if positive { r2 >= qa } else { r2 > qa } {
+        t + if positive { 1 } else { -1 }
+    } else {
+        t
+    }
+}
+
 #[test]
-fn mul_div_toward_zero_and_symmetric() {
+fn mul_div_nearest_and_symmetric() {
     let scale = SCALE_TQ8_8 as i128;
     let mut a = -SWEEP;
     while a <= SWEEP {
         let mut b = -SWEEP;
         while b <= SWEEP {
-            // Contract §3: mul = (a·b)/3^8 truncated toward zero.
-            let want = (a * b) / scale;
+            // Contract §3 (0.5.0): mul = nearest((a·b)/3^8) — tie-free
+            // because the scale is odd, hence fully sign-symmetric.
+            let want = nearest_symmetric(a * b, scale);
             let got = multiply_ternary_tq8_8(a as i32, b as i32).unwrap();
             assert_eq!(got as i128, want, "mul semantics at {a},{b}");
-            // Odd symmetry: mul(-a, b) == -mul(a, b).
             let got_neg = multiply_ternary_tq8_8(-a as i32, b as i32).unwrap();
             assert_eq!(got_neg, -got, "mul odd-symmetry at {a},{b}");
             if b != 0 {
-                let want_div = (a * scale) / b;
+                // div = nearest((a·3^8)/b), ties toward +∞.
+                let want_div = nearest_ties_up(a * scale, b);
                 let got_div = divide_ternary_tq8_8(a as i32, b as i32).unwrap();
                 assert_eq!(got_div as i128, want_div, "div semantics at {a},{b}");
+                // Div symmetry holds except on exact ties (ties-+∞ is not
+                // odd-symmetric); the model equality above covers both signs.
                 let got_div_neg = divide_ternary_tq8_8(-a as i32, b as i32).unwrap();
-                assert_eq!(got_div_neg, -got_div, "div odd-symmetry at {a},{b}");
+                assert_eq!(
+                    got_div_neg as i128,
+                    nearest_ties_up(-a * scale, b),
+                    "div model at -{a},{b}"
+                );
             }
             b += STRIDE * 3 + 1; // stride not a multiple of 3
         }
@@ -434,13 +461,13 @@ fn tier2_ops_match_exact_i128_model() {
         assert_eq!(negate_ternary_tq16_16(ra).unwrap(), -ra);
         assert_eq!(
             multiply_ternary_tq16_16(ra, rb).unwrap() as i128,
-            (ra as i128 * rb as i128) / scale,
+            nearest_symmetric(ra as i128 * rb as i128, scale),
             "tier2 mul at ({a},{b})"
         );
         if rb != 0 {
             assert_eq!(
                 divide_ternary_tq16_16(ra, rb).unwrap() as i128,
-                (ra as i128 * scale) / rb as i128,
+                nearest_ties_up(ra as i128 * scale, rb as i128),
                 "tier2 div at ({a},{b})"
             );
         }
@@ -470,12 +497,13 @@ fn tier3_ops_match_exact_i128_model() {
             );
         }
     }
-    // Truncation-toward-zero semantics at tier 3, both signs.
+    // Nearest ties-+∞ semantics at tier 3 (0.5.0): 3.5 raw units is a
+    // genuine tie — +3.5 → 4 (up), −3.5 → −3 (toward +∞).
     let seven = 7i128 * scale;
     let two = 2i128 * scale;
-    let want = (7i128 * scale * scale) / (2i128 * scale); // 3.5 truncated in raw
-    assert_eq!(divide_ternary_tq32_32(seven, two).unwrap(), want);
-    assert_eq!(divide_ternary_tq32_32(-seven, two).unwrap(), -want);
+    let base = (7i128 * scale * scale) / (2i128 * scale); // 3.5 truncated
+    assert_eq!(divide_ternary_tq32_32(seven, two).unwrap(), base + 1);
+    assert_eq!(divide_ternary_tq32_32(-seven, two).unwrap(), -base);
 }
 
 #[test]
