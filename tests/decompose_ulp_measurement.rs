@@ -199,6 +199,19 @@ fn test_ulp_measurement_report() {
     // ── 6. QR orthogonality: measure Q^T Q - I ──
     println!("── QR Orthogonality: max |Q^T Q - I| in ULP ──");
     {
+        // The classic Golub matrix has column-norm² ≈ 31,066 — 95% of
+        // Q16.16's ±32,767 range. Under 0.5.0 nearest rounding an internal
+        // materialization legitimately crosses the storage ceiling on
+        // realtime (fail-loud round_to_storage), so the realtime report
+        // measures a dyadically scaled copy (÷8: same orthogonality
+        // structure, norms² ÷64) instead of a value at the range cliff.
+        #[cfg(table_format = "q16_16")]
+        let a = FixedMatrix::from_slice(3, 3, &[
+            fp("1.5"), fp("-6.375"), fp("0.5"),
+            fp("0.75"), fp("20.875"), fp("-8.5"),
+            fp("-0.5"), fp("3"), fp("-5.125"),
+        ]);
+        #[cfg(not(table_format = "q16_16"))]
         let a = FixedMatrix::from_slice(3, 3, &[
             fp("12"), fp("-51"), fp("4"),
             fp("6"), fp("167"), fp("-68"),

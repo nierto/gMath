@@ -117,3 +117,18 @@ listed for completeness, no change:
   widest-reaching single item and deserves its own line in the notice.
 - Every change lands with constructed-tie/cross-path equivalence tests;
   CONTRACT.md §3 collapses to one row per domain when done.
+
+
+## Appendix (0b, 2026-08-23): unsigned widening-multiply call-site audit
+
+Classification of every `mul_to_i512/i1024/i2048` caller — see ROADMAP
+item 0b (delivered) for the summary. Verdicts: sign-wrapped ✓ (linalg ×8,
+decimal_compute ×3, compute_multiply, ln's Q128/Q256/Q512 helpers, ternary
+0.4.34 fixes, I2048::Mul); positive-by-construction now debug_asserted
+(exp chains/Taylor ×8, ln Taylor ×2, sqrt Newton via renamed `_nonneg`
+helper); shadowing hazard removed (exp+sqrt private unsigned twins of the
+sign-safe `multiply_i1024_q512_512` renamed `*_nonneg`); latent sign bugs
+fixed in UNREACHABLE code (pow_tier_n_plus_1.rs ×3 — dead module, marked
+removal candidate). `mul_i128_to_i256` verified sign-safe (explicit
+handling). Enforcement: `tests/negative_operand_battery.rs` + the
+debug_asserts running under every test suite on every profile.

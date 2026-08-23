@@ -531,7 +531,8 @@ fn constant_decimal_approx_sin_pi() {
     let s = format!("{}", result.unwrap());
     let trimmed = s.trim_start_matches('-');
     assert!(
-        trimmed.starts_with("0.000"),
+        // Realtime's 4-digit display shows "0.00"; wider profiles "0.000…".
+        trimmed.starts_with("0.00"),
         "sin(pi_approx) should be ~0, got '{}'",
         s
     );
@@ -544,7 +545,9 @@ fn constant_decimal_approx_exp_ln2() {
     assert!(result.is_ok(), "exp(ln2_approx) should succeed, got {:?}", result);
     let s = format!("{}", result.unwrap());
     assert!(
-        s.starts_with("2.000") || s.starts_with("1.999"),
+        // Realtime displays "2.00" (trimmed); pre-0.5.0 the truncating
+        // display divide showed "1.9999" here. Both are ~2.0.
+        s.starts_with("2.0") || s.starts_with("1.99"),
         "exp(ln2_approx) should be ~2.0, got '{}'",
         s
     );

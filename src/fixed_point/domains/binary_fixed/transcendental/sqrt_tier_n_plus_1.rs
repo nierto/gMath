@@ -290,27 +290,35 @@ fn sqrt_q512_512_native(x: I1024) -> I1024 {
     // Reciprocal-sqrt iterations: 11 for 1024-bit convergence
     for _ in 0..11 {
         // y_n^2 in Q512.512: use mul_to_i2048 then shift right 512
-        let y_sq = multiply_i1024_q512_512(y_n, y_n);
+        let y_sq = multiply_i1024_q512_512_nonneg(y_n, y_n);
         // S * y_n^2 in Q512.512
-        let s_y_sq = multiply_i1024_q512_512(x, y_sq);
+        let s_y_sq = multiply_i1024_q512_512_nonneg(x, y_sq);
         // 3 - S * y_n^2
         let diff = three - s_y_sq;
         // y_n * (3 - S*y_n^2)
-        let product = multiply_i1024_q512_512(y_n, diff);
+        let product = multiply_i1024_q512_512_nonneg(y_n, diff);
         // / 2
         y_n = product >> 1;
     }
 
     // sqrt(S) = S * y_final (Q512.512 multiply)
-    multiply_i1024_q512_512(x, y_n)
+    multiply_i1024_q512_512_nonneg(x, y_n)
 }
 
 /// Q512.512 fixed-point multiply: (a * b) >> 512
 ///
-/// Uses I1024::mul_to_i2048 for full precision, then shifts right 512 bits.
+/// Multiply two NON-NEGATIVE I1024 values (Q512.512), truncating downscale.
+///
+/// 0.5.0 audit: renamed from `multiply_i1024_q512_512` (shadowed the
+/// sign-safe helper in ln_tier_n_plus_1). Raw `mul_to_i2048` is unsigned;
+/// all sqrt-internal operands are non-negative by domain (x ≥ 0, Newton
+/// iterates positive). Truncation kept deliberately — changing it would
+/// perturb the validated Newton trajectory for zero benefit.
 #[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 #[inline(always)]
-fn multiply_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
+fn multiply_i1024_q512_512_nonneg(a: I1024, b: I1024) -> I1024 {
+    debug_assert!(!(a < I1024::zero()), "unsigned widening mul fed a negative LHS");
+    debug_assert!(!(b < I1024::zero()), "unsigned widening mul fed a negative RHS");
     let full = a.mul_to_i2048(b);
     // Shift right 512 bits and extract as I1024
     (full >> 512).as_i1024()

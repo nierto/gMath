@@ -39,6 +39,20 @@ including the scientific 18/18 transcendental 0-ULP gate.
   consumers freezing hashed or persisted outputs should pin versions
   across this boundary. Compound/tier-N+1 results are unchanged.
 
+### Audited — unsigned widening-multiply call sites (0.5.0 item 0b)
+
+- Every `mul_to_i512/i1024/i2048` call site enumerated and classified;
+  positive-by-construction sites (exp/ln/sqrt internals) now carry
+  debug_asserts so the invariant is machine-checked in every test build;
+  two private UNSIGNED helpers that shadowed the sign-safe
+  `multiply_i1024_q512_512` renamed `*_nonneg` (hazard removed); three
+  genuinely sign-broken `y·ln(x)` multiplies fixed in
+  `pow_tier_n_plus_1.rs` — dead code with zero external callers (pow is
+  composed as exp(y·ln x) through the sign-safe path), now marked as an
+  unreachable removal candidate. New `negative_operand_battery` test
+  (odd/even symmetries bit-exact, negative-intermediate chains) on every
+  profile.
+
 ### Fixed
 
 - UGOD binary tier divide mis-signed its rounding bump for exact

@@ -11,9 +11,11 @@
 //! imperative vs canonical, compact) must be ZERO now — asserted here on
 //! every profile, including constructed exact-tie inputs.
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 use g_math::canonical::{evaluate, CompactShadow, LazyExpr, StackValue};
 use g_math::fixed_point::FixedPoint;
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn binary_tier() -> u8 {
     match evaluate(&g_math::canonical::gmath("1")).unwrap() {
         StackValue::Binary(t, _, _) => t,
@@ -21,6 +23,7 @@ fn binary_tier() -> u8 {
     }
 }
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn fasc_mul_raw(a: i128, b: i128, tier: u8) -> i128 {
     let sa = StackValue::Binary(tier, a as _, CompactShadow::None);
     let sb = StackValue::Binary(tier, b as _, CompactShadow::None);
@@ -30,6 +33,7 @@ fn fasc_mul_raw(a: i128, b: i128, tier: u8) -> i128 {
     }
 }
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn fasc_div_raw(a: i128, b: i128, tier: u8) -> i128 {
     let sa = StackValue::Binary(tier, a as _, CompactShadow::None);
     let sb = StackValue::Binary(tier, b as _, CompactShadow::None);
@@ -46,9 +50,11 @@ const FB: u32 = 32;
 #[cfg(table_format = "q64_64")]
 const FB: u32 = 64;
 #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+#[allow(dead_code)]
 const FB: u32 = 0; // wide raws exceed i128; sweep skipped, tie pins below use FixedPoint
 
 /// Nearest, ties toward +∞ reference model at storage scale.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn model_mul(a: i128, b: i128, fb: u32) -> i128 {
     let wide = a * b; // callers keep |a·b| within i128
     let half = 1i128 << (fb - 1);
@@ -57,6 +63,7 @@ fn model_mul(a: i128, b: i128, fb: u32) -> i128 {
     if rem >= half { floor + 1 } else { floor }
 }
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn model_div(a: i128, b: i128, fb: u32) -> i128 {
     let num = a << fb;
     let q = num / b;

@@ -964,6 +964,10 @@ fn taylor_series_ln_i1024_q512_512(r: &I1024) -> I1024 {
     if *r == I1024::zero() {
         return I1024::zero();
     }
+    // The 4-stage reduction guarantees r ≥ 0 (tables never overshoot);
+    // that non-negativity is what makes the raw unsigned mul_to_i2048
+    // power/coefficient chain below legal (0.5.0 audit invariant).
+    debug_assert!(!(*r < I1024::zero()), "ln Taylor fed negative remainder");
 
     // For |r| < 2^-40 after 4-stage reduction:
     // Each term r^n/n decreases by factor of r (< 2^-40) per term

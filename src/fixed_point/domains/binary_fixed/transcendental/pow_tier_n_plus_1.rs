@@ -1,4 +1,13 @@
 // ============================================================================
+//!
+//! **STATUS (0.5.0 audit)**: currently UNREACHABLE from any public path —
+//! FASC and the imperative surface compose pow as exp(y·ln x) at the
+//! compute tier through the sign-safe multiply. The y×ln(x) widening
+//! multiplies below were latent sign bugs (unsigned kernels fed possibly
+//! negative factors: y < 0 for reciprocals, ln x < 0 for x < 1); fixed
+//! with sign-wrapping during the 0.5.0 unsigned-multiply call-site audit
+//! so any future revival inherits correct code. Candidate for removal —
+//! owner's call.
 // TIER N+1 POWER FUNCTION
 // ============================================================================
 //
@@ -116,7 +125,11 @@ pub fn pow_q256_256_native(x: I512, y: I512) -> I512 {
     // Multiply in I1024 to get Q512.512, then downscale to Q256.256
     let y_i1024 = I1024::from_i512(y);
     let ln_x_i1024 = I1024::from_i512(ln_x);
-    let product_q512 = y_i1024.mul_to_i2048(ln_x_i1024);
+    // Sign-wrapped (0.5.0 audit): y and ln_x can each be negative.
+    let neg = (y_i1024 < I1024::zero()) ^ (ln_x_i1024 < I1024::zero());
+    let ay = if y_i1024 < I1024::zero() { -y_i1024 } else { y_i1024 };
+    let al = if ln_x_i1024 < I1024::zero() { -ln_x_i1024 } else { ln_x_i1024 };
+    let product_q512 = { let p = ay.mul_to_i2048(al); if neg { -p } else { p } };
 
     // Downscale Q512.512 → Q256.256 with rounding
     let rounding = crate::fixed_point::I2048::from_i1024(
@@ -189,7 +202,11 @@ pub fn pow_q128_128_native(x: I256, y: I256) -> I256 {
     // Step 2: y × ln(x) at Q512.512 → Q256.256
     let y_i1024 = I1024::from_i512(y_q256);
     let ln_x_i1024 = I1024::from_i512(ln_x);
-    let product_q512 = y_i1024.mul_to_i2048(ln_x_i1024);
+    // Sign-wrapped (0.5.0 audit): y and ln_x can each be negative.
+    let neg = (y_i1024 < I1024::zero()) ^ (ln_x_i1024 < I1024::zero());
+    let ay = if y_i1024 < I1024::zero() { -y_i1024 } else { y_i1024 };
+    let al = if ln_x_i1024 < I1024::zero() { -ln_x_i1024 } else { ln_x_i1024 };
+    let product_q512 = { let p = ay.mul_to_i2048(al); if neg { -p } else { p } };
 
     let rounding = crate::fixed_point::I2048::from_i1024(
         I1024::from_i512(I512::from_i256(I256::from_i128(1)))
@@ -265,7 +282,11 @@ pub fn pow_q64_64_native(x: i128, y: i128) -> i128 {
     // Step 2: y × ln(x) at Q256.256 → Q128.128
     let y_i512 = I512::from_i256(y_q128);
     let ln_x_i512 = I512::from_i256(ln_x);
-    let product_q256 = y_i512.mul_to_i1024(ln_x_i512);
+    // Sign-wrapped (0.5.0 audit): y and ln_x can each be negative.
+    let neg = y_i512.is_negative() ^ ln_x_i512.is_negative();
+    let ay = if y_i512.is_negative() { -y_i512 } else { y_i512 };
+    let al = if ln_x_i512.is_negative() { -ln_x_i512 } else { ln_x_i512 };
+    let product_q256 = { let p = ay.mul_to_i1024(al); if neg { -p } else { p } };
 
     let rounding = I1024::from_i512(I512::from_i256(I256::from_i128(1))) << 127;
     let y_ln_x = ((product_q256 + rounding) >> 128).as_i512().as_i256();

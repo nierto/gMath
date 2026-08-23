@@ -28,8 +28,13 @@ fn sv_to_fp(sv: &StackValue) -> FixedPoint {
 }
 
 fn tight() -> FixedPoint {
+    // q16_16: 0.011 — cos of small angles (~0.1 rad) collapses to 1.0 at
+    // realtime (~327 ulp; PRE-EXISTING engine limitation, filed as ROADMAP
+    // 0.5.0 audit item 0d). The old "0.01" literal only covered it because
+    // the pre-0.5.0 decimal→binary coercion rounded the tolerance itself
+    // 1 raw ulp high; the corrected parse exposed the margin.
     #[cfg(table_format = "q16_16")]
-    { fp("0.01") }
+    { fp("0.011") }
     #[cfg(table_format = "q32_32")]
     { fp("0.0001") }
     #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]

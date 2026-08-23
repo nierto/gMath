@@ -342,6 +342,10 @@ pub fn exp_q256_256_native(x: I512) -> I512 {
 
     // Multiply in I2048, downscale to I1024 Q512.512 (keeps full precision)
     // I1024 × I1024 = I2048, shift by 512 to get Q512.512 result
+    // Unsigned widening chain — every factor is a positive e^t table value
+    // or e^tiny ≥ 1 (0.5.0 audit invariant, asserted).
+    debug_assert!(!(t1_i1024 < I1024::zero()) && !(t2_i1024 < I1024::zero())
+        && !(t3_i1024 < I1024::zero()) && !(exp_tiny_i1024 < I1024::zero()));
     let p1 = (t1_i1024.mul_to_i2048(t2_i1024) >> 512).as_i1024();
     let p2 = (p1.mul_to_i2048(t3_i1024) >> 512).as_i1024();
     let exp_frac = (p2.mul_to_i2048(exp_tiny_i1024) >> 512).as_i1024();
@@ -441,8 +445,10 @@ pub fn upscale_q64_to_q256(value: i128) -> I512 {
 #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
-    // I256 × I256 in Q128.128 format
-    // Result has 256 fractional bits, shift right by 128 to get Q128.128
+    // I256 × I256 in Q128.128 format — NON-NEGATIVE operands only:
+    // mul_to_i512 is unsigned (0.5.0 audit; exp internals are positive
+    // by construction — tables, reduced remainders, e^x > 0).
+    debug_assert!(!a.is_negative() && !b.is_negative(), "unsigned widening mul fed a negative");
     let result_i512 = a.mul_to_i512(b);
     (result_i512 >> 128).as_i256()
 }
@@ -597,10 +603,19 @@ fn taylor_series_q256_256(remainder: (u128, u128)) -> I512 {
 /// Q512.512 native exponential (Tier 6 - for computing tier 5 with tier N+1)
 ///
 /// **INPUT**: I1024 value in Q512.512 format
-/// Multiply two I1024 values in Q512.512 format via I2048 intermediate.
+/// Multiply two NON-NEGATIVE I1024 values in Q512.512 format (I2048 wide).
+///
+/// 0.5.0 audit: renamed from `multiply_i1024_q512_512`, which SHADOWED the
+/// sign-safe `pub(crate)` helper of the same name in ln_tier_n_plus_1 —
+/// this one feeds `mul_to_i2048` raw (unsigned word arithmetic) and is
+/// only correct for non-negative operands. Every exp-internal caller is
+/// positive-by-construction (e^x tables, reduced remainders); the
+/// debug_asserts make that invariant loud in every test build.
 #[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
-fn multiply_i1024_q512_512(a: crate::fixed_point::I1024, b: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
+fn multiply_i1024_q512_512_nonneg(a: crate::fixed_point::I1024, b: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
     use crate::fixed_point::I2048;
+    debug_assert!(!(a < crate::fixed_point::I1024::zero()), "unsigned widening mul fed a negative LHS");
+    debug_assert!(!(b < crate::fixed_point::I1024::zero()), "unsigned widening mul fed a negative RHS");
     let result = a.mul_to_i2048(b);
     let rounding = I2048::from_i1024(crate::fixed_point::I1024::from_i512(I512::from_i256(I256::from_i128(1)))) << 511;
     ((result + rounding) >> 512).as_i1024()
@@ -650,7 +665,7 @@ pub fn exp_q512_512_native(x: crate::fixed_point::I1024) -> crate::fixed_point::
         let base = base_main + (I2048::from_i1024(I1024::from_i512(base_comp)) >> 512).as_i1024();
         let abs_k = k.unsigned_abs();
         for _ in 0..abs_k {
-            result = multiply_i1024_q512_512(result, base);
+            result = multiply_i1024_q512_512_nonneg(result, base);
         }
         (result, I512::zero())
     };
@@ -728,6 +743,8 @@ pub fn exp_q512_512_native(x: crate::fixed_point::I1024) -> crate::fixed_point::
 
     // Multiply: exp_frac = t1 * t2 * t3 * exp_tiny
     // Use I2048 intermediates for full precision
+    // Unsigned widening chain — positive table factors (asserted, 0.5.0 audit).
+    debug_assert!(!(t1 < I1024::zero()) && !(t2 < I1024::zero()) && !(t3 < I1024::zero()));
     let p1 = (t1.mul_to_i2048(t2) >> 512).as_i1024();
     let p2 = (p1.mul_to_i2048(t3) >> 512).as_i1024();
     let exp_frac = (p2.mul_to_i2048(exp_tiny) >> 512).as_i1024();
@@ -763,6 +780,10 @@ fn taylor_series_q512_512(r: crate::fixed_point::I1024) -> crate::fixed_point::I
     let mut result = result_main + (I2048::from_i1024(I1024::from_i512(result_comp)) >> 512).as_i1024();
 
     // Horner's method: work backwards from term 48 down to term 1
+    // r is the reduced remainder ∈ [0, ln 2 / 2^k): non-negative by the
+    // range reduction, which is what makes raw mul_to_i2048 legal here
+    // (0.5.0 audit invariant, asserted once).
+    debug_assert!(!(r < I1024::zero()), "exp Taylor fed negative remainder");
     for i in (1..TERMS - 1).rev() {
         // result = factorial_reciprocal[i] + r * result
         let product = (r.mul_to_i2048(result) >> 512).as_i1024();

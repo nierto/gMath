@@ -448,7 +448,7 @@ fn convert_to_ternary_wrap_fix_is_loud_on_narrow_profiles() {
     // UNCHECKED cast — 1/3 on realtime (raw 3^32/3 ≈ 6.2e14 > i32) wrapped
     // silently. Now: loud error on narrow storage, exact value on wide.
     use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
-    set_gmath_mode("auto:ternary");
+    let _ = set_gmath_mode("auto:ternary");
     let converted = evaluate(&g("1/3"));
     reset_gmath_mode();
     #[cfg(table_format = "q16_16")]

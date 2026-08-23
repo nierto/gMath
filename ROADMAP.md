@@ -282,13 +282,32 @@ invisible because no CI job runs the router integration suite on realtime
 (`large_integer_times_decimal` fails there today). Fix parse routing, make
 the test profile-aware, and add a realtime router-integration CI job.
 
-### 0b. Unsigned widening-multiply call-site audit (flagged 2026-08-14)
+### 0b. Unsigned widening-multiply call-site audit — DELIVERED 2026-08-23
 
-`mul_to_i512/i1024/i2048` are unsigned by convention; two unwrapped call
-sites were found and fixed post-0.4.33 (Tier-6 ternary mul, `I2048::Mul`
-I512 path). Remaining suspects: `pow_tier_n_plus_1.rs:119/192` feed
-`y·ln_x` — which CAN be negative — into `mul_to_i2048`. Audit every call
-site, add adversarial negative-operand tests per site.
+Every call site of the unsigned family (`mul_to_i512/i1024/i2048`)
+enumerated and classified (appendix in `docs/design/ROUNDING_CENSUS.md`):
+
+- **Sign-wrapped (correct)**: linalg dot/product helpers, decimal compute
+  engine, compute_multiply, sincos/atan via the sign-safe
+  `multiply_i1024_q512_512`, the 0.4.34-era ternary fixes.
+- **Positive-by-construction (now debug_assert-ENFORCED)**: exp table
+  chains + Taylor, ln Taylor remainder, sqrt Newton — every such site
+  carries a non-negativity assert, so every debug/test run polices the
+  invariant instead of trusting comments.
+- **De-shadowed**: exp and sqrt each had a private UNSIGNED
+  `multiply_i1024_q512_512` shadowing the sign-safe pub(crate) one —
+  renamed `*_nonneg` with asserts; the shadowing hazard is gone.
+- **Latent bugs fixed in dead code**: the three pow `y·ln_x` sites were
+  genuinely sign-broken but `pow_tier_n_plus_1.rs` has ZERO external
+  callers (FASC/imperative compose pow as exp(y·ln x) through the safe
+  path) — sign-wrapped anyway + module marked unreachable/removal
+  candidate (owner's call).
+- **Modular-truncating wide `Mul` fallbacks** (I512/I1024 schoolbook mod
+  2^N) are sign-correct by modular arithmetic; exercised with negatives
+  by the 0.4.34 tier-5 lattice tests.
+- New gate: `tests/negative_operand_battery.rs` — odd/even transcendental
+  symmetries bit-exact, negative-intermediate chains (exp∘ln on x<1,
+  sinh/cosh of −x), negative FASC compute products; all profiles.
 
 ### 0c. Uniform rounding policy — DELIVERED on main 2026-08-23
 
@@ -337,6 +356,16 @@ currently-truncated ops: breaking-precision class, so they ship together
 in 0.5.0 with a consumer notice (consumers freezing hashed outputs should
 pin versions across the boundary). Add tie-case and cross-path
 equivalence tests per domain to the path-independence suite.
+
+### 0d. Realtime small-angle cosine collapse (found 2026-08-23)
+
+`cos(0.1)` returns exactly 1.0000 at Q16.16 (~327 ulp error; true value
+0.99500). Pre-existing — surfaced when the 0.5.0 coercion fix stopped
+inflating a test tolerance by 1 raw ulp. Suspect: small-angle threshold or
+table granularity in the q16_16 sin/cos path treating |x| below some bound
+as cos=1. Investigate the realtime kernel, add mpmath points at 0.05/0.1/
+0.2 rad to realtime_profile_validation, and either fix or document the
+threshold as a profile limit.
 
 ### 1. UGOD multi-tier promotion verification
 
