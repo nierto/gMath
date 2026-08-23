@@ -96,7 +96,7 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_atan` | Fallible atan(x). |
 | `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)) — `Err(DomainError)` if \|x\| > 1. |
 | `try_acos` | Fallible acos(x) = π/2 - asin(x) — `Err(DomainError)` if \|x\| > 1. |
-| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2. |
+| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2 — `Err(TierOverflow)` when |
 | `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2 — `Err(TierOverflow)` when |
 | `try_tanh` | Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Saturates to exactly |
 | `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
