@@ -409,13 +409,10 @@ impl StackValue {
                 if let Some((num, den)) = shadow.as_rational() {
                     return Ok(RationalNumber::new(num, den));
                 }
-                // DecimalCompute holds raw × 10^-COMPUTE_DP. Convert via materialize to decimal.
-                use crate::fixed_point::domains::decimal_fixed::transcendental::{
-                    decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
-                };
-                // Downscale to max storage dp to preserve precision, then use Decimal path
-                let target_dp = DECIMAL_STORAGE_MAX_DP.saturating_sub(2);
-                let storage_val = decimal_downscale_to_storage(*value, target_dp)?;
+                // DecimalCompute holds raw × 10^-COMPUTE_DP. Materialize at
+                // the highest dp that fits (adaptive — 0.5.0 item 0d fix).
+                let (target_dp, storage_val) =
+                    StackEvaluator::materialize_decimal_compute_adaptive(*value)?;
                 let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
                 materialized.to_rational()
             }
@@ -626,13 +623,9 @@ impl StackValue {
                 }
             }
             StackValue::DecimalCompute(_tier, val, shadow) => {
-                // Materialize to Decimal at max storage dp, then format.
-                use crate::fixed_point::domains::decimal_fixed::transcendental::{
-                    decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
-                };
-                let target_dp = DECIMAL_STORAGE_MAX_DP.saturating_sub(2);
-                match decimal_downscale_to_storage(*val, target_dp) {
-                    Ok(storage_val) => {
+                // Materialize at the highest dp that fits (adaptive — 0d fix).
+                match StackEvaluator::materialize_decimal_compute_adaptive(*val) {
+                    Ok((target_dp, storage_val)) => {
                         let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
                         materialized.to_decimal_string(max_digits)
                     }
@@ -698,12 +691,8 @@ impl Display for StackValue {
                 }
             }
             StackValue::DecimalCompute(_tier, val, shadow) => {
-                use crate::fixed_point::domains::decimal_fixed::transcendental::{
-                    decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
-                };
-                let target_dp = DECIMAL_STORAGE_MAX_DP.saturating_sub(2);
-                match decimal_downscale_to_storage(*val, target_dp) {
-                    Ok(storage_val) => {
+                match StackEvaluator::materialize_decimal_compute_adaptive(*val) {
+                    Ok((target_dp, storage_val)) => {
                         let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
                         write!(f, "{}", materialized.to_decimal_string(precision))
                     }
@@ -896,6 +885,34 @@ impl StackEvaluator {
     ///
     /// Returns `Err(TierOverflow)` if the compute-tier value exceeds the
     /// storage tier's range (UGOD overflow detection).
+    /// Materialize a DecimalCompute raw at the highest storage dp that
+    /// fits (0.5.0 item 0d fix): try DECIMAL_STORAGE_MAX_DP first and step
+    /// down only when the magnitude genuinely needs fewer decimals. The
+    /// old fixed `MAX_DP - 2` slack silently cost realtime HALF its digits
+    /// (dp 4 → 2: cos(0.1) = 0.9952 displayed as "1.00"), which masqueraded
+    /// as a sin/cos kernel plateau for months. Deterministic; the
+    /// downscale is checked, so a too-large dp errors and we retry — never
+    /// a wrap.
+    fn materialize_decimal_compute_adaptive(
+        val: ComputeStorage,
+    ) -> Result<(u8, BinaryStorage), OverflowDetected> {
+        use crate::fixed_point::domains::decimal_fixed::transcendental::{
+            decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
+        };
+        let mut dp = DECIMAL_STORAGE_MAX_DP;
+        loop {
+            match decimal_downscale_to_storage(val, dp) {
+                Ok(v) => return Ok((dp, v)),
+                Err(e) => {
+                    if dp == 0 {
+                        return Err(e);
+                    }
+                    dp -= 1;
+                }
+            }
+        }
+    }
+
     pub(crate) fn materialize_compute(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, shadow) => {
