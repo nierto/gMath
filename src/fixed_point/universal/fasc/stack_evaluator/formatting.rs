@@ -186,7 +186,25 @@ pub(super) fn binary_storage_to_decimal_string(val: BinaryStorage, max_digits: u
         // Q256.256: I512
         let is_negative = val < I512::zero();
         let abs_val = if is_negative { -val } else { val };
-        let int_part = (abs_val >> 256).as_i256().as_i128() as u128;
+        // Integer part can exceed u128 (up to 2^255-1): extract digits at
+        // I256 width. (0.5.0 item 1: the old `as_i128 as u128` squeeze
+        // wrapped any integer part >= 2^127 — 1e20*1e20 displayed as
+        // 1e40 mod 2^128.)
+        let int_i256 = (abs_val >> 256).as_i256();
+        let int_part = if int_i256 == I256::zero() {
+            "0".to_string()
+        } else {
+            let ten = I256::from_i128(10);
+            let mut digits = Vec::new();
+            let mut n = int_i256;
+            while n != I256::zero() {
+                let digit = (n % ten).as_i128() as u8;
+                digits.push((b'0' + digit) as char);
+                n = n / ten;
+            }
+            digits.reverse();
+            digits.into_iter().collect::<String>()
+        };
 
         let mask_lower_256 = I512::from_words([
             0xFFFF_FFFF_FFFF_FFFF, 0xFFFF_FFFF_FFFF_FFFF,

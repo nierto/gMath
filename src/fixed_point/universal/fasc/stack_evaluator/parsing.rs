@@ -124,6 +124,41 @@ impl StackEvaluator {
         #[cfg(table_format = "q256_256")]
         let max_frac: usize = 76; // 77 sig digits minus integer part headroom
 
+        // 0.5.0 item 1: on the narrow profiles max_frac IS the decimal
+        // storage cap, so truncating here destroys information above one
+        // storage ulp — "0.000000001" on realtime silently parsed to 0,
+        // turning later divisions into division-by-zero. Fall back to the
+        // exact Symbolic domain instead (the fractional twin of the item-0
+        // integer parse fallback). Trailing zeros carry no value: trim
+        // before the width check. The i128 rational holds 38 total digits;
+        // the integer part's digits shrink the fractional budget. Digits
+        // beyond the budget are dropped — at >= (38 - int_digits) decimals
+        // they sit far below one narrow-profile storage ulp. Only if the
+        // budget cannot beat max_frac does this fall through to the old
+        // truncation.
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+        if frac_len > max_frac {
+            let sym_frac_full = fractional_str.trim_end_matches('0');
+            let int_digits = integer_str.trim_start_matches('0').len();
+            let budget = 38usize.saturating_sub(int_digits);
+            let sym_len = sym_frac_full.len().min(budget);
+            if sym_len > max_frac {
+                let sym_frac = &sym_frac_full[..sym_len];
+                if let (Ok(int_mag), Ok(frac_mag)) =
+                    (integer_str.parse::<i128>(), sym_frac.parse::<i128>())
+                {
+                    let den = 10_i128.pow(sym_len as u32);
+                    if let Some(mag) = int_mag
+                        .checked_mul(den)
+                        .and_then(|v| v.checked_add(frac_mag))
+                    {
+                        let num = if is_negative { -mag } else { mag };
+                        return Ok(StackValue::Symbolic(RationalNumber::new(num, den as u128)));
+                    }
+                }
+            }
+        }
+
         // Truncate to what the profile can represent
         let effective_frac_len = frac_len.min(max_frac);
         let effective_frac_str = &fractional_str[..effective_frac_len];

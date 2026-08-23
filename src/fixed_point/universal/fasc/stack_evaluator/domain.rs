@@ -523,72 +523,90 @@ pub(super) fn binary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<U
 }
 
 /// Convert UniversalBinaryFixed result back to (tier, BinaryStorage) — full precision
-pub(super) fn binary_to_storage(binary: &UniversalBinaryFixed) -> (u8, BinaryStorage) {
+/// Checked narrowing of an i128 binary tier raw into BinaryStorage.
+/// TierOverflow instead of the silent wrap the bare casts produced
+/// (0.5.0 item 1: 9e18 + 9e18 on embedded returned 0.0 — the promoted
+/// Tier-4 result wrapped through as_i128; binary twin of the 0.4.33
+/// ternary_to_storage fix).
+fn i128_to_binary_storage_checked_b(val: i128) -> Result<BinaryStorage, OverflowDetected> {
+    #[cfg(table_format = "q256_256")]
+    { Ok(I512::from_i128(val)) }
+    #[cfg(table_format = "q128_128")]
+    { Ok(I256::from_i128(val)) }
+    #[cfg(table_format = "q64_64")]
+    { Ok(val) }
+    #[cfg(table_format = "q32_32")]
+    { i64::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+    #[cfg(table_format = "q16_16")]
+    { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+}
+
+/// Convert UniversalBinaryFixed back to (tier, BinaryStorage) — checked.
+///
+/// Fallible (0.5.0 item 1): a promoted tier raw that does not fit the
+/// profile's BinaryStorage is a TierOverflow, never a wrap. FASC's
+/// arithmetic arms catch that error and fall back to the exact rational
+/// path — the true top of the UGOD ladder.
+pub(super) fn binary_to_storage(binary: &UniversalBinaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
     let (tier, raw) = binary.to_tier_raw();
-    match raw {
-        BinaryRaw::Small(v) => (tier, to_binary_storage(v)),
+    let storage = match raw {
+        BinaryRaw::Small(v) => i128_to_binary_storage_checked_b(v)?,
         BinaryRaw::Medium(v) => {
             // I256 → BinaryStorage
             #[cfg(table_format = "q256_256")]
-            { (tier, I512::from_i256(v)) }
+            { I512::from_i256(v) }
 
             #[cfg(table_format = "q128_128")]
-            { (tier, v) }
+            { v }
 
-            #[cfg(table_format = "q64_64")]
-            { (tier, v.as_i128()) }
-
-            #[cfg(table_format = "q32_32")]
-            { (tier, v.as_i128() as i64) }
-
-            #[cfg(table_format = "q16_16")]
-            { (tier, v.as_i128() as i32) }
-
+            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
+            {
+                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                i128_to_binary_storage_checked_b(v.as_i128())?
+            }
         }
         BinaryRaw::Large(v) => {
             // I512 → BinaryStorage
             #[cfg(table_format = "q256_256")]
-            { (tier, v) }
+            { v }
 
             #[cfg(table_format = "q128_128")]
-            { (tier, v.as_i256()) }
+            {
+                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+                v.as_i256()
+            }
 
-            #[cfg(table_format = "q64_64")]
-            { (tier, v.as_i128()) }
-
-            #[cfg(table_format = "q32_32")]
-            { (tier, v.as_i128() as i64) }
-
-            #[cfg(table_format = "q16_16")]
-            { (tier, v.as_i128() as i32) }
-
+            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
+            {
+                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                i128_to_binary_storage_checked_b(v.as_i128())?
+            }
         }
         BinaryRaw::XLarge(v) => {
             // I1024 → BinaryStorage
             #[cfg(table_format = "q256_256")]
-            { (tier, v.as_i512()) }
+            {
+                if !v.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
+                v.as_i512()
+            }
 
             #[cfg(table_format = "q128_128")]
-            { (tier, v.as_i256()) }
+            {
+                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+                v.as_i256()
+            }
 
-            #[cfg(table_format = "q64_64")]
-            { (tier, v.as_i128()) }
-
-            #[cfg(table_format = "q32_32")]
-            { (tier, v.as_i128() as i64) }
-
-            #[cfg(table_format = "q16_16")]
-            { (tier, v.as_i128() as i32) }
-
+            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
+            {
+                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                i128_to_binary_storage_checked_b(v.as_i128())?
+            }
         }
-    }
+    };
+    Ok((tier, storage))
 }
 
-// ============================================================================
-// SHADOW PROPAGATION HELPERS
-// ============================================================================
-
-/// GCD for shadow reduction (Euclidean algorithm on u128)
+/// Euclid's gcd for shadow normalization.
 pub(super) fn shadow_gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {
         let t = b;

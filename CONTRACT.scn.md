@@ -81,6 +81,12 @@ Code wins over docs.
   in binary); canonical router auto-classifies + routes each literal to an exact
   domain and keeps a shadow | conditioning amplifies input error O(κ) | error is
   deterministic everywhere.
+
+@OVERFLOW(0.5.0): canonical arithmetic on representable inputs = EXACT (tier
+  promotion → exact-rational fallback) OR loud typed error. NEVER silent wrap —
+  any tier, any domain, coercions + literal parsing included (out-of-range
+  literals on narrow profiles parse into exact symbolic). Gate:
+  tests/ugod_promotion_validation.rs per profile.
 ```
 
 ---

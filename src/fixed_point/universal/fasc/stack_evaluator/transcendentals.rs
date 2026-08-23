@@ -25,10 +25,14 @@ use crate::fixed_point::I1024;
 use crate::fixed_point::universal::tier_types::CompactShadow;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
 
-/// True when a binary exp result sits at the compute-tier ceiling (saturating
-/// downscale or overflow sentinel) — adding to it would wrap the compute type.
+/// True when a binary exp result sits at its overflow sentinel — building
+/// on it (cosh/tanh adds, sinh halving) would produce a plausible-wrong
+/// value. The old `== compute_ceiling()` check missed the q64_64/q128_128
+/// engines' `i128::MAX`-at-storage-scale sentinel (0.5.0 item 2 find);
+/// the shared per-profile predicate covers every engine.
 fn exp_at_compute_ceiling(v: &StackValue) -> bool {
-    matches!(v, StackValue::BinaryCompute(_, val, _) if *val == compute_ceiling())
+    use crate::fixed_point::universal::fasc::stack_evaluator::compute::exp_sentinel_reached;
+    matches!(v, StackValue::BinaryCompute(_, val, _) if exp_sentinel_reached(val))
 }
 
 // Transcendental functions called directly (not re-exported through compute::*)
@@ -882,10 +886,11 @@ impl StackEvaluator {
             StackValue::Symbolic(rational) => {
                 // Try i128 extraction first (tiers 1-5)
                 if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
-                    return symbolic_to_compute_storage(num, den);
+                    symbolic_to_compute_storage(num, den)
+                } else {
+                    // Fall back to wider extraction for Massive/Ultra tier rationals
+                    symbolic_wide_to_compute_storage(rational)
                 }
-                // Fall back to wider extraction for Massive/Ultra tier rationals
-                return symbolic_wide_to_compute_storage(rational);
             }
             StackValue::Ternary(tier, value, _) => {
                 // Ternary: convert through rational (value / 3^frac_trits)
@@ -900,6 +905,88 @@ impl StackEvaluator {
         }
     }
 
+    /// num/den → Q-format BinaryStorage: nearest, ties toward +∞, CHECKED
+    /// (0.5.0 item 1): the old per-arm `(num << F) / den` shifted i128
+    /// before any range check — a symbolic 1e20 coerced to binary on
+    /// embedded wrapped mod 2^64 and produced a plausible WRONG value.
+    fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<BinaryStorage, OverflowDetected> {
+        if den == 0 {
+            return Err(OverflowDetected::DivisionByZero);
+        }
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+        {
+            #[cfg(table_format = "q16_16")]
+            let fb: usize = crate::fixed_point::frac_config::FRAC_BITS as usize;
+            #[cfg(table_format = "q32_32")]
+            let fb: usize = 32;
+            #[cfg(table_format = "q64_64")]
+            let fb: usize = 64;
+            let n = I256::from_i128(num) << fb;
+            let d = I256::from_i128(den);
+            let (mut q, r) = crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(n, d);
+            let r_abs = if r.is_negative() { -r } else { r };
+            let d_abs = if d.is_negative() { -d } else { d };
+            let positive = n.is_negative() == d.is_negative();
+            let r2 = r_abs + r_abs;
+            if if positive { r2 >= d_abs } else { r2 > d_abs } {
+                q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
+            }
+            if !q.fits_in_i128() {
+                return Err(OverflowDetected::TierOverflow);
+            }
+            let q128 = q.as_i128();
+            #[cfg(table_format = "q64_64")]
+            { Ok(q128) }
+            #[cfg(table_format = "q32_32")]
+            {
+                i64::try_from(q128).map_err(|_| OverflowDetected::TierOverflow)
+            }
+            #[cfg(table_format = "q16_16")]
+            {
+                i32::try_from(q128).map_err(|_| OverflowDetected::TierOverflow)
+            }
+        }
+        #[cfg(table_format = "q128_128")]
+        {
+            let n = I512::from_i256(I256::from_i128(num)) << 128;
+            let d = I512::from_i256(I256::from_i128(den));
+            let (mut q, r) = crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(n, d);
+            let r_abs = if r.is_negative() { -r } else { r };
+            let d_abs = if d.is_negative() { -d } else { d };
+            let positive = n.is_negative() == d.is_negative();
+            let r2 = r_abs + r_abs;
+            if if positive { r2 >= d_abs } else { r2 > d_abs } {
+                q = if positive { q + I512::from_i128(1) } else { q - I512::from_i128(1) };
+            }
+            if !q.fits_in_i256() {
+                return Err(OverflowDetected::TierOverflow);
+            }
+            Ok(q.as_i256())
+        }
+        #[cfg(table_format = "q256_256")]
+        {
+            use crate::fixed_point::I1024;
+            let n = I1024::from_i512(I512::from_i256(I256::from_i128(num))) << 256;
+            let d = I1024::from_i512(I512::from_i256(I256::from_i128(den)));
+            let mut q = n / d;
+            let r = n % d;
+            let r_neg = (r.words[15] as i64) < 0;
+            let d_neg = (d.words[15] as i64) < 0;
+            let n_neg = (n.words[15] as i64) < 0;
+            let r_abs = if r_neg { -r } else { r };
+            let d_abs = if d_neg { -d } else { d };
+            let positive = n_neg == d_neg;
+            let r2 = r_abs + r_abs;
+            if if positive { r2 >= d_abs } else { r2 > d_abs } {
+                q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
+            }
+            if !q.fits_in_i512() {
+                return Err(OverflowDetected::TierOverflow);
+            }
+            Ok(q.as_i512())
+        }
+    }
+
     /// Convert any StackValue to profile-specific BinaryStorage format
     pub(crate) fn to_binary_storage(&self, value: &StackValue) -> Result<BinaryStorage, OverflowDetected> {
         match value {
@@ -910,80 +997,15 @@ impl StackEvaluator {
                 crate::fixed_point::universal::fasc::stack_evaluator::decimal_compute_to_binary_storage_pub(*val)
             }
             StackValue::Decimal(decimals, scaled, _) => {
-                #[cfg(table_format = "q256_256")]
-                {
-                    use crate::fixed_point::I1024;
-                    let ten_pow = pow10_i512(*decimals);
-                    let scaled_i1024 = I1024::from_i512(*scaled) << 256;
-                    Ok((scaled_i1024 / I1024::from_i512(ten_pow)).as_i512())
-                }
-
-                #[cfg(table_format = "q128_128")]
-                {
-                    let ten_pow = pow10_i256(*decimals);
-                    let num = I512::from_i256(*scaled) << 128;
-                    let den = I512::from_i256(ten_pow);
-                    Ok((num / den).as_i256())
-                }
-
-                #[cfg(table_format = "q64_64")]
-                {
-                    let ten_pow = pow10_i256(*decimals);
-                    let num = I256::from_i128(*scaled) << 64;
-                    Ok((num / ten_pow).as_i128())
-                }
-
-                #[cfg(table_format = "q32_32")]
-                {
-                    // Q32.32: BinaryStorage = i64, use i128 intermediate
-                    let ten_pow = pow10_i256(*decimals);
-                    let num = I256::from_i128(*scaled as i128) << 32;
-                    Ok((num / ten_pow).as_i128() as i64)
-                }
-
-                #[cfg(table_format = "q16_16")]
-                {
-                    use crate::fixed_point::frac_config;
-                    let ten_pow = pow10_i256(*decimals);
-                    let num = I256::from_i128(*scaled as i128) << (frac_config::FRAC_BITS as usize);
-                    // Round-to-nearest: add half denominator before division
-                    let half = ten_pow >> 1;
-                    let rounded = if num >= I256::zero() { num + half } else { num - half };
-                    Ok((rounded / ten_pow).as_i128() as i32)
-                }
+                // Delegate to the single checked, ties-+∞ implementation
+                // (0.5.0 item 1: this arm previously duplicated the
+                // conversion with unchecked truncating variants per profile).
+                crate::fixed_point::universal::fasc::stack_evaluator::decimal_to_binary_storage(*decimals, *scaled)
             }
             StackValue::Symbolic(rational) => {
                 // Try i128 extraction first (tiers 1-5)
                 if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
-                    #[cfg(table_format = "q256_256")]
-                    {
-                        use crate::fixed_point::I1024;
-                        let num_i1024 = I1024::from_i512(I512::from_i256(I256::from_i128(num))) << 256;
-                        let den_i512 = I512::from_i256(I256::from_i128(den));
-                        return Ok((num_i1024 / I1024::from_i512(den_i512)).as_i512());
-                    }
-
-                    #[cfg(table_format = "q128_128")]
-                    {
-                        return Ok((I256::from_i128(num) << 128) / I256::from_i128(den));
-                    }
-
-                    #[cfg(table_format = "q64_64")]
-                    {
-                        return Ok((num << 64) / den);
-                    }
-
-                    #[cfg(table_format = "q32_32")]
-                    {
-                        // Q32.32: BinaryStorage = i64
-                        return Ok(((num << 32) / den) as i64);
-                    }
-
-                    #[cfg(table_format = "q16_16")]
-                    {
-                        use crate::fixed_point::frac_config;
-                        return Ok(((num << frac_config::FRAC_BITS) / den) as i32);
-                    }
+                    return Self::rational_i128_to_storage_checked(num, den);
                 }
                 // Fall back to wider extraction for Massive/Ultra tier rationals
                 let cs = symbolic_wide_to_compute_storage(rational)?;
@@ -993,34 +1015,7 @@ impl StackEvaluator {
                 // Ternary: convert through rational (value / 3^frac_trits), then to Q-format
                 let rational = ternary_to_rational(*tier, value)?;
                 if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
-                    #[cfg(table_format = "q256_256")]
-                    {
-                        use crate::fixed_point::I1024;
-                        let num_i1024 = I1024::from_i512(I512::from_i256(I256::from_i128(num))) << 256;
-                        let den_i512 = I512::from_i256(I256::from_i128(den));
-                        return Ok((num_i1024 / I1024::from_i512(den_i512)).as_i512());
-                    }
-
-                    #[cfg(table_format = "q128_128")]
-                    {
-                        return Ok((I256::from_i128(num) << 128) / I256::from_i128(den));
-                    }
-
-                    #[cfg(table_format = "q64_64")]
-                    {
-                        return Ok((num << 64) / den);
-                    }
-
-                    #[cfg(table_format = "q32_32")]
-                    {
-                        return Ok(((num << 32) / den) as i64);
-                    }
-
-                    #[cfg(table_format = "q16_16")]
-                    {
-                        use crate::fixed_point::frac_config;
-                        return Ok(((num << frac_config::FRAC_BITS) / den) as i32);
-                    }
+                    Self::rational_i128_to_storage_checked(num, den)
                 } else {
                     let cs = symbolic_wide_to_compute_storage(&rational)?;
                     downscale_to_storage(cs)

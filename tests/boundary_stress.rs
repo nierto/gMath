@@ -406,9 +406,12 @@ fn decimal_extreme_18_places() {
         Ok(val) => {
             let s = format!("{}", val);
             println!("0.000000000000000001 = {}", s);
-            // Should be very close to zero
+            // Should be very close to zero. On narrow profiles the literal
+            // is held EXACTLY in the Symbolic domain (0.5.0 item 1 parse
+            // fallback) and displays as "0." at profile precision — 1e-18
+            // is far below one realtime/compact ulp.
             assert!(
-                s.starts_with("0.000"),
+                s.starts_with("0.000") || s == "0.",
                 "18-place decimal should be near zero, got '{}'",
                 s
             );
@@ -508,9 +511,15 @@ fn decimal_extreme_catastrophic_cancellation() {
         Ok(val) => {
             let s = format!("{}", val);
             println!("1.0000000000001 - 1.0 = {}", s);
-            // Should give approximately 1e-13
+            // Should give approximately 1e-13. On narrow profiles the
+            // 13-dp literal is held EXACTLY in the Symbolic domain (0.5.0
+            // item 1 parse fallback) and the difference displays as "0."
+            // at profile precision — 1e-13 is below one narrow-profile ulp.
+            // (Pre-fix the literal itself truncated to 1.0 at parse and the
+            // subtraction was exactly zero — displayed "0.0000", passing
+            // this assertion by coincidence.)
             assert!(
-                s.starts_with("0.000"),
+                s.starts_with("0.000") || s == "0.",
                 "near-cancellation should give small positive, got '{}'",
                 s
             );

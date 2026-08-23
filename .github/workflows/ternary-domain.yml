@@ -59,3 +59,11 @@ jobs:
         env:
           GMATH_PROFILE: ${{ matrix.profile }}
         run: cargo test --test rounding_unification
+
+      # UGOD ladder-top gate (0.5.0 item 1): arithmetic on representable
+      # inputs is exact — via a wider tier or the symbolic fallback — or
+      # fails loud. Pre-fix, every ladder's TOP wrapped silently.
+      - name: UGOD promotion gate (exact or loud, never wrapped)
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --test ugod_promotion_validation

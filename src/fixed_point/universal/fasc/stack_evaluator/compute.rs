@@ -587,6 +587,29 @@ pub(crate) fn compute_ceiling() -> ComputeStorage {
     { I1024::max_value() }
 }
 
+/// True when an exp engine result sits at its overflow sentinel.
+///
+/// The sentinel differs by profile: the q16_16/q32_32/q256_256 engines
+/// saturate at the compute type's maximum, but the q64_64/q128_128 engines
+/// return `i128::MAX` at storage scale — which on q128_128 DOWNSCALES
+/// CLEANLY into the storage maximum, so a `== compute_ceiling()` check (the
+/// old guard) silently missed it and cosh/sinh built on the sentinel
+/// returned plausible-wrong values (0.5.0 item 2 find). `>=` because no
+/// legitimate exp result can exceed the sentinel.
+#[inline]
+pub(crate) fn exp_sentinel_reached(v: &ComputeStorage) -> bool {
+    #[cfg(table_format = "q16_16")]
+    { *v == i64::MAX }
+    #[cfg(table_format = "q32_32")]
+    { *v == i128::MAX }
+    #[cfg(table_format = "q64_64")]
+    { *v >= I256::from_i128(i128::MAX) << 128usize }
+    #[cfg(table_format = "q128_128")]
+    { *v >= I512::from_i256(I256::from_i128(i128::MAX)) << 256usize }
+    #[cfg(table_format = "q256_256")]
+    { *v == I1024::max_value() }
+}
+
 /// Subtract two compute-tier values
 #[inline]
 pub(crate) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {

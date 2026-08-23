@@ -173,7 +173,15 @@ impl BinaryTier6 {
         } else {
             quotient
         };
-        Some(Self { value: quotient.as_i1024() })
+        {
+            // Checked narrowing (0.5.0 item 1): a quotient beyond I1024
+            // (tiny divisor) must be None — ladder top, never a wrap.
+            let sign_ext = if (quotient.words[15] as i64) < 0 { u64::MAX } else { 0 };
+            if quotient.words[16..32].iter().any(|&w| w != sign_ext) {
+                return None;
+            }
+            Some(Self { value: quotient.as_i1024() })
+        }
     }
 }
 
@@ -184,6 +192,21 @@ impl BinaryTier6 {
 impl UniversalBinaryFixed {
     pub fn divide(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let (a, b) = self.align_to_common_tier(other);
+        // 0.5.0 item 1: decide DivisionByZero ONCE here, so every tier
+        // function's None below unambiguously means quotient overflow —
+        // previously an overflowing Tier-4 quotient was mislabeled
+        // DivisionByZero and the ladder stopped early.
+        let divisor_is_zero = match &b.value {
+            BinaryValue::Tier1(v) => v.raw() == 0,
+            BinaryValue::Tier2(v) => v.raw() == 0,
+            BinaryValue::Tier3(v) => v.raw() == 0,
+            BinaryValue::Tier4(v) => v.raw().is_zero(),
+            BinaryValue::Tier5(v) => v.raw().is_zero(),
+            BinaryValue::Tier6(v) => *v.raw() == crate::fixed_point::I1024::zero(),
+        };
+        if divisor_is_zero {
+            return Err(OverflowDetected::DivisionByZero);
+        }
         match (&a.value, &b.value) {
             (BinaryValue::Tier1(x), BinaryValue::Tier1(y)) => {
                 match x.checked_div(y) {
@@ -199,9 +222,9 @@ impl UniversalBinaryFixed {
                                 match x3.checked_div(&y3) {
                                     Some(r) => Ok(Self { value: BinaryValue::Tier3(r), current_tier: 3 }),
                                     None => {
-                                        match x3.to_tier4().div(&y3.to_tier4()) {
-                                            Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
-                                            None => Err(OverflowDetected::DivisionByZero),
+                                        match Self::div_tier4_and_up(&x3.to_tier4(), &y3.to_tier4()) {
+                                            Some(r) => Ok(r),
+                                            None => Err(OverflowDetected::TierOverflow),
                                         }
                                     }
                                 }
@@ -219,9 +242,9 @@ impl UniversalBinaryFixed {
                         match x3.checked_div(&y3) {
                             Some(r) => Ok(Self { value: BinaryValue::Tier3(r), current_tier: 3 }),
                             None => {
-                                match x3.to_tier4().div(&y3.to_tier4()) {
-                                    Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
-                                    None => Err(OverflowDetected::DivisionByZero),
+                                match Self::div_tier4_and_up(&x3.to_tier4(), &y3.to_tier4()) {
+                                    Some(r) => Ok(r),
+                                    None => Err(OverflowDetected::TierOverflow),
                                 }
                             }
                         }
@@ -232,42 +255,49 @@ impl UniversalBinaryFixed {
                 match x.checked_div(y) {
                     Some(r) => Ok(Self { value: BinaryValue::Tier3(r), current_tier: 3 }),
                     None => {
-                        match x.to_tier4().div(&y.to_tier4()) {
-                            Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
-                            None => Err(OverflowDetected::DivisionByZero),
+                        match Self::div_tier4_and_up(&x.to_tier4(), &y.to_tier4()) {
+                            Some(r) => Ok(r),
+                            None => Err(OverflowDetected::TierOverflow),
                         }
                     }
                 }
             }
             (BinaryValue::Tier4(x), BinaryValue::Tier4(y)) => {
-                match x.div(y) {
-                    Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
-                    None => {
-                        match x.to_tier5().div(&y.to_tier5()) {
-                            Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
-                            None => Err(OverflowDetected::DivisionByZero),
-                        }
-                    }
+                match Self::div_tier4_and_up(x, y) {
+                    Some(r) => Ok(r),
+                    None => Err(OverflowDetected::TierOverflow),
                 }
             }
             (BinaryValue::Tier5(x), BinaryValue::Tier5(y)) => {
                 match x.div(y) {
                     Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
-                    None => {
-                        match x.to_tier6().div(&y.to_tier6()) {
-                            Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
-                            None => Err(OverflowDetected::DivisionByZero),
-                        }
-                    }
+                    None => match x.to_tier6().div(&y.to_tier6()) {
+                        Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                        None => Err(OverflowDetected::TierOverflow),
+                    },
                 }
             }
             (BinaryValue::Tier6(x), BinaryValue::Tier6(y)) => {
                 match x.div(y) {
                     Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
-                    None => Err(OverflowDetected::DivisionByZero),
+                    None => Err(OverflowDetected::TierOverflow),
                 }
             }
             _ => Err(OverflowDetected::InvalidInput),
         }
+    }
+
+    /// Divide starting at Tier 4, promoting 5 → 6; None = quotient does
+    /// not fit any tier (caller reports TierOverflow; FASC falls back to
+    /// the exact rational path). Divisor-zero is decided by the caller.
+    fn div_tier4_and_up(x: &BinaryTier4, y: &BinaryTier4) -> Option<Self> {
+        if let Some(r) = x.div(y) {
+            return Some(Self { value: BinaryValue::Tier4(r), current_tier: 4 });
+        }
+        if let Some(r) = x.to_tier5().div(&y.to_tier5()) {
+            return Some(Self { value: BinaryValue::Tier5(r), current_tier: 5 });
+        }
+        x.to_tier5().to_tier6().div(&y.to_tier5().to_tier6())
+            .map(|r| Self { value: BinaryValue::Tier6(r), current_tier: 6 })
     }
 }

@@ -107,6 +107,14 @@ whatever error remains — are documented in
 [mootable/decimal-scaled](https://github.com/mootable/decimal-scaled)'s independent
 adversarial corpus.
 
+Overflow behavior (0.5.0): canonical arithmetic on representable inputs either
+returns the exact value — promoting through wider tiers or falling back to the
+exact rational domain — or fails loud with a typed error. It never silently
+wraps, at any tier, in any domain, including domain coercions and literal
+parsing (values beyond a narrow profile's binary or decimal range parse into
+the exact symbolic domain). Gated per profile by
+`tests/ugod_promotion_validation.rs`.
+
 ## 6. Requirements & dependencies
 
 - **Edition** 2021. No MSRV is currently pinned.

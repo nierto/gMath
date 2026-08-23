@@ -675,13 +675,30 @@ impl RationalNumber {
                 Ok(Self::new(result_num, result_den))
             },
             Err(OverflowDetected::TierOverflow) => {
-                // UGOD promotion: recompute at i128 using native checked arithmetic (FASC-compliant)
+                // UGOD promotion, step 1: retry at i128.
                 let (a_num, a_den) = self.extract_i128_pair()?;
                 let (b_num, b_den) = other.extract_i128_pair()?;
-                let num = a_num.checked_mul(b_num).ok_or(OverflowDetected::TierOverflow)?;
-                let den = a_den.checked_mul(b_den).ok_or(OverflowDetected::TierOverflow)?;
-                let g = gcd_unsigned(num.unsigned_abs(), den);
-                Ok(Self::new(num / (g as i128), den / g))
+                match (a_num.checked_mul(b_num), a_den.checked_mul(b_den)) {
+                    (Some(num), Some(den)) => {
+                        let g = gcd_unsigned(num.unsigned_abs(), den);
+                        Ok(Self::new(num / (g as i128), den / g))
+                    }
+                    _ => {
+                        // Step 2 (0.5.0 item 1): the old code stopped HERE —
+                        // an i128×i128 product "promoted" by retrying at the
+                        // same i128 width, so Huge×Huge (e.g. 1e20 × 1e20)
+                        // errored even though the Massive (I256) tier exists.
+                        // Climb the ladder for real: sign-safe widening
+                        // multiply into I256 (numerator can need 254 bits,
+                        // denominator up to u128×u128 < 2^254 — both fit).
+                        use crate::fixed_point::domains::binary_fixed::i256::mul_i128_to_i256;
+                        let den_a = i128::try_from(a_den).map_err(|_| OverflowDetected::TierOverflow)?;
+                        let den_b = i128::try_from(b_den).map_err(|_| OverflowDetected::TierOverflow)?;
+                        let num256 = mul_i128_to_i256(a_num, b_num);
+                        let den256 = mul_i128_to_i256(den_a, den_b);
+                        Ok(Self::from_i256_pair(num256, den256))
+                    }
+                }
             },
             Err(e) => Err(e),
         }
@@ -838,16 +855,34 @@ impl RationalNumber {
             return Err(OverflowDetected::PrecisionLimit);
         }
 
-        match target_tier {
-            1 => self.promote_both_to_tiny(other).and_then(|(a, b)| a.divide_tiny_tier(&b)),
-            2 => self.promote_both_to_small(other).and_then(|(a, b)| a.divide_small_tier(&b)),
-            3 => self.promote_both_to_medium(other).and_then(|(a, b)| a.divide_medium_tier(&b)),
-            4 => self.promote_both_to_large(other).and_then(|(a, b)| a.divide_large_tier(&b)),
-            5 => self.promote_both_to_huge(other).and_then(|(a, b)| a.divide_huge_tier(&b)),
-            #[cfg(not(feature = "embedded"))]
-            6 => self.promote_both_to_massive(other).and_then(|(a, b)| a.divide_massive_tier(&b)),
-            7 => self.promote_both_to_ultra(other).and_then(|(a, b)| a.divide_ultra_tier(&b)),
-            _ => Err(OverflowDetected::PrecisionLimit)
+        // 0.5.0 item 1: escalate on TierOverflow — a quotient can need a
+        // wider tier than either operand (9e18 ÷ 1e-9 = 9e27 needs Huge).
+        // Pre-fix this returned the target-tier attempt directly, so the
+        // symbolic ladder's top was unreachable from mixed-tier divides.
+        let mut tier = target_tier;
+        loop {
+            let attempt = match tier {
+                1 => self.promote_both_to_tiny(other).and_then(|(a, b)| a.divide_tiny_tier(&b)),
+                2 => self.promote_both_to_small(other).and_then(|(a, b)| a.divide_small_tier(&b)),
+                3 => self.promote_both_to_medium(other).and_then(|(a, b)| a.divide_medium_tier(&b)),
+                4 => self.promote_both_to_large(other).and_then(|(a, b)| a.divide_large_tier(&b)),
+                5 => self.promote_both_to_huge(other).and_then(|(a, b)| a.divide_huge_tier(&b)),
+                #[cfg(not(feature = "embedded"))]
+                6 => self.promote_both_to_massive(other).and_then(|(a, b)| a.divide_massive_tier(&b)),
+                7 => self.promote_both_to_ultra(other).and_then(|(a, b)| a.divide_ultra_tier(&b)),
+                _ => Err(OverflowDetected::PrecisionLimit)
+            };
+            match attempt {
+                Err(OverflowDetected::TierOverflow)
+                    if tier < 7 && tier < RationalStorage::max_tier_for_profile() =>
+                {
+                    tier += 1;
+                    // Massive (I256) is unavailable under the embedded feature
+                    #[cfg(feature = "embedded")]
+                    if tier == 6 { tier = 7; }
+                }
+                result => return result,
+            }
         }
     }
     

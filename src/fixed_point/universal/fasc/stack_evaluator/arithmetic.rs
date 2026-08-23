@@ -35,7 +35,7 @@ impl StackEvaluator {
                 // Full-precision binary negation with UGOD tier promotion
                 let binary = binary_from_storage(tier, &val)?;
                 let result = binary.negate()?;
-                let (new_tier, storage) = binary_to_storage(&result);
+                let (new_tier, storage) = binary_to_storage(&result)?;
                 Ok(StackValue::Binary(new_tier, storage, shadow_negate(shadow)))
             }
             StackValue::Decimal(dec, val, ref shadow) => {
@@ -107,9 +107,20 @@ impl StackEvaluator {
                     // Full-precision binary addition with UGOD tier promotion
                     let binary_a = binary_from_storage(*t1, v1)?;
                     let binary_b = binary_from_storage(*t2, v2)?;
-                    let result = binary_a.add(&binary_b)?;
-                    let (tier, storage) = binary_to_storage(&result);
-                    Ok(StackValue::Binary(tier, storage, shadow_add(s1, s2)))
+                    // Ladder top (0.5.0 item 1): if the promoted result
+                    // cannot fit the profile storage — or the UGOD ladder
+                    // itself overflows — fall back to the exact rational
+                    // path instead of erroring (and never wrapping; the
+                    // storage conversion is checked now).
+                    match binary_a.add(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                        Ok((tier, storage)) => {
+                            Ok(StackValue::Binary(tier, storage, shadow_add(s1, s2)))
+                        }
+                        Err(OverflowDetected::TierOverflow) => {
+                            self.add_via_rational(left.clone(), right.clone())
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                     // Full-precision decimal addition with UGOD tier promotion
@@ -205,9 +216,16 @@ impl StackEvaluator {
                     // Full-precision binary subtraction with UGOD tier promotion
                     let binary_a = binary_from_storage(*t1, v1)?;
                     let binary_b = binary_from_storage(*t2, v2)?;
-                    let result = binary_a.subtract(&binary_b)?;
-                    let (tier, storage) = binary_to_storage(&result);
-                    Ok(StackValue::Binary(tier, storage, shadow_subtract(s1, s2)))
+                    // Ladder top: rational fallback (see add arm).
+                    match binary_a.subtract(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                        Ok((tier, storage)) => {
+                            Ok(StackValue::Binary(tier, storage, shadow_subtract(s1, s2)))
+                        }
+                        Err(OverflowDetected::TierOverflow) => {
+                            self.subtract_via_rational(left.clone(), right.clone())
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                     // Full-precision decimal subtraction with UGOD tier promotion
@@ -298,9 +316,20 @@ impl StackEvaluator {
                     // Full-precision binary multiplication with UGOD tier promotion
                     let binary_a = binary_from_storage(*t1, v1)?;
                     let binary_b = binary_from_storage(*t2, v2)?;
-                    let result = binary_a.multiply(&binary_b)?;
-                    let (tier, storage) = binary_to_storage(&result);
-                    Ok(StackValue::Binary(tier, storage, shadow_multiply(s1, s2)))
+                    // Ladder top (0.5.0 item 1): if the promoted result
+                    // cannot fit the profile storage — or the UGOD ladder
+                    // itself overflows — fall back to the exact rational
+                    // path instead of erroring (and never wrapping; the
+                    // storage conversion is checked now).
+                    match binary_a.multiply(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                        Ok((tier, storage)) => {
+                            Ok(StackValue::Binary(tier, storage, shadow_multiply(s1, s2)))
+                        }
+                        Err(OverflowDetected::TierOverflow) => {
+                            self.multiply_via_rational(left.clone(), right.clone())
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                     let dp_result = *d1 as u16 + *d2 as u16;
@@ -400,9 +429,16 @@ impl StackEvaluator {
                 // Full-precision binary division with UGOD tier promotion
                 let binary_a = binary_from_storage(*t1, v1)?;
                 let binary_b = binary_from_storage(*t2, v2)?;
-                let result = binary_a.divide(&binary_b)?;
-                let (tier, storage) = binary_to_storage(&result);
-                Ok(StackValue::Binary(tier, storage, shadow_divide(s1, s2)))
+                // Ladder top: rational fallback (see add arm).
+                match binary_a.divide(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                    Ok((tier, storage)) => {
+                        Ok(StackValue::Binary(tier, storage, shadow_divide(s1, s2)))
+                    }
+                    Err(OverflowDetected::TierOverflow) => {
+                        self.divide_via_rational(left.clone(), right.clone())
+                    }
+                    Err(e) => Err(e),
+                }
             }
             (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                 // Full-precision decimal division with UGOD tier promotion

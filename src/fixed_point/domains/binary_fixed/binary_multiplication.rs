@@ -84,6 +84,17 @@ impl BinaryTier4 {
         let result = (wide >> 128) + round_bit;
         Self { value: result.as_i256() }
     }
+
+    /// Checked Q128.128 multiply (0.5.0 item 1): the unchecked `mul` above
+    /// silently truncated I512→I256 on overflow — 1e20 × 1e20 on the
+    /// balanced profile returned wrapped garbage. The UGOD ladder now uses
+    /// this and promotes to Tier 5 on None.
+    pub fn checked_mul(&self, other: &Self) -> Option<Self> {
+        let wide = I512::from_i256(self.value) * I512::from_i256(other.value);
+        let round_bit = (wide >> 127) & I512::from_i128(1);
+        let result = (wide >> 128) + round_bit;
+        if result.fits_in_i256() { Some(Self { value: result.as_i256() }) } else { None }
+    }
 }
 
 // ============================================================================
@@ -97,6 +108,14 @@ impl BinaryTier5 {
         let result = (wide >> 256) + round_bit;
         Self { value: result.as_i512() }
     }
+
+    /// Checked Q256.256 multiply — see BinaryTier4::checked_mul (0.5.0).
+    pub fn checked_mul(&self, other: &Self) -> Option<Self> {
+        let wide = I1024::from_i512(self.value) * I1024::from_i512(other.value);
+        let round_bit = (wide >> 255) & I1024::from_i128(1);
+        let result = (wide >> 256) + round_bit;
+        if result.fits_in_i512() { Some(Self { value: result.as_i512() }) } else { None }
+    }
 }
 
 // ============================================================================
@@ -106,6 +125,28 @@ impl BinaryTier5 {
 impl BinaryTier6 {
     pub fn mul(&self, other: &Self) -> Self {
         Self { value: I1024::mul_q512_512(self.value, other.value) }
+    }
+
+    /// Checked Q512.512 multiply — ladder top (0.5.0 item 1): a product
+    /// whose I2048 result exceeds I1024 is a TierOverflow for the caller
+    /// (FASC then falls back to exact rational), never a silent wrap.
+    pub fn checked_mul(&self, other: &Self) -> Option<Self> {
+        use crate::fixed_point::domains::binary_fixed::i2048::I2048;
+        let a_wide = I2048::from_i1024(self.value);
+        let b_wide = I2048::from_i1024(other.value);
+        let full_product = a_wide * b_wide;
+        let round_bit = (full_product >> 511).words[0] & 1;
+        let shifted = full_product >> 512;
+        // fits in I1024 iff words[16..32] are pure sign extension of bit 1023
+        let sign_ext = if (shifted.words[15] as i64) < 0 { u64::MAX } else { 0 };
+        if shifted.words[16..32].iter().any(|&w| w != sign_ext) {
+            return None;
+        }
+        let mut result = shifted.as_i1024();
+        if round_bit != 0 {
+            result = result + I1024::from_i128(1);
+        }
+        Some(Self { value: result })
     }
 }
 
@@ -157,13 +198,37 @@ impl UniversalBinaryFixed {
                 }
             }
             (BinaryValue::Tier4(x), BinaryValue::Tier4(y)) => {
-                Ok(Self { value: BinaryValue::Tier4(x.mul(y)), current_tier: 4 })
+                // 0.5.0 item 1: continue the ladder — 4 → 5 → 6 → loud
+                // TierOverflow (FASC falls back to exact rational).
+                match x.checked_mul(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
+                    None => {
+                        let x5 = x.to_tier5();
+                        let y5 = y.to_tier5();
+                        match x5.checked_mul(&y5) {
+                            Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
+                            None => match x5.to_tier6().checked_mul(&y5.to_tier6()) {
+                                Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                                None => Err(OverflowDetected::TierOverflow),
+                            },
+                        }
+                    }
+                }
             }
             (BinaryValue::Tier5(x), BinaryValue::Tier5(y)) => {
-                Ok(Self { value: BinaryValue::Tier5(x.mul(y)), current_tier: 5 })
+                match x.checked_mul(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
+                    None => match x.to_tier6().checked_mul(&y.to_tier6()) {
+                        Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                        None => Err(OverflowDetected::TierOverflow),
+                    },
+                }
             }
             (BinaryValue::Tier6(x), BinaryValue::Tier6(y)) => {
-                Ok(Self { value: BinaryValue::Tier6(x.mul(y)), current_tier: 6 })
+                match x.checked_mul(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                    None => Err(OverflowDetected::TierOverflow),
+                }
             }
             _ => Err(OverflowDetected::InvalidInput),
         }

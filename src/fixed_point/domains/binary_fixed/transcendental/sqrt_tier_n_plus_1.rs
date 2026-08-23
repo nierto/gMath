@@ -290,38 +290,43 @@ fn sqrt_q512_512_native(x: I1024) -> I1024 {
     // Reciprocal-sqrt iterations: 11 for 1024-bit convergence
     for _ in 0..11 {
         // y_n^2 in Q512.512: use mul_to_i2048 then shift right 512
-        let y_sq = multiply_i1024_q512_512_nonneg(y_n, y_n);
+        let y_sq = multiply_i1024_q512_512_signed(y_n, y_n);
         // S * y_n^2 in Q512.512
-        let s_y_sq = multiply_i1024_q512_512_nonneg(x, y_sq);
+        let s_y_sq = multiply_i1024_q512_512_signed(x, y_sq);
         // 3 - S * y_n^2
         let diff = three - s_y_sq;
         // y_n * (3 - S*y_n^2)
-        let product = multiply_i1024_q512_512_nonneg(y_n, diff);
+        let product = multiply_i1024_q512_512_signed(y_n, diff);
         // / 2
         y_n = product >> 1;
     }
 
     // sqrt(S) = S * y_final (Q512.512 multiply)
-    multiply_i1024_q512_512_nonneg(x, y_n)
+    multiply_i1024_q512_512_signed(x, y_n)
 }
 
 /// Q512.512 fixed-point multiply: (a * b) >> 512
 ///
-/// Multiply two NON-NEGATIVE I1024 values (Q512.512), truncating downscale.
+/// Signed Q512.512 multiply, truncating the magnitude (toward zero).
 ///
-/// 0.5.0 audit: renamed from `multiply_i1024_q512_512` (shadowed the
-/// sign-safe helper in ln_tier_n_plus_1). Raw `mul_to_i2048` is unsigned;
-/// all sqrt-internal operands are non-negative by domain (x ≥ 0, Newton
-/// iterates positive). Truncation kept deliberately — changing it would
-/// perturb the validated Newton trajectory for zero benefit.
+/// 0.5.0 audit history: this was `multiply_i1024_q512_512` (shadowing the
+/// sign-safe ln helper), assumed positive-by-construction and asserted as
+/// such — and the assert then FIRED on scientific SPD-distance inputs:
+/// the Newton factor `3 − S·y²` goes NEGATIVE when the seed overshoots,
+/// so the raw unsigned `mul_to_i2048` here was a real latent corruption
+/// path for overshooting inputs. Now sign-wrapped. Magnitude truncation
+/// is kept (identical to the old behavior for the positive common case,
+/// so the validated Newton trajectory is unchanged there).
 #[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 #[inline(always)]
-fn multiply_i1024_q512_512_nonneg(a: I1024, b: I1024) -> I1024 {
-    debug_assert!(!(a < I1024::zero()), "unsigned widening mul fed a negative LHS");
-    debug_assert!(!(b < I1024::zero()), "unsigned widening mul fed a negative RHS");
-    let full = a.mul_to_i2048(b);
-    // Shift right 512 bits and extract as I1024
-    (full >> 512).as_i1024()
+fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
+    let a_neg = a < I1024::zero();
+    let b_neg = b < I1024::zero();
+    let abs_a = if a_neg { -a } else { a };
+    let abs_b = if b_neg { -b } else { b };
+    let full = abs_a.mul_to_i2048(abs_b);
+    let mag = (full >> 512).as_i1024();
+    if a_neg != b_neg { -mag } else { mag }
 }
 
 // ============================================================================

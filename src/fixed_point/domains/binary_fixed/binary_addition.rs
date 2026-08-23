@@ -60,6 +60,15 @@ impl BinaryTier4 {
     pub fn sub(&self, other: &Self) -> Self {
         Self { value: self.value - other.value }
     }
+
+    /// Checked add/sub (0.5.0 item 1): the bare operators above wrap at
+    /// the I256 boundary; the UGOD ladder now uses these and promotes.
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        self.value.checked_add(other.value).map(|value| Self { value })
+    }
+    pub fn checked_sub(&self, other: &Self) -> Option<Self> {
+        self.value.checked_sub(other.value).map(|value| Self { value })
+    }
 }
 
 // ============================================================================
@@ -74,6 +83,14 @@ impl BinaryTier5 {
     pub fn sub(&self, other: &Self) -> Self {
         Self { value: self.value - other.value }
     }
+
+    /// Checked add/sub — see BinaryTier4 (0.5.0 item 1).
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        self.value.checked_add(other.value).map(|value| Self { value })
+    }
+    pub fn checked_sub(&self, other: &Self) -> Option<Self> {
+        self.value.checked_sub(other.value).map(|value| Self { value })
+    }
 }
 
 // ============================================================================
@@ -87,6 +104,16 @@ impl BinaryTier6 {
 
     pub fn sub(&self, other: &Self) -> Self {
         Self { value: self.value - other.value }
+    }
+
+    /// Checked add/sub — ladder top (0.5.0 item 1). I1024 has no
+    /// checked_sub; a − b == a + (−b) with checked add (−b cannot
+    /// overflow for any value reachable through the ladder).
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        self.value.checked_add(other.value).map(|value| Self { value })
+    }
+    pub fn checked_sub(&self, other: &Self) -> Option<Self> {
+        self.value.checked_add(-other.value).map(|value| Self { value })
     }
 }
 
@@ -129,13 +156,29 @@ impl UniversalBinaryFixed {
                 }
             }
             (BinaryValue::Tier4(x), BinaryValue::Tier4(y)) => {
-                Ok(Self { value: BinaryValue::Tier4(x.add(y)), current_tier: 4 })
+                // 0.5.0 item 1: checked, 4 → 5 promotion, loud at the top.
+                match x.checked_add(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
+                    None => match x.to_tier5().checked_add(&y.to_tier5()) {
+                        Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
+                        None => Err(OverflowDetected::TierOverflow),
+                    },
+                }
             }
             (BinaryValue::Tier5(x), BinaryValue::Tier5(y)) => {
-                Ok(Self { value: BinaryValue::Tier5(x.add(y)), current_tier: 5 })
+                match x.checked_add(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
+                    None => match x.to_tier6().checked_add(&y.to_tier6()) {
+                        Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                        None => Err(OverflowDetected::TierOverflow),
+                    },
+                }
             }
             (BinaryValue::Tier6(x), BinaryValue::Tier6(y)) => {
-                Ok(Self { value: BinaryValue::Tier6(x.add(y)), current_tier: 6 })
+                match x.checked_add(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                    None => Err(OverflowDetected::TierOverflow),
+                }
             }
             _ => Err(OverflowDetected::InvalidInput),
         }
@@ -175,13 +218,29 @@ impl UniversalBinaryFixed {
                 }
             }
             (BinaryValue::Tier4(x), BinaryValue::Tier4(y)) => {
-                Ok(Self { value: BinaryValue::Tier4(x.sub(y)), current_tier: 4 })
+                // 0.5.0 item 1: checked, 4 → 5 promotion, loud at the top.
+                match x.checked_sub(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier4(r), current_tier: 4 }),
+                    None => match x.to_tier5().checked_sub(&y.to_tier5()) {
+                        Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
+                        None => Err(OverflowDetected::TierOverflow),
+                    },
+                }
             }
             (BinaryValue::Tier5(x), BinaryValue::Tier5(y)) => {
-                Ok(Self { value: BinaryValue::Tier5(x.sub(y)), current_tier: 5 })
+                match x.checked_sub(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier5(r), current_tier: 5 }),
+                    None => match x.to_tier6().checked_sub(&y.to_tier6()) {
+                        Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                        None => Err(OverflowDetected::TierOverflow),
+                    },
+                }
             }
             (BinaryValue::Tier6(x), BinaryValue::Tier6(y)) => {
-                Ok(Self { value: BinaryValue::Tier6(x.sub(y)), current_tier: 6 })
+                match x.checked_sub(y) {
+                    Some(r) => Ok(Self { value: BinaryValue::Tier6(r), current_tier: 6 }),
+                    None => Err(OverflowDetected::TierOverflow),
+                }
             }
             _ => Err(OverflowDetected::InvalidInput),
         }
