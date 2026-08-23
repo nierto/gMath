@@ -53,8 +53,92 @@ including the scientific 18/18 transcendental 0-ULP gate.
   (odd/even symmetries bit-exact, negative-intermediate chains) on every
   profile.
 
+### Changed — fallible composed transcendentals bypass FASC (0.5.0 item 2)
+
+The `try_*` variants of the composed transcendentals (`try_tan`,
+`try_atan`, `try_asin`, `try_acos`, `try_sinh`, `try_cosh`, `try_tanh`,
+`try_asinh`, `try_acosh`, `try_atanh`) are now direct compute-tier
+compositions mirroring their infallible twins, instead of routing
+through the FASC pipeline (LazyExpr tree + TLS evaluator + domain
+dispatch) per call. Same engines, same formulas, one downscale — results
+are bit-identical to the infallible methods on in-domain inputs, and the
+0.4.27 error contract is unchanged (`DomainError` for |x|>1 asin/acos,
+x<1 acosh, |x|≥1 atanh; `TierOverflow` on storage overflow; `asin(±1)`
+= ±π/2 exactly; tanh saturates to exactly 1 at the exp ceiling). Gated
+by `tests/try_direct_bypass_validation.rs`.
+
+Two silent-wrong-value defects flushed out by the new gate (both in the
+0.5.0 wrap class):
+
+- The imperative π/2 constant on the realtime profile cast a Q64.64
+  quantity straight to i64 — π/2·2^64 wrapped negative, silently
+  corrupting every imperative `acos` on that profile (the FASC path was
+  unaffected, which is why nothing gated it). Now a rounded shift to the
+  profile's compute scale.
+- `sinh`/`cosh` at the exp overflow sentinel: the q128_128 exp engine's
+  sentinel (`i128::MAX` at storage scale) equals the storage maximum, so
+  it downscaled CLEANLY into a plausible-wrong result — `cosh(180)` on
+  balanced returned ~storage-max/2 as `Ok`, and the FASC pipeline's own
+  ceiling guard (`== compute max`) had the same blind spot on that
+  profile. A shared per-profile sentinel predicate now guards both
+  paths: infallible sinh/cosh panic, `try_` variants return
+  `TierOverflow`, FASC cosh/tanh use the corrected check.
+
+### Fixed — UGOD ladder top (0.5.0 item 1): exact or loud, never wrapped
+
+Verdict of the promotion audit: mid-ladder promotion (binary tiers 1→4)
+was always correct — but the TOP of every ladder wrapped silently.
+Contract now gated by `tests/ugod_promotion_validation.rs` on every
+profile (and in CI): arithmetic on representable inputs either returns
+the EXACT value — via a wider tier or the symbolic domain — or fails
+loud.
+
+- Binary Tier-4/5 multiply truncated its wide product unchecked
+  (`1e20 × 1e20` on balanced returned 1.318e38 — the product mod 2^256);
+  Tier-4/5/6 add/sub used bare wrapping operators (`9e18 + 9e18` on
+  embedded returned 0.0). All top tiers now use checked arithmetic with
+  4→5→6 promotion arms.
+- Storage narrowing of promoted results (`binary_to_storage`) used bare
+  casts — now fits-checked, and the FASC binary arms fall back to the
+  exact rational path on `TierOverflow`: the true ladder top.
+- Divide branched into per-tier code before distinguishing zero divisors
+  from quotient overflow, mislabeling overflow as `DivisionByZero`; the
+  zero check now happens once at ladder entry, and overflow falls back
+  to the exact rational quotient.
+- The symbolic ladder's multiply "promotion" retried at the same i128
+  width (Huge×Huge could never reach the existing Massive/I256 tier);
+  `divide_mixed_tiers` returned the target-tier attempt without
+  escalating (a quotient can need a wider tier than either operand:
+  9e18 ÷ 1e-9 = 9e27 needs Huge). Both now climb the ladder.
+- FASC's symbolic/ternary → binary coercion (`to_binary_storage`)
+  shifted i128 numerators before any range check: a symbolic 1e20
+  coerced on embedded wrapped mod 2^64 into a PLAUSIBLE WRONG value.
+  Replaced with a checked nearest-ties-+∞ conversion at tier N+1 width.
+- Fractional literals beyond a narrow profile's decimal cap silently
+  truncated at parse — `"0.000000001"` on realtime parsed to exactly 0,
+  turning later divisions into division-by-zero. Such literals now fall
+  back to the exact Symbolic domain (the fractional twin of the item-0
+  integer fallback below).
+- The scientific (Q256.256) formatter squeezed integer parts through
+  i128, so any result ≥ 2^127 DISPLAYED as its value mod 2^128 even when
+  the stored bits were exact. Integer parts now print digit-at-a-time at
+  I256 width.
+- A sqrt compute-tier multiply helper assumed non-negative operands, but
+  Newton's 3 − S·y² factor goes negative on seed overshoot (caught by
+  the new 0b debug_asserts on scientific); the helper is now sign-safe.
+
 ### Fixed
 
+- **Realtime FASC decimal results lost half their digits at
+  materialization** ("the cosine plateau that wasn't"): DecimalCompute
+  values were materialized at a fixed `DECIMAL_STORAGE_MAX_DP − 2` in
+  Display/to_decimal_string/to_rational — 2 harmless digits of slack on
+  wide profiles, but dp 4 → 2 on realtime, so cos(0.1) = 0.9952 rendered
+  as "1.00" and masqueraded as a sin/cos kernel plateau (the kernels were
+  bit-perfect all along). Now adaptive: full MAX_DP first, stepping down
+  only when the magnitude needs fewer decimals (checked, deterministic).
+  Wide profiles regain their two withheld display digits; realtime passes
+  its original strict tolerances again.
 - UGOD binary tier divide mis-signed its rounding bump for exact
   quotients in (−1, 0) raw units (branched on `quotient < 0`, which is 0
   there) — e.g. an exact −0.75-ulp quotient rounded to **+1** raw instead
@@ -70,13 +154,6 @@ including the scientific 18/18 transcendental 0-ULP gate.
   succeeding on every other profile. Regression-tested on every profile;
   the router/domain integration suites now also run on realtime+compact
   in CI, which is how this stayed hidden.
-
-### Planned
-
-- Uniform rounding policy (one rule per domain across every path —
-  binary nearest-ties-up, decimal banker's, ternary nearest/tie-free);
-  see ROADMAP 0.5.0 item 0c for the full analysis. Breaking-precision
-  class; ships in 0.5.0 with consumer notice.
 
 ## [0.4.34] - 2026-08-14
 

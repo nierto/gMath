@@ -92,16 +92,16 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_sincos` | Fused sin+cos — single shared range reduction at compute tier. |
 | `try_sinhcosh` | Fallible fused sinh+cosh — single shared exp-pair at compute tier. |
 | `sincos_wide` | Fused sin+cos for wide-range angles that exceed storage-tier integer range. |
-| `try_tan` | Fallible tan(x). |
+| `try_tan` | Fallible tan(x) = sin(x)/cos(x) — `Err(DomainError)` if cos(x) is zero |
 | `try_atan` | Fallible atan(x). |
-| `try_asin` | Fallible asin(x) — returns `Err(DomainError)` if \|x\| > 1. |
-| `try_acos` | Fallible acos(x) — returns `Err(DomainError)` if \|x\| > 1. |
-| `try_sinh` | Fallible sinh(x). |
-| `try_cosh` | Fallible cosh(x). |
-| `try_tanh` | Fallible tanh(x). |
-| `try_asinh` | Fallible asinh(x). |
-| `try_acosh` | Fallible acosh(x) — returns `Err(DomainError)` if x < 1. |
-| `try_atanh` | Fallible atanh(x) — returns `Err(DomainError)` if \|x\| >= 1. |
+| `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)) — `Err(DomainError)` if \|x\| > 1. |
+| `try_acos` | Fallible acos(x) = π/2 - asin(x) — `Err(DomainError)` if \|x\| > 1. |
+| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2. |
+| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2 — `Err(TierOverflow)` when |
+| `try_tanh` | Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Saturates to exactly |
+| `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
+| `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)) — `Err(DomainError)` if x < 1. |
+| `try_atanh` | Fallible atanh(x) = ln((1+x)/(1-x)) / 2 — `Err(DomainError)` if \|x\| >= 1. |
 | `try_pow` | Fallible x^y = exp(y * ln(x)). |
 | `try_atan2` | Fallible atan2(self=y, x). |
 

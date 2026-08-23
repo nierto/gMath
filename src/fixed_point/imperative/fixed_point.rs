@@ -154,6 +154,17 @@ use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_check
 }
 #[inline] fn compute_halve_direct(a: ComputeStorage) -> ComputeStorage { compute_halve(a) }
 
+/// True when an exp engine result sits at its overflow sentinel. sinh/cosh
+/// built on such a value would be silently wrong — on q128_128 the sentinel
+/// equals the storage maximum, so the final downscale does NOT catch it
+/// (0.5.0 item 2 find). Shares the per-profile predicate with the FASC
+/// pipeline's `exp_at_compute_ceiling`.
+#[inline]
+fn exp_ceilinged(v: &ComputeStorage) -> bool {
+    use crate::fixed_point::universal::fasc::stack_evaluator::compute::exp_sentinel_reached;
+    exp_sentinel_reached(v)
+}
+
 /// 1.0 at compute tier
 fn compute_one() -> ComputeStorage { upscale_to_compute(one_storage()) }
 
@@ -161,7 +172,18 @@ fn compute_one() -> ComputeStorage { upscale_to_compute(one_storage()) }
 /// Upscales from the available pi_half constant to the profile's compute tier.
 fn compute_pi_half() -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
-    { crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128() as i64 }
+    {
+        use crate::fixed_point::frac_config;
+        // pi_half_i128() is Q64.64; the realtime compute tier holds
+        // 2·FRAC_BITS fractional bits. The old bare `as i64` cast WRAPPED
+        // (π/2·2^64 > i64::MAX), silently corrupting every imperative
+        // acos on this profile (0.5.0 item 2 find). Shift down with
+        // nearest rounding instead.
+        let shift = 64 - (frac_config::COMPUTE_FRAC_BITS as u32);
+        let q64 = crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128();
+        let round = (q64 >> (shift - 1)) & 1;
+        ((q64 >> shift) + round) as i64
+    }
     #[cfg(table_format = "q32_32")]
     { crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128() }
     #[cfg(table_format = "q64_64")]
@@ -523,6 +545,13 @@ impl FixedPoint {
         let c = upscale_to_compute(self.raw);
         let ep = direct_exp(c);
         let en = direct_exp(compute_neg_direct(c));
+        // A ceiling exp means |sinh| already exceeds the storage tier, and
+        // the ceiling VALUE would downscale cleanly to a plausible-wrong
+        // maximum — fail loud instead.
+        assert!(
+            !exp_ceilinged(&ep) && !exp_ceilinged(&en),
+            "sinh overflow: exp at compute ceiling"
+        );
         let result = compute_halve_direct(compute_sub_direct(ep, en));
         Self { raw: downscale_to_storage(result).expect("sinh overflow") }
     }
@@ -531,8 +560,14 @@ impl FixedPoint {
         let c = upscale_to_compute(self.raw);
         let ep = direct_exp(c);
         let en = direct_exp(compute_neg_direct(c));
-        // A ceiling exp means cosh already exceeds the storage tier; the
-        // wrapping add would corrupt it before the downscale could notice.
+        // A ceiling exp means cosh already exceeds the storage tier. The
+        // checked add alone is NOT a sufficient guard: on wide profiles the
+        // ceiling fits the compute type and downscales to a plausible-wrong
+        // maximum — fail loud instead.
+        assert!(
+            !exp_ceilinged(&ep) && !exp_ceilinged(&en),
+            "cosh overflow: exp at compute ceiling"
+        );
         let sum = compute_checked_add(ep, en).expect("cosh overflow");
         let result = compute_halve_direct(sum);
         Self { raw: downscale_to_storage(result).expect("cosh overflow") }
@@ -723,26 +758,126 @@ impl FixedPoint {
             (Self::from_raw(sin_raw), Self::from_raw(cos_raw))
         }
     }
-    /// Fallible tan(x).
-    pub fn try_tan(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::tan) }
+    // Fallible composed transcendentals — direct compute-tier compositions
+    // mirroring the infallible methods above (0.5.0 item 2; previously these
+    // routed through the FASC pipeline via try_apply_unary(LazyExpr)).
+    // Error contract unchanged: DomainError on domain violations (0.4.27),
+    // TierOverflow when the result exceeds storage.
+
+    /// Fallible tan(x) = sin(x)/cos(x) — `Err(DomainError)` if cos(x) is zero
+    /// at the compute tier.
+    pub fn try_tan(self) -> Result<Self, OverflowDetected> {
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_is_zero;
+        let c = upscale_to_compute(self.raw);
+        let s = direct_sin(c);
+        let c_val = direct_cos(c);
+        if compute_is_zero(&c_val) { return Err(OverflowDetected::DomainError); }
+        Ok(Self { raw: downscale_to_storage(compute_divide_direct(s, c_val))? })
+    }
     /// Fallible atan(x).
-    pub fn try_atan(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::atan) }
-    /// Fallible asin(x) — returns `Err(DomainError)` if |x| > 1.
-    pub fn try_asin(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::asin) }
-    /// Fallible acos(x) — returns `Err(DomainError)` if |x| > 1.
-    pub fn try_acos(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::acos) }
-    /// Fallible sinh(x).
-    pub fn try_sinh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::sinh) }
-    /// Fallible cosh(x).
-    pub fn try_cosh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::cosh) }
-    /// Fallible tanh(x).
-    pub fn try_tanh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::tanh) }
-    /// Fallible asinh(x).
-    pub fn try_asinh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::asinh) }
-    /// Fallible acosh(x) — returns `Err(DomainError)` if x < 1.
-    pub fn try_acosh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::acosh) }
-    /// Fallible atanh(x) — returns `Err(DomainError)` if |x| >= 1.
-    pub fn try_atanh(self) -> Result<Self, OverflowDetected> { self.try_apply_unary(LazyExpr::atanh) }
+    pub fn try_atan(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_atan) }
+    /// Fallible asin(x) = atan(x / sqrt(1 - x²)) — `Err(DomainError)` if |x| > 1.
+    pub fn try_asin(self) -> Result<Self, OverflowDetected> {
+        let one = Self::one();
+        let neg_one = Self::ZERO - one;
+        if self > one || self < neg_one { return Err(OverflowDetected::DomainError); }
+        // Boundary: asin(±1) = ±π/2 exactly (avoids division by sqrt(0))
+        if self == one {
+            return Ok(Self { raw: downscale_to_storage(compute_pi_half())? });
+        }
+        if self == neg_one {
+            return Ok(Self { raw: downscale_to_storage(compute_neg_direct(compute_pi_half()))? });
+        }
+        let c = upscale_to_compute(self.raw);
+        let x2 = compute_mul_direct(c, c);
+        let denom = direct_sqrt(compute_sub_direct(compute_one(), x2));
+        let ratio = compute_divide_direct(c, denom);
+        Ok(Self { raw: downscale_to_storage(direct_atan(ratio))? })
+    }
+    /// Fallible acos(x) = π/2 - asin(x) — `Err(DomainError)` if |x| > 1.
+    pub fn try_acos(self) -> Result<Self, OverflowDetected> {
+        let one = Self::one();
+        let neg_one = Self::ZERO - one;
+        if self > one || self < neg_one { return Err(OverflowDetected::DomainError); }
+        let pi_half = compute_pi_half();
+        // Boundaries: acos(1) = 0, acos(-1) = π
+        let asin_c = if self == one {
+            pi_half
+        } else if self == neg_one {
+            compute_neg_direct(pi_half)
+        } else {
+            let c = upscale_to_compute(self.raw);
+            let x2 = compute_mul_direct(c, c);
+            let denom = direct_sqrt(compute_sub_direct(compute_one(), x2));
+            direct_atan(compute_divide_direct(c, denom))
+        };
+        Ok(Self { raw: downscale_to_storage(compute_sub_direct(pi_half, asin_c))? })
+    }
+    /// Fallible sinh(x) = (exp(x) - exp(-x)) / 2 — `Err(TierOverflow)` when
+    /// the result exceeds the storage tier (a ceiling exp means it already
+    /// has, and the ceiling value would downscale to a plausible-wrong max).
+    pub fn try_sinh(self) -> Result<Self, OverflowDetected> {
+        let c = upscale_to_compute(self.raw);
+        let ep = direct_exp(c);
+        let en = direct_exp(compute_neg_direct(c));
+        if exp_ceilinged(&ep) || exp_ceilinged(&en) {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(Self { raw: downscale_to_storage(compute_halve_direct(compute_sub_direct(ep, en)))? })
+    }
+    /// Fallible cosh(x) = (exp(x) + exp(-x)) / 2 — `Err(TierOverflow)` when
+    /// the result exceeds the storage tier (a ceiling exp means cosh already
+    /// has; the checked add alone cannot see it on wide profiles).
+    pub fn try_cosh(self) -> Result<Self, OverflowDetected> {
+        let c = upscale_to_compute(self.raw);
+        let ep = direct_exp(c);
+        let en = direct_exp(compute_neg_direct(c));
+        if exp_ceilinged(&ep) || exp_ceilinged(&en) {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let sum = compute_checked_add(ep, en)?;
+        Ok(Self { raw: downscale_to_storage(compute_halve_direct(sum))? })
+    }
+    /// Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Saturates to exactly
+    /// 1 when exp(2x) reaches the compute-tier ceiling (matches `tanh`).
+    pub fn try_tanh(self) -> Result<Self, OverflowDetected> {
+        let c = upscale_to_compute(self.raw);
+        let e2x = direct_exp(compute_add_direct(c, c));
+        let one = compute_one();
+        let den = match compute_checked_add(e2x, one) {
+            Ok(v) => v,
+            Err(_) => return Ok(Self::one()),
+        };
+        let num = compute_sub_direct(e2x, one);
+        Ok(Self { raw: downscale_to_storage(compute_divide_direct(num, den))? })
+    }
+    /// Fallible asinh(x) = ln(x + sqrt(x² + 1)).
+    pub fn try_asinh(self) -> Result<Self, OverflowDetected> {
+        // ln argument is provably positive at compute tier: for x >= 0 it is
+        // >= 1, and for x < 0 it is ~1/(2|x|) >= 2^-(FRAC_BITS+1), far above
+        // one compute-tier ulp for any storable x.
+        let c = upscale_to_compute(self.raw);
+        let x2 = compute_mul_direct(c, c);
+        let inner = direct_sqrt(compute_add_direct(x2, compute_one()));
+        Ok(Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner)))? })
+    }
+    /// Fallible acosh(x) = ln(x + sqrt(x² - 1)) — `Err(DomainError)` if x < 1.
+    pub fn try_acosh(self) -> Result<Self, OverflowDetected> {
+        if self < Self::one() { return Err(OverflowDetected::DomainError); }
+        let c = upscale_to_compute(self.raw);
+        let x2 = compute_mul_direct(c, c);
+        let inner = direct_sqrt(compute_sub_direct(x2, compute_one()));
+        Ok(Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner)))? })
+    }
+    /// Fallible atanh(x) = ln((1+x)/(1-x)) / 2 — `Err(DomainError)` if |x| >= 1.
+    pub fn try_atanh(self) -> Result<Self, OverflowDetected> {
+        let one = Self::one();
+        if self >= one || self <= Self::ZERO - one { return Err(OverflowDetected::DomainError); }
+        let c = upscale_to_compute(self.raw);
+        let one_c = compute_one();
+        let ratio = compute_divide_direct(compute_add_direct(one_c, c), compute_sub_direct(one_c, c));
+        Ok(Self { raw: downscale_to_storage(compute_halve_direct(direct_ln(ratio)))? })
+    }
 
     /// Fallible x^y = exp(y * ln(x)).
     pub fn try_pow(self, exponent: Self) -> Result<Self, OverflowDetected> {

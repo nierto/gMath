@@ -357,29 +357,71 @@ in 0.5.0 with a consumer notice (consumers freezing hashed outputs should
 pin versions across the boundary). Add tie-case and cross-path
 equivalence tests per domain to the path-independence suite.
 
-### 0d. Realtime small-angle cosine collapse (found 2026-08-23)
+### 0d. "Realtime cosine plateau" — SOLVED 2026-08-23 (was a materialization bug)
 
-`cos(0.1)` returns exactly 1.0000 at Q16.16 (~327 ulp error; true value
-0.99500). Pre-existing — surfaced when the 0.5.0 coercion fix stopped
-inflating a test tolerance by 1 raw ulp. Suspect: small-angle threshold or
-table granularity in the q16_16 sin/cos path treating |x| below some bound
-as cos=1. Investigate the realtime kernel, add mpmath points at 0.05/0.1/
-0.2 rad to realtime_profile_validation, and either fix or document the
-threshold as a profile limit.
+Investigation cleared the kernel entirely: the q16_16 sin/cos engines are
+correct (cos(0.1) = 0.99524 at the kernel, imperative path bit-perfect).
+The real defect: DecimalCompute results materialized at a fixed
+`DECIMAL_STORAGE_MAX_DP - 2` in THREE places (Display, to_decimal_string,
+to_rational) — imperceptible slack on wide profiles, but HALF of
+realtime's four decimal digits, so 0.9952 rendered as "1.00" and every
+display-round-tripping test saw a "plateau". Fixed with adaptive
+materialization: try full MAX_DP, step down only when the magnitude
+genuinely needs fewer decimals (checked downscale, never a wrap). Wide
+profiles gained their 2 withheld digits back as a side effect. The
+0d-era test-tolerance workarounds were REVERTED — original strict
+tolerances pass again on realtime. The related FASC exp(20) realtime
+TierOverflow was resolved under item 1: it is correct-and-loud (e^20
+exceeds every realtime representation), not a missing fallback.
 
-### 1. UGOD multi-tier promotion verification
+### 1. UGOD multi-tier promotion verification — DELIVERED 2026-08-23
 
-**Priority:** HIGH — correctness concern
-**Effort:** ~200 lines, 1 session
+**Verdict:** the original concern (promoting to symbolic after a single
+tier) was NOT the defect — mid-ladder promotion (binary tiers 1→4) was
+always correct (multiply/divide chain tiers explicitly; add/sub's
+single-step promotion is provably sufficient since a sum grows by at
+most one bit). The TOP of every ladder was broken instead, and wrapped
+SILENTLY rather than falling back:
 
-Verify that UGOD overflow promotion tries at least 2 subsequent tiers before falling back to symbolic rational. Current behavior may promote to symbolic after a single tier overflow, bypassing intermediate tiers that would succeed. Either confirm the code is correct (document the guarantee) or fix it.
+- Binary Tier-4/5 mul truncated wide products unchecked (balanced
+  `1e20 × 1e20` → 1.318e38 wrap garbage); Tier-4/5/6 add/sub used bare
+  wrapping operators (embedded `9e18 + 9e18` → 0.0). Now checked, with
+  4→5→6 promotion arms.
+- `binary_to_storage` narrowed promoted raws with bare casts; now
+  fits-checked, and the FASC binary arms fall back to the exact
+  rational path on `TierOverflow` — the true ladder top: exact or loud.
+- Divide mislabeled quotient overflow as `DivisionByZero` (zero check
+  now decided once at ladder entry).
+- Symbolic ladder: try_multiply's "promotion" retried at the same i128
+  width (never reached Massive/I256); `divide_mixed_tiers` didn't
+  escalate although a quotient can need a wider tier than either
+  operand (9e18 ÷ 1e-9 = 9e27). Both now climb.
+- FASC symbolic/ternary→binary coercion shifted i128 before any range
+  check — symbolic 1e20 coerced on embedded wrapped mod 2^64 into a
+  PLAUSIBLE WRONG value. Now checked nearest-ties-+∞ at tier N+1 width.
+- Two adjacent finds: narrow-profile fractional literals beyond the dp
+  cap silently parsed to truncated values (realtime `"0.000000001"` →
+  exactly 0) — now Symbolic-fallback like item 0; and the scientific
+  formatter displayed integer parts mod 2^128 (i128 squeeze) — now
+  digit-at-a-time at I256 width.
 
-### 2. Complete FixedPoint direct-engine bypass for composed transcendentals
+Gate: `tests/ugod_promotion_validation.rs` (all 5 profiles green; in
+ternary-domain CI on realtime+compact). The 0d-flagged realtime FASC
+exp(20) TierOverflow is RESOLVED as correct-and-loud: e^20 ≈ 4.85e8
+exceeds every realtime representation (Q16.16 max ≈ 3.3e4), so a loud
+TierOverflow is the contract — not a missing fallback.
 
-**Priority:** MEDIUM — throughput for inference consumers
-**Effort:** ~300 lines, 1 session
+### 2. Complete FixedPoint direct-engine bypass for composed transcendentals — DELIVERED 2026-08-23
 
-The infallible composed methods (tan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh) are already direct, but their fallible `try_*` variants still route through FASC (`try_apply_unary(LazyExpr::tan)` etc.). Implement direct compositions for the `try_*` variants using the already-direct exp/ln/sqrt/sin/cos/atan engines. Avoids the FASC pipeline overhead per call.
+The fallible `try_*` variants (tan/atan/asin/acos/sinh/cosh/tanh/asinh/
+acosh/atanh) no longer route through FASC (`try_apply_unary(LazyExpr)`);
+each is now a direct compute-tier composition mirroring its infallible
+twin — same engines, same formula, same single downscale. Error contract
+preserved: `DomainError` on domain violations (0.4.27), `TierOverflow`
+on storage overflow, `asin(±1) = ±π/2` boundary shortcut, tanh ceiling
+saturation to exactly 1. Gate: `tests/try_direct_bypass_validation.rs` —
+bit-identity with the infallible twins on in-domain inputs (which are
+0-ULP gated), typed domain errors, loud overflow.
 
 ### 3. Stack evaluator `profile_dispatch!` macro
 
