@@ -264,6 +264,13 @@ vs the rational fallback (parse-dominated); the value is architectural.
 
 ## Next: 0.5.0 — Correctness audit + remaining composed transcendental bypass
 
+**Status: staged on `main`, not yet released.** Items 0 through 2c below are
+delivered, swept green on all five profiles, and CI-green; item 3 is deferred
+past the cut. What remains for the release itself: version bump, CHANGELOG
+dating, and the consumer notice for the two bit-level changes (binary
+mul/div rounding, ternary raw scales). Until the tag lands, the published
+crate is 0.4.34 and `Cargo.toml` still reads 0.4.34 by design.
+
 ### 0. Narrow-profile integer-literal parse fallback — DELIVERED 2026-08-14
 
 **Fixed on main** (post-0.4.34): oversized integer literals now fall back
