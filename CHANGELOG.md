@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠ Please read before upgrading to 0.5.0
+
+0.5.0 makes gMath's answers more accurate. The side effect: some results
+now end in a different final digit than 0.4.x gave you. Nothing became
+less precise — the new values are simply closer to the true answer.
+
+**Do you need to act?**
+
+- **You compute and display results** → No. You just get better answers.
+- **You save results, hash them, or compare them against numbers an older
+  version produced** → Yes. Old and new values won't always match on the
+  last digit. Pick one version per dataset and regenerate in one go
+  rather than mixing.
+- **You need the same input to give the same answer on every machine** →
+  Nothing changes. That guarantee is untouched.
+
+**What changed, in plain terms**
+
+1. **Multiply and divide now round to the nearest value.** Some of them
+   used to just drop the leftover instead — and which way they dropped it
+   depended on which profile you built. Roughly half of all
+   multiplications and divisions that don't come out exact will end in a
+   different last digit.
+2. **Balanced-ternary values sit on a finer grid.** Each ternary tier now
+   fits 25% more digits into the same amount of memory. The values mean
+   the same thing, but the raw stored numbers are different — the same
+   measurement written on a finer ruler. Ternary weights for inference
+   (TQ1.9) are not affected.
+
+**The rounding rules now, one per domain** — the same rule on every path
+(direct calls, expressions, fused ops) and every profile:
+
+| Domain | Rule |
+| ------ | ---- |
+| Binary | Nearest; a value exactly halfway goes up |
+| Decimal | Exact when the result fits, otherwise banker's rounding (halfway goes to the even digit) |
+| Balanced ternary | Nearest; multiplication can never land exactly halfway, and where halfway is possible it goes up |
+
+One deliberate exception: the TQ1.9 `matvec_q2f` inference path still
+truncates, because its published contract guarantees it reproduces the
+narrow matvec bit for bit.
+
+**The rest** — `exp`, `ln`, `sqrt`, `sin`, `cos`, every other
+transcendental, and chained expressions return the same bits as 0.4.34;
+their reference tests are unchanged and still pass. It is plain
+arithmetic, and matrix work built on it, that can move by one digit.
+
+If in doubt: stay on 0.4.34 and upgrade when you can regenerate stored
+data in one pass.
+
+---
+
 ### Changed — 0.5.0 rounding unification (breaking-precision)
 
 One rounding rule per domain, identical on every path — imperative,
