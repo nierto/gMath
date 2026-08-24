@@ -16,7 +16,7 @@ Input values are also encoded as Q_N.N.
 import os
 import sys
 from mpmath import mp, mpf, pi, e, sqrt, log, exp, sin, cos, tan, atan, atan2
-from mpmath import asin, acos, sinh, cosh, tanh, asinh, acosh, atanh, power, nint
+from mpmath import asin, acos, sinh, cosh, tanh, asinh, acosh, atanh, nint
 
 mp.dps = 250  # 250 decimal places, well above 77 needed for Q256.256
 
@@ -252,19 +252,6 @@ ATANH_POINTS = [
     ("0.75", mpf("0.75")),
 ]
 
-# (label, base, exponent)
-POW_POINTS = [
-    ("2^10", mpf(2), mpf(10)),
-    ("2^0.5", mpf(2), mpf("0.5")),
-    ("10^3", mpf(10), mpf(3)),
-    ("2.0^3.5", mpf("2.0"), mpf("3.5")),
-    ("1.5^2.5", mpf("1.5"), mpf("2.5")),
-    ("0.5^2", mpf("0.5"), mpf(2)),
-    ("0.5^3", mpf("0.5"), mpf(3)),
-    ("3^0.5", mpf(3), mpf("0.5")),
-    ("1.001^100", mpf("1.001"), mpf(100)),
-    ("e^1", E, mpf(1)),
-]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -403,7 +390,6 @@ SINGLE_ARG_FUNCS = [
 
 TWO_ARG_FUNCS = [
     ("atan2", atan2, ATAN2_POINTS),
-    ("pow",   power, POW_POINTS),
 ]
 
 PROFILES = [

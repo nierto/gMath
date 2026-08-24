@@ -2,7 +2,7 @@
 //!
 //! 18 transcendental functions across 6 engines, computed at tier N+1 for full storage-tier precision.
 //!
-//! Dedicated engines: `exp`, `ln`, `sqrt`, `sin_cos`, `atan`, `pow`.
+//! Dedicated engines: `exp`, `ln`, `sqrt`, `sin_cos`, `atan`. (pow is composed as exp(y·ln x) at the compute tier — the dead dedicated engine was removed in 0.5.0.)
 //! FASC-composed: `tan`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `atan2`.
 //!
 //! | Profile    | Format    | Decimals | ULP |
@@ -16,7 +16,6 @@
 
 pub mod exp_tier_n_plus_1;
 pub mod ln_tier_n_plus_1;
-pub mod pow_tier_n_plus_1;
 pub mod sqrt_tier_n_plus_1;
 pub mod sin_cos_tier_n_plus_1;
 pub mod atan_tier_n_plus_1;
@@ -30,9 +29,6 @@ pub use exp_tier_n_plus_1::{exp_binary_i256, exp_binary_i512};
 pub use ln_tier_n_plus_1::ln_binary_i128;
 #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
 pub use ln_tier_n_plus_1::{ln_binary_i256, ln_binary_i512};
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-pub use pow_tier_n_plus_1::{pow_binary_i128, pow_binary_i256, pow_binary_i512};
-pub use pow_tier_n_plus_1::pow_integer_i128;
 #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
 pub use sqrt_tier_n_plus_1::sqrt_binary_i128;
 #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]

@@ -128,7 +128,7 @@ decimal_compute ×3, compute_multiply, ln's Q128/Q256/Q512 helpers, ternary
 (exp chains/Taylor ×8, ln Taylor ×2, sqrt Newton via renamed `_nonneg`
 helper); shadowing hazard removed (exp+sqrt private unsigned twins of the
 sign-safe `multiply_i1024_q512_512` renamed `*_nonneg`); latent sign bugs
-fixed in UNREACHABLE code (pow_tier_n_plus_1.rs ×3 — dead module, marked
-removal candidate). `mul_i128_to_i256` verified sign-safe (explicit
+fixed in UNREACHABLE code (pow_tier_n_plus_1.rs ×3 — dead module, since
+REMOVED per owner decision, 0.5.0). `mul_i128_to_i256` verified sign-safe (explicit
 handling). Enforcement: `tests/negative_operand_battery.rs` + the
 debug_asserts running under every test suite on every profile.

@@ -20,7 +20,6 @@ mod q64_64 {
         exp_binary_i128, ln_binary_i128, sqrt_binary_i128,
         sin_binary_i128, cos_binary_i128,
         atan_binary_i128, atan2_binary_i128,
-        pow_binary_i128,
     };
     use g_math::fixed_point::domains::binary_fixed::{I256, mul_i128_to_i256};
 
@@ -162,20 +161,6 @@ mod q64_64 {
             "atan2 max ULP {} exceeds threshold", max_ulp);
     }
 
-    #[test]
-    fn validate_pow_ulp() {
-        let mut max_ulp: i128 = 0;
-        let mut worst_label = "";
-        for &(base, exponent, expected, label) in POW_REFS.iter() {
-            let actual = pow_binary_i128(base, exponent);
-            let ulp = ulp_i128(actual, expected);
-            if ulp > max_ulp { max_ulp = ulp; worst_label = label; }
-        }
-        eprintln!("pow Q64.64: max {} ULP across {} points (worst: {})",
-            max_ulp, POW_REFS.len(), worst_label);
-        assert!(max_ulp <= MAX_ULP_KNOWN_IMPRECISE,
-            "pow max ULP {} exceeds threshold", max_ulp);
-    }
 
     // --- Composed functions (Q64.64 only, using divide_binary_i128) ---
 
@@ -400,7 +385,6 @@ mod q128_128 {
         exp_binary_i256, ln_binary_i256, sqrt_binary_i256,
         sin_binary_i256, cos_binary_i256,
         atan_binary_i256, atan2_binary_i256,
-        pow_binary_i256,
         pi_half_i256,
     };
 
@@ -586,22 +570,6 @@ mod q128_128 {
             format_i256_hex(max_ulp), ATAN2_REFS.len(), worst_label);
     }
 
-    #[test]
-    fn validate_pow_ulp() {
-        let mut max_ulp = I256::zero();
-        let mut worst_label = "";
-        for &(base_w, exp_w, expected_w, label) in POW_REFS.iter() {
-            let base = i256_from_words(base_w);
-            let exponent = i256_from_words(exp_w);
-            let expected = i256_from_words(expected_w);
-            let actual = pow_binary_i256(base, exponent);
-            let ulp = ulp_i256(actual, expected);
-            max_ulp = max_ulp_i256(max_ulp, ulp);
-            if ulp == max_ulp { worst_label = label; }
-        }
-        eprintln!("pow Q128.128: max ULP={} across {} points (worst: {})",
-            format_i256_hex(max_ulp), POW_REFS.len(), worst_label);
-    }
 
     // --- Composed function helpers (Q128.128) ---
 
@@ -835,7 +803,6 @@ mod q256_256 {
         exp_binary_i512, ln_binary_i512, sqrt_binary_i512,
         sin_binary_i512, cos_binary_i512,
         atan_binary_i512, atan2_binary_i512,
-        pow_binary_i512,
         pi_half_i512,
     };
 
@@ -1011,22 +978,6 @@ mod q256_256 {
             format_i512_hex(max_ulp), ATAN2_REFS.len(), worst_label);
     }
 
-    #[test]
-    fn validate_pow_ulp() {
-        let mut max_ulp = I512::zero();
-        let mut worst_label = "";
-        for &(base_w, exp_w, expected_w, label) in POW_REFS.iter() {
-            let base = i512_from_words(base_w);
-            let exponent = i512_from_words(exp_w);
-            let expected = i512_from_words(expected_w);
-            let actual = pow_binary_i512(base, exponent);
-            let ulp = ulp_i512(actual, expected);
-            max_ulp = max_ulp_i512(max_ulp, ulp);
-            if ulp == max_ulp { worst_label = label; }
-        }
-        eprintln!("pow Q256.256: max ULP={} across {} points (worst: {})",
-            format_i512_hex(max_ulp), POW_REFS.len(), worst_label);
-    }
 
     // --- Composed function helpers (Q256.256) ---
 
