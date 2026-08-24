@@ -60,7 +60,7 @@ constructed exact-tie inputs, per profile):
 | ------ | ----------------- | ----- |
 | Binary | round-to-nearest, ties toward +∞ | multiply, divide, every wide-tier downscale, and decimal→binary coercion — one rule, all five profiles |
 | Decimal | exact when representable; banker's (half-even) where rounding occurs | canonical multiply grows decimal places (no rounding); canonical divide tiers 1–5 are exact-or-rational-fallback (`PrecisionLoss` → symbolic) and never round; `DecimalFixed<D>` and the tier-6 best-effort divide round banker's |
-| Balanced ternary | round-to-nearest | tie-free for multiply and `div3` (odd scale, contract theorem); ties toward +∞ where ties exist (divide, conversion in — e.g. `0.5` → raw 3281, `-0.5` → raw −3280, the documented +∞ tie asymmetry) |
+| Balanced ternary | round-to-nearest | tie-free for multiply and `div3` (odd scale, contract theorem); ties toward +∞ where ties exist (divide, conversion in — e.g. `0.5` → raw 29525, `-0.5` → raw −29524 at TQ10.10, the documented +∞ tie asymmetry) |
 
 Exactness-first remains the prior rule everywhere: a result representable
 in its domain is returned exactly; rounding fires only at the single

@@ -623,17 +623,17 @@ impl StackEvaluator {
     /// **ARCHITECTURE**: Mirrors profile_max_binary_tier() for ternary domain.
     /// Maps each profile to the ternary tier whose storage type matches the profile's native type.
     /// **TIER MAPPING**:
-    ///   - Embedded (i128) → Tier 3 TQ32.32 (i128, 32 frac trits ≈ 15 decimals)
-    ///   - Balanced (I256)             → Tier 4 TQ64.64 (I256, 64 frac trits ≈ 30 decimals)
-    ///   - Scientific (I512)           → Tier 5 TQ128.128 (I512, 128 frac trits ≈ 61 decimals)
+    ///   - Embedded (i128) → Tier 3 TQ40.40 (i128, 32 frac trits ≈ 15 decimals)
+    ///   - Balanced (I256)             → Tier 4 TQ80.80 (I256, 64 frac trits ≈ 30 decimals)
+    ///   - Scientific (I512)           → Tier 5 TQ160.160 (I512, 128 frac trits ≈ 61 decimals)
     pub(crate) fn profile_max_ternary_tier(&self) -> u8 {
         match self.deployment_profile {
-            DeploymentProfile::Realtime => 1,      // TQ8.8 (i32, 8 frac trits)
-            DeploymentProfile::Compact => 2,       // TQ16.16 (i64, 16 frac trits)
-            DeploymentProfile::Embedded => 3,      // TQ32.32 (i128, 32 frac trits)
-            DeploymentProfile::Balanced => 4,      // TQ64.64 (I256, 64 frac trits)
-            DeploymentProfile::Scientific => 5,    // TQ128.128 (I512, 128 frac trits)
-            DeploymentProfile::Custom => 3,        // Default TQ32.32
+            DeploymentProfile::Realtime => 1,      // TQ10.10 (i32, 8 frac trits)
+            DeploymentProfile::Compact => 2,       // TQ20.20 (i64, 16 frac trits)
+            DeploymentProfile::Embedded => 3,      // TQ40.40 (i128, 32 frac trits)
+            DeploymentProfile::Balanced => 4,      // TQ80.80 (I256, 64 frac trits)
+            DeploymentProfile::Scientific => 5,    // TQ160.160 (I512, 128 frac trits)
+            DeploymentProfile::Custom => 3,        // Default TQ40.40
         }
     }
 }

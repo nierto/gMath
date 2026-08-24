@@ -39,14 +39,20 @@ The six UGOD tiers store a radix-3 **scaled integer** in binary storage:
 value = raw / 3^F        raw ∈ native signed integer storage
 ```
 
-| Tier | Format   | F (frac trits) | Scale  | Storage |
-|------|----------|----------------|--------|---------|
-| 1    | TQ8.8    | 8              | 3^8    | i32     |
-| 2    | TQ16.16  | 16             | 3^16   | i64     |
-| 3    | TQ32.32  | 32             | 3^32   | i128    |
-| 4    | TQ64.64  | 64             | 3^64   | I256    |
-| 5    | TQ128.128| 128            | 3^128  | I512    |
-| 6    | TQ256.256| 256            | 3^256  | I1024   |
+| Tier | Format    | F (frac trits) | Scale  | Storage |
+|------|-----------|----------------|--------|---------|
+| 1    | TQ10.10   | 10             | 3^10   | i32     |
+| 2    | TQ20.20   | 20             | 3^20   | i64     |
+| 3    | TQ40.40   | 40             | 3^40   | i128    |
+| 4    | TQ80.80   | 80             | 3^80   | I256    |
+| 5    | TQ160.160 | 160            | 3^160  | I512    |
+| 6    | TQ320.320 | 320            | 3^320  | I1024   |
+
+(0.5.0 tier resize: trit counts were raised +25% per tier — TQ8.8 →
+TQ10.10 and so on — to fill each binary word; a trit carries log2(3) ≈
+1.585 bits, and the old counts left ~20% of every word unused. Same
+storage, same instruction count, 25% more ternary precision digits.
+BREAKING for persisted raws: every scale factor changed.)
 
 Here the arithmetic is binary integer arithmetic on `raw` (add is
 `checked_add`; multiply is a double-width product rescaled by 3^F). The
@@ -66,19 +72,21 @@ conversion, and arithmetic method. Its weights are repacked into the
 native-trit form of 1a for the zero-multiply matvec paths.
 
 **Range honesty (1b only).** Tier doc comments describe ranges by nominal
-trit window (Tier 1: "±(3^8−1)/2 ≈ ±3280"), but the UGOD tiers bound values
-by *binary storage*, not trit count. The representable set of a tier is
-exactly
+trit window (Tier 1: "±(3^10−1)/2 = ±29,524"), but the UGOD tiers bound
+values by *binary storage*, not trit count. The representable set of a
+tier is exactly
 
 ```
 { n / 3^F : n ∈ [STORAGE_MIN, STORAGE_MAX] }
 ```
 
-For Tier 1 that admits values up to `(2^31−1)/3^8 ≈ 327,310` — about **100×**
-the nominal ±3280 window (and `from_integer`, capped by its `i16` parameter,
-still reaches ±32,767, about **10×** the window). For the UGOD tiers the
-nominal trit window describes precision structure, not an enforced
-invariant. TQ1.9 (1c) is the exception that does enforce it.
+After the 0.5.0 tier resize the slack is small by construction — the trit
+counts were chosen to fill the words: Tier 1 admits raws up to
+`(2^31−1)/3^10 ≈ ±36,368`, about **1.23×** the nominal ±29,524 window
+(pre-resize the slack was ~100×). `from_integer`, capped by its `i16`
+parameter, reaches ±32,767 ≈ 1.11× the window. The nominal trit window
+still describes precision structure, not an enforced invariant; TQ1.9
+(1c) is the exception that does enforce its window.
 **[current behavior]**
 
 ## 2. Exactness class
@@ -165,7 +173,7 @@ It does **not** cover:
   (e.g. ½) requires a tie rule. The shipping direct converter
   (`UniversalTernaryFixed::from_str`, used by `0t` literals) rounds
   **nearest with ties toward +∞** (0.5.0; was truncation) — pinned:
-  `0.5 → 3281/3^8`, `1.5 → 9842/3^8`, `-0.5 → -3280/3^8`. Sign symmetry
+  `0.5 → 29525/3^10`, `1.5 → 88574/3^10`, `-0.5 → -29524/3^10`. Sign symmetry
   `parse(-s) = -parse(s)` holds for every non-tie input; exact ties break
   it BY DESIGN (ties toward +∞ is not odd-symmetric) and both directions
   are pinned by test. The final sign is threaded into the conversion so
@@ -174,8 +182,8 @@ It does **not** cover:
   checked (0.4.33) and returns `TierOverflow` for a Tier-2+ raw on a
   profile whose `BinaryStorage` cannot hold it, where it previously
   wrapped silently. Values *reached by arithmetic* stay at their operand
-  tier, so e.g. `0t3280 + 0t1` is representable everywhere while the
-  literal `0t3281` window-gates to Tier 2 and errors loudly on realtime —
+  tier, so e.g. `0t29524 + 0t1` is representable everywhere while the
+  literal `0t29525` window-gates to Tier 2 and errors loudly on realtime —
   an asymmetry pinned by test.
 - Storage overflow is always an error (`TierOverflow`), never a wrap —
   the wrap-defect rule applies to this domain as everywhere else.

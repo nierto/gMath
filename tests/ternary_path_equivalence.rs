@@ -18,7 +18,7 @@
 
 use g_math::canonical::{evaluate, gmath, gmath_parse, LazyExpr, StackValue};
 use g_math::fixed_point::domains::balanced_ternary::{
-    UniversalTernaryFixed, TernaryTier, SCALE_TQ8_8, SCALE_TQ16_16,
+    UniversalTernaryFixed, TernaryTier, SCALE_TQ10_10, SCALE_TQ20_20,
 };
 
 // ============================================================================
@@ -60,20 +60,20 @@ fn ugod_promotion_on_multiply_overflow() {
     );
     let (tier, raw) = product.to_tier_value();
     assert_eq!(tier, 2, "expected promotion to exactly Tier 2");
-    assert_eq!(raw, 9_000_000i128 * SCALE_TQ16_16 as i128, "value preserved exactly");
+    assert_eq!(raw, 9_000_000i128 * SCALE_TQ20_20 as i128, "value preserved exactly");
 }
 
 #[test]
 fn ugod_promotion_preserves_value_exactly() {
     // Lossless promotion roundtrip: value at Tier 1, promoted through the
-    // tiers, must decode to the same rational (raw scales by 3^8 per step).
-    let v = ugod("3280"); // the full nominal Tier-1 integer window
+    // tiers, must decode to the same rational (raw scales by 3^10 per step).
+    let v = ugod("29524"); // the full nominal Tier-1 integer window
     let (t1, raw1) = v.to_tier_value();
-    assert_eq!((t1, raw1), (1, 3280 * SCALE_TQ8_8 as i128));
+    assert_eq!((t1, raw1), (1, 29524 * SCALE_TQ10_10 as i128));
     let promoted = v.promote_to_tier(TernaryTier::Tier2).expect("promote");
     let (t2, raw2) = promoted.to_tier_value();
     assert_eq!(t2, 2);
-    assert_eq!(raw2, 3280 * SCALE_TQ16_16 as i128, "promotion must be exact rescale");
+    assert_eq!(raw2, 29524 * SCALE_TQ20_20 as i128, "promotion must be exact rescale");
 }
 
 #[test]
@@ -88,24 +88,24 @@ fn ugod_mixed_tier_alignment() {
     assert_ne!(sum.current_tier(), TernaryTier::Tier1);
     let (tier, raw) = sum.to_tier_value();
     assert_eq!(tier, 2);
-    assert_eq!(raw, 100_005i128 * SCALE_TQ16_16 as i128, "aligned add exact");
+    assert_eq!(raw, 100_005i128 * SCALE_TQ20_20 as i128, "aligned add exact");
 }
 
 #[test]
 fn ugod_window_boundaries_exact() {
-    // ±3280 = ±(3^8−1)/2 — the all-(+1)/(−1) integer-trit patterns of Tier 1.
-    for (s, expected) in [("3280", 3280i128), ("1", 1), ("0", 0)] {
+    // ±29524 = ±(3^10−1)/2 — the all-(+1)/(−1) integer-trit patterns of Tier 1.
+    for (s, expected) in [("29524", 29524i128), ("1", 1), ("0", 0)] {
         let v = ugod(s);
         let (_t, raw) = v.to_tier_value();
-        assert_eq!(raw, expected * SCALE_TQ8_8 as i128, "window value {s}");
+        assert_eq!(raw, expected * SCALE_TQ10_10 as i128, "window value {s}");
     }
-    // from_str window gate: 3281 exceeds the Tier-1 window and must land
+    // from_str window gate: 29525 exceeds the Tier-1 window and must land
     // on Tier 2 (contract §1b range note: from_str DOES enforce the nominal
     // window, unlike from_integer).
-    let over = ugod("3281");
+    let over = ugod("29525");
     assert_eq!(over.current_tier(), TernaryTier::Tier2);
     let (_, raw) = over.to_tier_value();
-    assert_eq!(raw, 3281 * SCALE_TQ16_16 as i128);
+    assert_eq!(raw, 29525 * SCALE_TQ20_20 as i128);
 }
 
 // ============================================================================
@@ -119,7 +119,7 @@ fn fasc_ternary_arithmetic_stays_ternary_and_exact() {
     let cases: &[(&str, &str, &str, &str)] = &[
         // (op, a, b, expected-integer)
         ("+", "7", "5", "12"),
-        ("+", "3280", "1", "3281"),
+        ("+", "29524", "1", "29525"),
         ("-", "7", "12", "-5"),
         ("*", "21", "3", "63"),
         ("*", "81", "81", "6561"),
@@ -155,8 +155,8 @@ fn fasc_ternary_arithmetic_stays_ternary_and_exact() {
         .expect("ugod op");
         let (tier, raw) = ures.to_tier_value();
         let scale: i128 = match tier {
-            1 => SCALE_TQ8_8 as i128,
-            2 => SCALE_TQ16_16 as i128,
+            1 => SCALE_TQ10_10 as i128,
+            2 => SCALE_TQ20_20 as i128,
             t => panic!("unexpected tier {t} for small integers"),
         };
         assert_eq!(raw % scale, 0, "integer result must be exact");
@@ -168,7 +168,7 @@ fn fasc_ternary_arithmetic_stays_ternary_and_exact() {
 fn fasc_ternary_negation_symmetry() {
     // NOTE: a leading-minus literal ("-0t7") is a ParseError — the 0t prefix
     // check requires position 0. Negation is expressed as an operator.
-    for s in ["1", "7", "3280"] {
+    for s in ["1", "7", "29524"] {
         let pos = display(&g(&format!("0t{s}")));
         let negated = display(&(-g(&format!("0t{s}"))));
         let via_sub = display(&(g("0t0") - g(&format!("0t{s}"))));
@@ -218,37 +218,37 @@ fn cross_domain_coercion_matches_plain_expressions() {
 
 #[test]
 fn fractional_literal_conversion_boundary() {
-    // "0t0.5" forces the canonical tie: 0.5·3^8 = 3280.5, exactly between
+    // "0t0.5" forces the canonical tie: 0.5·3^10 = 29524.5, exactly between
     // grid points (3^F odd — contract §4/§5). Pin the shipped conversion.
     let v = UniversalTernaryFixed::from_str("0.5").expect("parse 0.5");
     let (tier, raw) = v.to_tier_value();
     assert_eq!(tier, 1);
     // Pin (contract §5, 0.5.0 unification): conversion rounds NEAREST with
-    // ties toward +∞ — 0.5·3^8 = 3280.5 is a genuine tie and resolves UP
-    // to 3281; 1.5·3^8 = 9841.5 → 9842.
-    assert_eq!(raw, 3281, "0.5 conversion pin (nearest, tie → +∞)");
+    // ties toward +∞ — 0.5·3^10 = 29524.5 is a genuine tie and resolves UP
+    // to 29525; 1.5·3^10 = 88573.5 → 88574.
+    assert_eq!(raw, 29525, "0.5 conversion pin (nearest, tie → +∞)");
     let (_, raw15) = UniversalTernaryFixed::from_str("1.5").expect("1.5").to_tier_value();
-    assert_eq!(raw15, 9842, "1.5 conversion pin (nearest, tie → +∞)");
+    assert_eq!(raw15, 88574, "1.5 conversion pin (nearest, tie → +∞)");
     // Exact-decimal values that ARE ternary-representable: integers only —
     // 0.5 is necessarily inexact (denominator 2 ∉ {3}).
-    assert_ne!(raw as i128 * 2, (SCALE_TQ8_8 as i128) * 1, "0.5 cannot be exact");
+    assert_ne!(raw as i128 * 2, (SCALE_TQ10_10 as i128) * 1, "0.5 cannot be exact");
 }
 
 #[test]
 fn ternary_literal_tier2_storage_limit_is_loud() {
-    // from_str window-gates 3281 to Tier 2 (raw 3281·3^16 ≈ 1.4e11). On the
+    // from_str window-gates 29525 to Tier 2 (raw 29525·3^20 ≈ 1.03e14). On the
     // narrow profiles that raw does not fit BinaryStorage — before 0.4.33
-    // this silently wrapped into garbage (0t3281 displayed as "-11.56021"
+    // this silently wrapped into garbage (pre-resize, 0t3281 displayed as "-11.56021"
     // on realtime); now it is a loud TierOverflow at parse.
     // Note the asymmetry: the same VALUE reached by arithmetic
-    // (0t3280 + 0t1) stays at Tier 1 raw 3281·3^8, which fits everywhere.
-    let parsed = gmath_parse("0t3281");
+    // (0t29524 + 0t1) stays at Tier 1 raw 29525·3^10, which fits everywhere.
+    let parsed = gmath_parse("0t29525");
     #[cfg(any(table_format = "q16_16"))]
     assert!(parsed.is_err(), "Tier-2 literal must fail loud on realtime");
     #[cfg(not(any(table_format = "q16_16")))]
     {
         let expr = parsed.expect("wider profiles hold Tier-2 raws");
-        assert_eq!(display(&expr), "3281");
+        assert_eq!(display(&expr), "29525");
     }
 }
 
@@ -258,8 +258,8 @@ fn negative_fractional_literal_sign_regression() {
     // integer part lost its sign before the fraction was applied. The fix
     // strips the sign once in from_str and negates the parsed magnitude.
     // Nearest with ties toward +∞ (0.5.0): −0.5 is a tie and resolves UP
-    // (toward +∞) to −3280; −0.1 has no tie (656.1 → 656); −1.5 tie → −9841.
-    for (s, expected_raw) in [("-0.5", -3280i128), ("-0.1", -656), ("-1.5", -9841)] {
+    // (toward +∞) to −29524; −0.1 has no tie (5904.9 → 5905); −1.5 tie → −88573.
+    for (s, expected_raw) in [("-0.5", -29524i128), ("-0.1", -5905), ("-1.5", -88573)] {
         let (tier, raw) = UniversalTernaryFixed::from_str(s)
             .expect("parse negative fractional")
             .to_tier_value();
@@ -268,8 +268,8 @@ fn negative_fractional_literal_sign_regression() {
     }
     // Sign symmetry of conversion holds for every NON-tie input;
     // exact ties break it by design (ties toward +∞ is not odd-symmetric):
-    // parse(0.5) = 3281 but parse(-0.5) = −3280. Both directions pinned.
-    for s in ["0.1", "3280", "0.0001", "0.3", "1.7"] {
+    // parse(0.5) = 29525 but parse(-0.5) = −29524. Both directions pinned.
+    for s in ["0.1", "29524", "0.0001", "0.3", "1.7"] {
         let pos = UniversalTernaryFixed::from_str(s).expect("pos").to_tier_value();
         let neg = UniversalTernaryFixed::from_str(&format!("-{s}")).expect("neg").to_tier_value();
         assert_eq!(neg.0, pos.0, "tier symmetry for {s}");
@@ -277,7 +277,7 @@ fn negative_fractional_literal_sign_regression() {
     }
     let tie_pos = UniversalTernaryFixed::from_str("0.5").unwrap().to_tier_value().1;
     let tie_neg = UniversalTernaryFixed::from_str("-0.5").unwrap().to_tier_value().1;
-    assert_eq!((tie_pos, tie_neg), (3281, -3280), "documented tie asymmetry (+∞)");
+    assert_eq!((tie_pos, tie_neg), (29525, -29524), "documented tie asymmetry (+∞)");
     // Double minus stays rejected.
     assert!(UniversalTernaryFixed::from_str("--5").is_err());
 }
@@ -290,7 +290,7 @@ fn negative_fractional_literal_sign_regression() {
 #[test]
 fn ternary_literals_cap_at_tier3() {
     // from_str parses the integer part as i64 (≤ ~9.2e18), and Tier 3 has
-    // no window gate — any i64 integer's raw (≤ 9.2e18·3^32 ≈ 1.7e34) fits
+    // no window gate — any i64 integer's raw (≤ 9.2e18·3^40 ≈ 1.1e38) fits
     // i128. Consequence, pinned here: 0t literals can NEVER land beyond
     // Tier 3; the Medium/Large/XLarge storage arms are reachable only via
     // internal from_tier_raw paths (unit-tested in domain.rs).
@@ -443,19 +443,16 @@ fn column_fallback_on_narrow_storage_is_silent_and_correct() {
 }
 
 #[test]
-fn convert_to_ternary_wrap_fix_is_loud_on_narrow_profiles() {
-    // Pre-fix: output-mode ternary conversion stored tier-3 raws through an
-    // UNCHECKED cast — 1/3 on realtime (raw 3^32/3 ≈ 6.2e14 > i32) wrapped
-    // silently. Now: loud error on narrow storage, exact value on wide.
+fn convert_to_ternary_output_mode_is_exact_on_every_profile() {
+    // History: the output-mode conversion once stored tier-3 raws through
+    // an UNCHECKED cast (silent wrap on realtime; made a loud error in
+    // 0.4.34). Since the 0.5.0 tier resize the coercion targets the
+    // PROFILE's own tier and scale, so a 3-adic value converts EXACTLY on
+    // every profile — realtime holds 1/3 at Tier 1 as raw 3^10/3 = 19,683.
     use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
     let _ = set_gmath_mode("auto:ternary");
     let converted = evaluate(&g("1/3"));
     reset_gmath_mode();
-    #[cfg(table_format = "q16_16")]
-    assert!(converted.is_err(), "narrow-profile conversion must fail loud");
-    #[cfg(not(table_format = "q16_16"))]
-    {
-        let v = converted.expect("wide profiles hold the tier-3 raw");
-        assert!(is_ternary(&v), "output mode must yield a ternary value");
-    }
+    let v = converted.expect("1/3 is 3-adic: exact ternary on every profile");
+    assert!(is_ternary(&v), "output mode must yield a ternary value");
 }

@@ -8,25 +8,25 @@
 use super::ternary_types::{
     TernaryTier, TernaryTier1, TernaryTier2, TernaryTier3, TernaryTier4, TernaryTier5, TernaryTier6,
     TernaryValue, UniversalTernaryFixed,
-    SCALE_TQ8_8, SCALE_TQ16_16, SCALE_TQ32_32, scale_tq128_128_i1024,
+    SCALE_TQ10_10, SCALE_TQ20_20, SCALE_TQ40_40, scale_tq160_160_i1024,
 };
 use crate::fixed_point::{I256, I512, I1024, I2048};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
-// TIER 1: TQ8.8 MULTIPLICATION (i32 storage)
+// TIER 1: TQ10.10 MULTIPLICATION (i32 storage)
 // ============================================================================
 
-/// TQ8.8 multiplication with overflow detection
+/// TQ10.10 multiplication with overflow detection
 ///
 /// **ALGORITHM**: Uses i64 intermediate for overflow prevention
 /// **SCALING**: Divides by 3^8 to maintain fixed-point format
 #[inline]
-pub fn multiply_ternary_tq8_8(a: i32, b: i32) -> Result<i32, OverflowDetected> {
+pub fn multiply_ternary_tq10_10(a: i32, b: i32) -> Result<i32, OverflowDetected> {
     let product = (a as i64) * (b as i64);
     // 0.5.0: nearest (was truncation). Scale 3^8 is odd, so no tie exists
     // (contract theorem) — a symmetric half-bump is total.
-    let scale = SCALE_TQ8_8 as i64;
+    let scale = SCALE_TQ10_10 as i64;
     let mut scaled = product / scale;
     let rem = product - scaled * scale;
     if (rem.unsigned_abs() << 1) > scale as u64 { scaled += rem.signum(); }
@@ -39,18 +39,18 @@ pub fn multiply_ternary_tq8_8(a: i32, b: i32) -> Result<i32, OverflowDetected> {
 }
 
 // ============================================================================
-// TIER 2: TQ16.16 MULTIPLICATION (i64 storage)
+// TIER 2: TQ20.20 MULTIPLICATION (i64 storage)
 // ============================================================================
 
-/// TQ16.16 multiplication with overflow detection
+/// TQ20.20 multiplication with overflow detection
 ///
 /// **ALGORITHM**: Uses i128 intermediate for overflow prevention
 /// **SCALING**: Divides by 3^16 to maintain fixed-point format
 #[inline]
-pub fn multiply_ternary_tq16_16(a: i64, b: i64) -> Result<i64, OverflowDetected> {
+pub fn multiply_ternary_tq20_20(a: i64, b: i64) -> Result<i64, OverflowDetected> {
     let product = (a as i128) * (b as i128);
     // Nearest, tie-free (odd scale) — see Tier 1.
-    let scale = SCALE_TQ16_16 as i128;
+    let scale = SCALE_TQ20_20 as i128;
     let mut scaled = product / scale;
     let rem = product - scaled * scale;
     if (rem.unsigned_abs() << 1) > scale as u128 { scaled += rem.signum(); }
@@ -63,22 +63,22 @@ pub fn multiply_ternary_tq16_16(a: i64, b: i64) -> Result<i64, OverflowDetected>
 }
 
 // ============================================================================
-// TIER 3: TQ32.32 MULTIPLICATION (i128 storage)
+// TIER 3: TQ40.40 MULTIPLICATION (i128 storage)
 // ============================================================================
 
-/// TQ32.32 multiplication with overflow detection
+/// TQ40.40 multiplication with overflow detection
 ///
 /// **ALGORITHM**: Uses I256 intermediate for overflow prevention
 /// **SCALING**: Divides by 3^32 to maintain fixed-point format
 #[inline]
-pub fn multiply_ternary_tq32_32(a: i128, b: i128) -> Result<i128, OverflowDetected> {
+pub fn multiply_ternary_tq40_40(a: i128, b: i128) -> Result<i128, OverflowDetected> {
     // Extend to I256 for overflow-safe multiplication
     let a_extended = I256::from_i128(a);
     let b_extended = I256::from_i128(b);
     let product = a_extended * b_extended;
 
     // Scale down by 3^32 — nearest, tie-free (odd scale; 0.5.0 unification)
-    let scale = I256::from_i128(SCALE_TQ32_32);
+    let scale = I256::from_i128(SCALE_TQ40_40);
     let (mut scaled, rem) =
         crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(product, scale);
     let rem_abs = if rem.is_negative() { -rem } else { rem };
@@ -95,23 +95,23 @@ pub fn multiply_ternary_tq32_32(a: i128, b: i128) -> Result<i128, OverflowDetect
 }
 
 // ============================================================================
-// TIER 4: TQ64.64 MULTIPLICATION (I256 storage, NEVER FAILS)
+// TIER 4: TQ80.80 MULTIPLICATION (I256 storage, NEVER FAILS)
 // ============================================================================
 
-/// TQ64.64 multiplication (maximum precision, never fails)
+/// TQ80.80 multiplication (maximum precision, never fails)
 ///
 /// **ALGORITHM**: Uses I512 intermediate for overflow prevention
 /// **SCALING**: Divides by 3^64 to maintain fixed-point format
 /// **GUARANTEE**: Never fails, uses saturation for extreme cases
 #[inline]
-pub fn multiply_ternary_tq64_64(a: I256, b: I256) -> I256 {
+pub fn multiply_ternary_tq80_80(a: I256, b: I256) -> I256 {
     // Extend to I512 for overflow-safe multiplication
     let a_extended = I512::from_i256(a);
     let b_extended = I512::from_i256(b);
     let product = a_extended * b_extended;
 
     // Scale down by 3^64 — nearest, tie-free (odd scale; 0.5.0 unification)
-    let scale = compute_3_pow_64_i512();
+    let scale = compute_3_pow_80_i512();
     let (mut scaled, rem) =
         crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(product, scale);
     let rem_abs = if rem.is_negative() { -rem } else { rem };
@@ -127,13 +127,13 @@ pub fn multiply_ternary_tq64_64(a: I256, b: I256) -> I256 {
 // TIER 4 CHECKED VARIANT (for promotion to Tier 5)
 // ============================================================================
 
-/// TQ64.64 multiplication with overflow detection (checked variant)
+/// TQ80.80 multiplication with overflow detection (checked variant)
 #[inline]
-pub fn multiply_ternary_tq64_64_checked(a: I256, b: I256) -> Result<I256, OverflowDetected> {
+pub fn multiply_ternary_tq80_80_checked(a: I256, b: I256) -> Result<I256, OverflowDetected> {
     let a_extended = I512::from_i256(a);
     let b_extended = I512::from_i256(b);
     let product = a_extended * b_extended;
-    let scale = compute_3_pow_64_i512();
+    let scale = compute_3_pow_80_i512();
     // Nearest, tie-free (odd scale) — matches the unchecked variant.
     let (mut scaled, rem) =
         crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(product, scale);
@@ -150,19 +150,19 @@ pub fn multiply_ternary_tq64_64_checked(a: I256, b: I256) -> Result<I256, Overfl
 }
 
 // ============================================================================
-// TIER 5: TQ128.128 MULTIPLICATION (I512 storage, checked)
+// TIER 5: TQ160.160 MULTIPLICATION (I512 storage, checked)
 // ============================================================================
 
-/// TQ128.128 multiplication with overflow detection
+/// TQ160.160 multiplication with overflow detection
 ///
 /// **ALGORITHM**: Uses I1024 intermediate (I1024 has Div)
 /// **SCALING**: Divides by 3^128 to maintain fixed-point format
 #[inline]
-pub fn multiply_ternary_tq128_128(a: I512, b: I512) -> Result<I512, OverflowDetected> {
+pub fn multiply_ternary_tq160_160(a: I512, b: I512) -> Result<I512, OverflowDetected> {
     let a_extended = I1024::from_i512(a);
     let b_extended = I1024::from_i512(b);
     let product = a_extended * b_extended;
-    let scale = scale_tq128_128_i1024();
+    let scale = scale_tq160_160_i1024();
     // Nearest, tie-free (odd scale; 0.5.0 unification).
     let mut scaled = product / scale;
     let rem = product % scale;
@@ -180,17 +180,17 @@ pub fn multiply_ternary_tq128_128(a: I512, b: I512) -> Result<I512, OverflowDete
 }
 
 // ============================================================================
-// TIER 6: TQ256.256 MULTIPLICATION (I1024 storage, saturating — NEVER FAILS)
+// TIER 6: TQ320.320 MULTIPLICATION (I1024 storage, saturating — NEVER FAILS)
 // ============================================================================
 
-/// TQ256.256 multiplication (maximum precision, never fails)
+/// TQ320.320 multiplication (maximum precision, never fails)
 ///
 /// **ALGORITHM**: Uses I2048 intermediate via mul_to_i2048()
 /// **CHALLENGE**: I2048 has no Div — use two-stage I1024 division
 /// Product / 3^256 = (Product / 3^128) / 3^128
 /// Since 3^128 fits in I512, each stage is I2048/I1024->I1024 (tractable)
 #[inline]
-pub fn multiply_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
+pub fn multiply_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
     // mul_to_i2048 is UNSIGNED word arithmetic by house convention — call
     // sites must sign-wrap (see stack_evaluator/compute.rs "MUST use signed
     // multiply" and decimal_compute.rs). This site did not: a negative
@@ -204,7 +204,7 @@ pub fn multiply_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
     let product = abs_a.mul_to_i2048(abs_b);
     // Divide I2048 by 3^256 = (3^128)^2
     // Stage 1: product / 3^128 -> I2048 quotient (using i2048_div_by_i1024)
-    let scale_128 = scale_tq128_128_i1024();
+    let scale_128 = scale_tq160_160_i1024();
     let stage1 = i2048_div_by_i1024(product, scale_128);
     // Stage 2: stage1 / 3^128 -> I1024 quotient
     // stage1 is I2048 but should fit close to I1024 range now
@@ -227,15 +227,13 @@ pub fn multiply_ternary_tq256_256(a: I1024, b: I1024) -> I1024 {
 // HELPER FUNCTIONS
 // ============================================================================
 
-/// Compute 3^64 as I512 for scaling
+/// Compute 3^80 as I512 for scaling (TQ80.80 tier-4 scale)
 ///
-/// 3^64 = 3_433_683_820_292_512_484_657_849_089_281
+/// 3^80 = 147_808_829_414_345_923_316_083_210_206_383_297_601
 /// Fits in i128 (max ~1.7x10^38), so construct via from_i128.
-fn compute_3_pow_64_i512() -> I512 {
-    // Precomputed: 3^64 via repeated squaring
-    // 3^1=3, 3^2=9, 3^4=81, 3^8=6561, 3^16=43046721,
-    // 3^32=1853020188851841, 3^64=3433683820292512484657849089281
-    I512::from_i128(3_433_683_820_292_512_484_657_849_089_281_i128)
+fn compute_3_pow_80_i512() -> I512 {
+    // Precomputed: 3^80 = (3^40)^2 = 12_157_665_459_056_928_801^2
+    I512::from_i128(147_808_829_414_345_923_316_083_210_206_383_297_601_i128)
 }
 
 /// Divide an I2048 value by an I1024 divisor.
@@ -327,7 +325,7 @@ impl UniversalTernaryFixed {
 
         match (&aligned_self.value, &aligned_other.value) {
             (TernaryValue::Tier1(a), TernaryValue::Tier1(b)) => {
-                match multiply_ternary_tq8_8(a.raw(), b.raw()) {
+                match multiply_ternary_tq10_10(a.raw(), b.raw()) {
                     Ok(result) => Ok(Self { value: TernaryValue::Tier1(TernaryTier1::from_raw(result)), current_tier: TernaryTier::Tier1 }),
                     Err(_) => {
                         let p_self = aligned_self.promote_to_tier2()?;
@@ -337,7 +335,7 @@ impl UniversalTernaryFixed {
                 }
             }
             (TernaryValue::Tier2(a), TernaryValue::Tier2(b)) => {
-                match multiply_ternary_tq16_16(a.raw(), b.raw()) {
+                match multiply_ternary_tq20_20(a.raw(), b.raw()) {
                     Ok(result) => Ok(Self { value: TernaryValue::Tier2(TernaryTier2::from_raw(result)), current_tier: TernaryTier::Tier2 }),
                     Err(_) => {
                         let p_self = aligned_self.promote_to_tier3()?;
@@ -347,7 +345,7 @@ impl UniversalTernaryFixed {
                 }
             }
             (TernaryValue::Tier3(a), TernaryValue::Tier3(b)) => {
-                match multiply_ternary_tq32_32(a.raw(), b.raw()) {
+                match multiply_ternary_tq40_40(a.raw(), b.raw()) {
                     Ok(result) => Ok(Self { value: TernaryValue::Tier3(TernaryTier3::from_raw(result)), current_tier: TernaryTier::Tier3 }),
                     Err(_) => {
                         let p_self = aligned_self.promote_to_tier4();
@@ -357,7 +355,7 @@ impl UniversalTernaryFixed {
                 }
             }
             (TernaryValue::Tier4(a), TernaryValue::Tier4(b)) => {
-                match multiply_ternary_tq64_64_checked(a.raw().clone(), b.raw().clone()) {
+                match multiply_ternary_tq80_80_checked(a.raw().clone(), b.raw().clone()) {
                     Ok(result) => Ok(Self { value: TernaryValue::Tier4(TernaryTier4::from_raw(result)), current_tier: TernaryTier::Tier4 }),
                     Err(_) => {
                         let p_self = aligned_self.promote_to_tier5();
@@ -367,7 +365,7 @@ impl UniversalTernaryFixed {
                 }
             }
             (TernaryValue::Tier5(a), TernaryValue::Tier5(b)) => {
-                match multiply_ternary_tq128_128(a.raw().clone(), b.raw().clone()) {
+                match multiply_ternary_tq160_160(a.raw().clone(), b.raw().clone()) {
                     Ok(result) => Ok(Self { value: TernaryValue::Tier5(TernaryTier5::from_raw(result)), current_tier: TernaryTier::Tier5 }),
                     Err(_) => {
                         let p_self = aligned_self.promote_to_tier6();
@@ -377,7 +375,7 @@ impl UniversalTernaryFixed {
                 }
             }
             (TernaryValue::Tier6(a), TernaryValue::Tier6(b)) => {
-                let result = multiply_ternary_tq256_256(a.raw().clone(), b.raw().clone());
+                let result = multiply_ternary_tq320_320(a.raw().clone(), b.raw().clone());
                 Ok(Self { value: TernaryValue::Tier6(TernaryTier6::from_raw(result)), current_tier: TernaryTier::Tier6 })
             }
             _ => unreachable!("align_to_common_tier should ensure matching tiers")

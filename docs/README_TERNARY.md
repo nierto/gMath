@@ -7,7 +7,7 @@ weight format used for zero-multiply neural-network inference.
 
 Two related surfaces. The **balanced-ternary domain**
 (`g_math::fixed_point::domains::balanced_ternary`) provides base-3 fixed-point
-arithmetic across six tier formats (TQ8.8 up to TQ256.256) plus trit packing
+arithmetic across six tier formats (TQ10.10 up to TQ320.320) plus trit packing
 (5 balanced trits per byte). **TQ1.9** (`g_math::tq19`, feature `inference`) is a
 decoupled, standalone format for neural-network weights: 1 integer trit + 9
 fractional trits per weight (2 bytes, range ±1.5). Because weights are {−1, 0, +1}

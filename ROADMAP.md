@@ -300,8 +300,9 @@ enumerated and classified (appendix in `docs/design/ROUNDING_CENSUS.md`):
 - **Latent bugs fixed in dead code**: the three pow `y·ln_x` sites were
   genuinely sign-broken but `pow_tier_n_plus_1.rs` has ZERO external
   callers (FASC/imperative compose pow as exp(y·ln x) through the safe
-  path) — sign-wrapped anyway + module marked unreachable/removal
-  candidate (owner's call).
+  path) — sign-wrapped anyway. RESOLVED 2026-08-23: module REMOVED per
+  owner decision (with its direct-engine tests and reference data);
+  composed pow keeps its 0-ULP gates.
 - **Modular-truncating wide `Mul` fallbacks** (I512/I1024 schoolbook mod
   2^N) are sign-correct by modular arithmetic; exercised with negatives
   by the 0.4.34 tier-5 lattice tests.
@@ -422,6 +423,26 @@ on storage overflow, `asin(±1) = ±π/2` boundary shortcut, tanh ceiling
 saturation to exactly 1. Gate: `tests/try_direct_bypass_validation.rs` —
 bit-identity with the infallible twins on in-domain inputs (which are
 0-ULP gated), typed domain errors, loud overflow.
+
+### 2b. Ternary tier resize — DELIVERED 2026-08-23 (owner-approved)
+
+Every balanced-ternary tier now fills its storage word: TQ10.10 (i32),
+TQ20.20 (i64), TQ40.40 (i128), TQ80.80 (I256), TQ160.160 (I512),
+TQ320.320 (I1024) — +25% trits per tier, same words, same speed, clean
+2× ladder. BREAKING for persisted ternary raws (all scale factors
+changed; tie pins now 0.5 → 29,525 / −0.5 → −29,524). The FASC
+binary→ternary coercion's tier-3 arm moved to I256 intermediates (the
+larger 3^40 scale overflowed the i128 path). TQ1.9 unaffected. Full
+capacity math: docs/design/BALANCED_TERNARY_CONTRACT.md §1b. Resolves
+the 0.4.33-flagged "tier resize" owner decision — batched with the 0c
+rounding change so consumers absorb ONE bit-compatibility boundary.
+
+### 2c. Dead pow engine removed — DELIVERED 2026-08-23 (owner-approved)
+
+`pow_tier_n_plus_1.rs` deleted with its direct-engine tests and
+reference data: zero production callers since the composed
+exp(y·ln x) path shipped; its latent sign bugs (0b audit) are moot.
+Composed pow keeps its 0-ULP mpmath gates.
 
 ### 3. Stack evaluator `profile_dispatch!` macro
 

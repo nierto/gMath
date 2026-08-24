@@ -19,8 +19,8 @@
 //! with no `table_format` gating. Runs under every profile and feature set.
 
 use g_math::fixed_point::domains::balanced_ternary::{
-    add_ternary_tq8_8, divide_ternary_tq8_8, multiply_ternary_tq8_8,
-    negate_ternary_tq8_8, subtract_ternary_tq8_8, SCALE_TQ8_8,
+    add_ternary_tq10_10, divide_ternary_tq10_10, multiply_ternary_tq10_10,
+    negate_ternary_tq10_10, subtract_ternary_tq10_10, SCALE_TQ10_10,
 };
 
 // ============================================================================
@@ -161,9 +161,9 @@ fn oracle_add_matches_raw_add() {
     let mut a = -SWEEP;
     while a <= SWEEP {
         let b = a.wrapping_mul(31) % SWEEP;
-        let got = add_ternary_tq8_8(a as i32, b as i32).unwrap();
+        let got = add_ternary_tq10_10(a as i32, b as i32).unwrap();
         assert_eq!(got as i128, decode(&ref_add(&encode(a), &encode(b))));
-        let got_sub = subtract_ternary_tq8_8(a as i32, b as i32).unwrap();
+        let got_sub = subtract_ternary_tq10_10(a as i32, b as i32).unwrap();
         assert_eq!(
             got_sub as i128,
             decode(&ref_add(&encode(a), &ref_neg(&encode(b))))
@@ -178,7 +178,7 @@ fn oracle_neg_matches_raw_neg() {
     while n <= SWEEP {
         let via_oracle = decode(&ref_neg(&encode(n)));
         assert_eq!(via_oracle, -n, "oracle neg wrong at {n}");
-        let got = negate_ternary_tq8_8(n as i32).unwrap();
+        let got = negate_ternary_tq10_10(n as i32).unwrap();
         assert_eq!(got as i128, -n);
         n += STRIDE;
     }
@@ -191,7 +191,7 @@ fn negation_involution_and_inverse() {
         let e = encode(n);
         assert_eq!(decode(&ref_neg(&ref_neg(&e))), n, "neg(neg({n})) != {n}");
         assert_eq!(decode(&ref_add(&e, &ref_neg(&e))), 0, "{n} + (-{n}) != 0");
-        let raw = negate_ternary_tq8_8(negate_ternary_tq8_8(n as i32).unwrap()).unwrap();
+        let raw = negate_ternary_tq10_10(negate_ternary_tq10_10(n as i32).unwrap()).unwrap();
         assert_eq!(raw as i128, n);
         n += STRIDE;
     }
@@ -234,7 +234,7 @@ fn nearest_ties_up(p: i128, q: i128) -> i128 {
 
 #[test]
 fn mul_div_nearest_and_symmetric() {
-    let scale = SCALE_TQ8_8 as i128;
+    let scale = SCALE_TQ10_10 as i128;
     let mut a = -SWEEP;
     while a <= SWEEP {
         let mut b = -SWEEP;
@@ -242,18 +242,18 @@ fn mul_div_nearest_and_symmetric() {
             // Contract §3 (0.5.0): mul = nearest((a·b)/3^8) — tie-free
             // because the scale is odd, hence fully sign-symmetric.
             let want = nearest_symmetric(a * b, scale);
-            let got = multiply_ternary_tq8_8(a as i32, b as i32).unwrap();
+            let got = multiply_ternary_tq10_10(a as i32, b as i32).unwrap();
             assert_eq!(got as i128, want, "mul semantics at {a},{b}");
-            let got_neg = multiply_ternary_tq8_8(-a as i32, b as i32).unwrap();
+            let got_neg = multiply_ternary_tq10_10(-a as i32, b as i32).unwrap();
             assert_eq!(got_neg, -got, "mul odd-symmetry at {a},{b}");
             if b != 0 {
                 // div = nearest((a·3^8)/b), ties toward +∞.
                 let want_div = nearest_ties_up(a * scale, b);
-                let got_div = divide_ternary_tq8_8(a as i32, b as i32).unwrap();
+                let got_div = divide_ternary_tq10_10(a as i32, b as i32).unwrap();
                 assert_eq!(got_div as i128, want_div, "div semantics at {a},{b}");
                 // Div symmetry holds except on exact ties (ties-+∞ is not
                 // odd-symmetric); the model equality above covers both signs.
-                let got_div_neg = divide_ternary_tq8_8(-a as i32, b as i32).unwrap();
+                let got_div_neg = divide_ternary_tq10_10(-a as i32, b as i32).unwrap();
                 assert_eq!(
                     got_div_neg as i128,
                     nearest_ties_up(-a * scale, b),
@@ -334,7 +334,7 @@ fn boundary_half_is_exact_tie() {
     // Every scale 3^F is odd, so ½·3^F is never an integer: ½ is not
     // representable, and its two neighbors are exactly equidistant — the
     // genuine tie lives at the conversion boundary, not inside the domain.
-    let scale = SCALE_TQ8_8 as i128; // 3^8 = 6561, odd
+    let scale = SCALE_TQ10_10 as i128; // 3^8 = 6561, odd
     assert_eq!(scale % 2, 1);
     let below = (scale - 1) / 2; // 3280  -> 3280/6561 < 1/2
     let above = below + 1; //         3281  -> 3281/6561 > 1/2
@@ -370,7 +370,7 @@ fn boundary_families() {
             assert_eq!(sum, n + other, "add at boundary {n}+{other}");
         }
         if n.abs() <= i32::MAX as i128 {
-            let got = negate_ternary_tq8_8(n as i32).unwrap();
+            let got = negate_ternary_tq10_10(n as i32).unwrap();
             assert_eq!(got as i128, -n);
         }
     }
@@ -389,14 +389,14 @@ fn boundary_families() {
 
 #[test]
 fn overflow_and_domain_failures() {
-    assert!(add_ternary_tq8_8(i32::MAX, 1).is_err());
-    assert!(subtract_ternary_tq8_8(i32::MIN, 1).is_err());
-    assert!(negate_ternary_tq8_8(i32::MIN).is_err());
-    assert!(multiply_ternary_tq8_8(i32::MAX, i32::MAX).is_err());
-    assert!(divide_ternary_tq8_8(1, 0).is_err());
+    assert!(add_ternary_tq10_10(i32::MAX, 1).is_err());
+    assert!(subtract_ternary_tq10_10(i32::MIN, 1).is_err());
+    assert!(negate_ternary_tq10_10(i32::MIN).is_err());
+    assert!(multiply_ternary_tq10_10(i32::MAX, i32::MAX).is_err());
+    assert!(divide_ternary_tq10_10(1, 0).is_err());
     // Near-boundary successes stay exact.
-    assert_eq!(add_ternary_tq8_8(i32::MAX - 1, 1).unwrap(), i32::MAX);
-    assert_eq!(negate_ternary_tq8_8(i32::MIN + 1).unwrap(), i32::MAX);
+    assert_eq!(add_ternary_tq10_10(i32::MAX - 1, 1).unwrap(), i32::MAX);
+    assert_eq!(negate_ternary_tq10_10(i32::MIN + 1).unwrap(), i32::MAX);
 }
 
 // ============================================================================
@@ -428,17 +428,17 @@ fn mul3_div3_shift_semantics() {
 // ============================================================================
 
 use g_math::fixed_point::domains::balanced_ternary::{
-    add_ternary_tq16_16, add_ternary_tq32_32,
-    subtract_ternary_tq16_16, subtract_ternary_tq32_32,
-    multiply_ternary_tq16_16, multiply_ternary_tq32_32,
-    divide_ternary_tq16_16, divide_ternary_tq32_32,
-    negate_ternary_tq16_16, negate_ternary_tq32_32,
-    multiply_ternary_tq64_64, multiply_ternary_tq64_64_checked,
-    multiply_ternary_tq128_128, multiply_ternary_tq256_256,
-    divide_ternary_tq64_64, divide_ternary_tq128_128, divide_ternary_tq256_256,
-    negate_ternary_tq64_64, negate_ternary_tq128_128, negate_ternary_tq256_256,
+    add_ternary_tq20_20, add_ternary_tq40_40,
+    subtract_ternary_tq20_20, subtract_ternary_tq40_40,
+    multiply_ternary_tq20_20, multiply_ternary_tq40_40,
+    divide_ternary_tq20_20, divide_ternary_tq40_40,
+    negate_ternary_tq20_20, negate_ternary_tq40_40,
+    multiply_ternary_tq80_80, multiply_ternary_tq80_80_checked,
+    multiply_ternary_tq160_160, multiply_ternary_tq320_320,
+    divide_ternary_tq80_80, divide_ternary_tq160_160, divide_ternary_tq320_320,
+    negate_ternary_tq80_80, negate_ternary_tq160_160, negate_ternary_tq320_320,
     TernaryTier4, TernaryTier5, TernaryTier6,
-    SCALE_TQ16_16, SCALE_TQ32_32,
+    SCALE_TQ20_20, SCALE_TQ40_40,
 };
 
 /// Signed integer pairs with every sign combination — the adversarial axis.
@@ -453,20 +453,29 @@ const INT_PAIRS: &[(i64, i64)] = &[
 
 #[test]
 fn tier2_ops_match_exact_i128_model() {
-    let scale = SCALE_TQ16_16 as i128;
+    let scale = SCALE_TQ20_20 as i128;
     for &(a, b) in INT_PAIRS {
-        let (ra, rb) = (a * SCALE_TQ16_16 / 1, b * SCALE_TQ16_16 / 1);
-        assert_eq!(add_ternary_tq16_16(ra, rb).unwrap() as i128, ra as i128 + rb as i128);
-        assert_eq!(subtract_ternary_tq16_16(ra, rb).unwrap() as i128, ra as i128 - rb as i128);
-        assert_eq!(negate_ternary_tq16_16(ra).unwrap(), -ra);
-        assert_eq!(
-            multiply_ternary_tq16_16(ra, rb).unwrap() as i128,
-            nearest_symmetric(ra as i128 * rb as i128, scale),
-            "tier2 mul at ({a},{b})"
-        );
+        let (ra, rb) = (a * SCALE_TQ20_20 / 1, b * SCALE_TQ20_20 / 1);
+        assert_eq!(add_ternary_tq20_20(ra, rb).unwrap() as i128, ra as i128 + rb as i128);
+        assert_eq!(subtract_ternary_tq20_20(ra, rb).unwrap() as i128, ra as i128 - rb as i128);
+        assert_eq!(negate_ternary_tq20_20(ra).unwrap(), -ra);
+        let model = nearest_symmetric(ra as i128 * rb as i128, scale);
+        if model >= i64::MIN as i128 && model <= i64::MAX as i128 {
+            assert_eq!(
+                multiply_ternary_tq20_20(ra, rb).unwrap() as i128,
+                model,
+                "tier2 mul at ({a},{b})"
+            );
+        } else {
+            // TQ20.20 range: products beyond i64 must fail loud, never wrap.
+            assert!(
+                multiply_ternary_tq20_20(ra, rb).is_err(),
+                "tier2 mul at ({a},{b}) must overflow loud"
+            );
+        }
         if rb != 0 {
             assert_eq!(
-                divide_ternary_tq16_16(ra, rb).unwrap() as i128,
+                divide_ternary_tq20_20(ra, rb).unwrap() as i128,
                 nearest_ties_up(ra as i128 * scale, rb as i128),
                 "tier2 div at ({a},{b})"
             );
@@ -476,22 +485,22 @@ fn tier2_ops_match_exact_i128_model() {
 
 #[test]
 fn tier3_ops_match_exact_i128_model() {
-    let scale = SCALE_TQ32_32; // i128
+    let scale = SCALE_TQ40_40; // i128
     for &(a, b) in INT_PAIRS {
         let ra = a as i128 * scale;
         let rb = b as i128 * scale;
-        assert_eq!(add_ternary_tq32_32(ra, rb).unwrap(), ra + rb);
-        assert_eq!(subtract_ternary_tq32_32(ra, rb).unwrap(), ra - rb);
-        assert_eq!(negate_ternary_tq32_32(ra).unwrap(), -ra);
+        assert_eq!(add_ternary_tq40_40(ra, rb).unwrap(), ra + rb);
+        assert_eq!(subtract_ternary_tq40_40(ra, rb).unwrap(), ra - rb);
+        assert_eq!(negate_ternary_tq40_40(ra).unwrap(), -ra);
         // Integer-lattice product: (a·S)(b·S)/S = a·b·S exactly.
         assert_eq!(
-            multiply_ternary_tq32_32(ra, rb).unwrap(),
+            multiply_ternary_tq40_40(ra, rb).unwrap(),
             a as i128 * b as i128 * scale,
             "tier3 mul at ({a},{b})"
         );
         if rb != 0 && a % b == 0 {
             assert_eq!(
-                divide_ternary_tq32_32(ra, rb).unwrap(),
+                divide_ternary_tq40_40(ra, rb).unwrap(),
                 (a / b) as i128 * scale,
                 "tier3 exact div at ({a},{b})"
             );
@@ -501,9 +510,9 @@ fn tier3_ops_match_exact_i128_model() {
     // genuine tie — +3.5 → 4 (up), −3.5 → −3 (toward +∞).
     let seven = 7i128 * scale;
     let two = 2i128 * scale;
-    let base = (7i128 * scale * scale) / (2i128 * scale); // 3.5 truncated
-    assert_eq!(divide_ternary_tq32_32(seven, two).unwrap(), base + 1);
-    assert_eq!(divide_ternary_tq32_32(-seven, two).unwrap(), -base);
+    let base = 7i128 * scale / 2; // floor(3.5·S) — S odd, so 7S/2 truncates
+    assert_eq!(divide_ternary_tq40_40(seven, two).unwrap(), base + 1);
+    assert_eq!(divide_ternary_tq40_40(-seven, two).unwrap(), -base);
 }
 
 #[test]
@@ -512,27 +521,27 @@ fn tier4_integer_lattice_all_sign_combinations() {
         let ta = TernaryTier4::from_integer(a as i128);
         let tb = TernaryTier4::from_integer(b as i128);
         let expected = TernaryTier4::from_integer(a as i128 * b as i128);
-        let got = multiply_ternary_tq64_64(*ta.raw(), *tb.raw());
+        let got = multiply_ternary_tq80_80(*ta.raw(), *tb.raw());
         assert_eq!(got, *expected.raw(), "tier4 mul at ({a},{b})");
-        let got_checked = multiply_ternary_tq64_64_checked(*ta.raw(), *tb.raw()).unwrap();
+        let got_checked = multiply_ternary_tq80_80_checked(*ta.raw(), *tb.raw()).unwrap();
         assert_eq!(got_checked, *expected.raw(), "tier4 checked mul at ({a},{b})");
         if b != 0 && a % b == 0 {
             // (a·b)/b == a and (a)/b == a/b, exactly on the integer lattice.
             assert_eq!(
-                divide_ternary_tq64_64(*expected.raw(), *tb.raw()),
+                divide_ternary_tq80_80(*expected.raw(), *tb.raw()),
                 *ta.raw(),
                 "tier4 div (a*b)/b at ({a},{b})"
             );
             let q = TernaryTier4::from_integer((a / b) as i128);
             assert_eq!(
-                divide_ternary_tq64_64(*ta.raw(), *tb.raw()),
+                divide_ternary_tq80_80(*ta.raw(), *tb.raw()),
                 *q.raw(),
                 "tier4 div a/b at ({a},{b})"
             );
         }
         // Negation total on the lattice, exact.
         assert_eq!(
-            negate_ternary_tq64_64(*ta.raw()),
+            negate_ternary_tq80_80(*ta.raw()),
             *TernaryTier4::from_integer(-(a as i128)).raw(),
             "tier4 neg at {a}"
         );
@@ -545,20 +554,20 @@ fn tier5_integer_lattice_all_sign_combinations() {
         let ta = TernaryTier5::from_integer(a as i128);
         let tb = TernaryTier5::from_integer(b as i128);
         let expected = TernaryTier5::from_integer(a as i128 * b as i128);
-        let got = multiply_ternary_tq128_128(ta.raw().clone(), tb.raw().clone())
+        let got = multiply_ternary_tq160_160(ta.raw().clone(), tb.raw().clone())
             .expect("tier5 lattice mul must not overflow");
         assert_eq!(got, *expected.raw(), "tier5 mul at ({a},{b})");
         if b != 0 && a % b == 0 {
             let q = TernaryTier5::from_integer((a / b) as i128);
             assert_eq!(
-                divide_ternary_tq128_128(ta.raw().clone(), tb.raw().clone())
+                divide_ternary_tq160_160(ta.raw().clone(), tb.raw().clone())
                     .expect("tier5 lattice div must not overflow"),
                 *q.raw(),
                 "tier5 div at ({a},{b})"
             );
         }
         assert_eq!(
-            negate_ternary_tq128_128(ta.raw().clone()).expect("tier5 neg"),
+            negate_ternary_tq160_160(ta.raw().clone()).expect("tier5 neg"),
             *TernaryTier5::from_integer(-(a as i128)).raw(),
             "tier5 neg at {a}"
         );
@@ -574,18 +583,18 @@ fn tier6_integer_lattice_all_sign_combinations() {
         let ta = TernaryTier6::from_integer(a as i128);
         let tb = TernaryTier6::from_integer(b as i128);
         let expected = TernaryTier6::from_integer(a as i128 * b as i128);
-        let got = multiply_ternary_tq256_256(ta.raw().clone(), tb.raw().clone());
+        let got = multiply_ternary_tq320_320(ta.raw().clone(), tb.raw().clone());
         assert_eq!(got, *expected.raw(), "tier6 mul at ({a},{b})");
         if b != 0 && a % b == 0 {
             let q = TernaryTier6::from_integer((a / b) as i128);
             assert_eq!(
-                divide_ternary_tq256_256(ta.raw().clone(), tb.raw().clone()),
+                divide_ternary_tq320_320(ta.raw().clone(), tb.raw().clone()),
                 *q.raw(),
                 "tier6 div at ({a},{b})"
             );
         }
         assert_eq!(
-            negate_ternary_tq256_256(ta.raw().clone()),
+            negate_ternary_tq320_320(ta.raw().clone()),
             *TernaryTier6::from_integer(-(a as i128)).raw(),
             "tier6 neg at {a}"
         );

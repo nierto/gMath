@@ -1110,23 +1110,13 @@ impl StackEvaluator {
     /// `num * 3^frac_trits / den` at the profile-appropriate ternary tier.
     ///
     /// **UGOD STRATEGY**: Profile determines tier (matching convert_to_binary pattern):
-    ///   - Embedded → Tier 3 TQ32.32 (i128 arithmetic, 32 frac trits)
-    ///   - Balanced → Tier 4 TQ64.64 (I256 arithmetic, 64 frac trits)
-    ///   - Scientific → Tier 5 TQ128.128 (I512 arithmetic, 128 frac trits)
+    ///   - Embedded → Tier 3 TQ40.40 (i128 arithmetic, 40 frac trits)
+    ///   - Balanced → Tier 4 TQ80.80 (I256 arithmetic, 80 frac trits)
+    ///   - Scientific → Tier 5 TQ160.160 (I512 arithmetic, 160 frac trits)
     /// (num * scale) / den rounded to nearest, ties toward +INF — the
     /// documented ternary conversion-boundary rule (0.5.0 unification;
-    /// contract §5). i128 path used by the tier-3 and fallback arms.
-    fn ternary_convert_div_i128(scaled_num: i128, den: i128) -> i128 {
-        let mut q = scaled_num / den;
-        let rem2 = (scaled_num - q * den).unsigned_abs() << 1;
-        let dabs = den.unsigned_abs();
-        let positive = (scaled_num < 0) == (den < 0);
-        if if positive { rem2 >= dabs } else { rem2 > dabs } {
-            q += if positive { 1 } else { -1 };
-        }
-        q
-    }
-
+    /// contract §5). All arms run wide (I256/I512) since the 0.5.0 tier
+    /// resize: num·3^40 can exceed i128 for binary-raw numerators.
     pub(crate) fn convert_to_ternary(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match &value {
             StackValue::Ternary(_, _, _) => Ok(value),
@@ -1149,7 +1139,7 @@ impl StackEvaluator {
                         let scale = {
                             let mut s = I512::from_i128(1);
                             let three = I512::from_i128(3);
-                            for _ in 0..128 { s = s * three; }
+                            for _ in 0..160 { s = s * three; }
                             s
                         };
                         // Split to avoid overflow: int_part * scale + (rem * scale) / den
@@ -1183,19 +1173,39 @@ impl StackEvaluator {
                     return Err(OverflowDetected::DivisionByZero);
                 }
                 match tier {
-                    // Tier 3: TQ32.32 — 32 frac trits, i128 arithmetic
-                    3 => {
-                        // 3^32 = 1,853,020,188,851,841
-                        let scale: i128 = 1_853_020_188_851_841;
-                        let stored = if let Some(product) = num.checked_mul(scale) {
-                            Self::ternary_convert_div_i128(product, den)
-                        } else {
-                            let quotient = num / den;
-                            let remainder = num % den;
-                            quotient.checked_mul(scale).ok_or(OverflowDetected::Overflow)?
-                                + Self::ternary_convert_div_i128(
-                                    remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)?, den)
+                    // Tiers 1-3 — i128-storable raws at the PROFILE's own
+                    // scale (3^10 / 3^20 / 3^40). Pre-resize the narrow
+                    // profiles borrowed the tier-3 arm, whose raws no longer
+                    // fit their storage (value·3^40 exceeds i64 for any
+                    // |value| ≥ 1). The num·scale product can exceed i128
+                    // (binary raws reach 2^64), so the multiply-divide runs
+                    // at I256 width and narrows back with a fits check.
+                    t @ (1 | 2 | 3) => {
+                        let scale_i128: i128 = match t {
+                            1 => 59_049,                     // 3^10
+                            2 => 3_486_784_401,              // 3^20
+                            _ => 12_157_665_459_056_928_801, // 3^40
                         };
+                        let scale = I256::from_i128(scale_i128);
+                        let num256 = I256::from_i128(num);
+                        let den256 = I256::from_i128(den);
+                        // Nearest, ties toward +INF (0.5.0; contract §5).
+                        let sn = num256 * scale;
+                        let (mut q, rem) =
+                            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(sn, den256);
+                        {
+                            let rem_abs = if rem.is_negative() { -rem } else { rem };
+                            let den_abs = if den256.is_negative() { -den256 } else { den256 };
+                            let positive = sn.is_negative() == den256.is_negative();
+                            let rem2 = rem_abs + rem_abs;
+                            if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+                                q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
+                            }
+                        }
+                        if !q.fits_in_i128() {
+                            return Err(OverflowDetected::TierOverflow);
+                        }
+                        let stored = q.as_i128();
                         // Checked narrowing — the bare to_binary_storage cast
                         // silently wrapped tier-3 raws on narrow profiles
                         // (same class as the 0.4.33 ternary_to_storage fix).
@@ -1204,12 +1214,12 @@ impl StackEvaluator {
                         )?;
                         Ok(StackValue::Ternary(t, bs, shadow))
                     }
-                    // Tier 4: TQ64.64 — 64 frac trits, I256 arithmetic
+                    // Tier 4: TQ80.80 — 80 frac trits, I256 arithmetic
                     4 => {
                         let scale = {
                             let mut s = I256::from_u8(1);
                             let three = I256::from_u8(3);
-                            for _ in 0..64 { s = s * three; }
+                            for _ in 0..80 { s = s * three; }
                             s
                         };
                         let num256 = I256::from_i128(num);
@@ -1232,12 +1242,12 @@ impl StackEvaluator {
                         )?;
                         Ok(StackValue::Ternary(t, bs, shadow))
                     }
-                    // Tier 5: TQ128.128 — handled by cfg block above on Q256.256
+                    // Tier 5: TQ160.160 — handled by cfg block above on Q256.256
                     5 => {
                         let scale = {
                             let mut s = I512::from_i128(1);
                             let three = I512::from_i128(3);
-                            for _ in 0..128 { s = s * three; }
+                            for _ in 0..160 { s = s * three; }
                             s
                         };
                         let num512 = I512::from_i128(num);
@@ -1262,16 +1272,26 @@ impl StackEvaluator {
                     }
                     // Fallback: use tier 3 for any unexpected tier value
                     _ => {
-                        let scale: i128 = 1_853_020_188_851_841;
-                        let stored = if let Some(product) = num.checked_mul(scale) {
-                            Self::ternary_convert_div_i128(product, den)
-                        } else {
-                            let quotient = num / den;
-                            let remainder = num % den;
-                            quotient.checked_mul(scale).ok_or(OverflowDetected::Overflow)?
-                                + Self::ternary_convert_div_i128(
-                                    remainder.checked_mul(scale).ok_or(OverflowDetected::Overflow)?, den)
-                        };
+                        // I256-width multiply-divide (see tier-3 arm).
+                        let scale = I256::from_i128(12_157_665_459_056_928_801);
+                        let num256 = I256::from_i128(num);
+                        let den256 = I256::from_i128(den);
+                        let sn = num256 * scale;
+                        let (mut q, rem) =
+                            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(sn, den256);
+                        {
+                            let rem_abs = if rem.is_negative() { -rem } else { rem };
+                            let den_abs = if den256.is_negative() { -den256 } else { den256 };
+                            let positive = sn.is_negative() == den256.is_negative();
+                            let rem2 = rem_abs + rem_abs;
+                            if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+                                q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
+                            }
+                        }
+                        if !q.fits_in_i128() {
+                            return Err(OverflowDetected::TierOverflow);
+                        }
+                        let stored = q.as_i128();
                         // Checked narrowing (see tier-3 arm above): on
                         // realtime/compact a tier-3 raw beyond i32/i64 is a
                         // loud TierOverflow, never a wrap.

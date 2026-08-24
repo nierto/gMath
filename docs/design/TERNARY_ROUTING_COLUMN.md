@@ -56,8 +56,8 @@ schedule.
 ## Decision 2 — coercion failure falls back silently to the previous route
 
 Gap-closing proved (and pinned by test) that narrow profiles cannot hold
-Tier-2+ ternary raws in FASC storage: realtime caps at TQ8.8/i32,
-compact at TQ16.16/i64. Coercing a large 3-adic value into ternary on
+Tier-2+ ternary raws in FASC storage: realtime caps at TQ10.10/i32,
+compact at TQ20.20/i64. Coercing a large 3-adic value into ternary on
 those profiles is a legitimate `TierOverflow`.
 
 If the router propagated that error, routing would *introduce failures*

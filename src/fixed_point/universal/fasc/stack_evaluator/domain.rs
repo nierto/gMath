@@ -175,16 +175,17 @@ pub(super) fn ternary_to_rational(tier: u8, value: &BinaryStorage) -> Result<Rat
     let (ternary_tier, _raw) = ternary.to_tier_raw();
 
     let frac_trits: u32 = match ternary_tier {
-        1 => 8,    // TQ8.8
-        2 => 16,   // TQ16.16
-        3 => 32,   // TQ32.32
-        4 => 64,   // TQ64.64
-        5 => 128,  // TQ128.128
-        6 => 256,  // TQ256.256
-        _ => 32,
+        1 => 10,   // TQ10.10
+        2 => 20,   // TQ20.20
+        3 => 40,   // TQ40.40
+        4 => 80,   // TQ80.80
+        5 => 160,  // TQ160.160
+        6 => 320,  // TQ320.320
+        _ => 40,
     };
 
-    if frac_trits <= 32 {
+    // Tiers 1-3 stay on the i128 fast path: 3^40 = 1.2e19 fits i128.
+    if frac_trits <= 40 {
         let mut denom = 1i128;
         for _ in 0..frac_trits {
             denom *= 3;

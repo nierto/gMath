@@ -53,6 +53,53 @@ including the scientific 18/18 transcendental 0-ULP gate.
   (odd/even symmetries bit-exact, negative-intermediate chains) on every
   profile.
 
+### Changed — ternary tier resize: TQ10.10 … TQ320.320 (breaking, owner-approved)
+
+Every balanced-ternary UGOD tier gains 25% more trits in the SAME storage
+word: TQ8.8→TQ10.10 (i32), TQ16.16→TQ20.20 (i64), TQ32.32→TQ40.40
+(i128), TQ64.64→TQ80.80 (I256), TQ128.128→TQ160.160 (I512),
+TQ256.256→TQ320.320 (I1024). A trit carries log2(3) ≈ 1.585 bits; the
+old counts (chosen to mirror the binary tier names) left ~20% of every
+word unused. The new counts fill the words — same storage, same
+instruction count, 25% more ternary precision digits, and a clean 2×
+ladder (10→20→40→80→160→320).
+
+- BREAKING for persisted/hashed ternary raws: every scale factor changed
+  (Tier 1 scale is now 3^10 = 59,049). Pinned conversion constants moved
+  with it: `0t0.5` → raw 29,525, `-0.5` → −29,524 (tie asymmetry
+  preserved), Tier-1 window ±29,524.
+- Public fn renames follow the formats (`multiply_ternary_tq10_10` etc.);
+  `SCALE_TQ10_10/TQ20_20/TQ40_40` replace the old constants.
+- The FASC binary→ternary coercion's tier-3 arm now runs its
+  multiply-divide at I256 width: with the larger 3^40 scale, a binary
+  raw numerator times the scale can exceed i128 (caught by the mode-
+  routing suite: `binary:ternary` sin(1.0) overflowed the old i128 path).
+- The same coercion now targets the PROFILE's own tier and scale
+  (realtime tier 1 / 3^10, compact tier 2 / 3^20): the old code borrowed
+  the tier-3 arm on narrow profiles, whose 3^40-scaled raws no longer
+  fit their storage (routed `0t2 + 1/3` on compact went TierOverflow
+  instead of exact).
+- `from_tier_raw`'s tier-1/2 constructors used bare `as i32`/`as i64`
+  casts — oversized raws silently wrapped; now checked `TierOverflow`
+  (wrap-defect class).
+- `from_str`'s Tier-3 fractional multiply is now checked — long
+  fractions cascade to Tier 4 instead of overflowing (latent pre-resize
+  hazard, window merely shifted by the resize).
+- TQ1.9 (`g_math::tq19`, the packed inference weight format) is a
+  separate type and is NOT affected.
+- Rationale and word-capacity math: docs/design/BALANCED_TERNARY_CONTRACT.md §1b.
+
+### Removed — dead `pow_tier_n_plus_1.rs` engine (owner-approved)
+
+The dedicated pow engine was superseded before it was ever wired in —
+shipping pow (FASC and imperative) composes exp(y·ln x) at the compute
+tier, which the 0-ULP suites validate. The module had zero production
+callers; its three latent sign bugs were found and fixed in the 0b audit
+and are now moot. Its direct-engine tests and reference data
+(`POW_REFS`, generator section) are removed with it; the composed pow
+keeps its own mpmath 0-ULP gates (integer and fractional exponents) in
+`fasc_ulp_validation`.
+
 ### Changed — fallible composed transcendentals bypass FASC (0.5.0 item 2)
 
 The `try_*` variants of the composed transcendentals (`try_tan`,

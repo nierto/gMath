@@ -1,8 +1,8 @@
 //! Balanced Ternary Types, Constructors, and Tier Promotion
 //!
 //! **MISSION**: Unified type definitions + runtime precision management for UGOD ternary
-//! **ARCHITECTURE**: TQ8.8(i32) → TQ16.16(i64) → TQ32.32(i128) → TQ64.64(I256)
-//!     → TQ128.128(I512) → TQ256.256(I1024)
+//! **ARCHITECTURE**: TQ10.10(i32) → TQ20.20(i64) → TQ40.40(i128) → TQ80.80(I256)
+//!     → TQ160.160(I512) → TQ320.320(I1024)
 //! **PRECISION**: Each tier uses minimal storage for its precision level
 //! **INTEGRATION**: UGOD-compatible with runtime overflow delegation
 //!
@@ -23,69 +23,69 @@ use crate::fixed_point::{I256, I512, I1024};
 // TIER-SPECIFIC STORAGE TYPES
 // ============================================================================
 
-/// Tier 1: TQ8.8 - Compact Geometric Precision (8 integer + 8 fractional trits)
+/// Tier 1: TQ10.10 - Compact Geometric Precision (8 integer + 8 fractional trits)
 ///
 /// **STORAGE**: i32 (32 bits for ~25.4 bits of information)
-/// **RANGE**: ±(3^8-1)/2 ≈ ±3,280
+/// **RANGE**: ±(3^10-1)/2 = ±29,524
 /// **USE CASE**: Basic geometric coordinates, simple triangular operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TernaryTier1 {
-    /// Raw value: actual_value × 3^8
+    /// Raw value: actual_value × 3^10
     pub(crate) value: i32,
 }
 
-/// Tier 2: TQ16.16 - Standard Geometric Precision (16 integer + 16 fractional trits)
+/// Tier 2: TQ20.20 - Standard Geometric Precision (16 integer + 16 fractional trits)
 ///
 /// **STORAGE**: i64 (64 bits for ~50.7 bits of information)
-/// **RANGE**: ±(3^16-1)/2 ≈ ±21,523,360
+/// **RANGE**: ±(3^20-1)/2 ≈ ±1.74×10^9
 /// **USE CASE**: Standard geometric transformations, barycentric coordinates
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TernaryTier2 {
-    /// Raw value: actual_value × 3^16
+    /// Raw value: actual_value × 3^20
     pub(crate) value: i64,
 }
 
-/// Tier 3: TQ32.32 - Extended Geometric Precision (32 integer + 32 fractional trits)
+/// Tier 3: TQ40.40 - Extended Geometric Precision (32 integer + 32 fractional trits)
 ///
 /// **STORAGE**: i128 (128 bits for ~101.4 bits of information)
-/// **RANGE**: ±(3^32-1)/2 ≈ ±9.3×10^14
+/// **RANGE**: ±(3^40-1)/2 ≈ ±6.1×10^18
 /// **USE CASE**: Complex geometric calculations, high-precision transformations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TernaryTier3 {
-    /// Raw value: actual_value × 3^32
+    /// Raw value: actual_value × 3^40
     pub(crate) value: i128,
 }
 
-/// Tier 4: TQ64.64 - Ultra Geometric Precision (64 integer + 64 fractional trits)
+/// Tier 4: TQ80.80 - Ultra Geometric Precision (64 integer + 64 fractional trits)
 ///
 /// **STORAGE**: I256 (256 bits for ~202.9 bits of information)
-/// **RANGE**: ±(3^64-1)/2 ≈ ±1.7×10^30
+/// **RANGE**: ±(3^80-1)/2 ≈ ±7.4×10^37
 /// **USE CASE**: Research-grade geometric computations, high-precision applications
 #[derive(Debug, Clone)]
 pub struct TernaryTier4 {
-    /// Raw value: actual_value × 3^64
+    /// Raw value: actual_value × 3^80
     pub(crate) value: I256,
 }
 
-/// Tier 5: TQ128.128 - Balanced Profile Precision (128 integer + 128 fractional trits)
+/// Tier 5: TQ160.160 - Balanced Profile Precision (128 integer + 128 fractional trits)
 ///
 /// **STORAGE**: I512 (512 bits for ~405.7 bits of information)
-/// **RANGE**: ±(3^128-1)/2 ≈ ±5.9×10^60
+/// **RANGE**: ±(3^160-1)/2 ≈ ±1.1×10^76
 /// **USE CASE**: Cross-domain operations matching balanced profile (38 decimals)
 #[derive(Debug, Clone)]
 pub struct TernaryTier5 {
-    /// Raw value: actual_value × 3^128
+    /// Raw value: actual_value × 3^160
     pub(crate) value: I512,
 }
 
-/// Tier 6: TQ256.256 - Scientific Profile Precision (256 integer + 256 fractional trits)
+/// Tier 6: TQ320.320 - Scientific Profile Precision (256 integer + 256 fractional trits)
 ///
 /// **STORAGE**: I1024 (1024 bits for ~811.4 bits of information)
-/// **RANGE**: ±(3^256-1)/2 ≈ ±7.0×10^121
+/// **RANGE**: ±(3^320-1)/2 ≈ ±2.4×10^152
 /// **USE CASE**: Cross-domain operations matching scientific profile (77 decimals)
 #[derive(Debug, Clone)]
 pub struct TernaryTier6 {
-    /// Raw value: actual_value × 3^256
+    /// Raw value: actual_value × 3^320
     pub(crate) value: I1024,
 }
 
@@ -118,34 +118,34 @@ pub enum TernaryValue {
 // SCALE FACTOR CONSTANTS (Powers of 3)
 // ============================================================================
 
-/// Scale factor for TQ8.8: 3^8 = 6,561
-pub const SCALE_TQ8_8: i32 = 6_561;
+/// Scale factor for TQ10.10: 3^10 = 59,049
+pub const SCALE_TQ10_10: i32 = 59_049;
 
-/// Scale factor for TQ16.16: 3^16 = 43,046,721
-pub const SCALE_TQ16_16: i64 = 43_046_721;
+/// Scale factor for TQ20.20: 3^20 = 3,486,784,401
+pub const SCALE_TQ20_20: i64 = 3_486_784_401;
 
-/// Scale factor for TQ32.32: 3^32 = 1,853,020,188,851,841
-pub const SCALE_TQ32_32: i128 = 1_853_020_188_851_841;
+/// Scale factor for TQ40.40: 3^40 = 12,157,665,459,056,928,801
+pub const SCALE_TQ40_40: i128 = 12_157_665_459_056_928_801;
 
-// Scale factor for TQ64.64 needs I256 computation
-fn scale_tq64_64() -> I256 {
-    // 3^64 = compute at runtime or use precomputed constant
-    compute_power_of_3_i256(64)
+// Scale factor for TQ80.80 needs I256 computation
+fn scale_tq80_80() -> I256 {
+    // 3^80 = compute at runtime or use precomputed constant
+    compute_power_of_3_i256(80)
 }
 
-/// 3^128 as I512 for Tier 5 scaling (~1.18×10^61, needs ~204 bits, fits in I512's 511)
-pub(crate) fn scale_tq128_128() -> I512 {
-    compute_power_of_3_i512(128)
+/// 3^160 as I512 for Tier 5 scaling (~2.2×10^76, needs ~254 bits, fits in I512's 511)
+pub(crate) fn scale_tq160_160() -> I512 {
+    compute_power_of_3_i512(160)
 }
 
-/// 3^128 as I1024 for Tier 5 multiplication intermediate
-pub(crate) fn scale_tq128_128_i1024() -> I1024 {
-    I1024::from_i512(scale_tq128_128())
+/// 3^160 as I1024 for Tier 5 multiplication intermediate
+pub(crate) fn scale_tq160_160_i1024() -> I1024 {
+    I1024::from_i512(scale_tq160_160())
 }
 
-/// 3^256 as I1024 for Tier 6 scaling (~1.39×10^122, needs ~406 bits, fits in I1024's 1023)
-pub(crate) fn scale_tq256_256() -> I1024 {
-    compute_power_of_3_i1024(256)
+/// 3^320 as I1024 for Tier 6 scaling (~6.9×10^152, needs ~508 bits, fits in I1024's 1023)
+pub(crate) fn scale_tq320_320() -> I1024 {
+    compute_power_of_3_i1024(320)
 }
 
 // ============================================================================
@@ -183,7 +183,7 @@ pub(crate) fn compute_power_of_3_i1024(n: u32) -> I1024 {
 }
 
 // ============================================================================
-// TIER 1: TQ8.8 IMPLEMENTATION
+// TIER 1: TQ10.10 IMPLEMENTATION
 // ============================================================================
 
 impl TernaryTier1 {
@@ -202,14 +202,14 @@ impl TernaryTier1 {
         Self { value: 0 }
     }
 
-    /// Create one (1.0 in TQ8.8 format)
+    /// Create one (1.0 in TQ10.10 format)
     pub const fn one() -> Self {
-        Self { value: SCALE_TQ8_8 }
+        Self { value: SCALE_TQ10_10 }
     }
 
     /// Convert from integer
     pub fn from_integer(n: i16) -> Result<Self, ()> {
-        match (n as i32).checked_mul(SCALE_TQ8_8) {
+        match (n as i32).checked_mul(SCALE_TQ10_10) {
             Some(scaled) => Ok(Self { value: scaled }),
             None => Err(()), // Overflow
         }
@@ -217,8 +217,8 @@ impl TernaryTier1 {
 
     /// Promote to Tier 2 (lossless)
     pub fn to_tier2(&self) -> TernaryTier2 {
-        // Scale up by 3^8 to convert TQ8.8 to TQ16.16
-        let scale_factor = SCALE_TQ16_16 / SCALE_TQ8_8 as i64; // 3^8
+        // Scale up by 3^10 to convert TQ10.10 to TQ20.20
+        let scale_factor = SCALE_TQ20_20 / SCALE_TQ10_10 as i64; // 3^10
         TernaryTier2 {
             value: (self.value as i64) * scale_factor,
         }
@@ -245,7 +245,7 @@ impl TernaryTier1 {
 }
 
 // ============================================================================
-// TIER 2: TQ16.16 IMPLEMENTATION
+// TIER 2: TQ20.20 IMPLEMENTATION
 // ============================================================================
 
 impl TernaryTier2 {
@@ -264,14 +264,14 @@ impl TernaryTier2 {
         Self { value: 0 }
     }
 
-    /// Create one (1.0 in TQ16.16 format)
+    /// Create one (1.0 in TQ20.20 format)
     pub const fn one() -> Self {
-        Self { value: SCALE_TQ16_16 }
+        Self { value: SCALE_TQ20_20 }
     }
 
     /// Convert from integer
     pub fn from_integer(n: i32) -> Result<Self, ()> {
-        match (n as i64).checked_mul(SCALE_TQ16_16) {
+        match (n as i64).checked_mul(SCALE_TQ20_20) {
             Some(scaled) => Ok(Self { value: scaled }),
             None => Err(()), // Overflow
         }
@@ -279,8 +279,8 @@ impl TernaryTier2 {
 
     /// Promote to Tier 3 (lossless)
     pub fn to_tier3(&self) -> TernaryTier3 {
-        // Scale up by 3^16 to convert TQ16.16 to TQ32.32
-        let scale_factor = SCALE_TQ32_32 / SCALE_TQ16_16 as i128; // 3^16
+        // Scale up by 3^20 to convert TQ20.20 to TQ40.40
+        let scale_factor = SCALE_TQ40_40 / SCALE_TQ20_20 as i128; // 3^20
         TernaryTier3 {
             value: (self.value as i128) * scale_factor,
         }
@@ -288,7 +288,7 @@ impl TernaryTier2 {
 
     /// Demote to Tier 1 (may lose precision)
     pub fn to_tier1(&self) -> Result<TernaryTier1, ()> {
-        let scale_factor = SCALE_TQ16_16 / SCALE_TQ8_8 as i64; // 3^8
+        let scale_factor = SCALE_TQ20_20 / SCALE_TQ10_10 as i64; // 3^8
         let scaled = self.value / scale_factor;
 
         if scaled >= i32::MIN as i64 && scaled <= i32::MAX as i64 {
@@ -321,7 +321,7 @@ impl TernaryTier2 {
 }
 
 // ============================================================================
-// TIER 3: TQ32.32 IMPLEMENTATION
+// TIER 3: TQ40.40 IMPLEMENTATION
 // ============================================================================
 
 impl TernaryTier3 {
@@ -340,14 +340,14 @@ impl TernaryTier3 {
         Self { value: 0 }
     }
 
-    /// Create one (1.0 in TQ32.32 format)
+    /// Create one (1.0 in TQ40.40 format)
     pub const fn one() -> Self {
-        Self { value: SCALE_TQ32_32 }
+        Self { value: SCALE_TQ40_40 }
     }
 
     /// Convert from integer
     pub fn from_integer(n: i64) -> Result<Self, ()> {
-        match (n as i128).checked_mul(SCALE_TQ32_32) {
+        match (n as i128).checked_mul(SCALE_TQ40_40) {
             Some(scaled) => Ok(Self { value: scaled }),
             None => Err(()), // Overflow
         }
@@ -356,7 +356,7 @@ impl TernaryTier3 {
     /// Promote to Tier 4 (lossless)
     pub fn to_tier4(&self) -> TernaryTier4 {
         let base = I256::from_i128(self.value);
-        let scale_factor = compute_power_of_3_i256(32); // 3^32 as I256
+        let scale_factor = compute_power_of_3_i256(40); // 3^40 as I256 (tier 3->4 delta)
         TernaryTier4 {
             value: base * scale_factor,
         }
@@ -364,7 +364,7 @@ impl TernaryTier3 {
 
     /// Demote to Tier 2 (may lose precision)
     pub fn to_tier2(&self) -> Result<TernaryTier2, ()> {
-        let scale_factor = SCALE_TQ32_32 / SCALE_TQ16_16 as i128; // 3^16
+        let scale_factor = SCALE_TQ40_40 / SCALE_TQ20_20 as i128; // 3^16
         let scaled = self.value / scale_factor;
 
         if scaled >= i64::MIN as i128 && scaled <= i64::MAX as i128 {
@@ -397,7 +397,7 @@ impl TernaryTier3 {
 }
 
 // ============================================================================
-// TIER 4: TQ64.64 IMPLEMENTATION
+// TIER 4: TQ80.80 IMPLEMENTATION
 // ============================================================================
 
 impl TernaryTier4 {
@@ -418,17 +418,17 @@ impl TernaryTier4 {
         }
     }
 
-    /// Create one (1.0 in TQ64.64 format)
+    /// Create one (1.0 in TQ80.80 format)
     pub fn one() -> Self {
         Self {
-            value: scale_tq64_64(),
+            value: scale_tq80_80(),
         }
     }
 
     /// Convert from integer
     pub fn from_integer(n: i128) -> Self {
         let base = I256::from_i128(n);
-        let scale = scale_tq64_64();
+        let scale = scale_tq80_80();
         Self {
             value: base * scale,
         }
@@ -437,7 +437,7 @@ impl TernaryTier4 {
     /// Promote to Tier 5 (lossless)
     pub fn to_tier5(&self) -> TernaryTier5 {
         let base = I512::from_i256(self.value);
-        let scale_factor = compute_power_of_3_i512(64); // 3^64 as I512
+        let scale_factor = compute_power_of_3_i512(80); // 3^80 as I512 (tier 4->5 delta)
         TernaryTier5 {
             value: base * scale_factor,
         }
@@ -445,7 +445,7 @@ impl TernaryTier4 {
 
     /// Demote to Tier 3 (may lose precision)
     pub fn to_tier3(&self) -> Result<TernaryTier3, ()> {
-        let scale_factor = compute_power_of_3_i256(32); // 3^32
+        let scale_factor = compute_power_of_3_i256(40); // 3^40 (tier 4->3 delta)
         let scaled = &self.value / &scale_factor;
 
         if scaled.fits_in_i128() {
@@ -482,7 +482,7 @@ impl TernaryTier4 {
 }
 
 // ============================================================================
-// TIER 5: TQ128.128 IMPLEMENTATION
+// TIER 5: TQ160.160 IMPLEMENTATION
 // ============================================================================
 
 impl TernaryTier5 {
@@ -503,17 +503,17 @@ impl TernaryTier5 {
         }
     }
 
-    /// Create one (1.0 in TQ128.128 format)
+    /// Create one (1.0 in TQ160.160 format)
     pub fn one() -> Self {
         Self {
-            value: scale_tq128_128(),
+            value: scale_tq160_160(),
         }
     }
 
     /// Convert from integer
     pub fn from_integer(n: i128) -> Self {
         let base = I512::from_i128(n);
-        let scale = scale_tq128_128();
+        let scale = scale_tq160_160();
         Self {
             value: base * scale,
         }
@@ -522,7 +522,7 @@ impl TernaryTier5 {
     /// Promote to Tier 6 (lossless)
     pub fn to_tier6(&self) -> TernaryTier6 {
         let base = I1024::from_i512(self.value);
-        let scale_factor = I1024::from_i512(compute_power_of_3_i512(128)); // 3^128 as I1024
+        let scale_factor = I1024::from_i512(compute_power_of_3_i512(160)); // 3^160 as I1024 (tier 5->6 delta)
         TernaryTier6 {
             value: base * scale_factor,
         }
@@ -530,7 +530,7 @@ impl TernaryTier5 {
 
     /// Demote to Tier 4 (may lose precision)
     pub fn to_tier4(&self) -> Result<TernaryTier4, ()> {
-        let scale_factor = compute_power_of_3_i512(64); // 3^64
+        let scale_factor = compute_power_of_3_i512(80); // 3^80 (tier 5->4 delta)
         let scaled = self.value / scale_factor;
 
         if scaled.fits_in_i256() {
@@ -567,7 +567,7 @@ impl TernaryTier5 {
 }
 
 // ============================================================================
-// TIER 6: TQ256.256 IMPLEMENTATION
+// TIER 6: TQ320.320 IMPLEMENTATION
 // ============================================================================
 
 impl TernaryTier6 {
@@ -588,17 +588,17 @@ impl TernaryTier6 {
         }
     }
 
-    /// Create one (1.0 in TQ256.256 format)
+    /// Create one (1.0 in TQ320.320 format)
     pub fn one() -> Self {
         Self {
-            value: scale_tq256_256(),
+            value: scale_tq320_320(),
         }
     }
 
     /// Convert from integer
     pub fn from_integer(n: i128) -> Self {
         let base = I1024::from_i128(n);
-        let scale = scale_tq256_256();
+        let scale = scale_tq320_320();
         Self {
             value: base * scale,
         }
@@ -606,7 +606,7 @@ impl TernaryTier6 {
 
     /// Demote to Tier 5 (may lose precision)
     pub fn to_tier5(&self) -> Result<TernaryTier5, ()> {
-        let scale_factor = I1024::from_i512(compute_power_of_3_i512(128)); // 3^128
+        let scale_factor = I1024::from_i512(compute_power_of_3_i512(160)); // 3^160 (tier 6->5 delta)
         let scaled = self.value / scale_factor;
 
         if scaled.fits_in_i512() {
@@ -653,18 +653,18 @@ impl TernaryTier6 {
 /// UGOD-compatible ternary precision tiers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TernaryTier {
-    Tier1,  // TQ8.8    - 16 trits (i32 storage)
-    Tier2,  // TQ16.16  - 32 trits (i64 storage)
-    Tier3,  // TQ32.32  - 64 trits (i128 storage)
-    Tier4,  // TQ64.64  - 128 trits (I256 storage)
-    Tier5,  // TQ128.128 - 256 trits (I512 storage)
-    Tier6,  // TQ256.256 - 512 trits (I1024 storage, never fails)
+    Tier1,  // TQ10.10    - 16 trits (i32 storage)
+    Tier2,  // TQ20.20  - 32 trits (i64 storage)
+    Tier3,  // TQ40.40  - 64 trits (i128 storage)
+    Tier4,  // TQ80.80  - 128 trits (I256 storage)
+    Tier5,  // TQ160.160 - 256 trits (I512 storage)
+    Tier6,  // TQ320.320 - 512 trits (I1024 storage, never fails)
 }
 
 /// **UniversalTernaryFixed** - UGOD-compatible ternary type with runtime precision
 ///
 /// **RUNTIME PRECISION**: Automatically promotes between tiers on overflow
-/// **TIER PROGRESSION**: TQ8.8 → TQ16.16 → TQ32.32 → TQ64.64 → TQ128.128 → TQ256.256
+/// **TIER PROGRESSION**: TQ10.10 → TQ20.20 → TQ40.40 → TQ80.80 → TQ160.160 → TQ320.320
 /// **UGOD COMPATIBLE**: Implements UniversalTieredArithmetic trait
 /// **GEOMETRIC READY**: Handles triangular coordinates with adaptive precision
 #[derive(Debug, Clone)]
@@ -880,12 +880,18 @@ impl UniversalTernaryFixed {
     /// **PURPOSE**: Full-precision FASC boundary crossing for all tiers
     pub fn from_tier_raw(tier: u8, raw: TernaryRaw) -> Result<Self, OverflowDetected> {
         match (tier, raw) {
+            // Checked narrowing (0.5.0): the old bare `as i32`/`as i64`
+            // casts silently wrapped oversized raws into garbage values.
             (1, TernaryRaw::Small(v)) => Ok(Self {
-                value: TernaryValue::Tier1(TernaryTier1::from_raw(v as i32)),
+                value: TernaryValue::Tier1(TernaryTier1::from_raw(
+                    i32::try_from(v).map_err(|_| OverflowDetected::TierOverflow)?,
+                )),
                 current_tier: TernaryTier::Tier1,
             }),
             (2, TernaryRaw::Small(v)) => Ok(Self {
-                value: TernaryValue::Tier2(TernaryTier2::from_raw(v as i64)),
+                value: TernaryValue::Tier2(TernaryTier2::from_raw(
+                    i64::try_from(v).map_err(|_| OverflowDetected::TierOverflow)?,
+                )),
                 current_tier: TernaryTier::Tier2,
             }),
             (3, TernaryRaw::Small(v)) => Ok(Self {
@@ -928,10 +934,10 @@ impl UniversalTernaryFixed {
 // ============================================================================
 
 impl UniversalTernaryFixed {
-    /// Try to create in Tier 1 (TQ8.8) - most efficient
+    /// Try to create in Tier 1 (TQ10.10) - most efficient
     fn try_create_tier1(integer_part: i64, fractional_part: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Check if value fits in Tier 1 range
-        if integer_part.abs() > 3280 || fractional_part.len() > 8 {
+        if integer_part.abs() > 29_524 || fractional_part.len() > 10 {
             return Err(OverflowDetected::TierOverflow);
         }
 
@@ -943,10 +949,10 @@ impl UniversalTernaryFixed {
         })
     }
 
-    /// Try to create in Tier 2 (TQ16.16)
+    /// Try to create in Tier 2 (TQ20.20)
     fn try_create_tier2(integer_part: i64, fractional_part: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Check if value fits in Tier 2 range
-        if integer_part.abs() > 21_523_360 || fractional_part.len() > 16 {
+        if integer_part.abs() > 1_743_392_200 || fractional_part.len() > 20 {
             return Err(OverflowDetected::TierOverflow);
         }
 
@@ -958,7 +964,7 @@ impl UniversalTernaryFixed {
         })
     }
 
-    /// Try to create in Tier 3 (TQ32.32)
+    /// Try to create in Tier 3 (TQ40.40)
     fn try_create_tier3(integer_part: i64, fractional_part: &str, final_neg: bool) -> Result<Self, OverflowDetected> {
         // Most values should fit in Tier 3
         let ternary_value = Self::convert_decimal_to_ternary_tier3(integer_part, fractional_part, final_neg)?;
@@ -969,7 +975,7 @@ impl UniversalTernaryFixed {
         })
     }
 
-    /// Create in Tier 4 (TQ64.64) - never fails, maximum precision
+    /// Create in Tier 4 (TQ80.80) - never fails, maximum precision
     fn create_tier4(integer_part: i64, fractional_part: &str, final_neg: bool) -> Self {
         let ternary_value = Self::convert_decimal_to_ternary_tier4(integer_part, fractional_part, final_neg);
 
@@ -985,7 +991,7 @@ impl UniversalTernaryFixed {
 // ============================================================================
 
 impl UniversalTernaryFixed {
-    /// Promote to Tier 2 (TQ16.16)
+    /// Promote to Tier 2 (TQ20.20)
     pub(crate) fn promote_to_tier2(&self) -> Result<Self, OverflowDetected> {
         match &self.value {
             TernaryValue::Tier1(tier1) => {
@@ -999,7 +1005,7 @@ impl UniversalTernaryFixed {
         }
     }
 
-    /// Promote to Tier 3 (TQ32.32)
+    /// Promote to Tier 3 (TQ40.40)
     pub(crate) fn promote_to_tier3(&self) -> Result<Self, OverflowDetected> {
         let tier2_value = if matches!(&self.value, TernaryValue::Tier1(_)) {
             self.promote_to_tier2()?
@@ -1019,7 +1025,7 @@ impl UniversalTernaryFixed {
         }
     }
 
-    /// Promote to Tier 4 (TQ64.64)
+    /// Promote to Tier 4 (TQ80.80)
     pub(crate) fn promote_to_tier4(&self) -> Self {
         let tier3_value = self.promote_to_tier3().unwrap_or_else(|_| self.clone());
 
@@ -1036,7 +1042,7 @@ impl UniversalTernaryFixed {
         }
     }
 
-    /// Promote to Tier 5 (TQ128.128)
+    /// Promote to Tier 5 (TQ160.160)
     pub(crate) fn promote_to_tier5(&self) -> Self {
         let tier4_value = self.promote_to_tier4();
 
@@ -1053,7 +1059,7 @@ impl UniversalTernaryFixed {
         }
     }
 
-    /// Promote to Tier 6 (TQ256.256) - never fails, maximum ternary precision
+    /// Promote to Tier 6 (TQ320.320) - never fails, maximum ternary precision
     pub(crate) fn promote_to_tier6(&self) -> Self {
         let tier5_value = self.promote_to_tier5();
 
@@ -1191,13 +1197,13 @@ impl UniversalTernaryFixed {
         }
     }
 
-    /// Convert decimal to balanced ternary for Tier 1 (TQ8.8)
+    /// Convert decimal to balanced ternary for Tier 1 (TQ10.10)
     ///
-    /// **FORMAT**: value = integer_part x 3^8 + fractional_encoding
+    /// **FORMAT**: value = integer_part x 3^10 + fractional_encoding
     /// **STORAGE**: i32
-    /// **ALGORITHM**: Pure integer arithmetic -- scale factor is 3^8 = 6561
+    /// **ALGORITHM**: Pure integer arithmetic -- scale factor is 3^10 = 59049
     fn convert_decimal_to_ternary_tier1(integer: i64, fractional: &str, final_neg: bool) -> Result<i32, OverflowDetected> {
-        let scale = SCALE_TQ8_8 as i64; // 3^8 = 6561
+        let scale = SCALE_TQ10_10 as i64; // 3^10 = 59_049
 
         // Integer part: integer x scale
         let integer_scaled = integer.checked_mul(scale)
@@ -1232,12 +1238,12 @@ impl UniversalTernaryFixed {
         Ok(total as i32)
     }
 
-    /// Convert decimal to balanced ternary for Tier 2 (TQ16.16)
+    /// Convert decimal to balanced ternary for Tier 2 (TQ20.20)
     ///
-    /// **FORMAT**: value = integer_part x 3^16 + fractional_encoding
+    /// **FORMAT**: value = integer_part x 3^20 + fractional_encoding
     /// **STORAGE**: i64
     fn convert_decimal_to_ternary_tier2(integer: i64, fractional: &str, final_neg: bool) -> Result<i64, OverflowDetected> {
-        let scale = SCALE_TQ16_16; // 3^16 = 43_046_721
+        let scale = SCALE_TQ20_20; // 3^20 = 3_486_784_401
 
         // Integer part: integer x scale (use i128 intermediate to avoid overflow)
         let integer_scaled = (integer as i128).checked_mul(scale as i128)
@@ -1271,12 +1277,12 @@ impl UniversalTernaryFixed {
         Ok(total as i64)
     }
 
-    /// Convert decimal to balanced ternary for Tier 3 (TQ32.32)
+    /// Convert decimal to balanced ternary for Tier 3 (TQ40.40)
     ///
-    /// **FORMAT**: value = integer_part x 3^32 + fractional_encoding
+    /// **FORMAT**: value = integer_part x 3^40 + fractional_encoding
     /// **STORAGE**: i128
     fn convert_decimal_to_ternary_tier3(integer: i64, fractional: &str, final_neg: bool) -> Result<i128, OverflowDetected> {
-        let scale = SCALE_TQ32_32; // 3^32 = 1_853_020_188_851_841
+        let scale = SCALE_TQ40_40; // 3^40 = 12_157_665_459_056_928_801
 
         // Integer part: integer x scale
         let integer_scaled = (integer as i128).checked_mul(scale)
@@ -1290,7 +1296,10 @@ impl UniversalTernaryFixed {
                 .map_err(|_| OverflowDetected::InvalidInput)?;
             let ten_pow = 10_i128.pow(fractional.len() as u32);
             // Nearest, ties toward +∞ via the final sign (see tier 1).
-            let sn = frac_digits * scale;
+            // Checked: 10^len * 3^40 exceeds i128 for len >= 20 -- long
+            // fractions cascade to Tier 4 instead of overflowing here.
+            let sn = frac_digits.checked_mul(scale)
+                .ok_or(OverflowDetected::TierOverflow)?;
             let mut q = sn / ten_pow;
             let rem2 = (sn - q * ten_pow) << 1;
             if rem2 > ten_pow || (rem2 == ten_pow && !final_neg) { q += 1; }
@@ -1306,7 +1315,7 @@ impl UniversalTernaryFixed {
         Ok(total)
     }
 
-    /// Convert decimal to balanced ternary for Tier 4 (TQ64.64)
+    /// Convert decimal to balanced ternary for Tier 4 (TQ80.80)
     ///
     /// **FORMAT**: value = integer_part x 3^64 + fractional_encoding
     /// **STORAGE**: I256 (never overflows at this tier)
@@ -1359,7 +1368,7 @@ mod tests {
         let one = TernaryTier1::one();
 
         assert_eq!(zero.raw(), 0);
-        assert_eq!(one.raw(), SCALE_TQ8_8);
+        assert_eq!(one.raw(), SCALE_TQ10_10);
     }
 
     #[test]
@@ -1368,7 +1377,7 @@ mod tests {
         let tier2_val = tier1_val.to_tier2();
 
         // Value should be preserved but scaled up
-        assert_eq!(tier2_val.raw(), 10 * SCALE_TQ16_16);
+        assert_eq!(tier2_val.raw(), 10 * SCALE_TQ20_20);
     }
 
     #[test]
@@ -1377,7 +1386,7 @@ mod tests {
         let divided = val.div3();
 
         // 9 / 3 = 3 in ternary (exact)
-        assert_eq!(divided.raw(), 3 * SCALE_TQ8_8);
+        assert_eq!(divided.raw(), 3 * SCALE_TQ10_10);
     }
 
     #[test]

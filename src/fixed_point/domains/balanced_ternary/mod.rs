@@ -26,36 +26,36 @@ pub use ternary_types::{
     UniversalTernaryFixed, TernaryTier,
     TernaryTier1, TernaryTier2, TernaryTier3, TernaryTier4, TernaryTier5, TernaryTier6,
     TernaryValue, TernaryRaw,
-    SCALE_TQ8_8, SCALE_TQ16_16, SCALE_TQ32_32,
+    SCALE_TQ10_10, SCALE_TQ20_20, SCALE_TQ40_40,
 };
 
 // UGOD operation exports
 pub use ternary_addition::{
-    add_ternary_tq8_8, add_ternary_tq16_16, add_ternary_tq32_32, add_ternary_tq64_64,
-    subtract_ternary_tq8_8, subtract_ternary_tq16_16, subtract_ternary_tq32_32, subtract_ternary_tq64_64,
+    add_ternary_tq10_10, add_ternary_tq20_20, add_ternary_tq40_40, add_ternary_tq80_80,
+    subtract_ternary_tq10_10, subtract_ternary_tq20_20, subtract_ternary_tq40_40, subtract_ternary_tq80_80,
     // Tier 4 checked variants (for UGOD promotion to Tier 5)
-    add_ternary_tq64_64_checked, subtract_ternary_tq64_64_checked,
-    // Tier 5: TQ128.128
-    add_ternary_tq128_128, subtract_ternary_tq128_128,
-    // Tier 6: TQ256.256
-    add_ternary_tq256_256, subtract_ternary_tq256_256,
+    add_ternary_tq80_80_checked, subtract_ternary_tq80_80_checked,
+    // Tier 5: TQ160.160
+    add_ternary_tq160_160, subtract_ternary_tq160_160,
+    // Tier 6: TQ320.320
+    add_ternary_tq320_320, subtract_ternary_tq320_320,
 };
 pub use ternary_multiplication::{
-    multiply_ternary_tq8_8, multiply_ternary_tq16_16, multiply_ternary_tq32_32, multiply_ternary_tq64_64,
-    multiply_ternary_tq64_64_checked,
-    multiply_ternary_tq128_128,
-    multiply_ternary_tq256_256,
+    multiply_ternary_tq10_10, multiply_ternary_tq20_20, multiply_ternary_tq40_40, multiply_ternary_tq80_80,
+    multiply_ternary_tq80_80_checked,
+    multiply_ternary_tq160_160,
+    multiply_ternary_tq320_320,
 };
 pub use ternary_division::{
-    divide_ternary_tq8_8, divide_ternary_tq16_16, divide_ternary_tq32_32, divide_ternary_tq64_64,
-    divide_ternary_tq64_64_checked,
-    divide_ternary_tq128_128,
-    divide_ternary_tq256_256,
+    divide_ternary_tq10_10, divide_ternary_tq20_20, divide_ternary_tq40_40, divide_ternary_tq80_80,
+    divide_ternary_tq80_80_checked,
+    divide_ternary_tq160_160,
+    divide_ternary_tq320_320,
 };
 pub use ternary_negation::{
-    negate_ternary_tq8_8, negate_ternary_tq16_16, negate_ternary_tq32_32, negate_ternary_tq64_64,
-    negate_ternary_tq128_128,
-    negate_ternary_tq256_256,
+    negate_ternary_tq10_10, negate_ternary_tq20_20, negate_ternary_tq40_40, negate_ternary_tq80_80,
+    negate_ternary_tq160_160,
+    negate_ternary_tq320_320,
 };
 pub use crate::fixed_point::core_types::errors::OverflowDetected;
 

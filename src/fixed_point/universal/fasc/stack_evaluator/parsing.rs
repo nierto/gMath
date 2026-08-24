@@ -512,10 +512,10 @@ impl StackEvaluator {
         // Create shadow: raw_value / 3^frac_trits (when both fit in i128/u128)
         let shadow = {
             let frac_trits: u32 = match tier {
-                1 => 8, 2 => 16, 3 => 32, 4 => 64, _ => 128,
+                1 => 10, 2 => 20, 3 => 40, 4 => 80, _ => 160,
             };
-            // 3^64 fits in u128, 3^128 does not
-            if frac_trits <= 64 {
+            // 3^80 (≈1.48e38) fits in u128, 3^160 does not
+            if frac_trits <= 80 {
                 let den = 3u128.pow(frac_trits);
 
                 #[cfg(table_format = "q16_16")]

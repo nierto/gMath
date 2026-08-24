@@ -39,7 +39,7 @@ Code wins over docs.
            (canonical mul = dp-growth exact; canonical div t1-5 =
            exact-or-rational-fallback; DecimalFixed + t6 div = banker's)
   ternary: nearest — tie-free mul/div3 (odd scale); ties-+∞ at div and
-           conversion-in (0.5 → 3281, -0.5 → -3280: documented asymmetry)
+           conversion-in (0.5 → 29525, -0.5 → -29524 @TQ10.10: documented asymmetry)
   EXCEPTION (contracted): tq19 matvec_q2f narrowing stays truncation
            (0.4.31 bit-reproducibility contract).
   Compound paths: tier-N+1, round ONCE at downscale (unchanged).
