@@ -1,4 +1,4 @@
-//! Shadow Types — Relocated from router/shadow/ for hotpath access
+//! Shadow Types: Relocated from router/shadow/ for hotpath access
 //!
 //! These types are used by RationalNumber and NumberClassifier (both on the
 //! canonical FASC hotpath). The rest of the shadow system (decision engine,

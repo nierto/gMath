@@ -1,4 +1,4 @@
-//! Multi-Domain Matrix — StackValue-tagged matrix entries for cross-domain operations.
+//! Multi-Domain Matrix: StackValue-tagged matrix entries for cross-domain operations.
 //!
 //! **MISSION**: Enable matrix operations across all four domains (binary, decimal,
 //! ternary, symbolic) with automatic cross-domain routing via the FASC evaluator.
@@ -72,7 +72,7 @@ impl DomainMatrix {
         Ok(Self { rows, cols, data: data? })
     }
 
-    /// Create from a FixedMatrix — all entries become Binary domain.
+    /// Create from a FixedMatrix: all entries become Binary domain.
     pub fn from_fixed_matrix(m: &FixedMatrix) -> Self {
         let mut data = Vec::with_capacity(m.rows() * m.cols());
         for r in 0..m.rows() {
@@ -83,7 +83,7 @@ impl DomainMatrix {
         Self { rows: m.rows(), cols: m.cols(), data }
     }
 
-    /// Convert to FixedMatrix — all entries materialized to binary storage tier.
+    /// Convert to FixedMatrix: all entries materialized to binary storage tier.
     ///
     /// Non-binary entries are converted through the evaluator's binary conversion path.
     pub fn to_fixed_matrix(&self) -> Result<FixedMatrix, OverflowDetected> {
@@ -158,7 +158,7 @@ impl DomainMatrix {
         Self::from_fixed_matrix(&FixedMatrix::identity(n))
     }
 
-    /// Transpose — domain tags preserved, no computation.
+    /// Transpose: domain tags preserved, no computation.
     pub fn transpose(&self) -> Self {
         let mut data = Vec::with_capacity(self.rows * self.cols);
         for c in 0..self.cols {

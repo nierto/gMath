@@ -33,7 +33,7 @@ impl UniversalDecimalTiered {
 }
 
 /// Exact decimal multiplication: product = a_val * b_val, dp_result = dp_a + dp_b.
-/// No division by scale — the raw product at doubled dp is the exact result.
+/// No division by scale: the raw product at doubled dp is the exact result.
 fn try_mul_exact(a: &UniversalDecimalTiered, b: &UniversalDecimalTiered, dp_result: u8) -> Result<UniversalDecimalTiered, OverflowDetected> {
     let min_tier = tier_for_decimal_places(dp_result);
 

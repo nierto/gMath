@@ -1,4 +1,4 @@
-//! FixedPoint — Copy-able binary fixed-point numeric type for imperative computation.
+//! FixedPoint: Copy-able binary fixed-point numeric type for imperative computation.
 //!
 //! Wraps the raw `BinaryStorage` Q-format integer, providing direct arithmetic
 //! operators and transcendental methods (routed through FASC).
@@ -155,7 +155,7 @@ use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_check
 #[inline] fn compute_halve_direct(a: ComputeStorage) -> ComputeStorage { compute_halve(a) }
 
 /// True when an exp engine result sits at its overflow sentinel. sinh/cosh
-/// built on such a value would be silently wrong — on q128_128 the sentinel
+/// built on such a value would be silently wrong: on q128_128 the sentinel
 /// equals the storage maximum, so the final downscale does NOT catch it
 /// (0.5.0 item 2 find). Shares the per-profile predicate with the FASC
 /// pipeline's `exp_at_compute_ceiling`.
@@ -378,7 +378,7 @@ impl FixedPoint {
 
     /// Create from an f32 value.
     ///
-    /// Uses IEEE 754 bit extraction for exact conversion — no float arithmetic
+    /// Uses IEEE 754 bit extraction for exact conversion, no float arithmetic
     /// is performed internally. Panics on NaN or infinity.
     pub fn from_f32(v: f32) -> Self {
         let bits = v.to_bits();
@@ -409,7 +409,7 @@ impl FixedPoint {
 
     /// Create from an f64 value.
     ///
-    /// Uses IEEE 754 bit extraction for exact conversion — no float arithmetic
+    /// Uses IEEE 754 bit extraction for exact conversion, no float arithmetic
     /// is performed internally. Panics on NaN or infinity.
     pub fn from_f64(v: f64) -> Self {
         let bits = v.to_bits();
@@ -436,14 +436,14 @@ impl FixedPoint {
         if sign { -Self { raw } } else { Self { raw } }
     }
 
-    /// Convert to f32 (lossy — for display/interop only).
+    /// Convert to f32 (lossy: for display/interop only).
     pub fn to_f32(self) -> f32 {
         let sv = self.to_stack_value();
         let s = sv.to_decimal_string(10);
         s.parse::<f32>().unwrap_or(0.0)
     }
 
-    /// Convert to f64 (lossy — for display/interop only).
+    /// Convert to f64 (lossy: for display/interop only).
     pub fn to_f64(self) -> f64 {
         let sv = self.to_stack_value();
         let s = sv.to_decimal_string(MAX_DECIMAL_DIGITS);
@@ -506,11 +506,11 @@ impl FixedPoint {
     pub fn sin(self) -> Self { self.direct_unary(direct_sin) }
     /// cos(x)
     pub fn cos(self) -> Self { self.direct_unary(direct_cos) }
-    /// Fused (sin(x), cos(x)) — single range reduction, ~2× faster than separate calls.
+    /// Fused (sin(x), cos(x)): single range reduction, ~2× faster than separate calls.
     pub fn sincos(self) -> (Self, Self) {
         self.try_sincos().expect("sincos: overflow or domain error")
     }
-    /// tan(x) = sin(x) / cos(x) — direct composition, no FASC
+    /// tan(x) = sin(x) / cos(x): direct composition, no FASC
     pub fn tan(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let s = direct_sin(c);
@@ -520,7 +520,7 @@ impl FixedPoint {
     }
     /// atan(x)
     pub fn atan(self) -> Self { self.direct_unary(direct_atan) }
-    /// asin(x) = atan(x / sqrt(1 - x^2)), |x| <= 1 — direct composition
+    /// asin(x) = atan(x / sqrt(1 - x^2)), |x| <= 1: direct composition
     pub fn asin(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let one = compute_one();
@@ -529,7 +529,7 @@ impl FixedPoint {
         let ratio = compute_divide_direct(c, denom);
         Self { raw: downscale_to_storage(direct_atan(ratio)).expect("asin overflow") }
     }
-    /// acos(x) = pi/2 - asin(x), |x| <= 1 — direct composition
+    /// acos(x) = pi/2 - asin(x), |x| <= 1: direct composition
     pub fn acos(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let one = compute_one();
@@ -540,7 +540,7 @@ impl FixedPoint {
         let pi_half = compute_pi_half();
         Self { raw: downscale_to_storage(compute_sub_direct(pi_half, asin_val)).expect("acos overflow") }
     }
-    /// sinh(x) = (exp(x) - exp(-x)) / 2 — direct composition
+    /// sinh(x) = (exp(x) - exp(-x)) / 2: direct composition
     pub fn sinh(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let ep = direct_exp(c);
@@ -555,7 +555,7 @@ impl FixedPoint {
         let result = compute_halve_direct(compute_sub_direct(ep, en));
         Self { raw: downscale_to_storage(result).expect("sinh overflow") }
     }
-    /// cosh(x) = (exp(x) + exp(-x)) / 2 — direct composition
+    /// cosh(x) = (exp(x) + exp(-x)) / 2: direct composition
     pub fn cosh(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let ep = direct_exp(c);
@@ -572,16 +572,16 @@ impl FixedPoint {
         let result = compute_halve_direct(sum);
         Self { raw: downscale_to_storage(result).expect("cosh overflow") }
     }
-    /// Fused (sinh(x), cosh(x)) — single shared exp-pair evaluation at compute tier.
+    /// Fused (sinh(x), cosh(x)): single shared exp-pair evaluation at compute tier.
     ///
     /// ~2× faster than separate `sinh` + `cosh` (2 exp calls instead of 4).
     /// More importantly, sinh and cosh share the same `(exp(x), exp(-x))` pair,
-    /// so their rounding bias is **correlated** — downstream expressions like
+    /// so their rounding bias is **correlated**: downstream expressions like
     /// `cosh(θ)·p + (sinh(θ)/θ)·v` see errors that cancel rather than accumulate.
     pub fn sinhcosh(self) -> (Self, Self) {
         self.try_sinhcosh().expect("sinhcosh: overflow or domain error")
     }
-    /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1) — direct composition
+    /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1): direct composition
     pub fn tanh(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let two_x = compute_add_direct(c, c);
@@ -597,7 +597,7 @@ impl FixedPoint {
         let num = compute_sub_direct(e2x, one);
         Self { raw: downscale_to_storage(compute_divide_direct(num, den)).expect("tanh overflow") }
     }
-    /// asinh(x) = ln(x + sqrt(x^2 + 1)) — direct composition
+    /// asinh(x) = ln(x + sqrt(x^2 + 1)): direct composition
     pub fn asinh(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let one = compute_one();
@@ -605,7 +605,7 @@ impl FixedPoint {
         let inner = direct_sqrt(compute_add_direct(x2, one));
         Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner))).expect("asinh overflow") }
     }
-    /// acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1 — direct composition
+    /// acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1: direct composition
     pub fn acosh(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let one = compute_one();
@@ -613,7 +613,7 @@ impl FixedPoint {
         let inner = direct_sqrt(compute_sub_direct(x2, one));
         Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner))).expect("acosh overflow") }
     }
-    /// atanh(x) = ln((1+x)/(1-x)) / 2, |x| < 1 — direct composition
+    /// atanh(x) = ln((1+x)/(1-x)) / 2, |x| < 1: direct composition
     pub fn atanh(self) -> Self {
         let c = upscale_to_compute(self.raw);
         let one = compute_one();
@@ -623,7 +623,7 @@ impl FixedPoint {
         Self { raw: downscale_to_storage(compute_halve_direct(direct_ln(ratio))).expect("atanh overflow") }
     }
 
-    /// x^y = exp(y * ln(x)) — direct composition
+    /// x^y = exp(y * ln(x)): direct composition
     pub fn pow(self, exponent: Self) -> Self {
         let xc = upscale_to_compute(self.raw);
         let yc = upscale_to_compute(exponent.raw);
@@ -632,7 +632,7 @@ impl FixedPoint {
         Self { raw: downscale_to_storage(direct_exp(y_ln_x)).expect("pow overflow") }
     }
 
-    /// atan2(self=y, x) — direct binary engine
+    /// atan2(self=y, x): direct binary engine
     pub fn atan2(self, x: Self) -> Self {
         let yc = upscale_to_compute(self.raw);
         let xc = upscale_to_compute(x.raw);
@@ -644,9 +644,9 @@ impl FixedPoint {
     // UGOD-aware try_* transcendentals — return Result instead of panicking
     // ========================================================================
 
-    /// Fallible e^x — returns `Err(TierOverflow)` if result exceeds storage tier.
+    /// Fallible e^x: returns `Err(TierOverflow)` if result exceeds storage tier.
     pub fn try_exp(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_exp) }
-    /// Fallible ln(x) — returns `Err(DomainError)` if x <= 0.
+    /// Fallible ln(x): returns `Err(DomainError)` if x <= 0.
     pub fn try_ln(self) -> Result<Self, OverflowDetected> {
         // Domain check before the engine: the raw engine is infallible and
         // signals out-of-domain input with a MIN sentinel that downscale
@@ -667,7 +667,7 @@ impl FixedPoint {
         self.try_inv_sqrt().expect("inv_sqrt: domain error or overflow")
     }
 
-    /// Fallible 1/√x — `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if
+    /// Fallible 1/√x: `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if
     /// the result does not fit the storage tier.
     pub fn try_inv_sqrt(self) -> Result<Self, OverflowDetected> {
         use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
@@ -679,7 +679,7 @@ impl FixedPoint {
         Ok(Self { raw: downscale_to_storage(inv)? })
     }
 
-    /// Fallible sqrt(x) — returns `Err(DomainError)` if x < 0.
+    /// Fallible sqrt(x): returns `Err(DomainError)` if x < 0.
     pub fn try_sqrt(self) -> Result<Self, OverflowDetected> {
         if self < Self::ZERO { return Err(OverflowDetected::DomainError); }
         self.try_direct_unary(direct_sqrt)
@@ -688,7 +688,7 @@ impl FixedPoint {
     pub fn try_sin(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_sin) }
     /// Fallible cos(x).
     pub fn try_cos(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_cos) }
-    /// Fused sin+cos — single shared range reduction at compute tier.
+    /// Fused sin+cos: single shared range reduction at compute tier.
     /// Returns (sin(x), cos(x)). More efficient than separate try_sin + try_cos.
     pub fn try_sincos(self) -> Result<(Self, Self), OverflowDetected> {
         use super::linalg::{upscale_to_compute, round_to_storage, sincos_at_compute_tier};
@@ -697,10 +697,10 @@ impl FixedPoint {
         Ok((Self::from_raw(round_to_storage(sin_c)), Self::from_raw(round_to_storage(cos_c))))
     }
 
-    /// Fallible fused sinh+cosh — single shared exp-pair at compute tier.
+    /// Fallible fused sinh+cosh: single shared exp-pair at compute tier.
     ///
     /// Returns `Err(TierOverflow)` if either sinh(x) or cosh(x) exceeds the
-    /// storage tier (cosh grows fastest — overflows first for large |x|).
+    /// storage tier (cosh grows fastest: overflows first for large |x|).
     pub fn try_sinhcosh(self) -> Result<(Self, Self), OverflowDetected> {
         use crate::fixed_point::universal::fasc::stack_evaluator::sinhcosh_at_compute_tier;
         let compute_val = upscale_to_compute(self.raw);
@@ -764,7 +764,7 @@ impl FixedPoint {
     // Error contract unchanged: DomainError on domain violations (0.4.27),
     // TierOverflow when the result exceeds storage.
 
-    /// Fallible tan(x) = sin(x)/cos(x) — `Err(DomainError)` if cos(x) is zero
+    /// Fallible tan(x) = sin(x)/cos(x): `Err(DomainError)` if cos(x) is zero
     /// at the compute tier.
     pub fn try_tan(self) -> Result<Self, OverflowDetected> {
         use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_is_zero;
@@ -776,7 +776,7 @@ impl FixedPoint {
     }
     /// Fallible atan(x).
     pub fn try_atan(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(direct_atan) }
-    /// Fallible asin(x) = atan(x / sqrt(1 - x²)) — `Err(DomainError)` if |x| > 1.
+    /// Fallible asin(x) = atan(x / sqrt(1 - x²)): `Err(DomainError)` if |x| > 1.
     pub fn try_asin(self) -> Result<Self, OverflowDetected> {
         let one = Self::one();
         let neg_one = Self::ZERO - one;
@@ -794,7 +794,7 @@ impl FixedPoint {
         let ratio = compute_divide_direct(c, denom);
         Ok(Self { raw: downscale_to_storage(direct_atan(ratio))? })
     }
-    /// Fallible acos(x) = π/2 - asin(x) — `Err(DomainError)` if |x| > 1.
+    /// Fallible acos(x) = π/2 - asin(x): `Err(DomainError)` if |x| > 1.
     pub fn try_acos(self) -> Result<Self, OverflowDetected> {
         let one = Self::one();
         let neg_one = Self::ZERO - one;
@@ -813,7 +813,7 @@ impl FixedPoint {
         };
         Ok(Self { raw: downscale_to_storage(compute_sub_direct(pi_half, asin_c))? })
     }
-    /// Fallible sinh(x) = (exp(x) - exp(-x)) / 2 — `Err(TierOverflow)` when
+    /// Fallible sinh(x) = (exp(x) - exp(-x)) / 2: `Err(TierOverflow)` when
     /// the result exceeds the storage tier (a ceiling exp means it already
     /// has, and the ceiling value would downscale to a plausible-wrong max).
     pub fn try_sinh(self) -> Result<Self, OverflowDetected> {
@@ -825,7 +825,7 @@ impl FixedPoint {
         }
         Ok(Self { raw: downscale_to_storage(compute_halve_direct(compute_sub_direct(ep, en)))? })
     }
-    /// Fallible cosh(x) = (exp(x) + exp(-x)) / 2 — `Err(TierOverflow)` when
+    /// Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when
     /// the result exceeds the storage tier (a ceiling exp means cosh already
     /// has; the checked add alone cannot see it on wide profiles).
     pub fn try_cosh(self) -> Result<Self, OverflowDetected> {
@@ -861,7 +861,7 @@ impl FixedPoint {
         let inner = direct_sqrt(compute_add_direct(x2, compute_one()));
         Ok(Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner)))? })
     }
-    /// Fallible acosh(x) = ln(x + sqrt(x² - 1)) — `Err(DomainError)` if x < 1.
+    /// Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1.
     pub fn try_acosh(self) -> Result<Self, OverflowDetected> {
         if self < Self::one() { return Err(OverflowDetected::DomainError); }
         let c = upscale_to_compute(self.raw);
@@ -869,7 +869,7 @@ impl FixedPoint {
         let inner = direct_sqrt(compute_sub_direct(x2, compute_one()));
         Ok(Self { raw: downscale_to_storage(direct_ln(compute_add_direct(c, inner)))? })
     }
-    /// Fallible atanh(x) = ln((1+x)/(1-x)) / 2 — `Err(DomainError)` if |x| >= 1.
+    /// Fallible atanh(x) = ln((1+x)/(1-x)) / 2: `Err(DomainError)` if |x| >= 1.
     pub fn try_atanh(self) -> Result<Self, OverflowDetected> {
         let one = Self::one();
         if self >= one || self <= Self::ZERO - one { return Err(OverflowDetected::DomainError); }
@@ -1181,7 +1181,7 @@ fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
 /// Divide two Q-format fixed-point values.
 ///
 /// Uses tier N+1 widening: (a << FRAC_BITS) / b, rounded to nearest with
-/// ties toward +∞ (0.5.0 rounding unification — was truncation toward
+/// ties toward +∞ (0.5.0 rounding unification: was truncation toward
 /// zero). The exact quotient's sign decides the tie direction: positive
 /// results bump on 2|rem| >= |den| (tie goes up), negative results bump
 /// only on 2|rem| > |den| (tie stays, which is toward +∞).

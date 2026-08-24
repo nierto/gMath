@@ -509,7 +509,7 @@ pub fn div_i64_rational(a_num: i64, a_den: u64, b_num: i64, b_den: u64) -> Resul
 // TIER 5: HUGE (i128/u128) - Maximum standard precision
 // ================================================================================================
 
-/// Addition for Huge tier — uses I256 for intermediate calculations
+/// Addition for Huge tier: uses I256 for intermediate calculations
 pub fn add_i128_rational(a_num: i128, a_den: u128, b_num: i128, b_den: u128) -> Result<(i128, u128), OverflowDetected> {
     if a_num == 0 { return Ok((b_num, b_den)); }
     if b_num == 0 { return Ok((a_num, a_den)); }

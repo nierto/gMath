@@ -1,4 +1,4 @@
-//! Decimal exponential — `exp(x)` at compute dp.
+//! Decimal exponential: `exp(x)` at compute dp.
 //!
 //! # Algorithm
 //!
@@ -6,7 +6,7 @@
 //! `k = round(x / ln(2))` and `r = x - k × ln(2)` ensures `|r| ≤ ln(2)/2 ≈ 0.347`.
 //!
 //! 1. **Range reduction**: compute integer `k` and small remainder `r`.
-//! 2. **Taylor series** for `exp(r)` with `|r| ≤ 0.347` — converges in ~25 terms at dp=38.
+//! 2. **Taylor series** for `exp(r)` with `|r| ≤ 0.347`: converges in ~25 terms at dp=38.
 //!    Iterative: `term_0 = 1, term_n = term_{n-1} × r / n`.
 //! 3. **Multiply by 2^k**: bit shift the compute-tier result. For positive `k`,
 //!    shift left (exact); for negative `k`, shift right with rounding.
@@ -16,7 +16,7 @@
 //! Each squaring iteration of `exp(y)^2` doubles relative error. For `exp(20)` with
 //! the halve-and-square method, 14 squarings amplify error by 16384×.
 //!
-//! With ln(2)-based reduction, there is **no squaring** — only Taylor convergence
+//! With ln(2)-based reduction, there is **no squaring**: only Taylor convergence
 //! error and bit-shift truncation. Total error stays bounded by ~Taylor truncation,
 //! which is well below 1 ULP at the compute dp.
 
@@ -230,7 +230,7 @@ thread_local! {
 }
 
 /// Pure Taylor series for exp(x) = 1 + x + x²/2! + x³/3! + ...
-/// No range reduction — works for any x but converges faster for small |x|.
+/// No range reduction: works for any x but converges faster for small |x|.
 /// Early-exits when terms underflow to zero.
 fn exp_taylor_raw(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
     let one = decimal_compute_one();
@@ -312,9 +312,9 @@ fn build_exp_tables() -> Result<ExpTables, OverflowDetected> {
 /// 4-stage table-based exp for |x| ≤ 30.
 ///
 /// Decomposes |x| = k + d1/10 + d2/100 + d3/1000 + r where:
-/// - k ∈ [0, 30] — integer part
-/// - d1, d2, d3 ∈ [0, 9] — fractional decimal digits
-/// - |r| < 10^-3 — tiny remainder for short Taylor (~8-12 terms)
+/// - k ∈ [0, 30]: integer part
+/// - d1, d2, d3 ∈ [0, 9]: fractional decimal digits
+/// - |r| < 10^-3: tiny remainder for short Taylor (~8-12 terms)
 ///
 /// Result = exp(k) × exp(d1/10) × exp(d2/100) × exp(d3/1000) × exp(r)
 /// All factors except exp(r) are table lookups. 4 widening multiplies + short Taylor.
@@ -392,11 +392,11 @@ fn decimal_exp_ln2_reduction(x: ComputeStorage) -> Result<ComputeStorage, Overfl
 ///
 /// # Algorithm
 ///
-/// For |x| ≤ 30: **4-stage table decomposition** — decomposes x into decimal digits,
+/// For |x| ≤ 30: **4-stage table decomposition**: decomposes x into decimal digits,
 /// looks up precomputed exp values per digit, multiplies, then short Taylor for the
 /// tiny remainder. ~4 widening multiplies + ~8-12 Taylor terms.
 ///
-/// For |x| > 30: **ln(2)-based range reduction** — `exp(x) = 2^k × exp(r)` where
+/// For |x| > 30: **ln(2)-based range reduction**: `exp(x) = 2^k × exp(r)` where
 /// `k = round(x/ln(2))` and `|r| ≤ ln(2)/2`.
 ///
 /// The table path is ~2-3× faster than the ln(2) path for common inputs.
@@ -455,19 +455,19 @@ fn mul_compute_by_int(v: ComputeStorage, n: i64) -> ComputeStorage {
     }
 }
 
-/// Compute `exp(-x)` — used internally for hyperbolic functions.
+/// Compute `exp(-x)`: used internally for hyperbolic functions.
 #[allow(dead_code)]
 pub fn decimal_exp_neg(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
     decimal_exp(decimal_compute_neg(x))
 }
 
-/// Fused `(sinh(x), cosh(x))` at decimal compute tier — shares one exp-pair evaluation.
+/// Fused `(sinh(x), cosh(x))` at decimal compute tier: shares one exp-pair evaluation.
 ///
 /// Computes `exp(x)` and `exp(-x)` once, then derives
 /// `sinh(x) = (exp(x) - exp(-x)) / 2` and `cosh(x) = (exp(x) + exp(-x)) / 2`.
 ///
 /// sinh and cosh are derived from the **same** `(ep, en)` pair at compute tier,
-/// so their rounding bias is correlated — critical for expressions like
+/// so their rounding bias is correlated: critical for expressions like
 /// `cosh(θ)·p + (sinh(θ)/θ)·v` where the two errors cancel.
 pub fn decimal_sinhcosh(x: ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
     if decimal_compute_is_zero(&x) {
@@ -565,7 +565,7 @@ mod tests {
 
     /// mpmath: exp(-1) = 0.36787944117144232839...
     /// Storage-tier validation (compute-tier rounding from 1/exp(1) is acceptable
-    /// as long as storage-tier result is exact — covered by decimal_transcendental_validation).
+    /// as long as storage-tier result is exact: covered by decimal_transcendental_validation).
     #[test]
     fn exp_neg_one() {
         use crate::canonical::{gmath, evaluate};

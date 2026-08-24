@@ -1,7 +1,7 @@
-//! Lazy Matrix Expression Tree — Matrix Chain Persistence via FASC
+//! Lazy Matrix Expression Tree: Matrix Chain Persistence via FASC
 //!
 //! **MISSION**: Build matrix expression trees lazily, evaluate entirely at compute tier
-//! (tier N+1), single downscale to FixedMatrix at the end — the matrix analog of
+//! (tier N+1), single downscale to FixedMatrix at the end: the matrix analog of
 //! BinaryCompute chain persistence for scalars.
 //!
 //! **ARCHITECTURE**: `LazyMatrixExpr` mirrors `LazyExpr` but for matrix operations.
@@ -77,7 +77,7 @@ pub enum LazyMatrixExpr {
     /// Matrix square root: A^{1/2} via Denman-Beavers at compute tier
     Sqrt(Box<LazyMatrixExpr>),
 
-    /// Matrix power: A^p = exp(p * log(A)) — entire chain at compute tier
+    /// Matrix power: A^p = exp(p * log(A)): entire chain at compute tier
     Pow(Box<LazyMatrixExpr>, FixedPoint),
 }
 
@@ -334,7 +334,7 @@ fn eval_compute(expr: &LazyMatrixExpr) -> Result<ComputeMatrix, OverflowDetected
 ///
 /// let a = LazyMatrixExpr::from(FixedMatrix::identity(2));
 /// let b = LazyMatrixExpr::from(FixedMatrix::identity(2));
-/// // Entire chain at compute tier — no intermediate materializations
+/// // Entire chain at compute tier, no intermediate materializations
 /// let result = evaluate_matrix(&(a.exp() * b.exp())).unwrap();
 /// ```
 pub fn evaluate_matrix(expr: &LazyMatrixExpr) -> Result<FixedMatrix, OverflowDetected> {

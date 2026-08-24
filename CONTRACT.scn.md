@@ -1,4 +1,4 @@
-# CONTRACT.scn — g_math agent primer
+# CONTRACT.scn: g_math agent primer
 
 Condensed prime for an agent building against `g_math`. Authoritative prose:
 [CONTRACT.md](CONTRACT.md). Per-symbol index: [PUBLIC_API.md](PUBLIC_API.md).
@@ -26,11 +26,11 @@ Code wins over docs.
 
 @DETERMINISM (core guarantee):
   fixed-profile + identical-input → bit-identical-output ∀ platform/arch
-  mechanism: FLOAT_BAN — no f32/f64 in arithmetic|validation|comparison
+  mechanism: FLOAT_BAN, no f32/f64 in arithmetic|validation|comparison
   exception: from_f64/to_f64 = caller-convenience ONLY, never internal
   use-cases: consensus, financial-audit, reproducible-science
 
-@ROUNDING (deterministic, integer-only; UNIFIED 0.5.0 — one rule per domain,
+@ROUNDING (deterministic, integer-only; UNIFIED 0.5.0; one rule per domain,
   every path; gate: tests/rounding_unification.rs; evidence:
   docs/design/ROUNDING_CENSUS.md):
   binary:  nearest-ties-+∞ EVERYWHERE (mul, div, downscales, decimal→binary
@@ -38,7 +38,7 @@ Code wins over docs.
   decimal: exact-when-representable; banker's where rounding occurs
            (canonical mul = dp-growth exact; canonical div t1-5 =
            exact-or-rational-fallback; DecimalFixed + t6 div = banker's)
-  ternary: nearest — tie-free mul/div3 (odd scale); ties-+∞ at div and
+  ternary: nearest: tie-free mul/div3 (odd scale); ties-+∞ at div and
            conversion-in (0.5 → 29525, -0.5 → -29524 @TQ10.10: documented asymmetry)
   EXCEPTION (contracted): tq19 matvec_q2f narrowing stays truncation
            (0.4.31 bit-reproducibility contract).
@@ -59,7 +59,7 @@ Code wins over docs.
 @CROSS-PROFILE:
   guaranteed: determinism WITHIN a profile
   NOT-yet-contracted: widening-exact / single-rounding-narrowing / foreign-profile
-    serialization semantics — planned (ROADMAP U2). Do NOT rely on cross-profile
+    serialization semantics: planned (ROADMAP U2). Do NOT rely on cross-profile
     bit relationships yet.
 
 @FEATURES: infinite-precision(num-bigint symbolic tier) | serde | inference(rayon
@@ -71,7 +71,7 @@ Code wins over docs.
   imperative → known-domain hot loops (direct, Copy, no routing)
   fused → ML accumulation shapes (softmax/silu/rms/distance, compute-tier)
   tq19 → ternary-quantized inference (feature=inference)
-  correctness: PATH-INDEPENDENT — compound results (same engines, shared
+  correctness: PATH-INDEPENDENT for compound results (same engines, shared
   downscale) AND direct storage-tier arithmetic (unified 0.5.0, test-gated)
 
 @VALIDATION: mpmath refs 50-250 digits as exact strings (no floats). Decimal paths
@@ -83,7 +83,7 @@ Code wins over docs.
   deterministic everywhere.
 
 @OVERFLOW(0.5.0): canonical arithmetic on representable inputs = EXACT (tier
-  promotion → exact-rational fallback) OR loud typed error. NEVER silent wrap —
+  promotion → exact-rational fallback) OR loud typed error. NEVER silent wrap:
   any tier, any domain, coercions + literal parsing included (out-of-range
   literals on narrow profiles parse into exact symbolic). Gate:
   tests/ugod_promotion_validation.rs per profile.
@@ -91,4 +91,4 @@ Code wins over docs.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](README.md#author--support).

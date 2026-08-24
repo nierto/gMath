@@ -1,4 +1,4 @@
-//! Trit Packing Utilities — Public API for Balanced Ternary Weight Storage
+//! Trit Packing Utilities: Public API for Balanced Ternary Weight Storage
 //!
 //! **ENCODING**: 5 trits per byte using base-3 packing (3^5 = 243 ≤ 255)
 //! **EFFICIENCY**: 1.6 bits per trit (vs theoretical minimum 1.585 bits)

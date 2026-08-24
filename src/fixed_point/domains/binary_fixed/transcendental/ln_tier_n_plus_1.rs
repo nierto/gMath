@@ -1141,7 +1141,7 @@ pub fn ln_binary_i1024(x: I1024) -> I1024 {
 // Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
 // ============================================================================
 
-/// ln() for Q32.32 storage (i64) — tier N+1 via Q64.64
+/// ln() for Q32.32 storage (i64): tier N+1 via Q64.64
 ///
 /// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
 /// For Q32.32 profile: BinaryStorage = i64
@@ -1156,7 +1156,7 @@ pub fn ln_binary_i64(x: i64) -> i64 {
     downscale_q64_to_q32(result_q64)
 }
 
-/// ln() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// ln() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_binary_i128(x: i128) -> i128 {
     if x <= 0 {
@@ -1165,7 +1165,7 @@ pub fn ln_binary_i128(x: i128) -> i128 {
     ln_q64_64_native(x)
 }
 
-/// ln() for Q32.32 profile — I256 is tier N+1 (Q128.128)
+/// ln() for Q32.32 profile: I256 is tier N+1 (Q128.128)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_binary_i256(x: I256) -> I256 {
     if x <= I256::zero() {
@@ -1175,7 +1175,7 @@ pub fn ln_binary_i256(x: I256) -> I256 {
     ln_q128_128_native(x)
 }
 
-/// ln() for Q32.32 profile — I512 wrapper
+/// ln() for Q32.32 profile: I512 wrapper
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_binary_i512(x: I512) -> I512 {
     if x <= I512::zero() {

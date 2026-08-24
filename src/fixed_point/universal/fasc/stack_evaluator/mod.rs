@@ -211,7 +211,7 @@ pub(crate) fn decimal_compute_to_binary_storage_pub(val: ComputeStorage) -> Resu
 }
 
 /// Convert a DecimalCompute value directly to profile BinaryStorage via
-/// `val × 2^frac_bits / 10^compute_dp` — no intermediate Decimal materialization.
+/// `val × 2^frac_bits / 10^compute_dp`, no intermediate Decimal materialization.
 ///
 /// This is lossless (within rounding) because we do one big-integer division.
 fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
@@ -331,7 +331,7 @@ pub enum StackValue {
     /// Decimal compute-tier value for transcendental chain persistence.
     ///
     /// **STORAGE**: ComputeStorage at `DECIMAL_COMPUTE_DP` scaling (10^-dp).
-    /// **PURPOSE**: Decimal equivalent of BinaryCompute — keeps intermediate
+    /// **PURPOSE**: Decimal equivalent of BinaryCompute: keeps intermediate
     /// transcendental results at compute-tier precision between chained ops.
     /// Materialized to `Decimal` at non-transcendental boundaries (display, arithmetic
     /// with non-decimal operands, etc.) with dp chosen to guarantee 0 storage ULP.
@@ -346,7 +346,7 @@ pub enum StackValue {
     Ternary(u8, BinaryStorage, CompactShadow),
 
     /// Symbolic rational value (owned for stack storage)
-    /// Symbolic IS exact — no shadow needed
+    /// Symbolic IS exact, no shadow needed
     Symbolic(RationalNumber),
 
     /// Error state
@@ -387,7 +387,7 @@ impl StackValue {
 
     /// Convert to rational for cross-domain operations
     ///
-    /// **CRITICAL**: Uses full-precision conversion — no i128 truncation.
+    /// **CRITICAL**: Uses full-precision conversion, no i128 truncation.
     /// Binary Q-format values are divided by 2^frac_bits to get the true rational.
     /// Decimal values are divided by 10^decimals.
     /// Ternary values are divided by 3^frac_trits.
@@ -891,7 +891,7 @@ impl StackEvaluator {
     /// old fixed `MAX_DP - 2` slack silently cost realtime HALF its digits
     /// (dp 4 → 2: cos(0.1) = 0.9952 displayed as "1.00"), which masqueraded
     /// as a sin/cos kernel plateau for months. Deterministic; the
-    /// downscale is checked, so a too-large dp errors and we retry — never
+    /// downscale is checked, so a too-large dp errors and we retry, never
     /// a wrap.
     fn materialize_decimal_compute_adaptive(
         val: ComputeStorage,
@@ -974,7 +974,7 @@ pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
 
 /// Evaluate sin and cos of the same expression with a single range reduction.
 ///
-/// More efficient than evaluating sin(x) and cos(x) separately — shares the
+/// More efficient than evaluating sin(x) and cos(x) separately: shares the
 /// Cody-Waite range reduction and Taylor evaluation at compute tier.
 ///
 /// **USAGE**:
@@ -998,7 +998,7 @@ pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), Over
 
 /// Evaluate sinh and cosh of the same expression with a single shared exp-pair.
 ///
-/// More efficient than evaluating sinh(x) and cosh(x) separately — shares one
+/// More efficient than evaluating sinh(x) and cosh(x) separately: shares one
 /// `exp(x)` + `exp(-x)` evaluation at compute tier. sinh and cosh come from the
 /// same `(ep, en)` pair, so their rounding errors are correlated and cancel
 /// in downstream expressions like `cosh(θ)·p + (sinh(θ)/θ)·v`.

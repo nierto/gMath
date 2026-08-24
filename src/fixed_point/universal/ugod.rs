@@ -22,10 +22,10 @@
 //!
 //! ## Implementation Status
 //!
-//! - Binary: `UniversalBinaryFixed` (binary_types.rs) — full 6-tier UGOD
-//! - Decimal: `UniversalDecimalTiered` (decimal_types.rs) — full 6-tier UGOD
-//! - Ternary: `UniversalTernaryFixed` (ternary_types.rs) — full 6-tier UGOD
-//! - Symbolic: `RationalNumber` (rational_number.rs) — 6+1 tiers (BigInt gated)
+//! - Binary: `UniversalBinaryFixed` (binary_types.rs): full 6-tier UGOD
+//! - Decimal: `UniversalDecimalTiered` (decimal_types.rs): full 6-tier UGOD
+//! - Ternary: `UniversalTernaryFixed` (ternary_types.rs): full 6-tier UGOD
+//! - Symbolic: `RationalNumber` (rational_number.rs): 6+1 tiers (BigInt gated)
 //! - StackEvaluator: typed dispatch through all domain tier systems
 //! - Shadow: `CompactShadow` propagation through all arithmetic ops
 

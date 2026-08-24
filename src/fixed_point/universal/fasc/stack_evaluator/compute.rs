@@ -112,7 +112,7 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 /// Shifts right by (COMPUTE_FRAC_BITS - STORAGE_FRAC_BITS) with rounding.
 ///
 /// Returns `Err(TierOverflow)` if the compute-tier value does not fit in
-/// the storage tier — this is the UGOD overflow detection point that
+/// the storage tier; this is the UGOD overflow detection point that
 /// prevents silent truncation of large results (e.g., exp(44) in Q64.64).
 #[inline]
 pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
@@ -241,7 +241,7 @@ pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) ->
     }
 }
 
-/// Compute 10^exp at ComputeStorage precision — O(1) via const lookup table.
+/// Compute 10^exp at ComputeStorage precision: O(1) via const lookup table.
 ///
 /// Tables are built at compile time via const fn word-level multiplication.
 /// Covers all exponents up to the profile's DP promotion threshold.
@@ -310,7 +310,7 @@ pub(super) fn pow10_compute(exp: u8) -> Result<ComputeStorage, OverflowDetected>
 // ============================================================================
 
 /// Multiply a little-endian u64 word array by 10, returning the new words.
-/// Pure const fn — no trait dispatch, no heap.
+/// Pure const fn, no trait dispatch, no heap.
 const fn mul10_words<const N: usize>(words: [u64; N]) -> [u64; N] {
     let mut result = [0u64; N];
     let mut carry: u64 = 0;
@@ -559,7 +559,7 @@ pub(crate) fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorag
 ///
 /// `compute_add` wraps silently (native ints in release, schoolbook wrap on the
 /// wide types). Long accumulations that can legitimately exceed the compute-tier
-/// envelope — e.g. `Σⱼ eⱼ·vⱼ` in `fused::softmax_mix` over a long context — must
+/// envelope: e.g. `Σⱼ eⱼ·vⱼ` in `fused::softmax_mix` over a long context: must
 /// surface the overflow as an error rather than return wrapped garbage.
 #[inline]
 pub(crate) fn compute_checked_add(
@@ -569,7 +569,7 @@ pub(crate) fn compute_checked_add(
     a.checked_add(b).ok_or(OverflowDetected::TierOverflow)
 }
 
-/// The compute tier's maximum value — the ceiling that saturating downscales
+/// The compute tier's maximum value: the ceiling that saturating downscales
 /// (`downscale_q64_to_q32`) and the exp overflow sentinel land on. Consumers
 /// that would add to a ceiling value (tanh/cosh denominators) check against
 /// this to fail loud instead of wrapping.
@@ -591,7 +591,7 @@ pub(crate) fn compute_ceiling() -> ComputeStorage {
 ///
 /// The sentinel differs by profile: the q16_16/q32_32/q256_256 engines
 /// saturate at the compute type's maximum, but the q64_64/q128_128 engines
-/// return `i128::MAX` at storage scale — which on q128_128 DOWNSCALES
+/// return `i128::MAX` at storage scale, which on q128_128 DOWNSCALES
 /// CLEANLY into the storage maximum, so a `== compute_ceiling()` check (the
 /// old guard) silently missed it and cosh/sinh built on the sentinel
 /// returned plausible-wrong values (0.5.0 item 2 find). `>=` because no
@@ -834,7 +834,7 @@ pub(super) fn cos_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     }
 }
 
-/// Fused sinh+cosh at compute tier (tier N+1) — shares one exp-pair evaluation.
+/// Fused sinh+cosh at compute tier (tier N+1): shares one exp-pair evaluation.
 ///
 /// Evaluates `exp(x)` and `exp(-x)` once at compute tier, then derives
 /// `sinh(x) = (exp(x) - exp(-x)) / 2` and `cosh(x) = (exp(x) + exp(-x)) / 2`.
@@ -842,7 +842,7 @@ pub(super) fn cos_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
 /// Benefits over separate calls:
 ///   • 2 exp evaluations instead of 4 (`sinh` + `cosh` each call exp twice today).
 ///   • sinh and cosh are derived from the **same** `(ep, en)` pair, so their
-///     rounding bias is correlated — critical for expressions like
+///     rounding bias is correlated: critical for expressions like
 ///     `cosh(θ)·p + (sinh(θ)/θ)·v` where the two errors ought to cancel.
 #[inline]
 pub(crate) fn sinhcosh_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, ComputeStorage) {
@@ -857,7 +857,7 @@ pub(crate) fn sinhcosh_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, Co
     (sinh_c, cosh_c)
 }
 
-/// Fused sin+cos at compute tier (tier N+1) — single shared range reduction.
+/// Fused sin+cos at compute tier (tier N+1): single shared range reduction.
 /// Returns (sin(x), cos(x)) saving one range reduction vs separate calls.
 #[inline]
 pub(crate) fn sincos_at_compute_tier(x: ComputeStorage) -> (ComputeStorage, ComputeStorage) {
@@ -921,7 +921,7 @@ pub(super) fn atan2_at_compute_tier(y: ComputeStorage, x: ComputeStorage) -> Com
     }
 }
 
-/// Compute exp at compute tier (tier N+1) — free function variant.
+/// Compute exp at compute tier (tier N+1): free function variant.
 ///
 /// Returns ComputeStorage directly (no StackValue wrapping).
 /// Used by fused operations that need exp without evaluator context.
@@ -981,10 +981,10 @@ pub(crate) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
     }
 }
 
-/// Compute ln at compute tier (tier N+1) — free function variant.
+/// Compute ln at compute tier (tier N+1): free function variant.
 ///
 /// Returns ComputeStorage directly (no StackValue wrapping).
-/// Propagates the kernel's domain sentinel (type MIN) for x <= 0 —
+/// Propagates the kernel's domain sentinel (type MIN) for x <= 0;
 /// callers must domain-check before calling or handle the sentinel.
 /// Only consumed by the feature-gated `compute_tier` module, hence the
 /// dead_code allowance for no-feature builds (same as `make_compute_int`).

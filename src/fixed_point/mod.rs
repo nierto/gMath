@@ -1,17 +1,17 @@
-//! Fixed-Point Arithmetic Module — Canonical FASC+UGOD Pipeline
+//! Fixed-Point Arithmetic Module: Canonical FASC+UGOD Pipeline
 //!
-//! **Public API**: [`canonical`] module — `use g_math::canonical::{gmath, evaluate};`
+//! **Public API**: [`canonical`] module: `use g_math::canonical::{gmath, evaluate};`
 //!
 //! All other modules are internal implementation details.
 
-/// Canonical FASC entry point — the public API for gMath.
+/// Canonical FASC entry point: the public API for gMath.
 pub mod canonical;
 
-/// Imperative numeric types — `FixedPoint`, `FixedVector`, `FixedMatrix`.
+/// Imperative numeric types: `FixedPoint`, `FixedVector`, `FixedMatrix`.
 pub mod imperative;
 pub use imperative::{FixedPoint, FixedVector, FixedMatrix};
 
-/// TQ1.9 compact ternary operations — standalone, decoupled from FASC/routing.
+/// TQ1.9 compact ternary operations: standalone, decoupled from FASC/routing.
 /// Gated behind the `inference` feature flag.
 #[cfg(feature = "inference")]
 pub mod tq19;

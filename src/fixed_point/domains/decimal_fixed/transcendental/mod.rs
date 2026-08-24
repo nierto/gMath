@@ -1,4 +1,4 @@
-//! Decimal domain transcendental functions — native decimal compute-tier implementation.
+//! Decimal domain transcendental functions: native decimal compute-tier implementation.
 //!
 //! # Architecture
 //!

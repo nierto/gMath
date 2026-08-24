@@ -48,16 +48,16 @@ assert_eq!(planar.matvec(&acts), dense);
 
 ## What's here
 
-- **Balanced-ternary arithmetic** — add, subtract, multiply, divide, negate
+- **Balanced-ternary arithmetic**: add, subtract, multiply, divide, negate
   (checked and unchecked variants) across six tier formats; `pack_trits` /
   `unpack_trits` store 5 trits per byte. Ternary is also reachable through the
   [canonical layer](README_ROUTING.md) via `0t` literals or
   `set_gmath_mode("...:ternary")`; transcendentals on ternary values route through
   the binary engines.
-- **TQ1.9** — `TQ19Matrix` with `matvec` / `matvec_batch` (and rayon `_par`
+- **TQ1.9** (`TQ19Matrix` with `matvec` / `matvec_batch` (and rayon `_par`
   variants), the `tq19_dot` / `trit_dot` / `packed_trit_dot` kernels (AVX2 on
   x86_64 with a scalar fallback), and the `PlanarTQ19` / `HybridTQ19` compressed
-  weight forms — each bit-identical to dense `TQ19Matrix::matvec` on every profile.
+  weight forms) each bit-identical to dense `TQ19Matrix::matvec` on every profile.
 
 ## Public API
 
@@ -86,4 +86,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

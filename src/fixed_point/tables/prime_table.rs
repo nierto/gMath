@@ -1,4 +1,4 @@
-//! Prime Table — Build-Time Generated Reference Database
+//! Prime Table: Build-Time Generated Reference Database
 //!
 //! Contains all primes up to 10,000 generated via Sieve of Eratosthenes
 //! at compile time by `build.rs`. Zero external dependencies.
@@ -24,7 +24,7 @@ include!("../../generated_tables/prime_table.rs");
 
 /// Check if a number exists in the precomputed prime table.
 ///
-/// Uses binary search — O(log n) where n = PRIME_COUNT (1,145 primes).
+/// Uses binary search: O(log n) where n = PRIME_COUNT (1,145 primes).
 /// Only valid for values up to MAX_PRIME (9,973).
 #[inline]
 pub fn is_prime(n: u64) -> bool {

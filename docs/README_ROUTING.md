@@ -46,24 +46,24 @@ symbolic rational (everything else, as an exact numerator/denominator pair). See
 [the ternary guide](README_TERNARY.md) and [the precision guide](README_PRECISION.md)
 for per-domain detail.
 
-**FASC — Fixed Allocation Stack Computation.** `gmath()` builds a `LazyExpr` tree;
+**FASC: Fixed Allocation Stack Computation.** `gmath()` builds a `LazyExpr` tree;
 `evaluate()` walks it on a thread-local stack evaluator with fixed-size
 workspaces, so the hot path does not allocate on the heap per operation.
 
 **Tier N+1 chain persistence.** Every transcendental and every accumulating
 operation computes one tier *wider* than the storage format and rounds down once
-at the end. Between chained operations the intermediate stays at the wide tier —
-`sin(exp(x))` never narrows mid-chain — so a chain rounds once, not once per step.
+at the end. Between chained operations the intermediate stays at the wide tier (
+`sin(exp(x))` never narrows mid-chain), so a chain rounds once, not once per step.
 
-**UGOD — tiered graceful overflow.** Arithmetic is attempted at the current tier;
+**UGOD: tiered graceful overflow.** Arithmetic is attempted at the current tier;
 on overflow it promotes to a wider tier and retries. The top of the ladder is the
 symbolic rational domain, so overflow degrades into a wider or exact
 representation instead of wrapping.
 
 **Fractal-topology router + shadow system.** Cross-domain arithmetic (e.g. decimal
 + binary) is dispatched by classifying each operand through shadow denominator
-factoring — strip factors of 2 → binary-exact, 2 and 5 → decimal-exact, 3 →
-ternary-exact — and coercing both sides to the optimal shared domain via a small
+factoring (strip factors of 2 → binary-exact, 2 and 5 → decimal-exact, 3 →
+ternary-exact) and coercing both sides to the optimal shared domain via a small
 const lookup table. A `CompactShadow` (0–32 bytes, stack-only) can ride alongside
 an approximated value carrying its exact rational identity or a constant reference
 (π, e, √2, φ, ln 2, ln 10, γ); the router reads shadows to classify domain
@@ -92,7 +92,7 @@ domain-tagged values for mixed-domain matrices.
 
 ## Behaviour & limits
 
-- **Correctness is path-independent** — for compound results (same engines,
+- **Correctness is path-independent**: for compound results (same engines,
   one shared downscale) AND for direct storage-tier arithmetic: since the
   0.5.0 rounding unification every domain uses one rule on every path
   (binary nearest-ties-+∞, decimal exact-then-banker's, ternary nearest),
@@ -117,4 +117,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

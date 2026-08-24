@@ -210,7 +210,7 @@ impl Tensor {
     /// Format: `[u8 rank][u32 × rank (shape dims BE)][raw bytes × product(shape)]`
     ///
     /// The rank byte limits tensors to 255 dimensions (more than enough for any
-    /// practical use — Riemann curvature is rank 4, highest in differential geometry).
+    /// practical use: Riemann curvature is rank 4, highest in differential geometry).
     pub fn to_bytes(&self) -> Vec<u8> {
         let rank = self.rank();
         let total = self.len();

@@ -1,9 +1,9 @@
-//! TQ1.9 — Compact Ternary Fixed-Point for Neural Network Inference
+//! TQ1.9: Compact Ternary Fixed-Point for Neural Network Inference
 //!
 //! **FORMAT**: 1 integer trit + 9 fractional trits = 10 trits total
 //! **STORAGE**: i16 (max raw value 29524 < i16::MAX 32767)
 //! **SCALE**: 3^9 = 19683 (fractional scaling factor)
-//! **PRECISION**: ~4.3 decimal digits (uniform) — beats fp16's ~3.3 variable digits
+//! **PRECISION**: ~4.3 decimal digits (uniform): beats fp16's ~3.3 variable digits
 //! **RANGE**: ±1.5 (exact: ±29524/19683 ≈ ±1.49987)
 //!
 //! Standalone type with conversion bridge to FixedPoint. NOT a deployment profile.
@@ -26,7 +26,7 @@ const MAX_RAW: i16 = 29_524;
 /// Minimum raw value
 const MIN_RAW: i16 = -29_524;
 
-/// TQ1.9 — Compact ternary fixed-point (1 integer trit + 9 fractional trits)
+/// TQ1.9: Compact ternary fixed-point (1 integer trit + 9 fractional trits)
 ///
 /// Stores `value * 3^9` as i16. Same byte cost as fp16 but ~30% more precision
 /// for values in the [-1.5, +1.5] range typical of neural network weights.
@@ -258,13 +258,13 @@ impl TritQ1_9 {
     // Conversion: to/from f64 (convenience only, NOT for internal logic)
     // ════════════════════════════════════════════════════════════════
 
-    /// Convert to f64 (convenience only — NOT for internal computation)
+    /// Convert to f64 (convenience only, NOT for internal computation)
     #[inline]
     pub fn to_f64(&self) -> f64 {
         self.raw as f64 / SCALE_TQ1_9 as f64
     }
 
-    /// Convert from f64 (convenience only — NOT for internal computation)
+    /// Convert from f64 (convenience only, NOT for internal computation)
     pub fn from_f64(val: f64) -> Result<Self, OverflowDetected> {
         let scaled = (val * SCALE_TQ1_9 as f64).round() as i32;
         if scaled < MIN_RAW as i32 || scaled > MAX_RAW as i32 {

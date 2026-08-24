@@ -14,7 +14,7 @@
 //! - Ternary-specific div3/mul3 operations
 //!
 //! Arithmetic UGOD methods (add, subtract, multiply, divide, negate) live in
-//! separate operation files — NOT here.
+//! separate operation files, NOT here.
 
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::{I256, I512, I1024};
@@ -224,7 +224,7 @@ impl TernaryTier1 {
         }
     }
 
-    /// Ternary right-shift: drop the lowest trit (nearest — tie-free since 3 is odd)
+    /// Ternary right-shift: drop the lowest trit (nearest: tie-free since 3 is odd)
     pub fn div3(&self) -> Self {
         // 0.5.0: nearest (true ternary shift — drop lowest trit). 3 is odd
         // so no tie exists; |rem| >= 2 rounds away, |rem| <= 1 truncates.

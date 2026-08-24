@@ -1,13 +1,13 @@
-//! Fractal Topology Router — Value-Adaptive Domain Dispatch
+//! Fractal Topology Router: Value-Adaptive Domain Dispatch
 //!
 //! **PURPOSE**: Eliminate domain crisscross in arithmetic by classifying operands
 //! via CompactShadow denominator factoring and dispatching through a compile-time
 //! routing table.
 //!
 //! **ARCHITECTURE**:
-//! - Layer 1: Shadow classifier (~15 ns) — factors denominator, sets exact_in bits
-//! - Layer 2: Routing table (~3 ns) — static lookup in .rodata, zero sync
-//! - Layer 3: Tree walker (~200 ns) — bottom-up LazyExpr annotation
+//! - Layer 1: Shadow classifier (~15 ns): factors denominator, sets exact_in bits
+//! - Layer 2: Routing table (~3 ns): static lookup in .rodata, zero sync
+//! - Layer 3: Tree walker (~200 ns): bottom-up LazyExpr annotation
 //!
 //! **INVARIANTS**:
 //! - Zero mutable state; routing table in .rodata
@@ -31,7 +31,7 @@ use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
 /// The Ternary column (0.4.34) covers Add/Sub ONLY: sums of 3-adic values
 /// stay 3-adic (denominator ≤ max of operands), so routed add/sub is always
 /// exact. Products multiply denominators past the tier scale, where ternary
-/// truncates while symbolic stays exact — and the 4-bit class mask cannot
+/// truncates while symbolic stays exact, and the 4-bit class mask cannot
 /// see denominator exponents, so Mul/Div keep their previous routes (the
 /// fail-safe invariant: wrong routing costs performance, never correctness).
 /// See docs/design/TERNARY_ROUTING_COLUMN.md for the full reasoning.
@@ -319,7 +319,7 @@ const fn lowest_rank_domain_addsub(exact_in: u8) -> DomainChoice {
 /// Route a transcendental to the input's preferred engine.
 ///
 /// Decimal engine used when input is decimal-exact but NOT binary-exact
-/// (honors the "stated domain" — "3.0" → decimal engine, "3" → binary engine).
+/// (honors the "stated domain": "3.0" → decimal engine, "3" → binary engine).
 /// Binary engine used for everything else (always available).
 const fn transcendental_route(class: u8) -> DomainChoice {
     if class & DECIMAL_BIT != 0 && class & BINARY_BIT == 0 {

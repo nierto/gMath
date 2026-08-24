@@ -82,7 +82,7 @@ pub(super) fn ternary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<
 
 /// Checked narrowing of an i128 tier raw into BinaryStorage.
 ///
-/// Returns TierOverflow instead of wrapping — the bare `as i32`/`as i64`
+/// Returns TierOverflow instead of wrapping: the bare `as i32`/`as i64`
 /// casts this replaces silently corrupted Tier-2+ ternary values on the
 /// realtime/compact profiles (wrap-defect class, fixed 0.4.33).
 fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDetected> {
@@ -102,7 +102,7 @@ fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDe
     { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
 }
 
-/// Convert UniversalTernaryFixed result back to (tier, BinaryStorage) — full precision.
+/// Convert UniversalTernaryFixed result back to (tier, BinaryStorage): full precision.
 ///
 /// Fallible: a tier raw that does not fit the profile\'s BinaryStorage is a
 /// TierOverflow error, never a silent wrap (e.g. `0t3281` parses to Tier 2
@@ -297,7 +297,7 @@ pub(super) fn ternary_to_rational(tier: u8, value: &BinaryStorage) -> Result<Rat
     }
 }
 
-/// Create UniversalDecimalTiered from StackValue decimal storage — full precision
+/// Create UniversalDecimalTiered from StackValue decimal storage: full precision
 ///
 /// **PURPOSE**: Bridge BinaryStorage → typed decimal representation for UGOD dispatch.
 /// Decimal values are stored as (decimal_places, BinaryStorage) in the evaluator.
@@ -390,7 +390,7 @@ pub(super) fn decimal_from_storage(decimal_places: u8, storage: &BinaryStorage) 
     }
 }
 
-/// Convert UniversalDecimalTiered result back to (decimal_places, BinaryStorage) — full precision
+/// Convert UniversalDecimalTiered result back to (decimal_places, BinaryStorage): full precision
 pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> (u8, BinaryStorage) {
     use crate::fixed_point::domains::decimal_fixed::decimal_types::DecimalRaw;
     let (tier, raw) = decimal.to_tier_raw();
@@ -453,7 +453,7 @@ pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> (u8, Binar
     (decimal_places, storage)
 }
 
-/// Create UniversalBinaryFixed from StackValue binary storage — full precision
+/// Create UniversalBinaryFixed from StackValue binary storage: full precision
 ///
 /// **PURPOSE**: Bridge BinaryStorage → typed binary representation for UGOD dispatch.
 /// Binary values are stored as (tier, BinaryStorage) in the evaluator.
@@ -523,10 +523,10 @@ pub(super) fn binary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<U
     }
 }
 
-/// Convert UniversalBinaryFixed result back to (tier, BinaryStorage) — full precision
+/// Convert UniversalBinaryFixed result back to (tier, BinaryStorage): full precision
 /// Checked narrowing of an i128 binary tier raw into BinaryStorage.
 /// TierOverflow instead of the silent wrap the bare casts produced
-/// (0.5.0 item 1: 9e18 + 9e18 on embedded returned 0.0 — the promoted
+/// (0.5.0 item 1: 9e18 + 9e18 on embedded returned 0.0: the promoted
 /// Tier-4 result wrapped through as_i128; binary twin of the 0.4.33
 /// ternary_to_storage fix).
 fn i128_to_binary_storage_checked_b(val: i128) -> Result<BinaryStorage, OverflowDetected> {
@@ -542,12 +542,12 @@ fn i128_to_binary_storage_checked_b(val: i128) -> Result<BinaryStorage, Overflow
     { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
 }
 
-/// Convert UniversalBinaryFixed back to (tier, BinaryStorage) — checked.
+/// Convert UniversalBinaryFixed back to (tier, BinaryStorage): checked.
 ///
 /// Fallible (0.5.0 item 1): a promoted tier raw that does not fit the
 /// profile's BinaryStorage is a TierOverflow, never a wrap. FASC's
 /// arithmetic arms catch that error and fall back to the exact rational
-/// path — the true top of the UGOD ladder.
+/// path: the true top of the UGOD ladder.
 pub(super) fn binary_to_storage(binary: &UniversalBinaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
     let (tier, raw) = binary.to_tier_raw();
     let storage = match raw {
@@ -734,7 +734,7 @@ pub(super) fn shadow_divide(a: &CompactShadow, b: &CompactShadow) -> CompactShad
 #[cfg(test)]
 mod ternary_storage_arm_tests {
     //! The Medium/Large/XLarge arms of `ternary_to_storage` are unreachable
-    //! from `0t` literals (from_str caps at Tier 3 — i64 integer parts keep
+    //! from `0t` literals (from_str caps at Tier 3: i64 integer parts keep
     //! raws inside i128), so they are pinned here at the unit level: small
     //! raws convert exactly on every profile, raws exceeding the profile's
     //! BinaryStorage are a loud TierOverflow, never a wrap.

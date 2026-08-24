@@ -1,4 +1,4 @@
-//! Output formatting — value to decimal string conversion
+//! Output formatting: value to decimal string conversion
 //!
 //! All conversions are float-free, using integer long division.
 
@@ -339,7 +339,7 @@ pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String 
     }
 }
 
-/// Compute 10^exp as I256 — O(1) via const lookup table (covers 10^0..10^76)
+/// Compute 10^exp as I256: O(1) via const lookup table (covers 10^0..10^76)
 #[allow(dead_code)]
 pub(super) fn pow10_i256(exp: u8) -> I256 {
     use super::compute::pow10_table_i256;
@@ -388,7 +388,7 @@ pub(super) fn i256_to_padded_decimal_string(mut val: I256, width: usize) -> Stri
     String::from_utf8(digits).unwrap()
 }
 
-/// Compute 10^exp as i128 — covers 10^0..10^38 (i128 max ~1.7e38)
+/// Compute 10^exp as i128: covers 10^0..10^38 (i128 max ~1.7e38)
 #[cfg(any(table_format = "q32_32"))]
 #[allow(dead_code)]
 pub(super) fn pow10_i128(exp: u8) -> i128 {
@@ -416,7 +416,7 @@ pub(super) fn pow10_i128(exp: u8) -> i128 {
     }
 }
 
-/// Compute 10^exp as i64 — covers 10^0..10^18 (i64 max ~9.2e18)
+/// Compute 10^exp as i64: covers 10^0..10^18 (i64 max ~9.2e18)
 #[cfg(any(table_format = "q16_16"))]
 #[allow(dead_code)]
 pub(super) fn pow10_i64(exp: u8) -> i64 {

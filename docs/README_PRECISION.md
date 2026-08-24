@@ -26,8 +26,8 @@ the binary point inside the 32-bit storage word via `GMATH_FRAC_BITS` (valid ran
 2–30 fractional bits); the other profiles use fixed splits.
 
 ```bash
-GMATH_FRAC_BITS=10 GMATH_PROFILE=realtime cargo build   # Q22.10 — wider range, 3 digits
-GMATH_FRAC_BITS=24 GMATH_PROFILE=realtime cargo build   # Q8.24  — narrow range, 7 digits
+GMATH_FRAC_BITS=10 GMATH_PROFILE=realtime cargo build   # Q22.10: wider range, 3 digits
+GMATH_FRAC_BITS=24 GMATH_PROFILE=realtime cargo build   # Q8.24:  narrow range, 7 digits
 ```
 
 **Switching profiles** compiles different code paths via `cfg` flags. Clear the
@@ -38,7 +38,7 @@ rm -rf target/debug/incremental/
 ```
 
 Lookup tables are checked in, so a default build is fast. `--features rebuild-tables`
-regenerates them from `build.rs` (pure-Rust generation — π via Machin's formula,
+regenerates them from `build.rs` (pure-Rust generation: π via Machin's formula,
 e via factorial series, √2 via continued fractions, zero runtime dependencies)
 and is slow.
 
@@ -46,8 +46,8 @@ and is slow.
 
 Rounding is defined per domain, and it is deterministic (integer arithmetic, so
 identical on every platform). The key property: everything beyond a lone
-storage-tier multiply or divide — every transcendental, dot product,
-decomposition, matrix chain, and fused op — computes at tier N+1 with double the
+storage-tier multiply or divide (every transcendental, dot product,
+decomposition, matrix chain, and fused op) computes at tier N+1 with double the
 fractional bits and rounds to storage exactly once, so the wide→storage downscale
 is the only rounding the result sees. The normative per-domain rounding table and
 the full explanation are in the rounding contract,
@@ -58,7 +58,7 @@ the full explanation are in the rounding contract,
 Accuracy is defined by the test suite, not slogans:
 
 - Reference values are generated with mpmath at 50–250 digit precision and
-  embedded in the tests as exact strings — never computed with floats.
+  embedded in the tests as exact strings, never computed with floats.
 - Transcendentals are validated pointwise against those references on every
   profile; the wide-tier strategy means the final rounding step selects the
   nearest representable value for the storage format in the measured cases.
@@ -76,7 +76,7 @@ cargo test --release
 ## Limits worth knowing
 
 - **Input representation.** Within a single fixed representation some values
-  aren't exact — `0.3` and `1/3` repeat in binary, so the binary domain
+  aren't exact: `0.3` and `1/3` repeat in binary, so the binary domain
   approximates them (up to half an ULP before any computation). The canonical
   `gmath(...)` router sidesteps this by classifying each literal and routing it to
   a domain where it *is* exact (decimal for `0.3`, symbolic for `1/3`) and
@@ -87,7 +87,7 @@ cargo test --release
   error by orders of magnitude in any finite precision; iterative refinement
   recovers the residual but not the lost input information.
 - **Determinism.** Whatever the error is, it is the *same* error on every
-  platform — results are bit-identical across architectures.
+  platform; results are bit-identical across architectures.
 
 ## Feature flags
 
@@ -100,7 +100,7 @@ cargo test --release
 | `realtime` / `compact` / `embedded` / `balanced` / `scientific` | select profile via Cargo feature instead of `GMATH_PROFILE` |
 | `legacy-tests` | compile legacy test suites |
 
-No feature gates around core functionality — all domains, transcendentals, wide
+No feature gates around core functionality: all domains, transcendentals, wide
 integers (I256/I512/I1024), and tiered overflow are always compiled.
 
 The full determinism and cross-profile contract is in **[CONTRACT.md](../CONTRACT.md)**.
@@ -114,4 +114,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

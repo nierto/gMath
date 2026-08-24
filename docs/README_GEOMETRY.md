@@ -1,7 +1,7 @@
 # Geometry
 
 Riemannian manifolds, Lie groups, differential geometry, projective geometry,
-fiber bundles, ODE integrators, and tensors — all over the binary fixed-point
+fiber bundles, ODE integrators, and tensors: all over the binary fixed-point
 types.
 
 ## What it is
@@ -30,25 +30,25 @@ let back = s.exp_map(&p, &v).unwrap();        // ≈ q
 
 ## What's here
 
-- **Manifolds** (`manifold`) — trait `exp_map`, `log_map`, `distance`,
+- **Manifolds** (`manifold`): trait `exp_map`, `log_map`, `distance`,
   `parallel_transport`, `inner_product`: Euclidean, Sphere, Hyperbolic
   (hyperboloid model), SPD, Grassmannian, Stiefel, products.
-- **Lie groups** (`lie_group`) — trait adds `lie_exp`, `lie_log`, `hat`/`vee`,
+- **Lie groups** (`lie_group`): trait adds `lie_exp`, `lie_log`, `hat`/`vee`,
   `adjoint`, `bracket`, `act`: SO(3) via closed-form Rodrigues, SE(3) via
   closed-form V-matrix, plus SO(n), GL(n), O(n), SL(n) via matrix exp/log.
-- **Differential geometry** (`curvature`) — Christoffel symbols,
+- **Differential geometry** (`curvature`): Christoffel symbols,
   Riemann/Ricci/scalar/sectional curvature, geodesic integration, parallel
   transport along curves.
-- **Projective** (`projective`) — homogeneous coordinates, projective transforms,
+- **Projective** (`projective`): homogeneous coordinates, projective transforms,
   cross-ratios, stereographic projection, Möbius transformations (real and
   complex).
-- **Fiber bundles** (`fiber_bundle`) — trivial, vector (connection coefficients,
+- **Fiber bundles** (`fiber_bundle`): trivial, vector (connection coefficients,
   horizontal lift, parallel transport, curvature 2-form), principal (transition
   cocycles).
-- **ODE solvers** (`ode`) — RK4 (fixed step), Dormand-Prince RK45 (adaptive),
+- **ODE solvers** (`ode`): RK4 (fixed step), Dormand-Prince RK45 (adaptive),
   symplectic Störmer-Verlet (energy-preserving). Weighted sums accumulate at the
   compute tier; step halving is an exact bit shift.
-- **Tensors** (`tensor`, `tensor_decompose`) — arbitrary-rank contraction, outer
+- **Tensors** (`tensor`, `tensor_decompose`): arbitrary-rank contraction, outer
   product, trace, index raising/lowering via a metric, (anti)symmetrization;
   decompositions `truncated_svd`, `tucker_decompose` (HOSVD), `cp_decompose` (ALS).
 
@@ -76,4 +76,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

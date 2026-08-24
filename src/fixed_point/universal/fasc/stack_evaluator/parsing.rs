@@ -1,4 +1,4 @@
-//! Parsing — string literal to StackValue conversion
+//! Parsing: string literal to StackValue conversion
 //!
 //! 5-phase parsing: fractions, repeating decimals, hex/binary, decimals, named constants, integers.
 //! Mode routing integration for compute_mode override.
@@ -17,7 +17,7 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalN
 use crate::fixed_point::universal::ConstantId;
 
 impl StackEvaluator {
-    /// Parse literal string — single-pass byte classifier
+    /// Parse literal string: single-pass byte classifier
     ///
     /// **ARCHITECTURE**: Prefix checks + single byte scan + dispatch. Zero heap allocation.
     /// Replaces former CHD hash (~100ns) + NumberClassifier (~300-500ns) pipeline.
@@ -98,7 +98,7 @@ impl StackEvaluator {
     /// All profiles accept up to 38 fractional digits via the i128 path.
     /// The decimal→binary conversion naturally rounds to the closest
     /// representable Q-format value. Do NOT truncate to profile precision
-    /// before conversion — truncation introduces different rounding than
+    /// before conversion: truncation introduces different rounding than
     /// the mathematically correct round-to-nearest.
     pub(crate) fn parse_decimal(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
         let dot_pos = s.find('.').ok_or(OverflowDetected::ParseError)?;
@@ -456,7 +456,7 @@ impl StackEvaluator {
     /// for alphabetic inputs. O(1) match on ~10 known constant names.
     ///
     /// **PRECISION**: Uses SymbolicConstants high-precision methods (profile-aware:
-    /// 19/38/77 decimals) — NOT crude rational approximations.
+    /// 19/38/77 decimals), NOT crude rational approximations.
     ///
     /// **EXAMPLES**: "pi" → π (full precision), "e" → Euler's number, "sqrt2" → √2
     pub(crate) fn parse_named_constant(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
@@ -500,7 +500,7 @@ impl StackEvaluator {
 
     /// Parse value into ternary domain via `0t` prefix.
     ///
-    /// **FLOAT-FREE**: Pure integer parsing — no f64 contamination
+    /// **FLOAT-FREE**: Pure integer parsing, no f64 contamination
     /// **ALGORITHM**: Converts decimal string to base-3 scaled integer via UniversalTernaryFixed
     /// **STORAGE**: Ternary(tier, raw_value) where raw_value = value × 3^frac_trits
     /// **PREFIX**: `0t1.5` → parse "1.5" → base-3 fixed-point representation

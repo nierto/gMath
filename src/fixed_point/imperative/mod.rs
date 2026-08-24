@@ -1,6 +1,6 @@
 //! Imperative numeric types for direct computation.
 //!
-//! Provides `FixedPoint`, `FixedVector`, and `FixedMatrix` — Copy-able (FixedPoint)
+//! Provides `FixedPoint`, `FixedVector`, and `FixedMatrix`: Copy-able (FixedPoint)
 //! or Clone-able (Vector/Matrix) types with arithmetic operators and transcendentals.
 
 mod fixed_point;

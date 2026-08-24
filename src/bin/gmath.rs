@@ -1,8 +1,8 @@
-//! gmath — deterministic fixed-point calculator over the g_math crate.
+//! gmath: deterministic fixed-point calculator over the g_math crate.
 //!
 //! This is the REAL g_math FASC (canonical fixed-point) engine exposed as a
 //! CLI: zero-float, reproducible arithmetic with exact rationals and
-//! transcendentals. The same inputs produce the same result on every machine —
+//! transcendentals. The same inputs produce the same result on every machine,
 //! which is the whole point of the ecosystem. It replaces the former bash/`bc`
 //! demo, which had nothing to do with g_math.
 //!

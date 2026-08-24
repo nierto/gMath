@@ -1,4 +1,4 @@
-//! # TQ1.9 — Compact Ternary Arithmetic Module
+//! # TQ1.9: Compact Ternary Arithmetic Module
 //!
 //! Standalone fixed-point ternary operations optimized for throughput.
 //! Decoupled from FASC routing, shadow values, and domain dispatch.
@@ -12,15 +12,15 @@
 //!
 //! ## Operations
 //!
-//! - [`TQ19Matrix::matvec`] — matrix-vector product with compute-tier accumulation
-//! - [`TQ19Matrix::matvec_batch`] — batch matvec (weight matrix stays in cache)
-//! - [`tq19_dot`] — single dot product (weights × activations / SCALE)
-//! - `matvec_q2f` family (q16_16/q32_32) — wide-output matvec at 2·FRAC_BITS
+//! - [`TQ19Matrix::matvec`]: matrix-vector product with compute-tier accumulation
+//! - [`TQ19Matrix::matvec_batch`]: batch matvec (weight matrix stays in cache)
+//! - [`tq19_dot`]: single dot product (weights × activations / SCALE)
+//! - `matvec_q2f` family (q16_16/q32_32): wide-output matvec at 2·FRAC_BITS
 //!   precision with exactly one rounding; `q2f >> narrowing division`
 //!   reproduces the narrow matvec bit-for-bit
-//! - [`trit_dot`] — zero-multiply dot for pre-decoded trits
-//! - [`packed_trit_dot`] — zero-multiply dot for packed trits (5/byte)
-//! - [`packed_trit_matvec`] — matvec for packed trit format with per-row scales
+//! - [`trit_dot`]: zero-multiply dot for pre-decoded trits
+//! - [`packed_trit_dot`]: zero-multiply dot for packed trits (5/byte)
+//! - [`packed_trit_matvec`]: matvec for packed trit format with per-row scales
 //!
 //! All operations accumulate at ComputeStorage (tier N+1) with a single
 //! division/downscale at the end, matching gMath's precision contract.
@@ -233,7 +233,7 @@ impl TQ19Matrix {
 
     /// Wide-output matvec: each row at 2·FRAC_BITS fractional precision with exactly one rounding.
     ///
-    /// Returns `trunc(Σ W[i][j]·x[j] · 2^FRAC_BITS / SCALE)` per row — the
+    /// Returns `trunc(Σ W[i][j]·x[j] · 2^FRAC_BITS / SCALE)` per row: the
     /// exact accumulator value the narrow epilogue would round to storage.
     /// **Narrowing contract**: `q2f / (1 << FRAC_BITS)` (Rust truncating
     /// division) reproduces [`TQ19Matrix::matvec`] bit-for-bit. Same inner
@@ -280,7 +280,7 @@ pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage
 
 /// Wide-output TQ1.9 dot: the exact dot value at 2·FRAC_BITS fractional precision.
 ///
-/// `trunc(sum(weights[i]·activations[i]) · 2^FRAC_BITS / SCALE)` — exactly one
+/// `trunc(sum(weights[i]·activations[i]) · 2^FRAC_BITS / SCALE)`: exactly one
 /// rounding. `q2f / (1 << FRAC_BITS)` reproduces [`tq19_dot`] bit-for-bit.
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[inline]
@@ -290,7 +290,7 @@ pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeSt
 
 /// Zero-multiply trit dot product for pre-decoded trits.
 ///
-/// Trits must be `i8` values in {-1, 0, +1}. No multiplications —
+/// Trits must be `i8` values in {-1, 0, +1}. No multiplications:
 /// only add, subtract, or skip per element.
 ///
 /// # Panics

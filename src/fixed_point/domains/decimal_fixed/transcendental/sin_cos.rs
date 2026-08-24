@@ -1,4 +1,4 @@
-//! Decimal sine and cosine — Cody-Waite range reduction with decimal π, Horner Taylor.
+//! Decimal sine and cosine: Cody-Waite range reduction with decimal π, Horner Taylor.
 //!
 //! # Algorithm
 //!
@@ -122,7 +122,7 @@ const fn max_trig_taylor_terms() -> u32 {
     (DECIMAL_COMPUTE_DP as u32 / 2) + 20
 }
 
-/// Compute both `sin(x)` and `cos(x)` at compute dp — single shared range reduction.
+/// Compute both `sin(x)` and `cos(x)` at compute dp: single shared range reduction.
 pub fn decimal_sincos(x: ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
     if decimal_compute_is_zero(&x) {
         return Ok((decimal_compute_zero(), decimal_compute_one()));

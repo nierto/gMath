@@ -1,4 +1,4 @@
-//! FixedMatrix — row-major matrix of FixedPoint values.
+//! FixedMatrix: row-major matrix of FixedPoint values.
 //!
 //! All matrix arithmetic uses compute-tier accumulation for precision:
 //! matrix multiply, matrix-vector multiply accumulate at tier N+1 and

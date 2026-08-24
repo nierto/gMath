@@ -1,4 +1,4 @@
-//! Decimal square root — `sqrt(x)` via Newton-Raphson at compute dp.
+//! Decimal square root: `sqrt(x)` via Newton-Raphson at compute dp.
 //!
 //! # Algorithm
 //!

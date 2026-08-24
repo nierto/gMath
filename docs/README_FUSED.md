@@ -1,12 +1,12 @@
 # Fused operations
 
 Whole computation patterns evaluated at the wide compute tier with a single
-downscale at the end — no intermediate materialization.
+downscale at the end, no intermediate materialization.
 
 ## What it is
 
 `g_math::fixed_point::imperative::fused` collects the accumulation patterns common
-in numeric and ML code — norms, distances, softmax, normalization, activations —
+in numeric and ML code (norms, distances, softmax, normalization, activations) 
 and runs each entirely at tier N+1, materializing to storage exactly once. This
 removes both the per-step rounding and the per-step materialization cost that a
 naïve `dot(x, x).sqrt()` or a materialized-weights softmax would incur. It is the
@@ -37,7 +37,7 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | Function | Computes |
 | -------- | -------- |
 | `sqrt_sum_sq(&[x])` | √(Σ xᵢ²) |
-| `inv_sqrt_sum_sq(&[x])` | 1/√(Σ xᵢ²) — the reciprocal norm; one call + N multiplies replaces N per-component divisions in normalization |
+| `inv_sqrt_sum_sq(&[x])` | 1/√(Σ xᵢ²): the reciprocal norm; one call + N multiplies replaces N per-component divisions in normalization |
 | `euclidean_distance(&a, &b)` | √(Σ (aᵢ−bᵢ)²) |
 | `softmax(&scores)` | numerically stable softmax |
 | `softmax_mix(&scores, &values)` | softmax(scores) · V, weights never materialized to storage |
@@ -49,7 +49,7 @@ the value mix imposes a 2^−FRAC_BITS resolution floor: under a low-fractional-
 profile a small attention weight rounds to zero and its value row vanishes from
 the mix. Keeping the weights at the compute tier through the accumulation removes
 that floor. It returns the mixed output plus a storage-quantized copy of the
-weights for observers (attention recording, diagnostics) — the observer copy is
+weights for observers (attention recording, diagnostics): the observer copy is
 not what the mix used.
 
 ## Public API
@@ -62,7 +62,7 @@ rather than wrapping silently.
 ## Behaviour & limits
 
 - Same numeric result as the equivalent unfused sequence, minus the intermediate
-  rounding — never worse, and strictly better where a materialization floor would
+  rounding, never worse, and strictly better where a materialization floor would
   otherwise bite.
 - `softmax_mix` requires every value row to have the same length; a ragged matrix
   is a programming error and panics.
@@ -79,4 +79,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

@@ -1,19 +1,19 @@
 //! Mode Routing System (`compute_mode:output_mode`)
 //!
 //! Controls which domain computes and which domain formats the result.
-//! Default is `Auto:Auto` — existing parse_literal() routing is untouched.
+//! Default is `Auto:Auto`: existing parse_literal() routing is untouched.
 //!
 //! **Examples**:
-//! - `"auto:auto"` — default behavior, no override
-//! - `"binary:ternary"` — parse all inputs as Binary, convert result to Ternary
-//! - `"decimal:symbolic"` — parse all inputs as Decimal, convert result to Symbolic
+//! - `"auto:auto"`: default behavior, no override
+//! - `"binary:ternary"`: parse all inputs as Binary, convert result to Ternary
+//! - `"decimal:symbolic"`: parse all inputs as Decimal, convert result to Symbolic
 
 use core::cell::Cell;
 
 /// Which domain computes the expression
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComputeMode {
-    /// Existing parse_literal() routing — DEFAULT
+    /// Existing parse_literal() routing: DEFAULT
     Auto,
     /// All inputs → Binary domain
     Binary,
@@ -28,7 +28,7 @@ pub enum ComputeMode {
 /// Which domain formats the result
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputMode {
-    /// Return as-is (whatever domain computed) — DEFAULT
+    /// Return as-is (whatever domain computed): DEFAULT
     Auto,
     /// Convert result to Binary before returning
     Binary,

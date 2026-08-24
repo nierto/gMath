@@ -1,4 +1,4 @@
-//! Row-scaled TQ1.9 ("TQ1.9-R") — per-row quantization scales.
+//! Row-scaled TQ1.9 ("TQ1.9-R"): per-row quantization scales.
 //!
 //! Motivation: plain TQ19 quantizes every
 //! tensor with ONE global step (1/SCALE ≈ 5.1e-5, zero-floor 2.5e-5).
@@ -13,12 +13,12 @@
 //! Semantics: `row_value = raw × s_row`, with `raw = round(w / s_row)`,
 //! `s_row = max|w_row| / MAX_RAW`. Scales are stored RELATIVE to the
 //! global step as unsigned Q32.32: `s_rel = s_row × SCALE`, so
-//! `matvec_out = tq19_dot(raw_row, x) × s_rel` — the existing (SIMD)
+//! `matvec_out = tq19_dot(raw_row, x) × s_rel`: the existing (SIMD)
 //! `tq19_dot` is reused verbatim and the scale is applied to its result
 //! with an i128 multiply and >>32 arithmetic shift. Fully deterministic;
 //! truncation error ≤ ~1.5 storage units per output element.
 //!
-//! Profile support: q16_16 (realtime) and q32_32 (compact) — the i128
+//! Profile support: q16_16 (realtime) and q32_32 (compact): the i128
 //! multiply covers BinaryStorage = i32/i64. Wider profiles need bigint
 //! scale arithmetic and are deliberately not implemented yet.
 
@@ -129,11 +129,11 @@ impl RowScaledTQ19 {
 
     /// Wide-output row-scaled matvec: each row at 2·FRAC_BITS precision.
     ///
-    /// `floor(tq19_dot_q2f(row, x) · s_rel / 2^32)` — the wide dot keeps
+    /// `floor(tq19_dot_q2f(row, x) · s_rel / 2^32)`: the wide dot keeps
     /// FRAC_BITS extra fractional bits *through* the scale multiply, so this
     /// is strictly more precise than scaling the narrowed dot. Consequence
     /// (documented deliberately): narrowing this result can differ from
-    /// [`Self::matvec`] by ±1 storage LSB for non-unit scales — the narrow
+    /// [`Self::matvec`] by ±1 storage LSB for non-unit scales: the narrow
     /// path scales an already-rounded dot. For `s_rel = 1.0` (`1u64 << 32`)
     /// the two agree bit-for-bit.
     pub fn matvec_q2f(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
@@ -290,7 +290,7 @@ mod tests {
     }
 
     /// Independent oracle: recompute the matvec with plain i128 arithmetic
-    /// (no tq19_dot, no SIMD) — Σ raw·x accumulated at i128, then the same
+    /// (no tq19_dot, no SIMD): Σ raw·x accumulated at i128, then the same
     /// Q32.32 multiply-shift. Pins both the tq19_dot reuse and the scale
     /// application against a path that shares no code with the kernel.
     #[test]

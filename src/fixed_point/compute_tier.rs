@@ -1,4 +1,4 @@
-//! # Compute-Tier Transcendentals — Public Wide-Precision Surface
+//! # Compute-Tier Transcendentals: Public Wide-Precision Surface
 //!
 //! Direct access to the tier-N+1 transcendental engines that back every
 //! other API in this crate, operating on raw [`ComputeStorage`] values at
@@ -16,7 +16,7 @@
 //!
 //! ## Contract
 //!
-//! - Same engines, same rounding as the canonical and imperative paths —
+//! - Same engines, same rounding as the canonical and imperative paths;
 //!   results are path-independent with the rest of the crate.
 //! - `exp` **saturates** at [`ceiling`] when the true result exceeds the
 //!   compute tier's range; it never wraps. Detect saturation by comparing
@@ -66,7 +66,7 @@ pub fn one() -> ComputeStorage {
     make_compute_int(1)
 }
 
-/// The compute tier's maximum value — the saturation ceiling for [`exp`].
+/// The compute tier's maximum value: the saturation ceiling for [`exp`].
 #[inline]
 pub fn ceiling() -> ComputeStorage {
     compute_ceiling()
@@ -185,7 +185,7 @@ pub fn softplus(x: ComputeStorage) -> ComputeStorage {
 /// `ln(1 + x)` at the compute tier.
 ///
 /// The `1 + x` addition is exact in fixed point (integer add), so unlike
-/// floating point there is no cancellation regime — this is a convenience
+/// floating point there is no cancellation regime; this is a convenience
 /// wrapper with a domain check, not a different algorithm.
 ///
 /// # Panics

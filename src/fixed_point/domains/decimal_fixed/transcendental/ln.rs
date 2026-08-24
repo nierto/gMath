@@ -1,4 +1,4 @@
-//! Decimal natural logarithm — `ln(x)` at compute dp.
+//! Decimal natural logarithm: `ln(x)` at compute dp.
 //!
 //! # Algorithm
 //!

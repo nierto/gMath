@@ -606,7 +606,7 @@ fn taylor_series_q256_256(remainder: (u128, u128)) -> I512 {
 /// Multiply two NON-NEGATIVE I1024 values in Q512.512 format (I2048 wide).
 ///
 /// 0.5.0 audit: renamed from `multiply_i1024_q512_512`, which SHADOWED the
-/// sign-safe `pub(crate)` helper of the same name in ln_tier_n_plus_1 —
+/// sign-safe `pub(crate)` helper of the same name in ln_tier_n_plus_1;
 /// this one feeds `mul_to_i2048` raw (unsigned word arithmetic) and is
 /// only correct for non-negative operands. Every exp-internal caller is
 /// positive-by-construction (e^x tables, reduced remainders); the
@@ -850,7 +850,7 @@ pub(crate) fn upscale_q32_to_q64(val: i64) -> i128 {
     { (val as i128) << 32 }
 }
 
-/// exp() for Q32.32 storage (i64) — tier N+1 via Q64.64
+/// exp() for Q32.32 storage (i64): tier N+1 via Q64.64
 ///
 /// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
 /// For Q32.32 profile: BinaryStorage = i64
@@ -861,20 +861,20 @@ pub fn exp_binary_i64(x: i64) -> i64 {
     downscale_q64_to_q32(result_q64)
 }
 
-/// exp() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// exp() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn exp_binary_i128(x: i128) -> i128 {
     exp_q64_64_native(x)
 }
 
-/// exp() for Q32.32 profile — I256 is tier N+1 (Q128.128)
+/// exp() for Q32.32 profile: I256 is tier N+1 (Q128.128)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn exp_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute exp at Q128.128 natively
     exp_q128_128_native(x)
 }
 
-/// exp() for Q32.32 profile — I512 wrapper
+/// exp() for Q32.32 profile: I512 wrapper
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn exp_binary_i512(x: I512) -> I512 {
     // Downscale to Q128.128, compute at tier N+1, upscale back

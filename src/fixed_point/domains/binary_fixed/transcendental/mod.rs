@@ -1,8 +1,8 @@
-//! Transcendental Functions — Fixed-Point Implementations
+//! Transcendental Functions: Fixed-Point Implementations
 //!
 //! 18 transcendental functions across 6 engines, computed at tier N+1 for full storage-tier precision.
 //!
-//! Dedicated engines: `exp`, `ln`, `sqrt`, `sin_cos`, `atan`. (pow is composed as exp(y·ln x) at the compute tier — the dead dedicated engine was removed in 0.5.0.)
+//! Dedicated engines: `exp`, `ln`, `sqrt`, `sin_cos`, `atan`. (pow is composed as exp(y·ln x) at the compute tier: the dead dedicated engine was removed in 0.5.0.)
 //! FASC-composed: `tan`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `atan2`.
 //!
 //! | Profile    | Format    | Decimals | ULP |

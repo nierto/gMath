@@ -1,4 +1,4 @@
-//! Decimal arctangent — `atan(x)` and `atan2(y, x)` at compute dp.
+//! Decimal arctangent: `atan(x)` and `atan2(y, x)` at compute dp.
 //!
 //! # Algorithm
 //!
@@ -17,7 +17,7 @@
 //! needs π/2, but we can avoid calling `atan` on values ≥ 1 for most use cases by
 //! accepting a direct input in `[-1, 1]`. For the `|x| > 1` case, the caller must
 //! supply `pi_half` (which `sin_cos` computes via Machin's formula using this same
-//! `decimal_atan` function — one-time bootstrap).
+//! `decimal_atan` function; one-time bootstrap).
 
 use super::decimal_compute::{
     ComputeStorage, DECIMAL_COMPUTE_DP,
@@ -142,7 +142,7 @@ fn atan_reduced(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
 
 /// Approximation of `tan(π/16) ≈ 0.19891236738...` for threshold comparisons.
 ///
-/// Exact value not needed — this is a threshold, not a computational constant.
+/// Exact value not needed; this is a threshold, not a computational constant.
 /// We use 0.2 (conservative bound).
 fn tan_pi_over_16_approx() -> ComputeStorage {
     // 0.2 at compute dp = 2 × 10^(dp-1)

@@ -6,6 +6,13 @@ Built by **Niels Erik Toren** · published as `g_math` on [crates.io](https://cr
 
 ---
 
+> **Upgrading from 0.4.x?** 0.5.0 is more accurate, and as a side effect some
+> results end in a different final digit. It matters only if you store, hash, or
+> compare results across versions. The four-line summary is at the top of
+> [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ## What it is
 
 `g_math` computes with scaled integers only. No `f32`/`f64` appears anywhere in
@@ -74,7 +81,7 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
 - **Two computation paths** - a routed canonical layer for mixed or chained work
   and a direct imperative layer for known-domain hot loops. Results are
   path-independent: one rounding rule per domain on every path (unified
-  0.5.0, permanently test-gated — see [CONTRACT.md](CONTRACT.md) §3).
+  0.5.0, permanently test-gated: see [CONTRACT.md](CONTRACT.md) §3).
 - **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
   and Lie groups, and standalone TQ1.9 ternary inference.
 - **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;

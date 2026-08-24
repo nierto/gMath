@@ -31,15 +31,15 @@ pub enum LazyExpr {
     /// String literal (compile-time or static reference)
     Literal(&'static str),
 
-    /// Pre-evaluated value — enables chaining results across evaluate() calls.
+    /// Pre-evaluated value: enables chaining results across evaluate() calls.
     ///
     /// Preserves full precision + shadow from previous computation.
-    /// The evaluator passes this through directly — no re-parsing, no precision loss.
+    /// The evaluator passes this through directly, no re-parsing, no precision loss.
     ///
     /// ```rust
     /// use g_math::canonical::{gmath, evaluate, LazyExpr};
     /// let balance = evaluate(&(gmath("1000.00") * gmath("1.05"))).unwrap();
-    /// // Feed result back into next expression — shadow + precision preserved
+    /// // Feed result back into next expression: shadow + precision preserved
     /// let next = evaluate(&(LazyExpr::from(balance) * gmath("1.05"))).unwrap();
     /// ```
     Value(Box<super::stack_evaluator::StackValue>),
@@ -151,7 +151,7 @@ impl LazyExpr {
 
 /// Convert a pre-evaluated StackValue into a LazyExpr for chaining.
 ///
-/// Preserves full precision and shadow — no string round-trip.
+/// Preserves full precision and shadow, no string round-trip.
 impl From<super::stack_evaluator::StackValue> for LazyExpr {
     fn from(val: super::stack_evaluator::StackValue) -> Self {
         LazyExpr::Value(Box::new(val))

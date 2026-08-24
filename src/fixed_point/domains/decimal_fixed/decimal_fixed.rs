@@ -619,7 +619,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: super::transcendental::decimal_compute_to_i128(val, DECIMALS) }
     }
 
-    /// `exp(x)` — native decimal exponential at full compute-tier precision.
+    /// `exp(x)`: native decimal exponential at full compute-tier precision.
     pub fn exp(&self) -> Self {
         use super::transcendental::decimal_exp;
         let compute = self.to_decimal_compute();
@@ -627,7 +627,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `ln(x)` — native decimal natural logarithm. Requires x > 0.
+    /// `ln(x)`: native decimal natural logarithm. Requires x > 0.
     pub fn ln(&self) -> Self {
         use super::transcendental::decimal_ln;
         let compute = self.to_decimal_compute();
@@ -635,7 +635,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `sqrt(x)` — native decimal square root. Requires x >= 0.
+    /// `sqrt(x)`: native decimal square root. Requires x >= 0.
     pub fn sqrt(&self) -> Self {
         use super::transcendental::decimal_sqrt;
         let compute = self.to_decimal_compute();
@@ -643,7 +643,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `sin(x)` — native decimal sine.
+    /// `sin(x)`: native decimal sine.
     pub fn sin(&self) -> Self {
         use super::transcendental::decimal_sin;
         let compute = self.to_decimal_compute();
@@ -651,7 +651,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `cos(x)` — native decimal cosine.
+    /// `cos(x)`: native decimal cosine.
     pub fn cos(&self) -> Self {
         use super::transcendental::decimal_cos;
         let compute = self.to_decimal_compute();
@@ -659,7 +659,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `sincos(x)` — fused sine and cosine with single range reduction.
+    /// `sincos(x)`: fused sine and cosine with single range reduction.
     pub fn sincos(&self) -> (Self, Self) {
         use super::transcendental::decimal_sincos;
         let compute = self.to_decimal_compute();
@@ -677,7 +677,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: decimal_compute_to_i128(q, DECIMALS) }
     }
 
-    /// `atan(x)` — native decimal arctangent.
+    /// `atan(x)`: native decimal arctangent.
     pub fn atan(&self) -> Self {
         use super::transcendental::decimal_atan;
         let compute = self.to_decimal_compute();
@@ -685,7 +685,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `atan2(y, x)` — native decimal two-argument arctangent.
+    /// `atan2(y, x)`: native decimal two-argument arctangent.
     pub fn atan2(&self, x: Self) -> Self {
         use super::transcendental::decimal_atan2;
         let y_compute = self.to_decimal_compute();
@@ -737,7 +737,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: decimal_compute_to_i128(result, DECIMALS) }
     }
 
-    /// `sinh(x)` — fused (exp(x) - exp(-x)) / 2 at the compute tier.
+    /// `sinh(x)`: fused (exp(x) - exp(-x)) / 2 at the compute tier.
     pub fn sinh(&self) -> Self {
         use super::transcendental::decimal_sinhcosh;
         use super::transcendental::decimal_compute::decimal_compute_to_i128;
@@ -745,7 +745,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: decimal_compute_to_i128(s, DECIMALS) }
     }
 
-    /// `cosh(x)` — fused (exp(x) + exp(-x)) / 2 at the compute tier.
+    /// `cosh(x)`: fused (exp(x) + exp(-x)) / 2 at the compute tier.
     pub fn cosh(&self) -> Self {
         use super::transcendental::decimal_sinhcosh;
         use super::transcendental::decimal_compute::decimal_compute_to_i128;
@@ -753,12 +753,12 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value: decimal_compute_to_i128(c, DECIMALS) }
     }
 
-    /// `sinhcosh(x)` — fused hyperbolic pair sharing one exp-pair evaluation at
+    /// `sinhcosh(x)`: fused hyperbolic pair sharing one exp-pair evaluation at
     /// decimal compute tier.
     ///
     /// Mirrors `FixedPoint::sinhcosh` in the binary domain. sinh and cosh are
     /// derived from the same `(exp(x), exp(-x))` pair at compute tier, so their
-    /// rounding bias is correlated — important for expressions of the form
+    /// rounding bias is correlated: important for expressions of the form
     /// `cosh(θ)·p + (sinh(θ)/θ)·v`.
     pub fn sinhcosh(&self) -> (Self, Self) {
         use super::transcendental::decimal_sinhcosh;
@@ -767,7 +767,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
     }
 
-    /// `tanh(x)` — (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to
+    /// `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to
     /// ±1 when exp(2x) overflows (|tanh| is then 1 to full storage precision).
     pub fn tanh(&self) -> Self {
         use super::transcendental::decimal_exp;

@@ -86,7 +86,7 @@ impl BinaryTier4 {
     }
 
     /// Checked Q128.128 multiply (0.5.0 item 1): the unchecked `mul` above
-    /// silently truncated I512→I256 on overflow — 1e20 × 1e20 on the
+    /// silently truncated I512→I256 on overflow: 1e20 × 1e20 on the
     /// balanced profile returned wrapped garbage. The UGOD ladder now uses
     /// this and promotes to Tier 5 on None.
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {
@@ -109,7 +109,7 @@ impl BinaryTier5 {
         Self { value: result.as_i512() }
     }
 
-    /// Checked Q256.256 multiply — see BinaryTier4::checked_mul (0.5.0).
+    /// Checked Q256.256 multiply: see BinaryTier4::checked_mul (0.5.0).
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {
         let wide = I1024::from_i512(self.value) * I1024::from_i512(other.value);
         let round_bit = (wide >> 255) & I1024::from_i128(1);
@@ -127,7 +127,7 @@ impl BinaryTier6 {
         Self { value: I1024::mul_q512_512(self.value, other.value) }
     }
 
-    /// Checked Q512.512 multiply — ladder top (0.5.0 item 1): a product
+    /// Checked Q512.512 multiply: ladder top (0.5.0 item 1): a product
     /// whose I2048 result exceeds I1024 is a TierOverflow for the caller
     /// (FASC then falls back to exact rational), never a silent wrap.
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {

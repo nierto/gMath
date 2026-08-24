@@ -65,7 +65,7 @@ pub fn atan_binary_i512(x: I512) -> I512 {
     atan_q256_256(x_q256)
 }
 
-/// atan2(y, x) — full quadrant arctangent in Q64.64
+/// atan2(y, x): full quadrant arctangent in Q64.64
 #[cfg(table_format = "q64_64")]
 pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
     atan2_q64_64(y, x)
@@ -177,7 +177,7 @@ fn atan_core_q64_64(x: i128) -> i128 {
     atan_val
 }
 
-/// atan2(y, x) in Q64.64 — handles all quadrants
+/// atan2(y, x) in Q64.64: handles all quadrants
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn atan2_q64_64(y: i128, x: i128) -> i128 {
     if x == 0 && y == 0 {
@@ -955,7 +955,7 @@ fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
 // Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
 // ============================================================================
 
-/// atan() for Q32.32 storage (i64) — tier N+1 via Q64.64
+/// atan() for Q32.32 storage (i64): tier N+1 via Q64.64
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i64(x: i64) -> i64 {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
@@ -983,13 +983,13 @@ pub fn atan2_compute_tier_i64(y: i64, x: i64) -> i64 {
     downscale_q64_to_q32(result_q64)
 }
 
-/// atan() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// atan() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i128(x: i128) -> i128 {
     atan_q64_64(x)
 }
 
-/// atan2() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// atan2() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
     atan2_q64_64(y, x)

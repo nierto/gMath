@@ -728,7 +728,7 @@ pub fn cos_compute_tier_i256(x: I256) -> I256 {
 }
 
 /// Fused sin+cos at compute tier (single shared range reduction).
-/// Returns (sin, cos) — saves one range reduction vs calling sin + cos separately.
+/// Returns (sin, cos): saves one range reduction vs calling sin + cos separately.
 #[cfg(table_format = "q256_256")]
 pub fn sincos_compute_tier_i1024(x: I1024) -> (I1024, I1024) {
     sincos_q512_512(x)
@@ -984,7 +984,7 @@ fn taylor_cos_q256_256_impl(r: I512) -> I512 {
 // Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
 // ============================================================================
 
-/// sin() for Q32.32 storage (i64) — tier N+1 via Q64.64
+/// sin() for Q32.32 storage (i64): tier N+1 via Q64.64
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_binary_i64(x: i64) -> i64 {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
@@ -993,7 +993,7 @@ pub fn sin_binary_i64(x: i64) -> i64 {
     downscale_q64_to_q32(result_q64)
 }
 
-/// cos() for Q32.32 storage (i64) — tier N+1 via Q64.64
+/// cos() for Q32.32 storage (i64): tier N+1 via Q64.64
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_binary_i64(x: i64) -> i64 {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
@@ -1029,13 +1029,13 @@ pub fn sincos_compute_tier_i64(x: i64) -> (i64, i64) {
     (downscale_q64_to_q32(sin_val), downscale_q64_to_q32(cos_val))
 }
 
-/// sin() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// sin() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_binary_i128(x: i128) -> i128 {
     sin_q64_64(x)
 }
 
-/// cos() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// cos() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_binary_i128(x: i128) -> i128 {
     cos_q64_64(x)

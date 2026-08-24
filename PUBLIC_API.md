@@ -1,6 +1,6 @@
 # Public API
 
-Generated from source by `scripts/gen-public-api.rs` — do not edit by hand. Regenerate with: `rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /tmp/gen-public-api`
+Generated from source by `scripts/gen-public-api.rs`. Do not edit by hand. Regenerate with: `rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /tmp/gen-public-api`
 
 This is a **pragmatic source scan** of a curated set of surface files, not a compiler-verified export list. It lists `pub` free items and impl methods with the first line of their doc comment. `pub use` re-exports, `#[cfg(test)]` items, and `#[doc(hidden)]` items are omitted, as are impls of std/derive traits. See the header of `scripts/gen-public-api.rs` for exact scope and limitations.
 
@@ -13,7 +13,7 @@ Modules: g_math::canonical
 | `set_gmath_mode` | fn | Set compute:output mode. Examples: "binary:ternary", "auto:auto", "decimal:binary" |
 | `reset_gmath_mode` | fn | Reset to default Auto:Auto mode |
 
-**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
 | Item | Re-exported from |
 | --- | --- |
@@ -39,7 +39,7 @@ Modules: g_math::canonical
 
 Modules: FixedPoint (re-exported at g_math::fixed_point)
 
-**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
 | Item | Re-exported from |
 | --- | --- |
@@ -60,48 +60,48 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `is_zero` | Check if zero. |
 | `from_f32` | Create from an f32 value. |
 | `from_f64` | Create from an f64 value. |
-| `to_f32` | Convert to f32 (lossy — for display/interop only). |
-| `to_f64` | Convert to f64 (lossy — for display/interop only). |
+| `to_f32` | Convert to f32 (lossy: for display/interop only). |
+| `to_f64` | Convert to f64 (lossy: for display/interop only). |
 | `from_str` | Parse from a decimal string (e.g., "3.14159"). |
 | `exp` | e^x |
 | `ln` | ln(x), x > 0 |
 | `sqrt` | sqrt(x), x >= 0 |
 | `sin` | sin(x) |
 | `cos` | cos(x) |
-| `sincos` | Fused (sin(x), cos(x)) — single range reduction, ~2× faster than separate calls. |
-| `tan` | tan(x) = sin(x) / cos(x) — direct composition, no FASC |
+| `sincos` | Fused (sin(x), cos(x)): single range reduction, ~2× faster than separate calls. |
+| `tan` | tan(x) = sin(x) / cos(x): direct composition, no FASC |
 | `atan` | atan(x) |
-| `asin` | asin(x) = atan(x / sqrt(1 - x^2)), \|x\| <= 1 — direct composition |
-| `acos` | acos(x) = pi/2 - asin(x), \|x\| <= 1 — direct composition |
-| `sinh` | sinh(x) = (exp(x) - exp(-x)) / 2 — direct composition |
-| `cosh` | cosh(x) = (exp(x) + exp(-x)) / 2 — direct composition |
-| `sinhcosh` | Fused (sinh(x), cosh(x)) — single shared exp-pair evaluation at compute tier. |
-| `tanh` | tanh(x) = (exp(2x) - 1) / (exp(2x) + 1) — direct composition |
-| `asinh` | asinh(x) = ln(x + sqrt(x^2 + 1)) — direct composition |
-| `acosh` | acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1 — direct composition |
-| `atanh` | atanh(x) = ln((1+x)/(1-x)) / 2, \|x\| < 1 — direct composition |
-| `pow` | x^y = exp(y * ln(x)) — direct composition |
-| `atan2` | atan2(self=y, x) — direct binary engine |
-| `try_exp` | Fallible e^x — returns `Err(TierOverflow)` if result exceeds storage tier. |
-| `try_ln` | Fallible ln(x) — returns `Err(DomainError)` if x <= 0. |
+| `asin` | asin(x) = atan(x / sqrt(1 - x^2)), \|x\| <= 1: direct composition |
+| `acos` | acos(x) = pi/2 - asin(x), \|x\| <= 1: direct composition |
+| `sinh` | sinh(x) = (exp(x) - exp(-x)) / 2: direct composition |
+| `cosh` | cosh(x) = (exp(x) + exp(-x)) / 2: direct composition |
+| `sinhcosh` | Fused (sinh(x), cosh(x)): single shared exp-pair evaluation at compute tier. |
+| `tanh` | tanh(x) = (exp(2x) - 1) / (exp(2x) + 1): direct composition |
+| `asinh` | asinh(x) = ln(x + sqrt(x^2 + 1)): direct composition |
+| `acosh` | acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1: direct composition |
+| `atanh` | atanh(x) = ln((1+x)/(1-x)) / 2, \|x\| < 1: direct composition |
+| `pow` | x^y = exp(y * ln(x)): direct composition |
+| `atan2` | atan2(self=y, x): direct binary engine |
+| `try_exp` | Fallible e^x: returns `Err(TierOverflow)` if result exceeds storage tier. |
+| `try_ln` | Fallible ln(x): returns `Err(DomainError)` if x <= 0. |
 | `inv_sqrt` | 1/√x computed at compute tier without materializing √x at storage. |
-| `try_inv_sqrt` | Fallible 1/√x — `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if |
-| `try_sqrt` | Fallible sqrt(x) — returns `Err(DomainError)` if x < 0. |
+| `try_inv_sqrt` | Fallible 1/√x: `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if |
+| `try_sqrt` | Fallible sqrt(x): returns `Err(DomainError)` if x < 0. |
 | `try_sin` | Fallible sin(x). |
 | `try_cos` | Fallible cos(x). |
-| `try_sincos` | Fused sin+cos — single shared range reduction at compute tier. |
-| `try_sinhcosh` | Fallible fused sinh+cosh — single shared exp-pair at compute tier. |
+| `try_sincos` | Fused sin+cos: single shared range reduction at compute tier. |
+| `try_sinhcosh` | Fallible fused sinh+cosh: single shared exp-pair at compute tier. |
 | `sincos_wide` | Fused sin+cos for wide-range angles that exceed storage-tier integer range. |
-| `try_tan` | Fallible tan(x) = sin(x)/cos(x) — `Err(DomainError)` if cos(x) is zero |
+| `try_tan` | Fallible tan(x) = sin(x)/cos(x): `Err(DomainError)` if cos(x) is zero |
 | `try_atan` | Fallible atan(x). |
-| `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)) — `Err(DomainError)` if \|x\| > 1. |
-| `try_acos` | Fallible acos(x) = π/2 - asin(x) — `Err(DomainError)` if \|x\| > 1. |
-| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2 — `Err(TierOverflow)` when |
-| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2 — `Err(TierOverflow)` when |
+| `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)): `Err(DomainError)` if \|x\| > 1. |
+| `try_acos` | Fallible acos(x) = π/2 - asin(x): `Err(DomainError)` if \|x\| > 1. |
+| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2: `Err(TierOverflow)` when |
+| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when |
 | `try_tanh` | Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Saturates to exactly |
 | `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
-| `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)) — `Err(DomainError)` if x < 1. |
-| `try_atanh` | Fallible atanh(x) = ln((1+x)/(1-x)) / 2 — `Err(DomainError)` if \|x\| >= 1. |
+| `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1. |
+| `try_atanh` | Fallible atanh(x) = ln((1+x)/(1-x)) / 2: `Err(DomainError)` if \|x\| >= 1. |
 | `try_pow` | Fallible x^y = exp(y * ln(x)). |
 | `try_atan2` | Fallible atan2(self=y, x). |
 
@@ -124,8 +124,8 @@ A dynamically-sized vector of fixed-point values.
 | `dot` | Dot product of two vectors at compute tier (tier N+1). |
 | `length_squared` | Squared length (self . self). |
 | `length` | Length (Euclidean norm). |
-| `length_fused` | Fused length — sqrt(Σ x_i²) entirely at compute tier. |
-| `distance_to` | Fused Euclidean distance to another vector — sqrt(Σ (a_i - b_i)²) |
+| `length_fused` | Fused length: sqrt(Σ x_i²) entirely at compute tier. |
+| `distance_to` | Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²) |
 | `normalize` | Normalize in place (divide each component by length). |
 | `normalized` | Return a normalized copy. |
 | `map` | Apply a function to each component, returning a new vector. |
@@ -218,21 +218,21 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `convert_with_rounding` | Force conversion to different decimal precision with rounding |
 | `to_binary_q256` | Convert DecimalFixed to Q256.256 binary format (I512) |
 | `from_binary_q256` | Create DecimalFixed from Q256.256 binary format (I512) |
-| `exp` | `exp(x)` — native decimal exponential at full compute-tier precision. |
-| `ln` | `ln(x)` — native decimal natural logarithm. Requires x > 0. |
-| `sqrt` | `sqrt(x)` — native decimal square root. Requires x >= 0. |
-| `sin` | `sin(x)` — native decimal sine. |
-| `cos` | `cos(x)` — native decimal cosine. |
-| `sincos` | `sincos(x)` — fused sine and cosine with single range reduction. |
+| `exp` | `exp(x)`: native decimal exponential at full compute-tier precision. |
+| `ln` | `ln(x)`: native decimal natural logarithm. Requires x > 0. |
+| `sqrt` | `sqrt(x)`: native decimal square root. Requires x >= 0. |
+| `sin` | `sin(x)`: native decimal sine. |
+| `cos` | `cos(x)`: native decimal cosine. |
+| `sincos` | `sincos(x)`: fused sine and cosine with single range reduction. |
 | `tan` | `tan(x)` = sin(x)/cos(x), composed entirely at the compute tier. |
-| `atan` | `atan(x)` — native decimal arctangent. |
-| `atan2` | `atan2(y, x)` — native decimal two-argument arctangent. |
+| `atan` | `atan(x)`: native decimal arctangent. |
+| `atan2` | `atan2(y, x)`: native decimal two-argument arctangent. |
 | `asin` | `asin(x)` = atan(x / sqrt(1 - x^2)), composed at the compute tier. |
 | `acos` | `acos(x)` = pi/2 - asin(x), composed at the compute tier (single |
-| `sinh` | `sinh(x)` — fused (exp(x) - exp(-x)) / 2 at the compute tier. |
-| `cosh` | `cosh(x)` — fused (exp(x) + exp(-x)) / 2 at the compute tier. |
-| `sinhcosh` | `sinhcosh(x)` — fused hyperbolic pair sharing one exp-pair evaluation at |
-| `tanh` | `tanh(x)` — (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to |
+| `sinh` | `sinh(x)`: fused (exp(x) - exp(-x)) / 2 at the compute tier. |
+| `cosh` | `cosh(x)`: fused (exp(x) + exp(-x)) / 2 at the compute tier. |
+| `sinhcosh` | `sinhcosh(x)`: fused hyperbolic pair sharing one exp-pair evaluation at |
+| `tanh` | `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to |
 | `asinh` | `asinh(x)` = ln(x + sqrt(x^2 + 1)), composed at the compute tier. |
 | `acosh` | `acosh(x)` = ln(x + sqrt(x^2 - 1)), composed at the compute tier. |
 | `atanh` | `atanh(x)` = ln((1+x)/(1-x)) / 2, composed at the compute tier. |
@@ -243,14 +243,14 @@ Modules: g_math::fixed_point::imperative::fused
 
 | Item | Kind | Summary |
 | --- | --- | --- |
-| `sqrt_sum_sq` | fn | Fused sqrt(Σ x_i²) — norm of a slice, entirely at compute tier. |
-| `inv_sqrt_sum_sq` | fn | Fused 1/√(Σ vᵢ²) — the reciprocal norm, entirely at compute tier. |
-| `euclidean_distance` | fn | Fused sqrt(Σ (a_i - b_i)²) — Euclidean distance, entirely at compute tier. |
-| `euclidean_distance_squared` | fn | Fused Σ (a_i − b_i)² — squared Euclidean distance at compute tier, no sqrt (U1). |
-| `dot` | fn | Fused Σ a_i·b_i — dot product entirely at compute tier (U1). |
+| `sqrt_sum_sq` | fn | Fused sqrt(Σ x_i²): norm of a slice, entirely at compute tier. |
+| `inv_sqrt_sum_sq` | fn | Fused 1/√(Σ vᵢ²): the reciprocal norm, entirely at compute tier. |
+| `euclidean_distance` | fn | Fused sqrt(Σ (a_i - b_i)²): Euclidean distance, entirely at compute tier. |
+| `euclidean_distance_squared` | fn | Fused Σ (a_i − b_i)²: squared Euclidean distance at compute tier, no sqrt (U1). |
+| `dot` | fn | Fused Σ a_i·b_i: dot product entirely at compute tier (U1). |
 | `mobius_denominator_sq` | fn | Fused squared Möbius denominator `\|1 − p̄q\|² = 1 − 2⟨p,q⟩ + \|p\|²·\|q\|²` (U1). |
 | `softmax` | fn | Stable softmax entirely at compute tier. |
-| `rms_norm_factor` | fn | Fused 1/sqrt(mean(x²) + eps) — RMSNorm scaling factor at compute tier. |
+| `rms_norm_factor` | fn | Fused 1/sqrt(mean(x²) + eps): RMSNorm scaling factor at compute tier. |
 | `silu` | fn | Fused SiLU activation: x / (1 + exp(-x)) entirely at compute tier. |
 | `softmax_mix` | fn | Fused softmax + weighted value mix, entirely at compute tier: |
 
@@ -347,7 +347,7 @@ Modules: g_math::fixed_point::imperative::manifold, g_math::fixed_point::imperat
 | `stereo_project` | fn | Stereographic projection from S^n to R^n (north pole projection). |
 | `stereo_unproject` | fn | Inverse stereographic projection from R^n to S^n. |
 | `FiberBundle` | trait | A fiber bundle π: E → B with fiber F. |
-| `BundleConnection` | trait | A connection on a fiber bundle — specifies how fibers relate along the base. |
+| `BundleConnection` | trait | A connection on a fiber bundle: specifies how fibers relate along the base. |
 | `apply_representation` | fn | Apply a transition function (group element) to a fiber element via |
 | `change_chart` | fn | Change of chart for a section: ξ_β = g_{αβ} · ξ_α. |
 | `vector_bundle_curvature` | fn | Compute the curvature 2-form of a vector bundle connection at a point. |
@@ -562,7 +562,7 @@ GL(n): General linear group of invertible n×n matrices.
 
 ### On
 
-O(n): Orthogonal group — matrices with QᵀQ = I, det = ±1.
+O(n): Orthogonal group: matrices with QᵀQ = I, det = ±1.
 
 | Method | Summary |
 | --- | --- |
@@ -587,7 +587,7 @@ O(n): Orthogonal group — matrices with QᵀQ = I, det = ±1.
 
 ### SLn
 
-SL(n): Special linear group — n×n matrices with det = 1.
+SL(n): Special linear group: n×n matrices with det = 1.
 
 | Method | Summary |
 | --- | --- |
@@ -832,7 +832,7 @@ Modules: g_math::fixed_point::domains::balanced_ternary
 | `pack_trits` | fn | Pack trits into bytes, 5 trits per byte using base-3 encoding. |
 | `unpack_trits` | fn | Unpack bytes back to trits. |
 
-**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
 | Item | Re-exported from |
 | --- | --- |
@@ -913,19 +913,19 @@ Modules: g_math::tq19 _(feature: inference)_
 | `packed_trit_matvec_par` | fn | Row-parallel packed trit matvec. |
 | `tq19_matvec` | fn | TQ1.9 matrix-vector product (sequential). |
 | `tq19_matvec_batch` | fn | Batch TQ1.9 matvec with tiled accumulation. |
-| `tq19_matvec_q2f` | fn | Wide-output TQ1.9 matvec (sequential) — 2·FRAC_BITS precision, one rounding. |
+| `tq19_matvec_q2f` | fn | Wide-output TQ1.9 matvec (sequential): 2·FRAC_BITS precision, one rounding. |
 | `tq19_matvec_par` | fn | Row-parallel TQ1.9 matvec. |
-| `tq19_matvec_q2f_par` | fn | Row-parallel wide-output TQ1.9 matvec — 2·FRAC_BITS precision, one rounding. |
+| `tq19_matvec_q2f_par` | fn | Row-parallel wide-output TQ1.9 matvec: 2·FRAC_BITS precision, one rounding. |
 | `tq19_matvec_q2f_batch_par` | fn | Row-parallel wide-output batch TQ1.9 matvec with tiled accumulation. |
 | `tq19_matvec_batch_par` | fn | Row-parallel batch TQ1.9 matvec with tiled accumulation. |
 | `NUM_PLANES` | const | Number of balanced-ternary digit planes in a TQ1.9 value. |
 | `POW3` | const | Powers of three, 3^0 .. 3^9. |
 | `SPARSE_DENSITY_PERCENT` | const | Density below which a plane is stored sparse (CSR) instead of dense packed. |
 | `HYBRID_LOW_TRITS` | const | Number of low balanced-ternary digits fused into the 12-bit field. |
-| `LOW_MOD` | const | 3^7 — modulus of the low part. |
+| `LOW_MOD` | const | 3^7: modulus of the low part. |
 | `LOW_BIAS` | const | Bias added to the balanced low remainder: biased = lo + 1093 ∈ [0, 2186]. |
 
-**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
 | Item | Re-exported from |
 | --- | --- |
@@ -1011,7 +1011,7 @@ Modules: g_math::compute_tier _(feature: inference)_
 | Item | Kind | Summary |
 | --- | --- | --- |
 | `one` | fn | The value `1.0` at compute-tier scale (`1 << COMPUTE_FRAC_BITS`). |
-| `ceiling` | fn | The compute tier's maximum value — the saturation ceiling for [`exp`]. |
+| `ceiling` | fn | The compute tier's maximum value: the saturation ceiling for [`exp`]. |
 | `from_fixed` | fn | Promote a `FixedPoint` (storage tier) to the compute tier. Exact. |
 | `to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint` (single rounding). |
 | `try_to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint`, or `None` on storage overflow. |
@@ -1023,7 +1023,7 @@ Modules: g_math::compute_tier _(feature: inference)_
 | `softplus` | fn | `ln(1 + e^x)` (softplus) at the compute tier. |
 | `ln1p` | fn | `ln(1 + x)` at the compute tier. |
 
-**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):
+**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
 | Item | Re-exported from |
 | --- | --- |

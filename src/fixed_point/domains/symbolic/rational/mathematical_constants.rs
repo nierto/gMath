@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-//! Mathematical Constants — Single Source of Truth
+//! Mathematical Constants: Single Source of Truth
 //!
 //! All constants are generated at build-time with profile-aware precision via pure-Rust
 //! BigRational arithmetic. Zero floating-point contamination.

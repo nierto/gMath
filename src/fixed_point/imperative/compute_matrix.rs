@@ -1,8 +1,8 @@
-//! ComputeMatrix — matrix type operating entirely at compute tier (tier N+1).
+//! ComputeMatrix: matrix type operating entirely at compute tier (tier N+1).
 //!
 //! All operations (multiply, add, LU solve) stay at compute-tier precision.
 //! Only downscaled to FixedMatrix via `to_fixed_matrix()` at the very end.
-//! This gives 0-1 ULP for arbitrarily long matrix operation chains — the
+//! This gives 0-1 ULP for arbitrarily long matrix operation chains: the
 //! same principle as FASC's BinaryCompute chain persistence for scalars.
 
 use super::FixedPoint;
@@ -64,7 +64,7 @@ impl ComputeMatrix {
         Self::from_fn(m.rows(), m.cols(), |r, c| upscale_to_compute(m.get(r, c).raw()))
     }
 
-    /// Downscale to FixedMatrix — single rounding per element (0-1 ULP).
+    /// Downscale to FixedMatrix: single rounding per element (0-1 ULP).
     pub fn to_fixed_matrix(&self) -> FixedMatrix {
         FixedMatrix::from_fn(self.rows, self.cols, |r, c| {
             FixedPoint::from_raw(round_to_storage(self.get(r, c)))
@@ -140,7 +140,7 @@ impl ComputeMatrix {
     }
 
     /// Matrix-vector multiply at compute tier. Returns compute-tier result vector.
-    /// Both matrix and vector stay at tier N+1 — no mid-chain downscale.
+    /// Both matrix and vector stay at tier N+1, no mid-chain downscale.
     pub fn mul_vector_compute(&self, v: &[ComputeStorage]) -> Vec<ComputeStorage> {
         assert_eq!(self.cols, v.len());
         (0..self.rows).map(|r| {
@@ -186,7 +186,7 @@ impl ComputeMatrix {
         Self::from_fn(self.rows, self.cols, |r, c| self.get(r, c))
     }
 
-    /// Transpose at compute tier — no downscale.
+    /// Transpose at compute tier, no downscale.
     pub fn transpose(&self) -> Self {
         Self::from_fn(self.cols, self.rows, |r, c| self.get(c, r))
     }

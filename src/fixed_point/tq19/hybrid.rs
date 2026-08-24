@@ -1,9 +1,9 @@
-//! # HybridTQ19 — 12-bit low part + sparse high corrections
+//! # HybridTQ19: 12-bit low part + sparse high corrections
 //!
 //! The batch-1 performance form of the trit-plane idea (see `planar.rs`).
 //! Measured plane densities on real LLM tensors show digit planes k=0..6 are
 //! near-maximum entropy (incompressible noise) while k=7..9 are sparse or
-//! empty. Separating the low planes therefore buys nothing — so this format
+//! empty. Separating the low planes therefore buys nothing, so this format
 //! stores them **fused** as one 12-bit field and keeps only the high digits
 //! as sparse corrections:
 //!
@@ -21,7 +21,7 @@
 //!
 //! Size: 12 bits/weight + ~40 bits per high-correction ≈ 12.4–13.4 bits/weight
 //! on measured models (vs 16 dense, ~11.4-11.9 for trit planes). Reconstruction
-//! is ~10× cheaper than the plane kernel — this is the format intended to
+//! is ~10× cheaper than the plane kernel; this is the format intended to
 //! reach batch-1 dense parity while keeping the bandwidth win.
 //!
 //! Matvec is bit-identical to [`TQ19Matrix::matvec`]: rows are reconstructed
@@ -44,7 +44,7 @@ use rayon::prelude::*;
 /// Number of low balanced-ternary digits fused into the 12-bit field.
 pub const HYBRID_LOW_TRITS: usize = 7;
 
-/// 3^7 — modulus of the low part.
+/// 3^7: modulus of the low part.
 pub const LOW_MOD: i32 = 2187;
 
 /// Bias added to the balanced low remainder: biased = lo + 1093 ∈ [0, 2186].

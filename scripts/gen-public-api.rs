@@ -1,11 +1,11 @@
-//! gen-public-api.rs — public-API index generator for the `g_math` crate.
+//! gen-public-api.rs: public-API index generator for the `g_math` crate.
 //!
 //! WHAT THIS IS
 //! ------------
 //! A single self-contained Rust program (std library only, no external crates,
 //! no `cargo` deps) that scans a hardcoded, curated set of "surface" source
-//! files and emits `PUBLIC_API.md` at the repo root — one entry per public
-//! symbol with a one-line summary — so the README never hand-copies signatures.
+//! files and emits `PUBLIC_API.md` at the repo root (one entry per public
+//! symbol with a one-line summary) so the README never hand-copies signatures.
 //!
 //! This is a PRAGMATIC SOURCE SCAN, not a compiler. It reads text with a small
 //! brace-depth state machine; it does NOT type-check, expand macros, or resolve
@@ -264,7 +264,7 @@ fn scan_file(
                 buf.push(' ');
             }
             buf.push_str(t);
-            depth += code_braces(t); // net 0 across the full statement — keeps depth balanced
+            depth += code_braces(t); // net 0 across the full statement, keeps depth balanced
             if !buf.contains(';') {
                 use_buf = Some(buf);
                 continue;
@@ -463,7 +463,7 @@ fn code_braces(s: &str) -> i32 {
             continue;
         }
         if c == b'/' && i + 1 < n && (b[i + 1] == b'/' || b[i + 1] == b'*') {
-            break; // line/block comment — stop (pragmatic)
+            break; // line/block comment: stop (pragmatic)
         }
         if c == b'"' {
             in_str = true;
@@ -544,7 +544,7 @@ fn parse_impl(buf: &str) -> (String, ImplKind) {
     }
 }
 
-// Take the first "type token" — up to whitespace / '<' / '{' / 'where'.
+// Take the first "type token": up to whitespace / '<' / '{' / 'where'.
 fn first_type_token(s: &str) -> String {
     let s = s.trim();
     let mut out = String::new();
@@ -674,7 +674,7 @@ fn parse_reexports(buf: &str, section: &str, out: &mut Vec<ReExport>) {
             }
         }
     } else if let Some(name) = reexport_name(s) {
-        // `pub use path::Name` — source is the path minus the final segment.
+        // `pub use path::Name`: source is the path minus the final segment.
         let source = match s.rfind("::") {
             Some(i) => s[..i].to_string(),
             None => String::new(),
@@ -756,7 +756,7 @@ fn render(free_items: &[FreeItem], methods: &[Method], reexports: &[ReExport]) -
     let mut out = String::new();
     out.push_str("# Public API\n\n");
     out.push_str(
-        "Generated from source by `scripts/gen-public-api.rs` — do not edit by hand. \
+        "Generated from source by `scripts/gen-public-api.rs`. Do not edit by hand. \
 Regenerate with: `rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /tmp/gen-public-api`\n\n",
     );
     out.push_str(
@@ -843,11 +843,11 @@ of `scripts/gen-public-api.rs` for exact scope and limitations.\n\n",
             .copied()
             .collect();
         if !sec_reex_new.is_empty() {
-            out.push_str("**Re-exports** — signatures on [docs.rs](https://docs.rs/g_math):\n\n");
+            out.push_str("**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):\n\n");
             out.push_str("| Item | Re-exported from |\n");
             out.push_str("| --- | --- |\n");
             for r in &sec_reex_new {
-                let src = if r.source.is_empty() { "—".to_string() } else { format!("`{}`", r.source) };
+                let src = if r.source.is_empty() { "-".to_string() } else { format!("`{}`", r.source) };
                 writeln!(out, "| `{}` | {} |", r.name, src).ok();
             }
             out.push('\n');

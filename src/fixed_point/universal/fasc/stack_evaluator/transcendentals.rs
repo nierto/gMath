@@ -1,7 +1,7 @@
-//! Transcendental function evaluation — 18 functions with BinaryCompute chain persistence
+//! Transcendental function evaluation: 18 functions with BinaryCompute chain persistence
 //!
 //! 5 dedicated (exp, ln, sqrt, pow, atan2) + 13 FASC-composed from core functions.
-//! All return BinaryCompute for chain persistence — single downscale at materialization.
+//! All return BinaryCompute for chain persistence: single downscale at materialization.
 //! Also contains mode routing (parse_literal_with_mode, apply_output_mode)
 //! and conversion helpers (to_compute_storage, to_binary_storage).
 
@@ -25,7 +25,7 @@ use crate::fixed_point::I1024;
 use crate::fixed_point::universal::tier_types::CompactShadow;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
 
-/// True when a binary exp result sits at its overflow sentinel — building
+/// True when a binary exp result sits at its overflow sentinel: building
 /// on it (cosh/tanh adds, sinh halving) would produce a plausible-wrong
 /// value. The old `== compute_ceiling()` check missed the q64_64/q128_128
 /// engines' `i128::MAX`-at-storage-scale sentinel (0.5.0 item 2 find);
@@ -185,7 +185,7 @@ impl StackEvaluator {
     // SQUARE ROOT AND POWER FUNCTION EVALUATION
     // ============================================================================
 
-    /// sqrt(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
+    /// sqrt(x): tier N+1 computation returning BinaryCompute or DecimalCompute
     /// **DOMAIN**: x >= 0 (returns error for x < 0)
     pub(crate) fn evaluate_sqrt(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
@@ -206,7 +206,7 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// pow(x, y) = exp(y × ln(x)) — FASC-composed at compute tier
+    /// pow(x, y) = exp(y × ln(x)): FASC-composed at compute tier
     ///
     /// The entire chain (ln → multiply → exp) stays at compute tier via BinaryCompute propagation.
     pub(crate) fn evaluate_pow(&mut self, base: StackValue, exponent: StackValue) -> Result<StackValue, OverflowDetected> {
@@ -303,7 +303,7 @@ impl StackEvaluator {
     }
 
     /// PATH: FASC (canonical) composed-transcendental machinery. Domain-agnostic
-    /// despite the legacy `binary` ancestry — the imperative `FixedPoint` /
+    /// despite the legacy `binary` ancestry: the imperative `FixedPoint` /
     /// `DecimalFixed` types do NOT use these helpers (they call the compute-tier
     /// engines directly).
     ///
@@ -317,7 +317,7 @@ impl StackEvaluator {
     /// This keeps composed transcendentals (sinh, asinh, tan, ...) in their
     /// native domain through the whole chain. NOTE: the final arm sends a
     /// `Symbolic` operand to binary compute; this is correct-rounded in practice
-    /// (the compute tier absorbs representation error — measured 0 ULP), but a
+    /// (the compute tier absorbs representation error: measured 0 ULP), but a
     /// future guard could route `Symbolic` through decimal compute for domain
     /// consistency. See tests/oracle_golden/FINDINGS.md.
     pub(crate) fn to_compute_value(&mut self, val: &StackValue) -> Result<StackValue, OverflowDetected> {
@@ -383,7 +383,7 @@ impl StackEvaluator {
         }
     }
 
-    /// PATH: FASC composed-transcendental helper — the compute-tier divide used
+    /// PATH: FASC composed-transcendental helper: the compute-tier divide used
     /// inside transcendental composition. Distinct from `arithmetic::divide_values`
     /// (the general `&mut self` arithmetic divide with UGOD/rational fallback);
     /// this one is `&self` and stays at the compute tier. Domain-agnostic
@@ -608,7 +608,7 @@ impl StackEvaluator {
     // TRIGONOMETRIC FUNCTIONS
     // ============================================================================
 
-    /// sin(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
+    /// sin(x): tier N+1 computation returning BinaryCompute or DecimalCompute
     pub(crate) fn evaluate_sin(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
         if let Some(dec_compute) = self.try_decimal_compute(&value) {
@@ -621,7 +621,7 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// cos(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
+    /// cos(x): tier N+1 computation returning BinaryCompute or DecimalCompute
     pub(crate) fn evaluate_cos(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
         if let Some(dec_compute) = self.try_decimal_compute(&value) {
@@ -634,7 +634,7 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// Fused sin+cos at compute tier — single shared range reduction.
+    /// Fused sin+cos at compute tier: single shared range reduction.
     /// Returns (sin_val, cos_val) both as BinaryCompute or DecimalCompute.
     pub(crate) fn evaluate_sincos(&mut self, value: StackValue) -> Result<(StackValue, StackValue), OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
@@ -654,7 +654,7 @@ impl StackEvaluator {
         ))
     }
 
-    /// Fused sinh+cosh at compute tier — single shared exp-pair evaluation.
+    /// Fused sinh+cosh at compute tier: single shared exp-pair evaluation.
     /// Returns (sinh_val, cosh_val) both as BinaryCompute or DecimalCompute.
     ///
     /// Routes to `decimal_sinhcosh` for decimal-domain inputs, binary
@@ -678,7 +678,7 @@ impl StackEvaluator {
         ))
     }
 
-    /// tan(x) = sin(x) / cos(x) — uses fused sincos for single range reduction
+    /// tan(x) = sin(x) / cos(x): uses fused sincos for single range reduction
     pub(crate) fn evaluate_tan(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let (sin_val, cos_val) = self.evaluate_sincos(value)?;
         // Check for cos == 0 at compute tier
@@ -690,7 +690,7 @@ impl StackEvaluator {
         self.divide_at_compute(sin_val, cos_val)
     }
 
-    /// asin(x) = atan(x / sqrt(1 - x²)) — FASC-composed at compute tier
+    /// asin(x) = atan(x / sqrt(1 - x²)): FASC-composed at compute tier
     /// Domain: |x| <= 1
     pub(crate) fn evaluate_asin(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         // Domain check: |x| <= 1
@@ -756,7 +756,7 @@ impl StackEvaluator {
         self.evaluate_atan(ratio)
     }
 
-    /// acos(x) = π/2 - asin(x) — FASC-composed at compute tier
+    /// acos(x) = π/2 - asin(x): FASC-composed at compute tier
     /// Domain: |x| <= 1
     pub(crate) fn evaluate_acos(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let asin_val = self.evaluate_asin(value)?;
@@ -780,7 +780,7 @@ impl StackEvaluator {
         self.subtract_values(pi_half_val, asin_val)
     }
 
-    /// atan(x) — tier N+1 computation returning BinaryCompute or DecimalCompute
+    /// atan(x): tier N+1 computation returning BinaryCompute or DecimalCompute
     pub(crate) fn evaluate_atan(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
         if let Some(dec_compute) = self.try_decimal_compute(&value) {
@@ -793,7 +793,7 @@ impl StackEvaluator {
         Ok(StackValue::BinaryCompute(storage_tier, result, CompactShadow::None))
     }
 
-    /// atan2(y, x) — tier N+1 computation returning BinaryCompute
+    /// atan2(y, x): tier N+1 computation returning BinaryCompute
     pub(crate) fn evaluate_atan2(&mut self, y: StackValue, x: StackValue) -> Result<StackValue, OverflowDetected> {
         let storage_tier = self.profile_max_binary_tier();
         // Decimal fast path: both operands decimal → decimal engine
@@ -907,7 +907,7 @@ impl StackEvaluator {
 
     /// num/den → Q-format BinaryStorage: nearest, ties toward +∞, CHECKED
     /// (0.5.0 item 1): the old per-arm `(num << F) / den` shifted i128
-    /// before any range check — a symbolic 1e20 coerced to binary on
+    /// before any range check: a symbolic 1e20 coerced to binary on
     /// embedded wrapped mod 2^64 and produced a plausible WRONG value.
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<BinaryStorage, OverflowDetected> {
         if den == 0 {
@@ -1113,7 +1113,7 @@ impl StackEvaluator {
     ///   - Embedded → Tier 3 TQ40.40 (i128 arithmetic, 40 frac trits)
     ///   - Balanced → Tier 4 TQ80.80 (I256 arithmetic, 80 frac trits)
     ///   - Scientific → Tier 5 TQ160.160 (I512 arithmetic, 160 frac trits)
-    /// (num * scale) / den rounded to nearest, ties toward +INF — the
+    /// (num * scale) / den rounded to nearest, ties toward +INF: the
     /// documented ternary conversion-boundary rule (0.5.0 unification;
     /// contract §5). All arms run wide (I256/I512) since the 0.5.0 tier
     /// resize: num·3^40 can exceed i128 for binary-raw numerators.

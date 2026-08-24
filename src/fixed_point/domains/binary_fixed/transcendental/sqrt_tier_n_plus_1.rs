@@ -311,7 +311,7 @@ fn sqrt_q512_512_native(x: I1024) -> I1024 {
 ///
 /// 0.5.0 audit history: this was `multiply_i1024_q512_512` (shadowing the
 /// sign-safe ln helper), assumed positive-by-construction and asserted as
-/// such — and the assert then FIRED on scientific SPD-distance inputs:
+/// such, and the assert then FIRED on scientific SPD-distance inputs:
 /// the Newton factor `3 − S·y²` goes NEGATIVE when the seed overshoots,
 /// so the raw unsigned `mul_to_i2048` here was a real latent corruption
 /// path for overshooting inputs. Now sign-wrapped. Magnitude truncation
@@ -408,7 +408,7 @@ pub fn sqrt_binary_i1024(x: I1024) -> I1024 {
 // Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
 // ============================================================================
 
-/// sqrt() for Q32.32 storage (i64) — tier N+1 via Q64.64
+/// sqrt() for Q32.32 storage (i64): tier N+1 via Q64.64
 ///
 /// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
 /// For Q32.32 profile: BinaryStorage = i64
@@ -421,20 +421,20 @@ pub fn sqrt_binary_i64(x: i64) -> i64 {
     downscale_q64_to_q32(result_q64)
 }
 
-/// sqrt() for Q32.32 profile — i128 is the compute tier (Q64.64)
+/// sqrt() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn sqrt_binary_i128(x: i128) -> i128 {
     sqrt_q64_64_native(x)
 }
 
-/// sqrt() for Q32.32 profile — I256 is tier N+1 (Q128.128)
+/// sqrt() for Q32.32 profile: I256 is tier N+1 (Q128.128)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn sqrt_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute sqrt at Q128.128 natively
     sqrt_q128_128_native(x)
 }
 
-/// sqrt() for Q32.32 profile — I512 wrapper
+/// sqrt() for Q32.32 profile: I512 wrapper
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn sqrt_binary_i512(x: I512) -> I512 {
     // Compute sqrt at Q256.256 for Q32.32 profile

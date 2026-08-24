@@ -7,7 +7,7 @@ lazy tree and no router dispatch.
 
 The imperative layer (`g_math::fixed_point`) is the fast path for code that
 already knows its domain. `FixedPoint`, `FixedVector`, and `FixedMatrix` are plain
-`Copy` value types whose operators map straight onto the binary Q-format engines —
+`Copy` value types whose operators map straight onto the binary Q-format engines,
 no expression tree is built, and nothing is routed. `DecimalFixed<DECIMALS>` is
 the decimal-domain scalar with its own native transcendental engines. Use this
 layer in tight numeric kernels, matrix code, and ML inference; use the
@@ -17,7 +17,7 @@ persistence.
 > **Scope today: binary-only for vectors/matrices.** `FixedVector`/`FixedMatrix`
 > and everything built on them ([linear algebra](README_LINALG.md),
 > [geometry](README_GEOMETRY.md)) are binary. `DecimalFixed` covers decimal
-> scalars but there is no decimal/ternary/symbolic vector or matrix surface yet —
+> scalars but there is no decimal/ternary/symbolic vector or matrix surface yet:
 > extending the imperative layer to every domain is a tracked roadmap item.
 
 ## Usage
@@ -50,18 +50,18 @@ let root  = "2".parse::<DecimalFixed<9>>().unwrap().sqrt(); // native decimal tr
 
 ## Public API
 
-- **[PUBLIC_API.md → FixedPoint](../PUBLIC_API.md#fixedpoint)** — `Copy` Q-format
+- **[PUBLIC_API.md → FixedPoint](../PUBLIC_API.md#fixedpoint)**: `Copy` Q-format
   scalar: arithmetic, comparisons, `abs`, `from_str`/`from_int`/`from_raw`, all 18
   [transcendentals](README_TRANSCENDENTALS.md), `sincos`, `sinhcosh`, float
   conversions for interop, and a fallible `try_*` variant per transcendental.
-- **[PUBLIC_API.md → FixedVector](../PUBLIC_API.md#fixedvector)** — `dot`, `length`,
+- **[PUBLIC_API.md → FixedVector](../PUBLIC_API.md#fixedvector)**: `dot`, `length`,
   `length_fused`, `normalized`, `distance_to`, `cross`, `outer_product`, `map`,
   indexing, operators. Dot products accumulate at the compute tier.
-- **[PUBLIC_API.md → FixedMatrix](../PUBLIC_API.md#fixedmatrix)** — `identity`,
+- **[PUBLIC_API.md → FixedMatrix](../PUBLIC_API.md#fixedmatrix)**: `identity`,
   `diagonal`, `from_fn`, `from_slice`, `transpose`, `trace`, `row`/`col`,
   mat-mat / mat-vec multiply (compute-tier dots per entry), `kronecker`,
   `submatrix`.
-- **[PUBLIC_API.md → DecimalFixed](../PUBLIC_API.md#decimalfixed)** — base-10
+- **[PUBLIC_API.md → DecimalFixed](../PUBLIC_API.md#decimalfixed)**: base-10
   scaled integer with a const-generic decimal-place count; full basic arithmetic
   and all 18 native transcendentals in the decimal domain, plus precision
   conversions and binary interop.
@@ -71,7 +71,7 @@ Live signatures on [docs.rs](https://docs.rs/g_math).
 ## Behaviour & limits
 
 - Results match the [canonical layer](README_ROUTING.md) bit-for-bit for the same
-  input and precision — the two paths share the compute-tier engines.
+  input and precision: the two paths share the compute-tier engines.
 - A single imperative `.exp().sin()` materializes between the two calls; for chain
   persistence across transcendentals use the canonical layer
   (`gmath("x").exp().sin()`).
@@ -90,4 +90,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

@@ -1,4 +1,4 @@
-//! Fused compute-tier operations — entire computation chains at tier N+1.
+//! Fused compute-tier operations: entire computation chains at tier N+1.
 //!
 //! Each function keeps ALL intermediates at compute tier (double width),
 //! performing a single downscale at the very end. This eliminates
@@ -38,7 +38,7 @@ fn compute_one() -> ComputeStorage {
 // FUSED OPERATIONS
 // ============================================================================
 
-/// Fused sqrt(Σ x_i²) — norm of a slice, entirely at compute tier.
+/// Fused sqrt(Σ x_i²): norm of a slice, entirely at compute tier.
 ///
 /// Accumulates squares at tier N+1 width, takes sqrt at compute tier,
 /// single downscale at the end. Saves 1 materialization vs separate
@@ -54,7 +54,7 @@ pub fn sqrt_sum_sq(values: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
 }
 
-/// Fused 1/√(Σ vᵢ²) — the reciprocal norm, entirely at compute tier.
+/// Fused 1/√(Σ vᵢ²): the reciprocal norm, entirely at compute tier.
 ///
 /// Accumulates squares, takes the square root, and forms the reciprocal all
 /// at tier N+1, with one rounding at the final downscale. This is the form
@@ -76,7 +76,7 @@ pub fn inv_sqrt_sum_sq(values: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(inv))
 }
 
-/// Fused sqrt(Σ (a_i - b_i)²) — Euclidean distance, entirely at compute tier.
+/// Fused sqrt(Σ (a_i - b_i)²): Euclidean distance, entirely at compute tier.
 ///
 /// Computes differences, squares, accumulates, and takes sqrt all at tier N+1.
 /// Saves 2 materializations vs `(a - b).length()`.
@@ -94,7 +94,7 @@ pub fn euclidean_distance(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
 }
 
-/// Fused Σ (a_i − b_i)² — squared Euclidean distance at compute tier, no sqrt (U1).
+/// Fused Σ (a_i − b_i)²: squared Euclidean distance at compute tier, no sqrt (U1).
 ///
 /// The no-transcendental half of `euclidean_distance`: metric-tree scoring,
 /// squared-space pruning, and Möbius-ratio numerators need the squared
@@ -116,9 +116,9 @@ pub fn euclidean_distance_squared(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPo
     FixedPoint::from_raw(round_to_storage(acc))
 }
 
-/// Fused Σ a_i·b_i — dot product entirely at compute tier (U1).
+/// Fused Σ a_i·b_i: dot product entirely at compute tier (U1).
 ///
-/// Accumulates products at tier N+1 width, single downscale at the end —
+/// Accumulates products at tier N+1 width, single downscale at the end:
 /// the accumulator cannot wrap the way a storage-tier fold can for large
 /// coordinates or many dimensions.
 ///
@@ -140,7 +140,7 @@ pub fn dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
 /// The denominator of the Poincaré-disk distance ratio
 /// `d(p,q) = 2·atanh(|p−q| / |1−p̄q|)`. Computing it fused keeps the
 /// dot product, both squared norms, and the combination at tier N+1 with
-/// a single downscale — one materialization instead of four, and no
+/// a single downscale; one materialization instead of four, and no
 /// intermediate can wrap.
 ///
 /// **Use case**: hyperbolic distance/ratio kernels; combine with
@@ -173,7 +173,7 @@ pub fn mobius_denominator_sq(p: &[FixedPoint], q: &[FixedPoint]) -> FixedPoint {
 /// Algorithm: find max → subtract max → exp → sum → divide.
 /// All exp() results stay at compute tier. Single downscale per output element.
 ///
-/// **Use case**: Attention weight normalization — O(seq_len²) per forward pass.
+/// **Use case**: Attention weight normalization: O(seq_len²) per forward pass.
 pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetected> {
     if scores.is_empty() {
         return Ok(vec![]);
@@ -212,12 +212,12 @@ pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetecte
     Ok(result)
 }
 
-/// Fused 1/sqrt(mean(x²) + eps) — RMSNorm scaling factor at compute tier.
+/// Fused 1/sqrt(mean(x²) + eps): RMSNorm scaling factor at compute tier.
 ///
 /// Computes sum of squares, divides by n, adds epsilon, takes sqrt,
-/// then reciprocal — all at tier N+1. Single downscale.
+/// then reciprocal: all at tier N+1. Single downscale.
 ///
-/// **Use case**: RMSNorm — called once per layer per token in transformer inference.
+/// **Use case**: RMSNorm: called once per layer per token in transformer inference.
 pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
     if values.is_empty() {
         return Err(OverflowDetected::DivisionByZero);
@@ -253,7 +253,7 @@ pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPo
 /// SiLU = x * sigmoid(x) = x / (1 + exp(-x)).
 /// Keeps exp(-x), addition, and division all at tier N+1.
 ///
-/// **Use case**: SwiGLU gate — called per intermediate activation in MLP layers.
+/// **Use case**: SwiGLU gate: called per intermediate activation in MLP layers.
 pub fn silu(x: FixedPoint) -> FixedPoint {
     let x_compute = upscale_to_compute(x.raw());
     let neg_x = compute_negate(x_compute);
@@ -284,19 +284,19 @@ pub fn silu(x: FixedPoint) -> FixedPoint {
 /// ```
 ///
 /// The softmax weights are **never materialized to storage tier** on the mix
-/// path — they stay at compute-tier resolution through the value accumulation,
+/// path; they stay at compute-tier resolution through the value accumulation,
 /// and only the mixed output vector is downscaled (one rounding per output
 /// element). This removes the storage-tier resolution floor on attention
 /// weights: with FRAC_BITS fractional bits, a materialized weight below
 /// 2^-FRAC_BITS truncates to zero and its value vector vanishes from the mix
-/// entirely — the cause of long-context attention starvation. Here a weight
+/// entirely: the cause of long-context attention starvation. Here a weight
 /// of any compute-representable magnitude still contributes.
 ///
 /// Returns `(mixed_output[dim], weights[n])`. The returned weights ARE
-/// storage-quantized — they are for observers (attention recording,
+/// storage-quantized; they are for observers (attention recording,
 /// diagnostics), not what the mix used.
 ///
-/// **Use case**: single-query attention `softmax(Q·Kᵀ/√d) · V` — the hot path
+/// **Use case**: single-query attention `softmax(Q·Kᵀ/√d) · V`: the hot path
 /// of autoregressive transformer inference.
 pub fn softmax_mix(
     scores: &[FixedPoint],
@@ -384,7 +384,7 @@ mod tests {
         else { FixedPoint::from_str(s) }
     }
 
-    /// Profile-appropriate tight tolerance — at least 1 ULP representable.
+    /// Profile-appropriate tight tolerance: at least 1 ULP representable.
     fn tight() -> FixedPoint {
         #[cfg(table_format = "q16_16")]
         { fp("0.001") }

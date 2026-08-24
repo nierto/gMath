@@ -1,4 +1,4 @@
-//! Domain routing — fractal topology classification and routing table.
+//! Domain routing: fractal topology classification and routing table.
 //!
 //! **PURPOSE**: Eliminate domain crisscross in arithmetic by classifying operands
 //! via CompactShadow denominator factoring and dispatching through a compile-time

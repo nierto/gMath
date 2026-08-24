@@ -1,13 +1,13 @@
 //! Riemannian manifold trait and concrete implementations.
 //!
-//! L3A — Manifolds with closed-form geodesics (no ODE solver required):
-//! - `EuclideanSpace` — R^n, flat
-//! - `Sphere` — S^n embedded in R^{n+1}
-//! - `HyperbolicSpace` — H^n in the hyperboloid model
+//! L3A: Manifolds with closed-form geodesics (no ODE solver required):
+//! - `EuclideanSpace`: R^n, flat
+//! - `Sphere`: S^n embedded in R^{n+1}
+//! - `HyperbolicSpace`: H^n in the hyperboloid model
 //!
-//! L3C — Manifolds requiring matrix function infrastructure:
-//! - `SPDManifold` — Sym⁺(n), symmetric positive-definite matrices
-//! - `Grassmannian` — Gr(k,n), k-dimensional subspaces of R^n
+//! L3C: Manifolds requiring matrix function infrastructure:
+//! - `SPDManifold`: Sym⁺(n), symmetric positive-definite matrices
+//! - `Grassmannian`: Gr(k,n), k-dimensional subspaces of R^n
 
 use super::FixedPoint;
 use super::FixedVector;
@@ -520,7 +520,7 @@ impl Grassmannian {
     }
 
     /// Project matrix onto the tangent space at Q: Δ - Q(QᵀΔ).
-    /// Compute-tier chain — single downscale at end.
+    /// Compute-tier chain: single downscale at end.
     #[allow(dead_code)]
     fn project_tangent(q: &FixedMatrix, delta: &FixedMatrix) -> FixedMatrix {
         let q_c = ComputeMatrix::from_fixed_matrix(q);
@@ -753,7 +753,7 @@ impl Manifold for Grassmannian {
 /// **Points stored as:** flattened n*k FixedVector (column-major).
 ///
 /// **Geodesics via QR retraction:**
-///   exp_Q(Δ) ≈ qr(Q + Δ).Q — the Q factor of QR decomposition.
+///   exp_Q(Δ) ≈ qr(Q + Δ).Q: the Q factor of QR decomposition.
 ///   This is a first-order retraction, not the exact Riemannian exponential,
 ///   but preserves the orthonormality constraint exactly (QR produces orthonormal Q).
 ///
@@ -798,7 +798,7 @@ impl StiefelManifold {
     /// Tangent vectors Δ satisfy: QᵀΔ + ΔᵀQ = 0 (skew-symmetric QᵀΔ).
     /// Projection: Δ_tangent = Δ - Q · sym(QᵀΔ) where sym(A) = (A+Aᵀ)/2.
     ///
-    /// Compute-tier chain — single downscale at end.
+    /// Compute-tier chain: single downscale at end.
     fn project_tangent(q: &FixedMatrix, delta: &FixedMatrix) -> FixedMatrix {
         let q_c = ComputeMatrix::from_fixed_matrix(q);
         let delta_c = ComputeMatrix::from_fixed_matrix(delta);
@@ -909,7 +909,7 @@ impl Manifold for StiefelManifold {
 /// exp/log/transport operate on each component independently.
 ///
 /// **FASC-UGOD integration:** All operations delegate to the component manifolds.
-/// Tier handling is inherited — each component uses its own compute-tier
+/// Tier handling is inherited; each component uses its own compute-tier
 /// operations internally. The product structure adds no additional precision loss.
 pub struct ProductManifold {
     m1: Box<dyn Manifold>,

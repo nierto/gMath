@@ -68,8 +68,8 @@ Transcendental methods appear on each surface's entry in the index:
 
 With the `inference` feature, **[g_math::compute_tier](../PUBLIC_API.md#compute-tier-transcendentals)**
 exposes the tier-N+1 engines directly over raw `ComputeStorage` values at
-2·FRAC_BITS precision — `exp`/`ln`/`sqrt`/`sinhcosh` plus `sigmoid`/`softplus`/`ln1p`
-compositions — for wide-precision consumers (e.g. chaining on the wide-output
+2·FRAC_BITS precision (`exp`/`ln`/`sqrt`/`sinhcosh` plus `sigmoid`/`softplus`/`ln1p`
+compositions) for wide-precision consumers (e.g. chaining on the wide-output
 `matvec_q2f` accumulators without an intermediate storage rounding). Results are
 path-independent with the surfaces above: `to_fixed(compute_tier::exp(from_fixed(x)))`
 is bit-identical to `x.exp()`.
@@ -78,7 +78,7 @@ is bit-identical to `x.exp()`.
 
 - On `FixedPoint`, every function also has a fallible `try_*` variant returning
   `Result<_, OverflowDetected>`.
-- On `DecimalFixed`, transcendentals run natively in the decimal domain — no
+- On `DecimalFixed`, transcendentals run natively in the decimal domain, no
   round-trip through binary.
 - Accuracy is defined by the test suite against mpmath references, not by slogans;
   see [the precision guide](README_PRECISION.md) and the validation methodology in
@@ -97,4 +97,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

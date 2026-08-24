@@ -1,4 +1,4 @@
-//! Arithmetic dispatch — add, subtract, multiply, divide with UGOD fallback
+//! Arithmetic dispatch: add, subtract, multiply, divide with UGOD fallback
 //!
 //! Each operation attempts native-domain UGOD arithmetic first,
 //! falling back to rational for cross-domain operations.

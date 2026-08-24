@@ -1,12 +1,12 @@
 //! L5A: Fiber bundle types and operations with fixed-point arithmetic.
 //!
 //! Provides:
-//! - `FiberBundle` trait — project, fiber_at, lift, local_trivialization
-//! - `TrivialBundle` — M × F with flat connection (test baseline)
-//! - `VectorBundle` — fiber = R^k, sections are vector fields
-//! - `PrincipalBundle` — fiber = Lie group, transition functions, right action
-//! - `Connection` trait — horizontal_lift, parallel transport along base curve
-//! - `bundle_curvature` — Ω = dω + ω∧ω (structure equation)
+//! - `FiberBundle` trait: project, fiber_at, lift, local_trivialization
+//! - `TrivialBundle`: M × F with flat connection (test baseline)
+//! - `VectorBundle`: fiber = R^k, sections are vector fields
+//! - `PrincipalBundle`: fiber = Lie group, transition functions, right action
+//! - `Connection` trait: horizontal_lift, parallel transport along base curve
+//! - `bundle_curvature`: Ω = dω + ω∧ω (structure equation)
 //!
 //! **FASC-UGOD integration:** All operations delegate to the underlying manifold
 //! (L3A) and Lie group (L4A) infrastructure. Parallel transport on bundles reduces
@@ -54,7 +54,7 @@ pub trait FiberBundle {
 // Connection trait
 // ============================================================================
 
-/// A connection on a fiber bundle — specifies how fibers relate along the base.
+/// A connection on a fiber bundle: specifies how fibers relate along the base.
 ///
 /// A connection provides a notion of "horizontal" in the tangent bundle of E,
 /// enabling parallel transport along curves in the base.
@@ -73,7 +73,7 @@ pub trait BundleConnection: FiberBundle {
 
     /// Vertical component of a tangent vector at a total space point.
     ///
-    /// V_e = ker(dπ) — the tangent vectors that project to zero in the base.
+    /// V_e = ker(dπ): the tangent vectors that project to zero in the base.
     fn vertical_component(
         &self,
         total_point: &FixedVector,

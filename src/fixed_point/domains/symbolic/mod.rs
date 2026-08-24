@@ -1,8 +1,8 @@
-//! Symbolic Mathematics Module — Rational Arithmetic Domain
+//! Symbolic Mathematics Module: Rational Arithmetic Domain
 //!
 //! Provides exact rational arithmetic through RationalNumber and tiered operations.
 //! All legacy symbolic tracking (SymbolicAdaptiveFixedPoint, Symbol, etc.) has been
-//! archived — FASC uses RationalNumber directly via StackValue::Symbolic.
+//! archived: FASC uses RationalNumber directly via StackValue::Symbolic.
 
 pub mod rational;
 

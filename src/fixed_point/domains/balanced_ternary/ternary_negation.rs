@@ -45,7 +45,7 @@ pub fn negate_ternary_tq40_40(a: i128) -> Result<i128, OverflowDetected> {
 
 /// TQ80.80 negation.
 ///
-/// 0.5.0 consistency fix: was `saturating_neg` — the one tier that silently
+/// 0.5.0 consistency fix: was `saturating_neg`: the one tier that silently
 /// absorbed the binary-MIN edge instead of failing loud like every other
 /// tier's `checked_neg`. I256::MIN is unreachable from any valid ternary
 /// value (the ternary window is symmetric), so panicking is the correct

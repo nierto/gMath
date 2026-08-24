@@ -1,4 +1,4 @@
-//! Tensor decompositions — truncated SVD, Tucker/HOSVD, CP/ALS.
+//! Tensor decompositions: truncated SVD, Tucker/HOSVD, CP/ALS.
 //!
 //! Built on the existing `svd_decompose` (Golub-Kahan bidiagonalization) and
 //! `Tensor` infrastructure. All inner products accumulated at compute tier.

@@ -1,4 +1,4 @@
-//! TQ1.9 core operations — profile-conditional implementation.
+//! TQ1.9 core operations: profile-conditional implementation.
 //!
 //! All dot products accumulate at ComputeStorage (tier N+1).
 //! Single division/downscale at the end per gMath precision contract.
@@ -101,11 +101,11 @@ pub(super) fn narrow_to_storage(v: ComputeStorage) -> BinaryStorage {
 }
 
 /// Wide matvec epilogue: the exact row value at 2·FRAC_BITS fractional
-/// precision with EXACTLY ONE rounding — truncation toward zero of
+/// precision with EXACTLY ONE rounding: truncation toward zero of
 /// `acc · 2^FRAC_BITS / SCALE`.
 ///
 /// **Narrowing spec**: Rust's truncating division `q2f / (1 << FRAC_BITS)`
-/// reproduces the narrow epilogue `acc / SCALE` bit-for-bit — nested
+/// reproduces the narrow epilogue `acc / SCALE` bit-for-bit: nested
 /// truncation toward zero is exact: `trunc(trunc(a·2^F/S)/2^F) ≡ trunc(a/S)`.
 /// Downstream consumers narrowing wide outputs must use this rule.
 ///
@@ -255,7 +255,7 @@ pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage
 /// Wide-output TQ1.9 dot: `trunc(sum(weights[i]·activations[i]) · 2^FRAC_BITS / SCALE)`.
 ///
 /// Same inner loop (and SIMD dispatch) as [`tq19_dot`]; only the epilogue
-/// differs — see [`wide_output`] for the exact rounding/narrowing contract.
+/// differs: see [`wide_output`] for the exact rounding/narrowing contract.
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeStorage {
     debug_assert_eq!(weights.len(), activations.len());
@@ -329,7 +329,7 @@ pub fn tq19_matvec(
 /// Chosen so that weight_tile + activation_tiles fit in L1d:
 ///   512 × 2B (weights) + 512 × 8B × batch_size (activations)
 ///   = 1 KB + 4 KB × batch_size
-/// For batch=8: 33 KB — fits in 32-48 KB L1d.
+/// For batch=8: 33 KB: fits in 32-48 KB L1d.
 const BATCH_TILE: usize = 512;
 
 /// Batch TQ1.9 matvec with tiled accumulation.
@@ -389,9 +389,9 @@ pub fn tq19_matvec_batch(
     results
 }
 
-/// Wide-output TQ1.9 matvec (sequential) — 2·FRAC_BITS precision, one rounding.
+/// Wide-output TQ1.9 matvec (sequential): 2·FRAC_BITS precision, one rounding.
 ///
-/// Same inner loops as [`tq19_matvec`]; only the epilogue differs — see
+/// Same inner loops as [`tq19_matvec`]; only the epilogue differs: see
 /// [`wide_output`] for the exact rounding/narrowing contract.
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 pub fn tq19_matvec_q2f(
@@ -452,9 +452,9 @@ pub fn tq19_matvec_par(
         .collect()
 }
 
-/// Row-parallel wide-output TQ1.9 matvec — 2·FRAC_BITS precision, one rounding.
+/// Row-parallel wide-output TQ1.9 matvec: 2·FRAC_BITS precision, one rounding.
 ///
-/// Epilogue-only variant of [`tq19_matvec_par`] — see [`wide_output`].
+/// Epilogue-only variant of [`tq19_matvec_par`]: see [`wide_output`].
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 pub fn tq19_matvec_q2f_par(
     data: &[i16],
@@ -472,7 +472,7 @@ pub fn tq19_matvec_q2f_par(
 }
 
 /// Row-parallel wide-output batch TQ1.9 matvec with tiled accumulation.
-/// Epilogue-only variant of [`tq19_matvec_batch_par`] — see [`wide_output`].
+/// Epilogue-only variant of [`tq19_matvec_batch_par`]: see [`wide_output`].
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 pub fn tq19_matvec_q2f_batch_par(
     data: &[i16],
@@ -626,7 +626,7 @@ mod tests {
 
     /// Contract pin for the wide epilogue:
     /// `q2f / (1 << FRAC_BITS)` (truncating division) must reproduce the
-    /// narrow matvec BIT-FOR-BIT — a theorem for nested truncation toward
+    /// narrow matvec BIT-FOR-BIT: a theorem for nested truncation toward
     /// zero, pinned here on random full-range signed data.
     #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
     #[test]

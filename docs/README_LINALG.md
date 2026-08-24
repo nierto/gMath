@@ -38,7 +38,7 @@ let det = lu.determinant();
   `nullspace`, `least_squares`, `condition_number_1` / `_2`.
 - **Matrix functions** (`matrix_functions`): `matrix_exp` (Padé +
   scaling-and-squaring), `matrix_sqrt` (Denman-Beavers), `matrix_log` (inverse
-  scaling-and-squaring), `matrix_pow` — all chained through `ComputeMatrix`.
+  scaling-and-squaring), `matrix_pow`: all chained through `ComputeMatrix`.
 
 ## Public API
 
@@ -65,4 +65,4 @@ inability to use this software.
 
 ---
 
-Built by **Niels Erik Toren** — [support & donations](../README.md#author--support).
+Built by **Niels Erik Toren** · [support & donations](../README.md#author--support).

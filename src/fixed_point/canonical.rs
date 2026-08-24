@@ -27,7 +27,7 @@
 //! let mut balance = evaluate(&gmath("1000.00")).unwrap();
 //!
 //! for year in 1..=5 {
-//!     // Feed previous result back in — full precision + shadow preserved
+//!     // Feed previous result back in: full precision + shadow preserved
 //!     balance = evaluate(&(LazyExpr::from(balance) * gmath("1.05"))).unwrap();
 //!     println!("Year {}: {:.2}", year, balance);
 //! }
@@ -59,8 +59,8 @@
 //! - **LazyExpr**: Expression tree builder with operator overloading
 //! - **StackEvaluator**: Thread-local evaluator with fixed-size workspace
 //! - **StackValue**: Domain-tagged result (Binary | Decimal | Ternary | Symbolic)
-//! - **gmath()**: Entry point for static strings — zero-cost, deferred parsing
-//! - **gmath_parse()**: Entry point for runtime strings — eager parsing
+//! - **gmath()**: Entry point for static strings: zero-cost, deferred parsing
+//! - **gmath_parse()**: Entry point for runtime strings: eager parsing
 //! - **LazyExpr::from(StackValue)**: Chain results into new expressions (zero precision loss)
 
 // Re-export the complete FASC API
@@ -103,7 +103,7 @@ pub fn reset_gmath_mode() {
 
 /// Construct a pre-parsed Decimal LazyExpr. Called by `gmath!("0.1")` expansion.
 ///
-/// Skips runtime string parsing — dp, scaled value, and shadow are computed
+/// Skips runtime string parsing: dp, scaled value, and shadow are computed
 /// at compile time by the proc-macro. ~60 ns faster than `gmath("0.1")`.
 #[doc(hidden)]
 pub fn __pre_decimal(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -> LazyExpr {

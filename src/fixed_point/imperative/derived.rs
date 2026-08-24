@@ -160,7 +160,7 @@ fn default_sv_threshold(sigma: &FixedVector, m: usize, n: usize) -> FixedPoint {
 /// Singular values below the default threshold (based on matrix dimensions
 /// and storage precision) are treated as zero.
 ///
-/// Works for any m×n matrix — not just square or full-rank.
+/// Works for any m×n matrix, not just square or full-rank.
 pub fn pseudoinverse(a: &FixedMatrix) -> Result<FixedMatrix, OverflowDetected> {
     let svd = svd_decompose(a)?;
     let (m, n) = (a.rows(), a.cols());

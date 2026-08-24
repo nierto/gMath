@@ -84,7 +84,7 @@ impl BinaryTier5 {
         Self { value: self.value - other.value }
     }
 
-    /// Checked add/sub — see BinaryTier4 (0.5.0 item 1).
+    /// Checked add/sub: see BinaryTier4 (0.5.0 item 1).
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
         self.value.checked_add(other.value).map(|value| Self { value })
     }
@@ -106,7 +106,7 @@ impl BinaryTier6 {
         Self { value: self.value - other.value }
     }
 
-    /// Checked add/sub — ladder top (0.5.0 item 1). I1024 has no
+    /// Checked add/sub: ladder top (0.5.0 item 1). I1024 has no
     /// checked_sub; a − b == a + (−b) with checked add (−b cannot
     /// overflow for any value reachable through the ladder).
     pub fn checked_add(&self, other: &Self) -> Option<Self> {

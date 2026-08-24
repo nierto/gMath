@@ -1,9 +1,9 @@
 //! Linear algebra helpers with compute-tier precision.
 //!
 //! Core routines:
-//! - `compute_tier_dot` — accumulates dot products at tier N+1 (double width)
-//! - `compute_tier_sub_dot_raw` — fused init-minus-dot at compute tier
-//! - `givens` — Givens rotation without trig (ratio + sqrt only)
+//! - `compute_tier_dot`: accumulates dot products at tier N+1 (double width)
+//! - `compute_tier_sub_dot_raw`: fused init-minus-dot at compute tier
+//! - `givens`: Givens rotation without trig (ratio + sqrt only)
 //!
 //! These are the matrix-operation analog of BinaryCompute chain persistence.
 
@@ -35,7 +35,7 @@ pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::si
 // ============================================================================
 
 /// Downscale a compute-tier accumulator to storage tier with round-to-nearest.
-/// This matches FASC's `downscale_to_storage` behavior — NOT truncation.
+/// This matches FASC's `downscale_to_storage` behavior, NOT truncation.
 ///
 /// Panics if the result exceeds the storage tier's range, matching the
 /// infallible imperative transcendentals. The previous shift-and-cast
@@ -326,7 +326,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
 ///   [[cs, sn], [-sn, cs]]^T * [a, b]^T = [r, 0]
 ///
 /// Uses ratio-based computation with a single `sqrt` call.
-/// No `atan`, `sin`, or `cos` — avoids layering transcendental approximation
+/// No `atan`, `sin`, or `cos`: avoids layering transcendental approximation
 /// error on top of fixed-point quantization.
 pub(crate) fn givens(a: FixedPoint, b: FixedPoint) -> (FixedPoint, FixedPoint) {
     let one = FixedPoint::one();
@@ -395,7 +395,7 @@ pub(crate) fn apply_givens_compute(
 ///
 /// In floating-point, convergence is tested against machine epsilon.
 /// In fixed-point, we use `magnitude >> (FRAC_BITS / 2)`, which gives
-/// sqrt(quantum) relative precision — the tightest achievable by iterative
+/// sqrt(quantum) relative precision: the tightest achievable by iterative
 /// multiply-based algorithms at storage tier.
 ///
 /// Floored at 1 quantum (the smallest nonzero representable value).
@@ -415,7 +415,7 @@ pub(crate) fn convergence_threshold(magnitude: FixedPoint) -> FixedPoint {
 ///
 /// When all rotation/accumulation steps happen at tier N+1 (via
 /// `apply_givens_compute`, `compute_tier_dot_raw`), each step introduces
-/// only 1 ULP of error — NOT √quantum. So we can converge to
+/// only 1 ULP of error, NOT √quantum. So we can converge to
 /// `magnitude >> (2 * FRAC_BITS / 3)` instead of `>> (FRAC_BITS / 2)`.
 ///
 /// Profile-dependent precision:
@@ -480,7 +480,7 @@ use crate::fixed_point::domains::balanced_ternary::trit_packing::Trit;
 ///
 /// The accumulator runs at ComputeStorage width. A single downscale
 /// with rounding occurs at the very end. **Zero multiplications** in the
-/// inner loop — only add/sub/skip.
+/// inner loop: only add/sub/skip.
 ///
 /// After downscaling, the result is multiplied by `scale` (per-block
 /// dequantization factor). The final multiply also uses compute-tier

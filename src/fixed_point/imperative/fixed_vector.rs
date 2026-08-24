@@ -1,4 +1,4 @@
-//! FixedVector — dynamically-sized vector of FixedPoint values.
+//! FixedVector: dynamically-sized vector of FixedPoint values.
 //!
 //! All operations delegate to FixedPoint arithmetic.
 
@@ -74,16 +74,16 @@ impl FixedVector {
         self.length_squared().sqrt()
     }
 
-    /// Fused length — sqrt(Σ x_i²) entirely at compute tier.
+    /// Fused length: sqrt(Σ x_i²) entirely at compute tier.
     ///
     /// More precise than `length()` which materializes the dot product
     /// before taking sqrt. This version keeps the accumulated sum at
-    /// tier N+1 and takes sqrt there — single downscale at the end.
+    /// tier N+1 and takes sqrt there: single downscale at the end.
     pub fn length_fused(&self) -> FixedPoint {
         super::fused::sqrt_sum_sq(&self.data)
     }
 
-    /// Fused Euclidean distance to another vector — sqrt(Σ (a_i - b_i)²)
+    /// Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²)
     /// entirely at compute tier.
     ///
     /// Saves 2 materializations vs `(self - other).length()`.

@@ -44,7 +44,7 @@ pub enum CompactShadow {
 /// Identifier for well-known mathematical constants in shadows.
 ///
 /// When a value is a mathematical constant, we store just the ID rather
-/// than a rational approximation — the constant tables provide full precision.
+/// than a rational approximation: the constant tables provide full precision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ShadowConstantId {

@@ -1,8 +1,8 @@
 //! L4A: Lie groups and Lie algebras with fixed-point arithmetic.
 //!
-//! - `SO3` — 3D rotations via closed-form Rodrigues (O(1) trig, not matrix_exp)
-//! - `SE3` — 3D rigid motions (rotation + translation) via closed-form V-matrix
-//! - `SOn` — General n×n rotations via matrix_exp/matrix_log fallback
+//! - `SO3`: 3D rotations via closed-form Rodrigues (O(1) trig, not matrix_exp)
+//! - `SE3`: 3D rigid motions (rotation + translation) via closed-form V-matrix
+//! - `SOn`: General n×n rotations via matrix_exp/matrix_log fallback
 //!
 //! SO(3) Rodrigues is the foundational primitive for geometric key derivation.
 
@@ -62,7 +62,7 @@ pub trait LieGroup: Manifold {
 ///
 /// Elements: 3×3 orthogonal matrices with det = +1.
 /// Algebra so(3): skew-symmetric 3×3 matrices, parameterized by 3-vectors.
-/// Uses closed-form Rodrigues formula — O(1) trig, not matrix_exp.
+/// Uses closed-form Rodrigues formula: O(1) trig, not matrix_exp.
 pub struct SO3;
 
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
@@ -102,7 +102,7 @@ impl SO3 {
     ///
     /// **Precision:** Entire formula evaluated at compute tier via ComputeMatrix.
     /// Fused sincos computes sin(θ) and cos(θ) from a single range reduction.
-    /// Scalar coefficients (sinc, half_cosc) computed at compute tier — zero
+    /// Scalar coefficients (sinc, half_cosc) computed at compute tier: zero
     /// mid-chain materializations. Single downscale at the end → 0-1 ULP.
     pub fn rodrigues_exp(omega: &FixedVector) -> Result<FixedMatrix, OverflowDetected> {
         assert_eq!(omega.len(), 3);
@@ -294,7 +294,7 @@ impl SE3 {
     /// SE(3) exponential: ξ = [ω, v] → [[R, V·v], [0, 1]].
     ///
     /// **Precision:** Fused sincos at compute tier for coefficients.
-    /// V-matrix AND V·v computed entirely at compute tier — single downscale.
+    /// V-matrix AND V·v computed entirely at compute tier: single downscale.
     pub fn se3_exp(xi: &FixedVector) -> Result<FixedMatrix, OverflowDetected> {
         assert_eq!(xi.len(), 6);
         let omega = FixedVector::from_slice(&[xi[0], xi[1], xi[2]]);
@@ -346,7 +346,7 @@ impl SE3 {
     /// SE(3) logarithm: [[R, t], [0, 1]] → [ω, v].
     ///
     /// **Precision:** Fused sincos at compute tier for coefficients.
-    /// V⁻¹ AND V⁻¹·t computed entirely at compute tier — single downscale.
+    /// V⁻¹ AND V⁻¹·t computed entirely at compute tier: single downscale.
     pub fn se3_log(g: &FixedMatrix) -> Result<FixedVector, OverflowDetected> {
         let r = Self::extract_rotation(g);
         let t = Self::extract_translation(g);
@@ -685,12 +685,12 @@ impl LieGroup for GLn {
 // O(n) — Orthogonal group (rotations + reflections, det = ±1)
 // ============================================================================
 
-/// O(n): Orthogonal group — matrices with QᵀQ = I, det = ±1.
+/// O(n): Orthogonal group: matrices with QᵀQ = I, det = ±1.
 ///
 /// Same algebra as SO(n) (skew-symmetric), but includes reflections.
 /// Inverse = transpose (exact, no LU). Delegates to SOn for exp/log.
 ///
-/// **FASC-UGOD integration:** Identical to SOn — matrix_exp on skew-symmetric
+/// **FASC-UGOD integration:** Identical to SOn: matrix_exp on skew-symmetric
 /// input guarantees orthogonal output at tier N+1.
 pub struct On {
     pub n: usize,
@@ -724,10 +724,10 @@ impl LieGroup for On {
 // SL(n) — Special linear group (det = 1, traceless algebra)
 // ============================================================================
 
-/// SL(n): Special linear group — n×n matrices with det = 1.
+/// SL(n): Special linear group: n×n matrices with det = 1.
 ///
 /// Algebra sl(n) = traceless n×n matrices (tr(A) = 0), dimension n²-1.
-/// det(exp(A)) = exp(tr(A)) = 1 when A is traceless — algebraic guarantee.
+/// det(exp(A)) = exp(tr(A)) = 1 when A is traceless: algebraic guarantee.
 ///
 /// **FASC-UGOD integration:** lie_exp via matrix_exp at tier N+1 (Padé [6/6]).
 /// The traceless constraint is preserved exactly by the exponential. lie_log

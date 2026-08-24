@@ -1,4 +1,4 @@
-//! Domain Implementations — 4 precision domains for FASC+UGOD pipeline
+//! Domain Implementations: 4 precision domains for FASC+UGOD pipeline
 //!
 //! Each domain provides domain-native arithmetic and type representations:
 //! - `binary_fixed`: Q64.64/Q128.128/Q256.256 binary fixed-point (tier N+1 transcendentals)

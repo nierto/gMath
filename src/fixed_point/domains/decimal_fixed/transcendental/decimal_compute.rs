@@ -1,4 +1,4 @@
-//! Decimal compute-tier primitives — arithmetic on values scaled by 10^DECIMAL_COMPUTE_DP.
+//! Decimal compute-tier primitives: arithmetic on values scaled by 10^DECIMAL_COMPUTE_DP.
 //!
 //! All values in this module are interpreted as `raw_int × 10^(-DECIMAL_COMPUTE_DP)`.
 //! Mirrors binary Q-format primitives but with decimal (base-10) scaling.
@@ -35,7 +35,7 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDe
 // PROFILE-SPECIFIC CONSTANTS
 // ============================================================================
 
-/// Decimal compute-tier precision (decimal places) — matches binary compute frac bits.
+/// Decimal compute-tier precision (decimal places): matches binary compute frac bits.
 ///
 /// Chosen so `compute_dp ≈ 2 × storage_dp`, giving the decimal equivalent of binary
 /// tier N+1 precision.
@@ -102,7 +102,7 @@ pub fn decimal_compute_scale() -> ComputeStorage {
     pow10_compute_ct(DECIMAL_COMPUTE_DP)
 }
 
-/// Alias for `decimal_compute_scale` — represents the value 1.0 at compute dp.
+/// Alias for `decimal_compute_scale`: represents the value 1.0 at compute dp.
 #[inline]
 pub fn decimal_compute_one() -> ComputeStorage {
     decimal_compute_scale()
@@ -534,7 +534,7 @@ pub fn decimal_compute_div_int(a: ComputeStorage, n: u64) -> ComputeStorage {
 ///
 /// - If `storage_dp < DECIMAL_COMPUTE_DP`: multiply by `10^(compute_dp - storage_dp)`.
 /// - If `storage_dp == DECIMAL_COMPUTE_DP`: widen only.
-/// - If `storage_dp > DECIMAL_COMPUTE_DP`: divide (precision loss possible — rare case).
+/// - If `storage_dp > DECIMAL_COMPUTE_DP`: divide (precision loss possible: rare case).
 #[inline]
 pub fn decimal_upscale_to_compute(scaled: BinaryStorage, storage_dp: u8) -> Result<ComputeStorage, OverflowDetected> {
     if storage_dp == DECIMAL_COMPUTE_DP {
@@ -584,7 +584,7 @@ fn binary_storage_to_compute_widen(scaled: BinaryStorage) -> ComputeStorage {
 
 /// Downscale compute-tier decimal value to storage-tier (BinaryStorage, dp).
 ///
-/// The caller provides `target_dp` — the number of decimal places the result should have.
+/// The caller provides `target_dp`: the number of decimal places the result should have.
 /// Rounding is round-half-away-from-zero.
 ///
 /// Returns `Err(TierOverflow)` if the result doesn't fit in BinaryStorage.

@@ -1,9 +1,9 @@
 //! L2A: Numerical ODE solvers with fixed-point arithmetic.
 //!
 //! Three integrators covering the practical spectrum:
-//! - `rk4_step` / `rk4_integrate` — classical 4th-order Runge-Kutta (fixed step)
-//! - `rk45_integrate` — Dormand-Prince adaptive (discrete double/halve/keep controller)
-//! - `verlet_step` / `verlet_integrate` — symplectic Störmer-Verlet (Hamiltonian systems)
+//! - `rk4_step` / `rk4_integrate`: classical 4th-order Runge-Kutta (fixed step)
+//! - `rk45_integrate`: Dormand-Prince adaptive (discrete double/halve/keep controller)
+//! - `verlet_step` / `verlet_integrate`: symplectic Störmer-Verlet (Hamiltonian systems)
 //!
 //! **FASC-UGOD integration:** All weighted sums (k1..k4/k6 combinations) are accumulated
 //! at compute tier via `compute_tier_dot_raw`. Step size h/2 is exact bit-shift (no
@@ -68,7 +68,7 @@ pub struct OdePoint {
 ///   x_{n+1} = x_n + (h/6)(k1 + 2k2 + 2k3 + k4)
 /// at compute tier for each component. Single downscale per component.
 ///
-/// h/6 is computed as (h/2)/3 — h/2 is a bit-shift (exact).
+/// h/6 is computed as (h/2)/3: h/2 is a bit-shift (exact).
 pub fn rk4_step<S: OdeSystem>(
     sys: &S,
     t: FixedPoint,
@@ -165,7 +165,7 @@ impl Rk45Config {
 /// Integrate an ODE using adaptive Dormand-Prince RK45.
 ///
 /// Uses a discrete step controller (double/halve/keep) instead of the
-/// standard `h_new = h * (tol/err)^(1/5)` formula — avoids the 5th root
+/// standard `h_new = h * (tol/err)^(1/5)` formula: avoids the 5th root
 /// computation entirely.
 ///
 /// Step controller:
@@ -339,7 +339,7 @@ pub trait HamiltonianSystem {
     fn force(&self, q: &FixedVector, p: &FixedVector) -> FixedVector;
     /// Velocity: dq/dt = ∂H/∂p(q, p).
     fn velocity(&self, q: &FixedVector, p: &FixedVector) -> FixedVector;
-    /// Total energy H(q, p) — for conservation monitoring.
+    /// Total energy H(q, p): for conservation monitoring.
     fn energy(&self, q: &FixedVector, p: &FixedVector) -> FixedPoint;
 }
 

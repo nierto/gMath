@@ -1,7 +1,11 @@
-//! # gMath — Multi-Domain Fixed-Point Arithmetic Library
+//! # gMath: Multi-Domain Fixed-Point Arithmetic Library
 //!
 //! Zero-float, pure-Rust, consensus-safe fixed-point arithmetic with
 //! 18 transcendental functions computed at tier N+1 for full storage-tier precision.
+//!
+//! Upgrading from 0.4.x: 0.5.0 is more accurate, and as a side effect some
+//! results end in a different final digit. This matters only if you store,
+//! hash, or compare results across versions. See CHANGELOG.md.
 //!
 //! ## Canonical API (FASC Pipeline)
 //!
@@ -15,9 +19,9 @@
 //! ## Profiles
 //!
 //! Default is `embedded`. Set `GMATH_PROFILE` for higher precision:
-//! - `embedded` (default) — Q64.64, 19 decimals
-//! - `balanced` — Q128.128, 38 decimals
-//! - `scientific` — Q256.256, 77 decimals
+//! - `embedded` (default): Q64.64, 19 decimals
+//! - `balanced`: Q128.128, 38 decimals
+//! - `scientific`: Q256.256, 77 decimals
 
 // Internal modules
 #[doc(hidden)] pub mod deployment_profiles;
@@ -26,12 +30,12 @@ pub mod fixed_point;
 // Canonical API — the single public entry point
 pub use fixed_point::canonical;
 
-/// TQ1.9 compact ternary operations — standalone module for inference and signal processing.
+/// TQ1.9 compact ternary operations: standalone module for inference and signal processing.
 /// Requires the `inference` feature flag.
 #[cfg(feature = "inference")]
 pub use fixed_point::tq19;
 
-/// Compute-tier (tier N+1) transcendentals over raw wide integers — exp, ln,
+/// Compute-tier (tier N+1) transcendentals over raw wide integers: exp, ln,
 /// sqrt, sinhcosh, sigmoid, softplus, ln1p at 2×FRAC_BITS precision.
 /// Requires the `inference` feature flag.
 #[cfg(feature = "inference")]

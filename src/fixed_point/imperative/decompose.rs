@@ -46,7 +46,7 @@ pub struct LUDecomposition {
 /// L is unit lower triangular, and U is upper triangular.
 ///
 /// **Precision strategy:** Uses Doolittle direct formulas where each entry is
-/// computed via `compute_tier_sub_dot_raw` — the entire inner sum accumulates
+/// computed via `compute_tier_sub_dot_raw`: the entire inner sum accumulates
 /// at tier N+1, rounding once. This gives 1 ULP per entry regardless of matrix
 /// size, instead of the O(n) ULP that incremental elimination produces.
 ///
@@ -183,7 +183,7 @@ impl LUDecomposition {
 
     /// Determinant: det(A) = (-1)^num_swaps * product(U diagonal).
     ///
-    /// Product accumulated at compute tier — single downscale at the end.
+    /// Product accumulated at compute tier: single downscale at the end.
     pub fn determinant(&self) -> FixedPoint {
         let n = self.u.rows();
         // Multiply all diagonal values at compute tier, downscale once
@@ -507,7 +507,7 @@ pub struct EigenDecomposition {
 /// **Algorithm:**
 /// 1. Cyclic-by-row sweeps: for each (i,j) with i<j, apply a Givens rotation
 ///    to zero A[i][j] (and A[j][i] by symmetry).
-/// 2. Rotation angle computed via quadratic formula — NO trig functions.
+/// 2. Rotation angle computed via quadratic formula, NO trig functions.
 ///    When a_ii == a_jj, use exact 45° rotation (cs = sn = √2/2).
 /// 3. Convergence: off-diagonal Frobenius norm drops below threshold, or
 ///    stagnation detected (5 sweeps with no improvement).
@@ -1272,7 +1272,7 @@ pub struct SchurDecomposition {
 ///
 /// **FASC-UGOD strategy:** Householder reflections use compute-tier dot products
 /// (same as QR decomposition). Francis shifts are computed from the trailing 2×2
-/// block at storage tier — no transcendentals needed (just trace and determinant
+/// block at storage tier, no transcendentals needed (just trace and determinant
 /// of a 2×2, which are additions and multiplications).
 pub fn schur_decompose(a: &FixedMatrix) -> Result<SchurDecomposition, OverflowDetected> {
     assert!(a.is_square(), "schur_decompose: matrix must be square");

@@ -1,11 +1,11 @@
-//! L1D: Matrix functions — exp, log, sqrt, pow.
+//! L1D: Matrix functions: exp, log, sqrt, pow.
 //!
 //! All operations use ComputeMatrix internally (tier N+1 precision throughout).
 //! Only one downscale per output element at the very end → 0-1 ULP.
 //!
 //! Internal `_compute` variants accept and return ComputeMatrix, enabling
 //! chains like `matrix_pow` (log → scalar_mul → exp) to stay at compute
-//! tier throughout — the matrix analog of FASC's BinaryCompute chain persistence.
+//! tier throughout: the matrix analog of FASC's BinaryCompute chain persistence.
 
 use super::FixedPoint;
 use super::FixedMatrix;
@@ -37,7 +37,7 @@ fn pade_coeff_compute(k: usize) -> ComputeStorage {
 // ============================================================================
 
 /// Compute-tier internal: exp(A) where A is already a ComputeMatrix.
-/// Returns ComputeMatrix — no downscale. Used by matrix_pow for chaining.
+/// Returns ComputeMatrix, no downscale. Used by matrix_pow for chaining.
 pub(crate) fn matrix_exp_compute(a: &ComputeMatrix) -> Result<ComputeMatrix, OverflowDetected> {
     let n = a.rows();
 
@@ -132,7 +132,7 @@ pub fn matrix_exp(a: &FixedMatrix) -> Result<FixedMatrix, OverflowDetected> {
 // ============================================================================
 
 /// Compute-tier internal: sqrt(A) where A is already a ComputeMatrix.
-/// Returns ComputeMatrix — no downscale. Used by matrix_log_compute for chaining.
+/// Returns ComputeMatrix, no downscale. Used by matrix_log_compute for chaining.
 pub(crate) fn matrix_sqrt_compute(a: &ComputeMatrix) -> Result<ComputeMatrix, OverflowDetected> {
     let n = a.rows();
     let max_iter = 50;
@@ -176,7 +176,7 @@ pub fn matrix_sqrt(a: &FixedMatrix) -> Result<FixedMatrix, OverflowDetected> {
 // ============================================================================
 
 /// Compute-tier internal: log(A) where A is already a ComputeMatrix.
-/// Returns ComputeMatrix — no downscale. Used by matrix_pow for chaining.
+/// Returns ComputeMatrix, no downscale. Used by matrix_pow for chaining.
 ///
 /// The sqrt loop now stays entirely at compute tier via matrix_sqrt_compute.
 /// Previously: N downscale-upscale cycles (one per sqrt). Now: zero.

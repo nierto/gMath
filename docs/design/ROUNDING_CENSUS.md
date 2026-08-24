@@ -6,15 +6,15 @@ bit-equality (sweeps + constructed exact ties) per profile, and all five
 profiles pass their full suites. Corrections discovered during
 implementation:
 
-- Canonical decimal divide tiers 1–5 were NOT truncating — they are
+- Canonical decimal divide tiers 1–5 were NOT truncating; they are
   **exact-or-rational-fallback** (`PrecisionLoss` → symbolic), which is
   better than any rounding rule and was kept; only the tier-6 best-effort
   arm truncated, now banker's.
 - `decimal_to_binary_storage` truncated on four arms and add-half-rounded
-  on q16_16 — unified to nearest ties-+∞ (result domain rule).
+  on q16_16: unified to nearest ties-+∞ (result domain rule).
 - The UGOD binary divide's old half-away adjust also mis-signed its bump
   for exact quotients in (−1, 0) raw units (branched on `quotient < 0`,
-  which is 0 there) — fixed by deriving the sign from the operands.
+  which is 0 there): fixed by deriving the sign from the operands.
 - Ternary Tier-4 `saturating_neg` → fail-loud MIN assert (0.4.33 flag).
 - LU singularity nuance surfaced: exact-zero pivots for matrices with
   storage-inexact multipliers (e.g. pivoting on 7 → 1/7) were a
@@ -27,38 +27,38 @@ Original census (stage a) follows.
 Every rounding site that determines result bits, catalogued from source
 2026-08-14. This is the evidence base for the uniform rounding policy
 (ROADMAP 0.5.0 item 0c): **exact when representable, round once otherwise,
-one tie rule per domain across every path** — binary nearest-ties-up,
+one tie rule per domain across every path**: binary nearest-ties-up,
 decimal banker's, ternary nearest (tie-free by theorem).
 
 Method: exhaustive grep for `round_bit` / `banker` / bare-shift /
 truncating-division patterns, then source reads of every hit. Sites marked
-**[verified]** were read line-by-line; a handful are **[catalogued]** —
+**[verified]** were read line-by-line; a handful are **[catalogued]**:
 located but their rule pinned down during implementation.
 
 ## A. Storage-result rounding sites (the policy surface)
 
-### Binary domain — target: round-to-nearest, ties toward +∞
+### Binary domain: target: round-to-nearest, ties toward +∞
 
 | Site | Current rule | Change for 0c |
 |---|---|---|
-| `fixed_multiply` (imperative `FixedPoint::Mul`) q16_16/q32_32 arms | **floor** (bare arithmetic `>>`) [verified] | → nearest ties-up (up to 1 ulp on ~all inexact products — behavioral improvement, breaking) |
+| `fixed_multiply` (imperative `FixedPoint::Mul`) q16_16/q32_32 arms | **floor** (bare arithmetic `>>`) [verified] | → nearest ties-up (up to 1 ulp on ~all inexact products: behavioral improvement, breaking) |
 | `fixed_multiply` q64_64 arm (`multiply_binary_i128` + AVX2 twin) | **banker's** (both twins consistent) [verified] | → ties-up (exact ties only) |
 | `fixed_multiply` q128_128/q256_256 arms | **truncate toward zero** (sign-magnitude shift) [verified] | → nearest ties-up (up to 1 ulp, breaking) |
-| `fixed_divide` (imperative `FixedPoint::Div`) — ALL profiles | **truncate toward zero** (bare `/`) [verified] | → nearest ties-up (up to 1 ulp on ~all inexact quotients, breaking) |
-| UGOD `BinaryTier1..6::checked_mul`/`mul` | nearest **ties-up** (round-bit add, all 6 tiers) [verified] | none — already the target |
+| `fixed_divide` (imperative `FixedPoint::Div`): ALL profiles | **truncate toward zero** (bare `/`) [verified] | → nearest ties-up (up to 1 ulp on ~all inexact quotients, breaking) |
+| UGOD `BinaryTier1..6::checked_mul`/`mul` | nearest **ties-up** (round-bit add, all 6 tiers) [verified] | none; already the target |
 | UGOD `BinaryTier*::checked_div` | nearest **half-away** (`abs_2rem >= abs_div`) [verified] | → ties-up (exact ties only) |
-| `downscale_to_storage` / `round_to_storage` / `downscale_q64_to_q32` (every compound path's single rounding) | nearest **ties-up**, checked/saturating [verified] | none — this is the anchor the policy aligns TO |
+| `downscale_to_storage` / `round_to_storage` / `downscale_q64_to_q32` (every compound path's single rounding) | nearest **ties-up**, checked/saturating [verified] | none; this is the anchor the policy aligns TO |
 | `compute_tier::to_fixed` (0.4.32 public) | ties-up via `downscale_to_storage` [verified] | none |
 
 **Headline finding: the imperative binary multiply uses THREE different
 rules by profile** (floor / banker's / toward-zero), and the imperative
-divide truncates everywhere — CONTRACT.md §3 was still wrong after the
+divide truncates everywhere: CONTRACT.md §3 was still wrong after the
 2026-08-14 correction, which had only checked the embedded kernel. §3 is
 re-corrected alongside this census.
 
 **Measured consequence** (compact, 44,044 sampled raw pairs): imperative
 vs canonical storage-tier multiply differ on **48.7% of products**, max
-1 ulp — floor vs nearest diverges whenever the discarded bits are >= half
+1 ulp: floor vs nearest diverges whenever the discarded bits are >= half
 an ulp, i.e. on ~half of all inexact products, NOT just on exotic ties.
 The same argument applies to divide on every profile (truncate vs
 half-away). Path independence for direct storage-tier mul/div is
@@ -67,18 +67,18 @@ paths are unaffected (single shared downscale). This is the strongest
 motivation for 0c: unification does not just simplify the mental model,
 it REPAIRS the path-independence contract for plain arithmetic.
 
-### Decimal domain — target: banker's (half-even)
+### Decimal domain: target: banker's (half-even)
 
 | Site | Current rule | Change for 0c |
 |---|---|---|
-| `DecimalFixed<D>` mul + div (11 `banker_round_decimal_i128` sites) | **banker's** [verified] | none — already the target |
-| Canonical decimal multiply (`try_mul_exact`) | **exact** — decimal places grow, no rounding [verified] | none — exactness-first, keep |
+| `DecimalFixed<D>` mul + div (11 `banker_round_decimal_i128` sites) | **banker's** [verified] | none; already the target |
+| Canonical decimal multiply (`try_mul_exact`) | **exact** (decimal places grow, no rounding [verified] | none) exactness-first, keep |
 | Canonical decimal divide | **truncate** (no rounding code; tier-6 comment confirms) [verified] | → banker's |
-| dp-cap reduction on canonical decimal store/promote | [catalogued] — pin rule during 0c | → banker's |
-| `decimal_to_binary_storage` (cross-domain coercion) | [catalogued] — 0.3.90 notes say round-to-nearest; tie rule unpinned | → domain of RESULT (binary ties-up) |
-| Decimal compute-tier engine mul (`decimal_compute.rs`) | half-away at DECIMAL_COMPUTE_DP [verified] | engine-internal, absorbed (below storage ulp) — keep, note only |
+| dp-cap reduction on canonical decimal store/promote | [catalogued]: pin rule during 0c | → banker's |
+| `decimal_to_binary_storage` (cross-domain coercion) | [catalogued]: 0.3.90 notes say round-to-nearest; tie rule unpinned | → domain of RESULT (binary ties-up) |
+| Decimal compute-tier engine mul (`decimal_compute.rs`) | half-away at DECIMAL_COMPUTE_DP [verified] | engine-internal, absorbed (below storage ulp): keep, note only |
 
-### Ternary domain — target: nearest (tie-free; no rule can be needed)
+### Ternary domain: target: nearest (tie-free; no rule can be needed)
 
 | Site | Current rule | Change for 0c |
 |---|---|---|
@@ -86,22 +86,22 @@ it REPAIRS the path-independence contract for plain arithmetic.
 | `div3` | truncate toward zero [verified] | → nearest = true trit shift |
 | `convert_to_ternary` / `0t` fractional-literal conversion | truncate toward zero [verified, pinned] | → nearest (tie-free for the 3-adic routed class; conversion-in of non-3-adic values documents nearest with the boundary tie noted in the contract) |
 
-### Contracted exceptions (documented truncation — keep as-is)
+### Contracted exceptions (documented truncation: keep as-is)
 
 | Site | Rule | Why it stays |
 |---|---|---|
-| tq19 `matvec_q2f`/`wide_output` narrowing | truncation toward zero | published 0.4.31 contract: `q2f / (1<<F)` reproduces the narrow matvec bit-for-bit — nested truncation is the property consumers pinned |
+| tq19 `matvec_q2f`/`wide_output` narrowing | truncation toward zero | published 0.4.31 contract: `q2f / (1<<F)` reproduces the narrow matvec bit-for-bit: nested truncation is the property consumers pinned |
 
 ## B. Compute-tier internal roundings (absorbed by tier N+1, out of policy scope)
 
 These round below the storage ulp and are erased by the single downscale;
 listed for completeness, no change:
 
-- `compute_divide` — truncating (all profile arms)
-- `mul_to_*` wide-product downscales in i512.rs/i1024.rs — ties-up round-bit
+- `compute_divide`: truncating (all profile arms)
+- `mul_to_*` wide-product downscales in i512.rs/i1024.rs: ties-up round-bit
 - Transcendental engine internals (exp/ln table+Taylor steps, decimal exp
-  4-stage, `sincos` reductions) — various, validated end-to-end at 0 ULP
-- `compute.rs` 18 round-bit sites — the ties-up downscale family
+  4-stage, `sincos` reductions): various, validated end-to-end at 0 ULP
+- `compute.rs` 18 round-bit sites: the ties-up downscale family
 
 ## Blast-radius summary for 0c implementation
 
@@ -121,14 +121,14 @@ listed for completeness, no change:
 
 ## Appendix (0b, 2026-08-23): unsigned widening-multiply call-site audit
 
-Classification of every `mul_to_i512/i1024/i2048` caller — see ROADMAP
+Classification of every `mul_to_i512/i1024/i2048` caller: see ROADMAP
 item 0b (delivered) for the summary. Verdicts: sign-wrapped ✓ (linalg ×8,
 decimal_compute ×3, compute_multiply, ln's Q128/Q256/Q512 helpers, ternary
 0.4.34 fixes, I2048::Mul); positive-by-construction now debug_asserted
 (exp chains/Taylor ×8, ln Taylor ×2, sqrt Newton via renamed `_nonneg`
 helper); shadowing hazard removed (exp+sqrt private unsigned twins of the
 sign-safe `multiply_i1024_q512_512` renamed `*_nonneg`); latent sign bugs
-fixed in UNREACHABLE code (pow_tier_n_plus_1.rs ×3 — dead module, since
+fixed in UNREACHABLE code (pow_tier_n_plus_1.rs ×3: dead module, since
 REMOVED per owner decision, 0.5.0). `mul_i128_to_i256` verified sign-safe (explicit
 handling). Enforcement: `tests/negative_operand_battery.rs` + the
 debug_asserts running under every test suite on every profile.

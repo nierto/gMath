@@ -102,7 +102,7 @@ pub fn compose_projective(
 ///
 /// CR(a, b, c, d) = (a-c)(b-d) / ((a-d)(b-c))
 ///
-/// This is the fundamental projective invariant — preserved under all
+/// This is the fundamental projective invariant: preserved under all
 /// projective transformations. Computed at compute tier for precision.
 pub fn cross_ratio_1d(
     a: FixedPoint,

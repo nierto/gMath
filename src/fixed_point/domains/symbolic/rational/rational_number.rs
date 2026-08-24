@@ -2120,7 +2120,7 @@ impl RationalNumber {
     /// Integer exponentiation: (a/b)^n
     ///
     /// Supports negative exponents: (a/b)^(-n) = (b/a)^n
-    /// **EXACT**: No precision loss — pure integer arithmetic
+    /// **EXACT**: No precision loss: pure integer arithmetic
     pub fn pow(self, exponent: i32) -> Self {
         if exponent == 0 {
             return Self::one();

@@ -4,7 +4,7 @@
 //! and index manipulation operations.
 //!
 //! **FASC-UGOD integration:** Contraction sums use `compute_tier_dot_raw`
-//! for the inner accumulation — same pattern as matrix multiply. Each
+//! for the inner accumulation; same pattern as matrix multiply. Each
 //! contraction output element is a dot product at tier N+1 with single
 //! downscale, giving 1 ULP regardless of the number of summed terms.
 
@@ -326,7 +326,7 @@ pub fn contract(a: &Tensor, b: &Tensor, pairs: &[(usize, usize)]) -> Tensor {
 /// Outer (tensor) product: C_{i₁...iₐ j₁...jᵦ} = A_{i₁...iₐ} * B_{j₁...jᵦ}.
 ///
 /// Result rank = rank(A) + rank(B).
-/// Each element is a single product — no accumulation needed.
+/// Each element is a single product, no accumulation needed.
 pub fn outer(a: &Tensor, b: &Tensor) -> Tensor {
     let mut out_shape = a.shape.clone();
     out_shape.extend_from_slice(&b.shape);

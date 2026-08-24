@@ -1,4 +1,4 @@
-//! # PlanarTQ19 — trit-plane decomposed TQ1.9 weight matrix
+//! # PlanarTQ19: trit-plane decomposed TQ1.9 weight matrix
 //!
 //! Every TQ1.9 weight (`i16` raw, |raw| ≤ 29,524 = (3^10 − 1)/2) is exactly a
 //! 10-digit balanced-ternary number:
@@ -10,10 +10,10 @@
 //! `PlanarTQ19` stores each digit position k as its own ternary matrix
 //! ("plane"), with a per-plane encoding chosen by density:
 //!
-//! - **Empty**  — no nonzero trits: zero storage.
-//! - **Sparse** — density below [`SPARSE_DENSITY_PERCENT`]: CSR column
+//! - **Empty**, no nonzero trits: zero storage.
+//! - **Sparse**: density below [`SPARSE_DENSITY_PERCENT`]: CSR column
 //!   indices, split into positive and negative sets (no sign storage).
-//! - **Dense**  — row-aligned packed trits, 5 per byte (1.6 bits/weight),
+//! - **Dense**: row-aligned packed trits, 5 per byte (1.6 bits/weight),
 //!   decoded via [`TRIT_DECODE_TABLE`].
 //!
 //! For bell-shaped LLM weight distributions the high planes (k ≥ 7) are
@@ -102,7 +102,7 @@ const fn build_contrib_luts() -> [[[i16; 8]; 256]; NUM_PLANES] {
 /// Storage for one trit plane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaneData {
-    /// All trits zero — nothing stored.
+    /// All trits zero; nothing stored.
     Empty,
     /// Row-aligned packed trits, 5 per byte. Row `r` occupies bytes
     /// `r * bytes_per_row .. (r+1) * bytes_per_row` with zero-trit padding
@@ -504,7 +504,7 @@ impl PlanarTQ19 {
     /// Batch matvec: same weights applied to multiple activation vectors.
     ///
     /// Each row is reconstructed **once** and dotted against every batch
-    /// vector — reconstruction cost amortizes across the batch.
+    /// vector: reconstruction cost amortizes across the batch.
     ///
     /// # Panics
     /// Panics if any activation vector length != `self.cols()`.

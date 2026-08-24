@@ -186,7 +186,7 @@ pub fn multiply_ternary_tq160_160(a: I512, b: I512) -> Result<I512, OverflowDete
 /// TQ320.320 multiplication (maximum precision, never fails)
 ///
 /// **ALGORITHM**: Uses I2048 intermediate via mul_to_i2048()
-/// **CHALLENGE**: I2048 has no Div — use two-stage I1024 division
+/// **CHALLENGE**: I2048 has no Div: use two-stage I1024 division
 /// Product / 3^256 = (Product / 3^128) / 3^128
 /// Since 3^128 fits in I512, each stage is I2048/I1024->I1024 (tractable)
 #[inline]

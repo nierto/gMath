@@ -1,12 +1,12 @@
 //! L3B: Christoffel symbols and curvature tensors with fixed-point arithmetic.
 //!
 //! Provides numerical differential geometry on Riemannian manifolds:
-//! - `numerical_derivative` — central difference with optimal h = 2^(-FRAC_BITS/3)
-//! - `christoffel` — Γᵏᵢⱼ = ½gᵏˡ(∂ᵢgⱼˡ+∂ⱼgˡᵢ-∂ˡgᵢⱼ)
-//! - `riemann_curvature` — R^l_{ijk} = ∂ⱼΓˡᵢₖ - ∂ₖΓˡᵢⱼ + ΓˡⱼₘΓᵐᵢₖ - ΓˡₖₘΓᵐᵢⱼ
-//! - `ricci_tensor` — Rᵢⱼ = R^k_{ikj}
-//! - `scalar_curvature` — R = gⁱʲRᵢⱼ
-//! - `sectional_curvature` — K(u,v) = R(u,v,v,u)/(|u|²|v|²-<u,v>²)
+//! - `numerical_derivative`: central difference with optimal h = 2^(-FRAC_BITS/3)
+//! - `christoffel`: Γᵏᵢⱼ = ½gᵏˡ(∂ᵢgⱼˡ+∂ⱼgˡᵢ-∂ˡgᵢⱼ)
+//! - `riemann_curvature`: R^l_{ijk} = ∂ⱼΓˡᵢₖ - ∂ₖΓˡᵢⱼ + ΓˡⱼₘΓᵐᵢₖ - ΓˡₖₘΓᵐᵢⱼ
+//! - `ricci_tensor`: Rᵢⱼ = R^k_{ikj}
+//! - `scalar_curvature`: R = gⁱʲRᵢⱼ
+//! - `sectional_curvature`: K(u,v) = R(u,v,v,u)/(|u|²|v|²-<u,v>²)
 //!
 //! **FASC-UGOD integration:** Numerical differentiation uses h = 2^(-FRAC_BITS/3)
 //! (power-of-2 for exact division by 2h via bit-shift). All contractions (Γ·g⁻¹,
@@ -514,7 +514,7 @@ impl MetricProvider for SphereMetric {
     /// All others = 0.
     ///
     /// These are derived analytically from g = r²[[1,0],[0,sin²θ]].
-    /// Uses the FASC sin/cos engines — no numerical differentiation involved.
+    /// Uses the FASC sin/cos engines, no numerical differentiation involved.
     fn christoffel_closed_form(&self, p: &FixedVector) -> Option<Tensor> {
         let theta = p[0];
         let sin_t = theta.sin();
