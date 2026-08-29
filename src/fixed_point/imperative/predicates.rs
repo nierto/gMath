@@ -368,3 +368,34 @@ pub fn pd_verdict(a: &FixedMatrix) -> Result<PdVerdict, OverflowDetected> {
     }
     Ok(PdVerdict::PositiveDefinite)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The width budget cannot be violated by inputs within the storage
+    /// range, so the guard is exercised here directly: it must refuse a
+    /// product whose operands' bit lengths exceed the accumulator.
+    #[test]
+    #[should_panic(expected = "accumulator width budget violated")]
+    fn mul_exact_refuses_a_product_beyond_the_accumulator() {
+        let big: i128 = 1 << 100;
+        let _ = big.mul_exact(big);
+    }
+
+    #[test]
+    fn mul_exact_is_signed_and_exact_on_magnitudes() {
+        assert_eq!(6i128.mul_exact(7), 42);
+        assert_eq!((-6i128).mul_exact(7), -42);
+        assert_eq!(6i128.mul_exact(-7), -42);
+        assert_eq!((-6i128).mul_exact(-7), 42);
+        assert_eq!(0i128.mul_exact(-7), 0);
+        let near = (1i128 << 63) - 1;
+        assert_eq!((-near).mul_exact(near), -(near * near));
+        assert_eq!((-42i128).sign(), Sign::Negative);
+        assert_eq!(0i128.sign(), Sign::Zero);
+        assert_eq!(42i128.sign(), Sign::Positive);
+        assert_eq!(Sign::Negative.flip(), Sign::Positive);
+        assert_eq!(Sign::Zero.flip(), Sign::Zero);
+    }
+}

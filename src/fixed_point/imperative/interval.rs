@@ -20,8 +20,9 @@
 //! **What may carry the word certified.** `+`, `-`, `*`, `/` are sound by the
 //! standard endpoint argument. [`Interval::sqrt`] is certified a posteriori:
 //! the returned floor `k` satisfies `k^2 <= n < (k+1)^2` in exact integers at
-//! the compute tier, checked after the engine produced its candidate, so the
-//! certificate does not depend on the engine at all. No transcendental is
+//! the compute tier. The candidate comes from an integer Newton iteration at
+//! the compute tier, not from the transcendental engine, and the check is
+//! bounded: it can fail loudly, never loop. No transcendental is
 //! provided. Their accuracy is validated against reference values at chosen
 //! points, which is evidence rather than a proof of a bound over the domain,
 //! and an interval widened by a measured error would not be an enclosure. Each
@@ -49,7 +50,6 @@ use super::{FixedMatrix, FixedPoint, FixedVector};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_checked_add, downscale_to_storage_ceil, downscale_to_storage_floor,
-    sqrt_at_compute_tier,
 };
 use crate::fixed_point::universal::fasc::stack_evaluator::{
     upscale_to_compute, BinaryStorage, ComputeStorage,
@@ -233,34 +233,109 @@ fn directed_divide(a: BinaryStorage, b: BinaryStorage) -> Result<(BinaryStorage,
 /// the storage scale, verified by exact integer comparison.
 ///
 /// In raw units `sqrt(x)_raw = isqrt(x_raw << FRAC_BITS)`, and `n = x_raw <<
-/// FRAC_BITS` is exactly the compute-tier representation of `x`. The engine's
-/// tier N+1 result, narrowed by floor, is the candidate `k`; it is then moved
-/// until `k^2 <= n < (k+1)^2` holds in exact compute-tier integers. The loop
-/// is what certifies the result; the engine only makes it short.
+/// FRAC_BITS` is exactly the compute-tier representation of `x`. The candidate
+/// is an integer Newton iteration on `n` at the compute tier, seeded from
+/// above by a power of two, which converges to `floor(sqrt(n))` in O(log bits)
+/// steps independent of any transcendental engine. The candidate is then
+/// verified: `k^2 <= n < (k+1)^2` in exact compute-tier integers, with at most
+/// two corrective steps each way; if the certificate still does not hold the
+/// function panics rather than loop or return an unverified value.
 #[inline]
 fn certified_sqrt(x: BinaryStorage) -> Result<(BinaryStorage, BinaryStorage), OverflowDetected> {
     let n = upscale_to_compute(x);
-    let candidate = sqrt_at_compute_tier(n);
-    let mut k = downscale_to_storage_floor(candidate)?;
+    let mut k = compute_narrow_integer(isqrt_compute(n))?;
     let unit = unit_raw();
     let mut steps = 0u32;
     while exact_product(k, k) > n {
         k = st_sub(k, unit)?;
         steps += 1;
+        assert!(steps <= 2, "certified_sqrt: candidate failed the certificate downward");
     }
     loop {
         let next = st_add(k, unit)?;
         if exact_product(next, next) <= n {
             k = next;
             steps += 1;
+            assert!(steps <= 2, "certified_sqrt: candidate failed the certificate upward");
         } else {
             break;
         }
     }
-    debug_assert!(steps <= 2, "certified_sqrt: engine candidate was {steps} units off");
     let floor = k;
     let ceil = if exact_product(k, k) == n { k } else { st_add(k, unit)? };
     Ok((floor, ceil))
+}
+
+/// `floor(sqrt(n))` for a non-negative compute-tier integer, by Newton from
+/// above: seed `2^ceil(bits/2) >= sqrt(n)`, iterate `k = (k + n/k) / 2` while
+/// it decreases. Plain integer arithmetic on the compute type; no Q-format
+/// scaling is involved.
+#[inline]
+fn isqrt_compute(n: ComputeStorage) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    {
+        debug_assert!(n >= 0);
+        (n as u64).isqrt() as i64
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        debug_assert!(n >= 0);
+        (n as u128).isqrt() as i128
+    }
+    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+    {
+        if n == ComputeStorage::zero() {
+            return n;
+        }
+        let bits = compute_bit_length(n);
+        let mut k = ComputeStorage::from_i128(1) << (((bits + 1) / 2) as usize);
+        loop {
+            let next = (k + n / k) >> 1;
+            if next >= k {
+                return k;
+            }
+            k = next;
+        }
+    }
+}
+
+/// Significant bits of a non-negative wide compute-tier value.
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+#[inline]
+fn compute_bit_length(n: ComputeStorage) -> u32 {
+    let words = &n.words;
+    for i in (0..words.len()).rev() {
+        if words[i] != 0 {
+            return i as u32 * 64 + (64 - words[i].leading_zeros());
+        }
+    }
+    0
+}
+
+/// A compute-tier integer that is known to fit the storage type, as storage.
+/// This is a plain integer narrowing, not a Q-format downscale.
+#[inline]
+fn compute_narrow_integer(v: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    #[cfg(table_format = "q16_16")]
+    {
+        i32::try_from(v).map_err(|_| OverflowDetected::TierOverflow)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        i64::try_from(v).map_err(|_| OverflowDetected::TierOverflow)
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        if v.fits_in_i128() { Ok(v.as_i128()) } else { Err(OverflowDetected::TierOverflow) }
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        if v.fits_in_i256() { Ok(v.as_i256()) } else { Err(OverflowDetected::TierOverflow) }
+    }
+    #[cfg(table_format = "q256_256")]
+    {
+        if v.fits_in_i512() { Ok(v.as_i512()) } else { Err(OverflowDetected::TierOverflow) }
+    }
 }
 
 /// The raw integer 1 (one ulp) in the storage type.

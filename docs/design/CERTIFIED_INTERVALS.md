@@ -66,12 +66,25 @@ unique `k` with
 
 Both inequalities are checkable in exact compute-tier integers: `k` fits the
 storage type (`k < 2^((W-1+F)/2) < 2^(W-1)` on every profile) so `k^2` is an
-`exact_product`, and `n` is a compute-tier value. The implementation takes the
-engine's tier N+1 result, narrows it by floor to a candidate, then moves the
-candidate down while `k^2 > n` and up while `(k+1)^2 <= n`. The loop is the
-certificate; the engine only makes it short (a `debug_assert` records that it
-never moves more than two units). The upper endpoint is `k` if `k^2 == n`,
-otherwise `k + 1`.
+`exact_product`, and `n` is a compute-tier value. The candidate `k` is an
+integer Newton iteration on `n` at the compute tier (seed `2^ceil(bits/2)`
+from above, iterate `(k + n/k) / 2` while it decreases; native `isqrt` on the
+narrow profiles), which converges in O(log bits) steps and involves no
+transcendental engine. The candidate is then verified against the two
+inequalities, with at most two corrective steps each way; if the certificate
+still fails the function panics. It cannot loop. The upper endpoint is `k` if
+`k^2 == n`, otherwise `k + 1`.
+
+The first implementation took its candidate from the Q-format sqrt engine and
+walked it one unit at a time to the certificate. That was sound but unbounded,
+and on the scientific profile the engine's candidate for inputs near the
+storage maximum (`2^510`) was far enough off that the walk did not finish in an
+hour. A certificate loop must be bounded; a candidate must not depend on the
+accuracy of code the certificate exists to stand independent of. The
+independent-reference gate now also asserts that the scalar `FixedPoint::sqrt`
+lies inside the certified enclosure for every reference input on every
+profile, so an inaccurate engine shows up as a failing test rather than a
+hang.
 
 This is why sqrt is in the certified set and the transcendentals are not. An
 algebraic function's result satisfies a polynomial identity that can be checked
@@ -344,3 +357,14 @@ consumer ever needs one at 77 digits.
 `tests/pd_verdict_validation.rs` and `tests/exact_predicates_validation.rs`
 gate sections 9 and 10 on every profile; `tests/wide_integer_sign_semantics.rs`
 gates the substrate fixes of section 6.
+
+`tests/certified_geometry_refs_validation.rs` is the independent second
+opinion: reference values from `scripts/generate_certified_geometry_refs.py`
+(Python exact integers and fractions, mpmath at 300 digits as the in-generator
+cross-check, no code shared with the Rust side), covering sqrt, product and
+quotient endpoints with operands near the storage maximum on every profile,
+containment of the exact rational last Cholesky pivot at n = 23 and 50,
+predicate signs on configurations scaled to near the storage maximum, and the
+decimal endpoints. The other gates use i128 models written alongside the code;
+this one does not, which is the point. All of these run on all five profiles
+in `.github/workflows/certified-geometry.yml`.

@@ -1,0 +1,45 @@
+# Certified geometry gates on every deployment profile.
+#
+# Intervals (binary and decimal), the interval Cholesky verdict, the exact
+# predicates, the wide-integer sign semantics they rest on, and the
+# independent-reference gate (Python exact integers cross-checked against
+# mpmath, tests/data/certified_geometry_refs.rs). Each gate runs in seconds;
+# the cost is one library build per profile. Pre-built tables make that
+# cheap, so all five profiles run on every push.
+name: certified-geometry
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Certified geometry gates
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: |
+          cargo test --no-fail-fast \
+            --test wide_integer_sign_semantics \
+            --test interval_enclosure \
+            --test decimal_interval_enclosure \
+            --test pd_verdict_validation \
+            --test exact_predicates_validation \
+            --test certified_geometry_refs_validation
+
+      - name: Width-budget guard (library unit tests)
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --lib predicates::
