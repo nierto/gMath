@@ -528,15 +528,39 @@ Balanced ternary arithmetic lacks a dedicated validation suite. The domain works
 A first-class interval type ([lo, hi] guaranteed to enclose the true value) built
 on the existing tier-N+1 machinery. The downscale step already rounds once;
 adding round-toward-−∞ and round-toward-+∞ modes beside the current
-round-to-nearest is a branch on the discarded bits, not new math: that directed
-(outward) rounding is what makes enclosures sound. With gMath's correctly-rounded
-transcendentals, interval versions come nearly for free: evaluate f at the
-endpoints, widen by the known ≤1-ULP rounding error. Turns "correctly rounded"
-into "certified bound": the error-transparency story for validation/anomaly
-consumers (e.g. interval-certified scores: d² ∈ [lo, hi], "certainly outside" vs
-"within numerical noise"). Real work is the dependency problem (centered/affine
-arithmetic to curb interval widening) and non-monotonic extrema; ship a
-monotonic-first v1. Reference: Moore/Kearfott; IEEE 1788-2015 (decorations).
+round-to-nearest is a branch on the discarded bits, not new math. Arithmetic
+shift is already floor for two's complement, so floor is computed today and ceil
+is the same shift plus a nonzero-remainder test. That directed (outward) rounding
+is what makes an enclosure sound. The payoff is the error-transparency story for
+validation and anomaly consumers: a score of d² ∈ [lo, hi] separates "certainly
+outside" from "within our own numerical noise".
+
+What may carry the word certified is decided by an algebraic boundary, not by
+convenience. Add, subtract, multiply and divide are sound by the standard
+endpoint argument. sqrt and inv_sqrt certify a posteriori in exact integers,
+since isqrt(n) is the unique k with k² ≤ n < (k+1)² and both inequalities are
+checkable at the compute tier: no error analysis is required and the certificate
+survives a change of algorithm. The transcendentals do **not** belong in v1.
+Their accuracy is validated against mpmath at chosen test points, which is
+evidence about those points rather than a proof of a bound over the domain, and
+an interval widened by a measured error encloses nothing while looking exactly
+like one that does. Each transcendental joins only once its bound is proven, one
+engine at a time.
+
+Measured 2026-08-29 on a 23-dimensional quadratic form at Q64.64: enclosures came
+out 5 to 64 ulp wide on values of order 10, a relative width near 1e-19, with no
+enclosure failures and no widening under deliberate ill-conditioning. Cost was 6
+to 13 percent over the scalar path, because endpoint work only doubles on stages
+whose inputs are already intervals; where inputs are exact and the accumulator is
+wide, an interval costs one extra directed narrowing. The dependency problem is
+bounded by the width it starts from: its sign-dependent cases need an interval
+that straddles a critical point, which a 1-ulp interval cannot, and its
+subtractive cases only double a width that is already negligible. The same
+computation with a narrowing after every elementary operation, which is the
+classical formulation, is 12 to 24 times wider. Rounding once per compound
+operation is therefore what makes the enclosure tight, and affine arithmetic is
+not needed for a monotonic-first v1. Reference: Moore/Kearfott; IEEE 1788-2015,
+whose decorations and reverse operations are an explicit non-goal.
 
 ### Exact geometric predicates
 
@@ -545,9 +569,21 @@ containment, built on the exact rational (BigInt a/b) and integer fixed-point
 domains. Each predicate is the sign of a determinant polynomial in the inputs,
 and only the sign matters, so exact arithmetic makes the verdict provably
 correct, including the exact-zero degenerate cases (collinear/cocircular) that
-floating point cannot decide reliably. Speed via the standard filter→fallback
-pattern: the interval type (above) resolves the common case, exact arithmetic
-runs only near zero. The same sign-of-determinant primitive certifies matrix
+floating point cannot decide reliably. Each predicate has a fixed degree, so the
+accumulator width is bounded and computable in advance: 2W+2 bits for orient2d,
+3W+3 for orient3d, 4W+5 for incircle and 5W+6 for insphere, where W is the
+storage width. Checked against the integer types already in the library, 19 of
+20 predicate-and-profile combinations fit, the exceptions being the circle
+predicates at Q256.256. No arbitrary-precision backend is required, and the
+accumulator type should be derived at compile time from the storage width rather
+than hand-written per profile. The received view that exact predicates need big
+integers is conditioned on floating-point inputs, whose exponent range makes the
+product width unbounded; integer inputs remove that premise. The standard
+filter→fallback pattern is therefore an optimisation here rather than a
+requirement, since the exact path is a handful of wide multiplies with no
+allocation, and it should not be imported without measurement. The predicate
+returns a trichotomy, never a bool: the exact-zero case is the whole reason the
+work is worth doing. The same sign-of-determinant primitive certifies matrix
 positive-definiteness/rank (a real need for any SPD/Cholesky consumer: replaces
 blind diagonal regularization). Enables a topological "shape over a point cloud"
 layer (Delaunay / alpha-complex / persistent homology: integer reduction, zero
