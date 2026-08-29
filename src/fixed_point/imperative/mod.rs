@@ -20,12 +20,14 @@ pub mod ode;
 pub mod curvature;
 pub mod projective;
 pub mod fiber_bundle;
+pub mod interval;
 mod serialization;
 
 pub use fixed_point::FixedPoint;
 pub use fixed_point::OverflowDetected;
 pub use fixed_vector::FixedVector;
 pub use fixed_matrix::FixedMatrix;
+pub use interval::Interval;
 
 // Re-export the underlying storage type for from_raw()/raw() interop
 pub use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;

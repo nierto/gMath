@@ -5,6 +5,39 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Certified interval arithmetic**: `g_math::fixed_point::Interval`
+  (module `imperative::interval`). An enclosure `[lo, hi]` that is sound by
+  construction: every product of storage values is formed exactly at the
+  compute tier, and every narrowing back to storage rounds the lower endpoint
+  toward negative infinity and the upper toward positive infinity.
+  Operations: `+ - * /` and `Neg` (with `try_*` twins), `sqrt` (certified a
+  posteriori by the exact integer check `k^2 <= n < (k+1)^2`, so the
+  certificate does not depend on the engine), `dot` and `quadratic_form`
+  (exact accumulation, one narrowing per stage), and the certainty predicates
+  `contains`, `contains_zero`, `is_certainly_positive`, `is_certainly_negative`,
+  `width`, `is_point`. Endpoint arithmetic never wraps: storage overflow is a
+  typed `TierOverflow`, and dividing by an interval containing zero is
+  `DivisionByZero`. No transcendental is provided; their accuracy is measured
+  at test points rather than proven over the domain, and an interval widened
+  by a measured error would not be an enclosure. Design and measurements in
+  `docs/design/CERTIFIED_INTERVALS.md`. Measured at Q64.64 on a 23-dimensional
+  quadratic form: 5 to 64 ulp wide on values of order 10, zero enclosure
+  failures, unmoved by ill-conditioning, at 106 to 113 percent of the scalar
+  path.
+- Directed narrowing points `downscale_to_storage_floor` and
+  `downscale_to_storage_ceil` beside the existing nearest variant, crate
+  internal. The scalar paths are untouched; one rounding rule per domain
+  still holds on every scalar path.
+- `tests/interval_enclosure.rs`: the permanent gate (directed rounding
+  brackets the nearest scalar by at most one ulp including negatives and
+  constructed ties, enclosure against exact integer references, the sqrt
+  certificate on sampled inputs, typed errors), on every profile and in the
+  narrow-profile CI matrix.
+
 ## [0.5.0] - 2026-08-24
 
 ### ⚠ Please read before upgrading to 0.5.0

@@ -9,7 +9,7 @@ pub mod canonical;
 
 /// Imperative numeric types: `FixedPoint`, `FixedVector`, `FixedMatrix`.
 pub mod imperative;
-pub use imperative::{FixedPoint, FixedVector, FixedMatrix};
+pub use imperative::{FixedPoint, FixedVector, FixedMatrix, Interval};
 
 /// TQ1.9 compact ternary operations: standalone, decoupled from FASC/routing.
 /// Gated behind the `inference` feature flag.

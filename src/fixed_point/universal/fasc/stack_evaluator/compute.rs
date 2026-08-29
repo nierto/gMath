@@ -188,6 +188,141 @@ pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage,
     }
 }
 
+/// Downscale from compute tier to storage tier rounding toward negative
+/// infinity (floor).
+///
+/// The arithmetic right shift IS floor in two's complement, so this is
+/// `downscale_to_storage` without its round-bit bump. Fits-checked the same
+/// way. Used for the lower endpoint of certified intervals; never on a scalar
+/// path, which keeps the one-rounding-rule-per-domain contract intact.
+#[inline]
+pub(crate) fn downscale_to_storage_floor(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    #[cfg(table_format = "q256_256")]
+    {
+        let shifted = val >> 256;
+        if !shifted.fits_in_i512() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(shifted.as_i512())
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        let shifted = val >> 128;
+        if !shifted.fits_in_i256() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(shifted.as_i256())
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        let shifted = val >> 64;
+        if !shifted.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(shifted.as_i128())
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        let shifted = val >> 32;
+        if shifted > i64::MAX as i128 || shifted < i64::MIN as i128 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(shifted as i64)
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        let shifted = val >> frac_config::FRAC_BITS;
+        if shifted > i32::MAX as i64 || shifted < i32::MIN as i64 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(shifted as i32)
+    }
+}
+
+/// Downscale from compute tier to storage tier rounding toward positive
+/// infinity (ceil).
+///
+/// Floor plus one whenever any discarded bit is set. The bump is checked:
+/// a value whose floor is exactly the storage maximum has no ceiling in the
+/// storage tier, and that is a `TierOverflow`, not a wrap. Used for the upper
+/// endpoint of certified intervals.
+#[inline]
+pub(crate) fn downscale_to_storage_ceil(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    #[cfg(table_format = "q256_256")]
+    {
+        let mask = (I1024::from_i128(1) << 256) - I1024::from_i128(1);
+        let inexact = (val & mask) != I1024::zero();
+        let shifted = val >> 256;
+        if !shifted.fits_in_i512() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let floor = shifted.as_i512();
+        if inexact {
+            floor.checked_add(I512::from_i128(1)).ok_or(OverflowDetected::TierOverflow)
+        } else {
+            Ok(floor)
+        }
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        let mask = (I512::from_i128(1) << 128) - I512::from_i128(1);
+        let inexact = (val & mask) != I512::zero();
+        let shifted = val >> 128;
+        if !shifted.fits_in_i256() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let floor = shifted.as_i256();
+        if inexact {
+            floor.checked_add(I256::from_i128(1)).ok_or(OverflowDetected::TierOverflow)
+        } else {
+            Ok(floor)
+        }
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        let mask = (I256::from_i128(1) << 64) - I256::from_i128(1);
+        let inexact = (val & mask) != I256::zero();
+        let shifted = val >> 64;
+        if !shifted.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let floor = shifted.as_i128();
+        if inexact {
+            floor.checked_add(1).ok_or(OverflowDetected::TierOverflow)
+        } else {
+            Ok(floor)
+        }
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        let inexact = (val & ((1i128 << 32) - 1)) != 0;
+        let shifted = val >> 32;
+        if shifted > i64::MAX as i128 || shifted < i64::MIN as i128 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let floor = shifted as i64;
+        if inexact {
+            floor.checked_add(1).ok_or(OverflowDetected::TierOverflow)
+        } else {
+            Ok(floor)
+        }
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        let inexact = (val & ((1i64 << frac_config::FRAC_BITS) - 1)) != 0;
+        let shifted = val >> frac_config::FRAC_BITS;
+        if shifted > i32::MAX as i64 || shifted < i32::MIN as i64 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        let floor = shifted as i32;
+        if inexact {
+            floor.checked_add(1).ok_or(OverflowDetected::TierOverflow)
+        } else {
+            Ok(floor)
+        }
+    }
+}
+
 /// Convert a Decimal StackValue directly to ComputeStorage at full compute-tier precision.
 ///
 /// This avoids the precision loss of going through BinaryStorage first.

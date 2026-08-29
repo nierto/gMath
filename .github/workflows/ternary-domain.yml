@@ -67,3 +67,12 @@ jobs:
         env:
           GMATH_PROFILE: ${{ matrix.profile }}
         run: cargo test --test ugod_promotion_validation
+
+      # Certified interval gate: directed rounding brackets the nearest
+      # scalar by at most one ulp (negatives and constructed ties included),
+      # the enclosure invariant holds against exact integer references, and
+      # the sqrt certificate k^2 <= n < (k+1)^2 holds on every sampled input.
+      - name: Certified interval gate (enclosure, directed rounding, sqrt certificate)
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --test interval_enclosure

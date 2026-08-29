@@ -254,6 +254,39 @@ Modules: g_math::fixed_point::imperative::fused
 | `silu` | fn | Fused SiLU activation: x / (1 + exp(-x)) entirely at compute tier. |
 | `softmax_mix` | fn | Fused softmax + weighted value mix, entirely at compute tier: |
 
+## Certified intervals
+
+Modules: Interval (re-exported at g_math::fixed_point)
+
+### Interval
+
+A certified enclosure `[lo, hi]` of a real value, `lo <= hi`.
+
+| Method | Summary |
+| --- | --- |
+| `point` | The degenerate interval `[x, x]`. |
+| `new` | `[lo, hi]`. Panics if `lo > hi`. |
+| `try_new` | `[lo, hi]`, or `Err(InvalidInput)` if `lo > hi`. |
+| `lo` | Lower endpoint. |
+| `hi` | Upper endpoint. |
+| `width` | `hi - lo`. Panics if the width itself does not fit the storage tier. |
+| `is_point` | `lo == hi`. |
+| `contains` | `lo <= x <= hi`. |
+| `contains_zero` | `lo <= 0 <= hi`. |
+| `is_certainly_positive` | `lo > 0`: every value in the interval is positive. |
+| `is_certainly_negative` | `hi < 0`: every value in the interval is negative. |
+| `try_add` | `[a.lo + b.lo, a.hi + b.hi]`. Storage addition is exact when it fits. |
+| `try_sub` | `[a.lo - b.hi, a.hi - b.lo]`. |
+| `try_neg` | `[-hi, -lo]`. |
+| `try_mul` | Product: exact corner products at the compute tier, narrowed once. |
+| `try_div` | Quotient; `Err(DivisionByZero)` if the divisor interval contains zero. |
+| `try_sqrt` | Certified square root. `Err(DomainError)` if `lo < 0`. |
+| `try_dot` | Certified dot product of two point vectors, with one narrowing. |
+| `try_quadratic_form` | Certified quadratic form `v^T M v` for point inputs. |
+| `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
+| `dot` | Certified dot product; panics on overflow. |
+| `quadratic_form` | Certified quadratic form; panics on overflow. |
+
 ## Linear algebra
 
 Modules: g_math::fixed_point::imperative::decompose, g_math::fixed_point::imperative::derived, g_math::fixed_point::imperative::matrix_functions

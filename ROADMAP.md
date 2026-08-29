@@ -260,6 +260,28 @@ dispatch-time shadow-exponent guard is the future path. Reasoning:
 `docs/design/TERNARY_ROUTING_COLUMN.md`. Measured end-to-end: ~1.06×
 vs the rational fallback (parse-dominated); the value is architectural.
 
+### Unreleased: Certified interval arithmetic
+
+**IMPLEMENTED 2026-08-29 on main, not yet released.**
+`g_math::fixed_point::Interval` (module `imperative::interval`): an enclosure
+`[lo, hi]` sound by construction, from exact compute-tier products and
+directed narrowing (floor for the lower endpoint, ceil for the upper) at the
+single narrowing point per compound operation. Operations: `+ - * /`, `Neg`,
+`sqrt` (certified a posteriori by `k^2 <= n < (k+1)^2` in exact integers, so
+the certificate is independent of the engine), `dot` and `quadratic_form`
+(exact accumulation, one narrowing per stage), and the certainty predicates.
+Endpoint arithmetic never wraps: storage overflow is a typed `TierOverflow`.
+No transcendental is provided until its bound is proven per engine. Imperative
+tier, binary domain, not a FASC domain and not UGOD-tiered (reasoning in
+`docs/design/CERTIFIED_INTERVALS.md`). Measured at Q64.64 on a 23-dimensional
+quadratic form before implementation: 5 to 64 ulp wide on values of order 10,
+zero enclosure failures, unmoved by ill-conditioning, 106 to 113 percent of
+the scalar path; 12 to 24 times tighter than narrowing every elementary
+operation. Gate: `tests/interval_enclosure.rs`, all profiles, in the
+narrow-profile CI matrix. Delivers the "Interval arithmetic: certified
+enclosures" item below for the certifiable subset; the transcendental half of
+that item stays open.
+
 ---
 
 ## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass
