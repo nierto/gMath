@@ -84,7 +84,15 @@ accuracy of code the certificate exists to stand independent of. The
 independent-reference gate now also asserts that the scalar `FixedPoint::sqrt`
 lies inside the certified enclosure for every reference input on every
 profile, so an inaccurate engine shows up as a failing test rather than a
-hang.
+hang. It did: the scientific Q512.512 engine was found to lose about 250 bits
+of relative precision for large inputs (it ran its reciprocal Newton on the
+raw input, where `1/sqrt(x)` and its square are too small for the grid), and
+was repaired by normalising the input to `[1, 4)`, certifying the result at
+the normalised scale with a bounded exact-integer correction, and shifting
+back exactly. A magnitude-ladder gate now holds every profile's scalar sqrt
+inside the certified enclosure across its full range. The certified interval
+found the defect in the scalar it was built beside; that is the enclosure
+doing its job.
 
 This is why sqrt is in the certified set and the transcendentals are not. An
 algebraic function's result satisfies a polynomial identity that can be checked

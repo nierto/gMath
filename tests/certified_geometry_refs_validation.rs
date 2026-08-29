@@ -70,19 +70,16 @@ fn sqrt_endpoints_match_independent_references() {
         let iv = Interval::point(fp_le(x)).sqrt();
         assert_eq!(iv.lo(), fp_le(f), "sqrt floor, reference {idx}");
         assert_eq!(iv.hi(), fp_le(c), "sqrt ceil, reference {idx}");
-        // the scalar engine's result must lie inside the certified enclosure.
-        // On the scientific profile the Q512.512 sqrt engine loses precision
-        // above roughly 2^200 (known issue, pinned by the ignored test below),
-        // so the near-maximum references are excluded from this assertion
-        // there and only there.
-        if scalar_sqrt_trusted(fp_le(x)) {
-            let scalar = fp_le(x).sqrt();
-            assert!(
-                iv.contains(scalar),
-                "scalar sqrt escaped the certified enclosure: reference {idx}, x = {}, scalar = {}, enclosure = [{}, {}]",
-                fp_le(x), scalar, iv.lo(), iv.hi()
-            );
-        }
+        // the scalar engine's result must lie inside the certified enclosure,
+        // including for inputs near the storage maximum. On the scientific
+        // profile this once failed above ~2^200 (the Q512.512 engine lost
+        // precision for large inputs; fixed by normalising the input).
+        let scalar = fp_le(x).sqrt();
+        assert!(
+            iv.contains(scalar),
+            "scalar sqrt escaped the certified enclosure: reference {idx}, x = {}, scalar = {}, enclosure = [{}, {}]",
+            fp_le(x), scalar, iv.lo(), iv.hi()
+        );
     }
     assert!(refs::SQRT.len() >= 12);
 }
@@ -103,32 +100,6 @@ fn product_and_quotient_endpoints_match_independent_references() {
     }
     assert!(near_max > 0, "references must exercise operands far above the small-value sweeps");
     assert!(refs::MUL.len() >= 50 && refs::DIV.len() >= 50);
-}
-
-#[cfg(not(table_format = "q256_256"))]
-fn scalar_sqrt_trusted(_x: FixedPoint) -> bool { true }
-
-/// Scientific only: the scalar sqrt engine is trusted below 2^150 (measured
-/// inside the enclosure through 2^150, outside from 2^200 on).
-#[cfg(table_format = "q256_256")]
-fn scalar_sqrt_trusted(x: FixedPoint) -> bool {
-    x < FixedPoint::from_raw(g_math::fixed_point::I512::from_i128(1) << (150 + 256))
-}
-
-/// Pins the known defect: on the scientific profile `FixedPoint::sqrt` falls
-/// outside the certified enclosure for inputs above roughly 2^200 (relative
-/// error about 2^-259, up to 2^124 ulp at 2^254). Run with `--ignored`; it
-/// fails today and must pass, and lose its `ignore`, once the Q512.512 engine
-/// is repaired. On the other profiles the assertion is part of the main gate.
-#[cfg(table_format = "q256_256")]
-#[test]
-#[ignore = "known issue: scientific Q512.512 sqrt engine loses precision above ~2^200; see CHANGELOG"]
-fn scalar_sqrt_is_inside_the_enclosure_for_every_reference_input() {
-    for (idx, (x, _, _)) in refs::SQRT.iter().enumerate() {
-        let iv = Interval::point(fp_le(x)).sqrt();
-        let scalar = fp_le(x).sqrt();
-        assert!(iv.contains(scalar), "reference {idx}: scalar sqrt outside the certified enclosure");
-    }
 }
 
 /// Bit-exact replica of the LCG in tests/pd_verdict_validation.rs, so the

@@ -98,22 +98,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New workflow `certified-geometry.yml`: the six certified-geometry gates and
   the width-budget unit tests on all five profiles on every push.
 
-### Known issues (found by the new gates, not yet fixed)
-
-- **Scientific profile: `FixedPoint::sqrt` loses precision for large
-  arguments.** The Q512.512 reciprocal-square-root engine delivers about 260
-  bits of relative precision, which is 0 ULP at Q256.256 over the validated
-  `[0.0001, 10000]` range but not for large values: the scalar result lies
-  outside the certified enclosure from roughly `2^200` upward (error `2.9e-42`
-  at `2^250`, `1.8e-40` at `2^254 + 12345 ulp`, about `2^124` ulp). Exact
-  powers of two with even exponents are unaffected by construction of the
-  seed. Pinned by an ignored test in
-  `tests/certified_geometry_refs_validation.rs` that must pass once the engine
-  is repaired. `Interval::sqrt` is unaffected: its candidate is an integer
-  Newton iteration and its result is verified.
-
 ### Fixed
 
+- **Scientific profile: `FixedPoint::sqrt` lost precision for large
+  arguments.** The Q512.512 reciprocal-square-root engine ran its Newton
+  iteration directly on the input; for large inputs `1/sqrt(x)` and its
+  square are tiny and the Q512.512 grid left them only about 260
+  significant bits, so the iteration converged to a fixed point of the
+  truncated map: 0 ULP over the validated `[0.0001, 10000]` range, but
+  `2^124` ulp at `2^254 + 12345 ulp` and outside the certified enclosure
+  from roughly `2^200` upward. The engine now normalises the input to
+  `m in [1, 4)` (exact shift; no bit of a Q256.256 input is ever discarded),
+  iterates at full precision, certifies the result at the normalised scale
+  by the exact integer check `r^2 <= m * 2^512 < (r+1)^2` with a bounded
+  correction that panics rather than return an unverified value, and shifts
+  back exactly. Modelled exactly in Python before porting: 3220 inputs
+  spanning the whole Q256.256 range, storage results correctly rounded in
+  every case. Found by the new scalar-containment assertion of the
+  reference gate; a magnitude-ladder gate in `tests/interval_enclosure.rs`
+  now checks every profile's scalar sqrt against the certified enclosure
+  across its full range.
 - **`D256::Sub` and `D512::Sub` never propagated a borrow.** The borrow test
   compared a `u128` difference against `u128::MAX`, which is never true, so
   `0 - 1` produced `2^64 - 1` and any subtraction needing a borrow across a

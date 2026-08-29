@@ -392,6 +392,65 @@ fn sqrt_pins() {
     assert!(hi2.hi() >= x, "hi^2 below x");
 }
 
+/// The scalar sqrt engine must lie inside the certified enclosure across the
+/// profile's whole magnitude range, not only the validated [1e-4, 1e4] window.
+/// On the scientific profile this found the Q512.512 engine losing precision
+/// above ~2^200 (fixed by normalising its input); it stays as the gate.
+#[test]
+fn scalar_sqrt_lies_inside_the_certified_enclosure_across_magnitudes() {
+    let mut checked = 0usize;
+    let mut e = -(ALL_FB as i32);
+    while e <= ALL_SB as i32 - ALL_FB as i32 - 2 {
+        for extra in [0i128, 1, 12345] {
+            let x = pow2_plus(e + ALL_FB as i32, extra);
+            if x <= FixedPoint::ZERO { continue; }
+            let iv = Interval::point(x).sqrt();
+            assert!(iv.width() <= ulp(), "sqrt enclosure wider than one ulp at 2^{e}");
+            let scalar = x.sqrt();
+            assert!(iv.contains(scalar), "scalar sqrt escaped the certified enclosure at 2^{e} + {extra} ulp: scalar {scalar}, enclosure [{}, {}]", iv.lo(), iv.hi());
+            checked += 1;
+        }
+        e += 3;
+    }
+    assert!(checked > 30, "ladder too short: {checked}");
+}
+
+#[cfg(table_format = "q16_16")]
+const ALL_FB: u32 = 16;
+#[cfg(table_format = "q32_32")]
+const ALL_FB: u32 = 32;
+#[cfg(table_format = "q64_64")]
+const ALL_FB: u32 = 64;
+#[cfg(table_format = "q128_128")]
+const ALL_FB: u32 = 128;
+#[cfg(table_format = "q256_256")]
+const ALL_FB: u32 = 256;
+#[cfg(table_format = "q16_16")]
+const ALL_SB: u32 = 32;
+#[cfg(table_format = "q32_32")]
+const ALL_SB: u32 = 64;
+#[cfg(table_format = "q64_64")]
+const ALL_SB: u32 = 128;
+#[cfg(table_format = "q128_128")]
+const ALL_SB: u32 = 256;
+#[cfg(table_format = "q256_256")]
+const ALL_SB: u32 = 512;
+
+/// `2^bits + extra` as a raw storage value, on every profile.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
+    let raw = (1i128 << bits) + extra;
+    FixedPoint::from_raw(raw as _)
+}
+#[cfg(table_format = "q128_128")]
+fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
+    FixedPoint::from_raw((g_math::fixed_point::I256::from_i128(1) << (bits as usize)) + g_math::fixed_point::I256::from_i128(extra))
+}
+#[cfg(table_format = "q256_256")]
+fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
+    FixedPoint::from_raw((g_math::fixed_point::I512::from_i128(1) << (bits as usize)) + g_math::fixed_point::I512::from_i128(extra))
+}
+
 // ----------------------------------------------------------------------------
 // Errors are typed, never wrapped
 // ----------------------------------------------------------------------------

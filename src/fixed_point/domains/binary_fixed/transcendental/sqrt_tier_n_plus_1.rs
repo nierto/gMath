@@ -10,9 +10,11 @@
 //   x_{n+1} = (x_n + S_shifted / x_n) / 2
 //   where S_shifted = S << N (upscale to next tier type to avoid overflow)
 //
-//   For Q512.512 (I2048 lacks Div): Reciprocal-sqrt Newton
-//   y_{n+1} = y_n * (3 - S * y_n^2) / 2
-//   sqrt(S) = S * y_final
+//   For Q512.512 (I2048 lacks Div): Reciprocal-sqrt Newton on the
+//   NORMALISED input m = S * 2^(-2k) in [1, 4), so that y and y^2 keep
+//   full precision (the unnormalised form lost ~250 bits for large S),
+//   y_{n+1} = y_n * (3 - m * y_n^2) / 2, sqrt(m) = m * y_final, then a
+//   bounded exact-integer certificate correction and an exact shift by k
 //
 // **STRATEGY**:
 //   - Tier 3 storage (i128/Q64.64):   Compute at Tier 4 (I256/Q128.128) → 19 decimals exact
@@ -241,14 +243,16 @@ fn sqrt_q256_256_native(x: I512) -> I512 {
     x_n.as_i512()
 }
 
-/// Q512.512 native square root using reciprocal-sqrt method
+/// Square root at Q512.512 (tier N+1 for the scientific profile).
 ///
-/// **INPUT**: I1024 value in Q512.512 format (must be non-negative)
-/// **OUTPUT**: I1024 value in Q512.512 format
-/// **PRECISION**: 77+ correct decimal digits
-/// **ALGORITHM**: Reciprocal-sqrt Newton (avoids I2048 division which is unavailable)
-///   y_{n+1} = y_n * (3 - S * y_n^2) / 2
-///   sqrt(S) = S * y_final
+/// **ALGORITHM**: normalise the input to m in [1, 4) by an exact power-of-two
+/// shift, run reciprocal-square-root Newton on m at full precision, certify
+/// the result at the normalised scale by the exact integer check
+/// r^2 <= m * 2^512 < (r+1)^2 with a bounded correction, then shift back.
+/// **WHY NORMALISE**: run on the raw input, y = 1/sqrt(x) and y^2 are too small
+/// for the Q512.512 grid when x is large, and the iteration converges to a
+/// fixed point of the truncated map (about 2^-259 relative precision at
+/// x = 2^254). With m in [1, 4) every intermediate keeps its full precision.
 /// **DOMAIN**: x >= 0
 #[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 fn sqrt_q512_512_native(x: I1024) -> I1024 {
@@ -265,44 +269,71 @@ fn sqrt_q512_512_native(x: I1024) -> I1024 {
         return one;
     }
 
-    // Reciprocal-sqrt Newton-Raphson:
-    // y_{n+1} = y_n * (3 - S * y_n^2) / 2
-    // All multiplications are Q512.512 fixed-point: a * b >> 512
-
-    // THREE constant in Q512.512: 3 << 512
-    let three = I1024::from_i128(3) << 512;
-
-    // Initial seed for 1/sqrt(S):
-    // Find MSB of S, then seed y0 ≈ 2^(-(msb - 512)/2) in Q512.512
+    // Normalise: x = m * 2^(2k) with m in [1, 4) at Q512.512.
+    //
+    // The reciprocal-square-root iteration below needs y = 1/sqrt(m) and y^2
+    // at full 512-bit fractional precision. Run directly on a large x that
+    // is not the case: y is tiny, y^2 is tinier, and truncating y^2 to the
+    // Q512.512 grid leaves it only (512 - log2 x) significant bits, so the
+    // iteration converges to a fixed point of the truncated map instead of
+    // the true one (about 2^-259 relative precision at x = 2^254, which is
+    // 2^124 ulp at Q256.256). With m in [1, 4), y is in (0.5, 1] and every
+    // intermediate carries its full precision; the final shift by k is exact.
+    // x is a Q256.256 value upscaled by 256 bits, so |k| <= 128 and the
+    // normalising shift never discards a set bit for k >= 0, while for k < 0
+    // m < 4 * 2^512 always fits.
     let msb = match find_msb_position_i1024(&x) {
-        Some(pos) => pos,
+        Some(pos) => pos as i32,
         None => return I1024::zero(),
     };
+    let k = (msb - 512).div_euclid(2);
+    let m = if k >= 0 { x >> ((2 * k) as usize) } else { x << ((-2 * k) as usize) };
+    debug_assert!(m >= one && m < (one << 2), "sqrt normalisation left [1, 4)");
 
-    // For Q512.512 format, the integer part starts at bit 512.
-    // If MSB is at position `pos`, the actual value ~ 2^(pos - 512)
-    // 1/sqrt(value) ~ 2^(-(pos-512)/2) = 2^((512-pos)/2)
-    // In Q512.512 format: 2^((512-pos)/2) * 2^512 = 2^((512-pos)/2 + 512)
-    //                    = 2^((1536-pos)/2)
-    let seed_shift = ((1536u32).saturating_sub(msb)) / 2;
-    let mut y_n = I1024::from_i128(1) << seed_shift as usize;
-
-    // Reciprocal-sqrt iterations: 11 for 1024-bit convergence
+    // Reciprocal-sqrt Newton-Raphson on m:
+    // y_{n+1} = y_n * (3 - m * y_n^2) / 2
+    // Seed 1 for m in [1, 2) and 1/2 for m in [2, 4): both satisfy
+    // m * y_0^2 < 3, the convergence condition. Eleven iterations reach the
+    // 2^-512 grid from either seed with margin (ten suffice in the model).
+    let three = I1024::from_i128(3) << 512;
+    let mut y_n = if m < (one << 1) { one } else { one >> 1 };
     for _ in 0..11 {
-        // y_n^2 in Q512.512: use mul_to_i2048 then shift right 512
         let y_sq = multiply_i1024_q512_512_signed(y_n, y_n);
-        // S * y_n^2 in Q512.512
-        let s_y_sq = multiply_i1024_q512_512_signed(x, y_sq);
-        // 3 - S * y_n^2
+        let s_y_sq = multiply_i1024_q512_512_signed(m, y_sq);
         let diff = three - s_y_sq;
-        // y_n * (3 - S*y_n^2)
         let product = multiply_i1024_q512_512_signed(y_n, diff);
-        // / 2
         y_n = product >> 1;
     }
 
-    // sqrt(S) = S * y_final (Q512.512 multiply)
-    multiply_i1024_q512_512_signed(x, y_n)
+    // sqrt(m) = m * y at Q512.512, then certify it at the normalised scale:
+    // r must be exactly floor(sqrt(m * 2^512)), i.e. r^2 <= m * 2^512 < (r+1)^2
+    // in exact 2048-bit integers. The Newton result is within a few units
+    // (measured: at most 4 on 3220 inputs spanning the profile's range), so
+    // the correction is bounded and any excursion beyond it is a defect that
+    // must panic rather than return an unverified value.
+    let mut r = multiply_i1024_q512_512_signed(m, y_n);
+    let target = crate::fixed_point::I2048::from_i1024(m) << 512usize;
+    let unit = I1024::from_i128(1);
+    let mut steps = 0u32;
+    while r.mul_to_i2048(r) > target {
+        r = r - unit;
+        steps += 1;
+        assert!(steps <= 8, "sqrt_q512_512_native: certificate correction exceeded its bound (downward)");
+    }
+    loop {
+        let next = r + unit;
+        if next.mul_to_i2048(next) <= target {
+            r = next;
+            steps += 1;
+            assert!(steps <= 8, "sqrt_q512_512_native: certificate correction exceeded its bound (upward)");
+        } else {
+            break;
+        }
+    }
+
+    // Undo the normalisation: sqrt(x) = sqrt(m) * 2^k. The shift is exact for
+    // k >= 0; for k < 0 it floors at the 2^-512 grid, far below storage.
+    if k >= 0 { r << (k as usize) } else { r >> ((-k) as usize) }
 }
 
 /// Q512.512 fixed-point multiply: (a * b) >> 512

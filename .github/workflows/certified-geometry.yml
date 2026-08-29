@@ -42,4 +42,4 @@ jobs:
       - name: Width-budget guard (library unit tests)
         env:
           GMATH_PROFILE: ${{ matrix.profile }}
-        run: cargo test --lib predicates::
+        run: "cargo test --lib predicates::"
