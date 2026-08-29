@@ -49,6 +49,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   halves against banker's rounding, the 256-bit intermediate path, the sqrt
   certificate, typed errors), every profile.
 
+- **Certified positive-definiteness verdict**:
+  `g_math::fixed_point::imperative::predicates::{pd_verdict, PdVerdict}`.
+  Runs the Cholesky factorisation in certified interval arithmetic
+  (`Interval::dot_intervals`, new, is the one addition it needed). Every
+  pivot certainly positive proves the stored matrix positive definite, with
+  no arbitrary precision; a pivot certainly at or below zero proves it is
+  not, at that pivot; a pivot straddling zero returns `Inconclusive` with
+  the straddling enclosure so the caller can decide, which turns blind
+  diagonal regularisation into a documented decision taken after a
+  diagnosis. Measured on dyadic SPD matrices: last-pivot width `2.6e-17` at
+  n = 23 and `1.2e-15` at n = 50 on Q64.64, sixteen orders of magnitude
+  below the pivot value. Gate: `tests/pd_verdict_validation.rs` (proven PD,
+  proven not PD at the right pivot with exact zero pivots, negative and
+  indefinite matrices, an inexact singular matrix never proven positive,
+  consistency with `cholesky_decompose`, width bound), every profile.
+
+- **Exact geometric predicates**: `predicates::{orient2d, orient3d, incircle,
+  insphere}` returning `Sign::{Negative, Zero, Positive}`, never a `bool`.
+  Each is the sign of a fixed-degree determinant evaluated in exact integer
+  arithmetic on an accumulator selected per profile from the storage width
+  (`2W+2`, `3W+3`, `4W+5`, `5W+6` bits), with every multiply asserting its
+  bit-length budget so a violation is loud rather than wrong. The exact-zero
+  cases (collinear, coplanar, cocircular, cospherical) are decided exactly,
+  including one ulp either side. `incircle` and `insphere` are not compiled
+  on the scientific profile (2053 and 2566 bits needed against 2048); the
+  route for a future consumer there is the arbitrary-precision type behind
+  the `infinite-precision` gate. Gate: `tests/exact_predicates_validation.rs`
+  (hand-checkable configurations with all three signs, permutation parity,
+  agreement with an exact i128 evaluation on random coordinates), every
+  profile.
+
 ### Fixed
 
 - **`D256::Sub` and `D512::Sub` never propagated a borrow.** The borrow test

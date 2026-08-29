@@ -78,6 +78,8 @@ jobs:
         run: |
           cargo test --test interval_enclosure
           cargo test --test decimal_interval_enclosure
+          cargo test --test pd_verdict_validation
+          cargo test --test exact_predicates_validation
 
       # Wide integer sign semantics: borrow propagation and the ordering of
       # two negatives on every wide type. Both were wrong for months under a

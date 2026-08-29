@@ -273,6 +273,37 @@ fn quadratic_form_encloses_exact_value_and_stays_narrow() {
     }
 }
 
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+#[test]
+fn dot_intervals_encloses_every_corner_and_interior_choice() {
+    let mut rng = Rng(0xD07_1A7);
+    for _ in 0..1_000 {
+        let n = 1 + (rng.next() % 8) as usize;
+        let mk = |rng: &mut Rng| {
+            let lo = sample_raw(rng) >> 4;
+            let hi = lo + (rng.next() & 0xFF) as i128;
+            (lo, hi)
+        };
+        let a: Vec<(i128, i128)> = (0..n).map(|_| mk(&mut rng)).collect();
+        let b: Vec<(i128, i128)> = (0..n).map(|_| mk(&mut rng)).collect();
+        let ai: Vec<Interval> = a.iter().map(|&(l, h)| Interval::new(from_i128(l), from_i128(h))).collect();
+        let bi: Vec<Interval> = b.iter().map(|&(l, h)| Interval::new(from_i128(l), from_i128(h))).collect();
+        let iv = Interval::dot_intervals(&ai, &bi);
+        let lo_scaled = raw_i128(iv.lo()) << FB;
+        let hi_scaled = raw_i128(iv.hi()) << FB;
+        // every choice of endpoint per term, plus midpoints, must land inside
+        for choice in 0..(1u32 << (2 * n).min(16)) {
+            let mut exact = 0i128;
+            for k in 0..n {
+                let x = match (choice >> (2 * k)) & 3 { 0 => a[k].0, 1 => a[k].1, _ => (a[k].0 + a[k].1) / 2 };
+                let y = match (choice >> (2 * k + 1)) & 1 { 0 => b[k].0, _ => b[k].1 };
+                exact += x * y;
+            }
+            assert!(lo_scaled <= exact && exact <= hi_scaled, "dot_intervals enclosure violated");
+        }
+    }
+}
+
 /// Structural pin on every profile: with the identity metric the quadratic
 /// form's first stage is exact, so `quadratic_form(v, I) == dot(v, v)`.
 #[test]

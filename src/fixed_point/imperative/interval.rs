@@ -447,6 +447,38 @@ impl Interval {
         Ok(Self::from_raw(downscale_to_storage_floor(acc)?, downscale_to_storage_ceil(acc)?))
     }
 
+    /// Certified dot product of two interval vectors, with one narrowing.
+    ///
+    /// For each term the four exact corner products are formed at the
+    /// compute tier and the smallest is added to the lower accumulator, the
+    /// largest to the upper; both sums are exact with checked addition and
+    /// each is narrowed once. This is what a factorisation needs once its
+    /// entries are themselves intervals.
+    ///
+    /// Panics if the slices differ in length.
+    pub fn try_dot_intervals(a: &[Interval], b: &[Interval]) -> Result<Self, OverflowDetected> {
+        assert_eq!(a.len(), b.len(), "Interval::dot_intervals: length mismatch");
+        let mut lo_acc = compute_zero();
+        let mut hi_acc = compute_zero();
+        for i in 0..a.len() {
+            let p = [
+                exact_product(a[i].lo.raw(), b[i].lo.raw()),
+                exact_product(a[i].lo.raw(), b[i].hi.raw()),
+                exact_product(a[i].hi.raw(), b[i].lo.raw()),
+                exact_product(a[i].hi.raw(), b[i].hi.raw()),
+            ];
+            let mut mn = p[0];
+            let mut mx = p[0];
+            for q in &p[1..] {
+                if *q < mn { mn = *q; }
+                if *q > mx { mx = *q; }
+            }
+            lo_acc = compute_checked_add(lo_acc, mn)?;
+            hi_acc = compute_checked_add(hi_acc, mx)?;
+        }
+        Ok(Self::from_raw(downscale_to_storage_floor(lo_acc)?, downscale_to_storage_ceil(hi_acc)?))
+    }
+
     /// Certified quadratic form `v^T M v` for point inputs.
     ///
     /// Two narrowings: each `(M v)_i` is an exact dot product narrowed to an
@@ -492,6 +524,11 @@ impl Interval {
     /// Certified quadratic form; panics on overflow.
     pub fn quadratic_form(v: &FixedVector, m: &FixedMatrix) -> Self {
         Self::try_quadratic_form(v, m).expect("Interval::quadratic_form: overflow")
+    }
+
+    /// Certified dot product of interval vectors; panics on overflow.
+    pub fn dot_intervals(a: &[Interval], b: &[Interval]) -> Self {
+        Self::try_dot_intervals(a, b).expect("Interval::dot_intervals: overflow")
     }
 }
 

@@ -292,6 +292,26 @@ propagated a borrow (the UGOD decimal tier 5 and 6 arms), and `Ord` on `I1024`,
 `I2048`, `D256`, `D512` ordered two negatives backwards (the scientific
 profile's compute tier among them).
 
+Then `predicates::pd_verdict`: the Cholesky factorisation in certified
+interval arithmetic, returning `PositiveDefinite` (proven, all pivots
+certainly positive, no BigInt), `NotPositiveDefinite { pivot }` (proven, a
+pivot certainly at or below zero) or `Inconclusive { pivot, straddle }`
+(the caller decides with the enclosure in hand). Last-pivot width measured
+at `2.6e-17` for n = 23 and `1.2e-15` for n = 50 on Q64.64. Gate:
+`tests/pd_verdict_validation.rs`, every profile.
+
+And `predicates::{orient2d, orient3d, incircle, insphere}` returning a
+`Sign` trichotomy: exact integer determinants on a per-profile accumulator
+derived from the storage width, no arbitrary precision, every multiply
+asserting its width budget. The circle predicates are not compiled on the
+scientific profile (2053 / 2566 bits against 2048); the recorded route for a
+future consumer there is the existing arbitrary-precision type behind its
+gate, not a wider hand-rolled type. Gate:
+`tests/exact_predicates_validation.rs`, exact i128 oracle, every profile.
+Together with `pd_verdict` this delivers the "Exact geometric predicates"
+item below except segment intersection and containment, which have no
+consumer yet.
+
 ---
 
 ## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass

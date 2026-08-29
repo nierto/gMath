@@ -239,7 +239,91 @@ wrap on the narrow profiles; an enclosure that wraps is worse than no enclosure.
 All derived from `BinaryStorage` / `ComputeStorage` per `table_format`; no width
 is hand-maintained per profile beyond the existing type aliases.
 
-## 9. Test gate
+## 9. Positive definiteness by interval Cholesky (`predicates::pd_verdict`)
+
+The factorisation `L L^T = A` is run with `Interval` entries: pivot
+`d_i = a_ii - sum_k L_ik^2` and column `L_ji = (a_ji - sum_k L_jk L_ik) / L_ii`,
+each an exact compute-tier accumulation (`Interval::dot_intervals`: per term
+the smallest corner product to the lower accumulator, the largest to the upper)
+narrowed once. By induction on `i`, the exact pivots of the STORED matrix lie in
+the pivot intervals. Sylvester's criterion in factored form then gives:
+
+| Pivot interval | Verdict | Status |
+|---|---|---|
+| `lo > 0` for every pivot | `PositiveDefinite` | proven |
+| `hi <= 0` at pivot `i`, earlier pivots `lo > 0` | `NotPositiveDefinite { pivot: i }` | proven |
+| `lo <= 0 < hi` at pivot `i` | `Inconclusive { pivot: i, straddle }` | undecided, enclosure returned |
+
+The division `L_ji / L_ii` is always by a certainly-positive interval, so it
+never meets the zero-straddle refusal. `sqrt` of a certainly-positive pivot is
+certainly positive at every profile (`floor(sqrt(1 ulp * 2^F)) = 2^(F/2) ulp`).
+
+This is the first multi-step chain in the library, where interval entries
+feed later intervals. Measured on dyadic `A^T A + I` (every input exact) at
+Q64.64: last-pivot width `2.6e-17` (about 480 ulp) at n = 23, `1.2e-15`
+(about 21,700 ulp) at n = 50, against pivot values 1.9 and 2.75. Growth is
+polynomial in n as the sensitivity model predicts, and sixteen orders of
+magnitude below the value at the larger dimension. The gate asserts the
+width stays below the pivot value and prints the measurement.
+
+`Inconclusive` is returned rather than escalated to an exact rational
+fallback, by owner decision: the consumer chooses (regularise, report rank
+deficiency, or escalate itself), and the enclosure tells it how close to
+singular the stored matrix is. An escalation behind the `infinite-precision`
+gate remains possible if a consumer wants it.
+
+## 10. Exact predicates (`predicates::{orient2d, orient3d, incircle, insphere}`)
+
+Each predicate is the sign of a determinant of fixed degree `d` in the input
+coordinates, so its worst-case width is `d * W + c` bits for storage width `W`
+(the width budget in the findings repository, `gmath-exact-predicate-width-
+budget-2026-08-25`). The accumulator is selected per profile by `cfg` from
+that budget:
+
+| Profile | W | `Orient` (2W+2 / 3W+3) | `Circle` (4W+5 / 5W+6) |
+|---|---|---|---|
+| realtime | 32 | i128 (66 / 99) | I256 (133 / 166) |
+| compact | 64 | I256 (130 / 195) | I512 (261 / 326) |
+| embedded | 128 | I512 (258 / 387) | I1024 (517 / 646) |
+| balanced | 256 | I1024 (514 / 771) | I2048 (1029 / 1286) |
+| scientific | 512 | I2048 (1026 / 1539) | not compiled (2053 / 2566 > 2048) |
+
+Arithmetic on the accumulator goes through one private trait: products are
+formed on magnitudes with the sign reapplied, so the wide types' `Mul`
+implementations are only ever entered with non-negative operands (where each
+is a plain schoolbook or a truncated unsigned product, both exact), and every
+product first asserts `bits(a) + bits(b) <= BITS - 1`. That assertion is the
+width budget made loud; it cannot fire for inputs within the storage range, and
+if the budget were ever wrong the predicate would panic rather than return a
+wrong sign.
+
+The lifted determinants are expanded along the lift column, so every product
+pairs a degree-2 lift with a degree-2 (`incircle`) or degree-3 (`insphere`)
+minor; this keeps the largest intermediate within the budget and within the
+bit-length precondition on every profile.
+
+Sign conventions follow Shewchuk: `orient2d` positive for a counterclockwise
+triangle; `orient3d` positive when `d` lies below the plane of `a b c` seen
+counterclockwise from above; `incircle` positive when `d` is inside the circle
+of a counterclockwise `a b c`; `insphere` positive when `e` is inside the sphere
+of a positively oriented `a b c d`. The circle predicates flip sign with the
+orientation of their defining points, as the determinant does.
+
+Why no filter: the interval-filter-then-exact pattern exists to avoid an
+expensive exact path. Here the exact path is a handful of wide multiplies with
+no allocation, chosen at compile time; a filter would cost more than it saves
+for the small predicates. It stays available for the n-by-n case, which is what
+`pd_verdict` is.
+
+Why the scientific circle predicates are absent rather than widened: a
+predicate returns a `Sign`, so the accumulator never leaves the function and
+no downstream width is affected; the cost of widening would be an `I4096`
+type, another hand-rolled wide integer, and this cycle showed what those carry
+(section 6). The arbitrary-precision type already exists behind the
+`infinite-precision` gate and is the right tool for a 2566-bit sign if a
+consumer ever needs one at 77 digits.
+
+## 11. Test gate
 
 `tests/interval_enclosure.rs`, all profiles:
 
@@ -256,3 +340,7 @@ is hand-maintained per profile beyond the existing type aliases.
   equal to floor iff exact, scalar inside; perfect-square and monotone pins
 - errors: division by an interval containing zero, negative sqrt, inverted
   endpoints, and every storage-boundary overflow return the typed error
+
+`tests/pd_verdict_validation.rs` and `tests/exact_predicates_validation.rs`
+gate sections 9 and 10 on every profile; `tests/wide_integer_sign_semantics.rs`
+gates the substrate fixes of section 6.

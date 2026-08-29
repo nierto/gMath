@@ -21,6 +21,7 @@ pub mod curvature;
 pub mod projective;
 pub mod fiber_bundle;
 pub mod interval;
+pub mod predicates;
 mod serialization;
 
 pub use fixed_point::FixedPoint;

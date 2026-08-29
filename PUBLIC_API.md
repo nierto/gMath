@@ -282,10 +282,12 @@ A certified enclosure `[lo, hi]` of a real value, `lo <= hi`.
 | `try_div` | Quotient; `Err(DivisionByZero)` if the divisor interval contains zero. |
 | `try_sqrt` | Certified square root. `Err(DomainError)` if `lo < 0`. |
 | `try_dot` | Certified dot product of two point vectors, with one narrowing. |
+| `try_dot_intervals` | Certified dot product of two interval vectors, with one narrowing. |
 | `try_quadratic_form` | Certified quadratic form `v^T M v` for point inputs. |
 | `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
 | `dot` | Certified dot product; panics on overflow. |
 | `quadratic_form` | Certified quadratic form; panics on overflow. |
+| `dot_intervals` | Certified dot product of interval vectors; panics on overflow. |
 
 ### DecimalInterval
 
@@ -313,6 +315,34 @@ A certified enclosure `[lo, hi]` of a real value in the decimal domain,
 | `try_dot` | Certified dot product of two point vectors, with one narrowing. |
 | `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
 | `dot` | Certified dot product; panics on overflow. |
+
+## Certified and exact predicates
+
+Modules: g_math::fixed_point::imperative::predicates
+
+| Item | Kind | Summary |
+| --- | --- | --- |
+| `orient2d` | fn | Orientation of the triangle `a b c`: `Positive` if counterclockwise, |
+| `orient3d` | fn | Orientation of the tetrahedron `a b c d`: `Positive` if `d` lies below the |
+| `incircle` | fn | Whether `d` lies inside the circle through `a b c`: `Positive` if inside |
+| `insphere` | fn | Whether `e` lies inside the sphere through `a b c d`: `Positive` if inside |
+| `pd_verdict` | fn | Certified positive-definiteness verdict via interval Cholesky. |
+
+### Sign
+
+The sign of an exactly evaluated determinant.
+
+| Method | Summary |
+| --- | --- |
+| `flip` | The sign of the negated quantity. |
+
+### PdVerdict
+
+The outcome of a certified positive-definiteness test.
+
+| Method | Summary |
+| --- | --- |
+| `is_proven_positive_definite` | `true` only for [`PdVerdict::PositiveDefinite`]. |
 
 ## Linear algebra
 
