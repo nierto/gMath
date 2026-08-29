@@ -282,6 +282,16 @@ narrow-profile CI matrix. Delivers the "Interval arithmetic: certified
 enclosures" item below for the certifiable subset; the transcendental half of
 that item stays open.
 
+Same day, the decimal twin: `DecimalInterval<D>` over `DecimalFixed<D>`, one
+profile-independent code path with `10^D` in place of `2^F`, `D256`
+intermediates, the same sqrt certificate, typed errors where the scalar
+saturates. Gate: `tests/decimal_interval_enclosure.rs`. Building it found two
+silent-wrong-value bugs in the wide integer types, both fixed and gated by
+`tests/wide_integer_sign_semantics.rs`: `D256`/`D512` subtraction never
+propagated a borrow (the UGOD decimal tier 5 and 6 arms), and `Ord` on `I1024`,
+`I2048`, `D256`, `D512` ordered two negatives backwards (the scientific
+profile's compute tier among them).
+
 ---
 
 ## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass

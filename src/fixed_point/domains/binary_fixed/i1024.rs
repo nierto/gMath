@@ -249,7 +249,9 @@ impl Ord for I1024 {
                 for i in (0..16).rev() {
                     match self.words[i].cmp(&other.words[i]) {
                         Ordering::Equal => continue,
-                        other => return if self_negative { other.reverse() } else { other },
+                        // Same sign: two's complement words already order correctly
+                        // (for negatives, smaller raw value = more negative). No reversal.
+                        other => return other,
                     }
                 }
                 Ordering::Equal

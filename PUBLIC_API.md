@@ -256,7 +256,7 @@ Modules: g_math::fixed_point::imperative::fused
 
 ## Certified intervals
 
-Modules: Interval (re-exported at g_math::fixed_point)
+Modules: Interval (re-exported at g_math::fixed_point), DecimalInterval (re-exported at g_math::fixed_point)
 
 ### Interval
 
@@ -286,6 +286,33 @@ A certified enclosure `[lo, hi]` of a real value, `lo <= hi`.
 | `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
 | `dot` | Certified dot product; panics on overflow. |
 | `quadratic_form` | Certified quadratic form; panics on overflow. |
+
+### DecimalInterval
+
+A certified enclosure `[lo, hi]` of a real value in the decimal domain,
+
+| Method | Summary |
+| --- | --- |
+| `point` | The degenerate interval `[x, x]`. |
+| `new` | `[lo, hi]`. Panics if `lo > hi`. |
+| `try_new` | `[lo, hi]`, or `Err(InvalidInput)` if `lo > hi`. |
+| `lo` | Lower endpoint. |
+| `hi` | Upper endpoint. |
+| `width` | `hi - lo`. Panics if the width itself does not fit i128. |
+| `is_point` | `lo == hi`. |
+| `contains` | `lo <= x <= hi`. |
+| `contains_zero` | `lo <= 0 <= hi`. |
+| `is_certainly_positive` | `lo > 0`: every value in the interval is positive. |
+| `is_certainly_negative` | `hi < 0`: every value in the interval is negative. |
+| `try_add` | `[a.lo + b.lo, a.hi + b.hi]`. Storage addition is exact when it fits. |
+| `try_sub` | `[a.lo - b.hi, a.hi - b.lo]`. |
+| `try_neg` | `[-hi, -lo]`. |
+| `try_mul` | Product: exact corner products at `2 * DECIMALS` places, narrowed once. |
+| `try_div` | Quotient; `Err(DivisionByZero)` if the divisor interval contains zero. |
+| `try_sqrt` | Certified square root. `Err(DomainError)` if `lo < 0`. |
+| `try_dot` | Certified dot product of two point vectors, with one narrowing. |
+| `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
+| `dot` | Certified dot product; panics on overflow. |
 
 ## Linear algebra
 

@@ -75,4 +75,14 @@ jobs:
       - name: Certified interval gate (enclosure, directed rounding, sqrt certificate)
         env:
           GMATH_PROFILE: ${{ matrix.profile }}
-        run: cargo test --test interval_enclosure
+        run: |
+          cargo test --test interval_enclosure
+          cargo test --test decimal_interval_enclosure
+
+      # Wide integer sign semantics: borrow propagation and the ordering of
+      # two negatives on every wide type. Both were wrong for months under a
+      # green 0-ULP gate, because no validated path asked a signed question.
+      - name: Wide integer sign semantics gate
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --test wide_integer_sign_semantics

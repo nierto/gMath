@@ -188,10 +188,26 @@ Other domains, for the record:
 - **Symbolic (exact rational)** needs no interval. Its arithmetic is exact and
   UGOD promotes instead of rounding, so the enclosure of any result is the
   point `[x, x]` by construction. Nothing to build.
-- **Decimal (`DecimalFixed<D>`)** takes the same design with `10^D` in place
-  of `2^F`: exact products at `2D` places, directed narrowing from the
-  truncating division and its remainder, the same sqrt certificate on
-  `isqrt(x_raw * 10^D)`. Planned next.
+- **Decimal (`DecimalFixed<D>`)**: delivered the same day as
+  `DecimalInterval<D>`. The same design with `10^D` in place of `2^F`: exact
+  products at `2D` places in the decimal-domain `D256`, directed narrowing
+  from the truncating quotient and whether its remainder is zero (the sign of
+  the exact quotient comes from the operands, so the remainder's sign
+  convention is never consulted), the same sqrt certificate on
+  `isqrt(x_raw * 10^D)` with an integer Newton candidate. One code path on
+  every profile. `divmod_d256_by_i128` saturates when the quotient leaves
+  i128, so the interval uses `divmod_d256_by_d256` and checks the fit itself.
+  Where the scalar `DecimalFixed` saturates (overflow, division by zero) the
+  interval returns a typed error. No `quadratic_form`: there is no decimal
+  matrix type. Gate: `tests/decimal_interval_enclosure.rs`.
+
+  Building it found two pre-existing silent-wrong-value bugs in the wide
+  integer types, fixed and gated by `tests/wide_integer_sign_semantics.rs`:
+  `D256`/`D512` subtraction never propagated a borrow, and `Ord` on `I1024`,
+  `I2048`, `D256`, `D512` ordered two negatives backwards. Every gate added in
+  this track has found a real bug in code it merely depended on; that is the
+  recurring lesson of the whole 0.5.0 cycle, and it argues for building the
+  next gate before the next feature.
 - **Ternary** has no imperative host type (the domain is FASC-only over
   engine functions), so a ternary interval arrives with the FASC-level
   interval, not before.

@@ -70,6 +70,7 @@ const SURFACE: &[(&str, &str, &str, Option<&str>)] = &[
     ("src/fixed_point/domains/decimal_fixed/decimal_fixed.rs", "DecimalFixed", "decimal", None),
     ("src/fixed_point/imperative/fused.rs", "g_math::fixed_point::imperative::fused", "fused", None),
     ("src/fixed_point/imperative/interval.rs", "Interval (re-exported at g_math::fixed_point)", "interval", None),
+    ("src/fixed_point/domains/decimal_fixed/decimal_interval.rs", "DecimalInterval (re-exported at g_math::fixed_point)", "interval", None),
     ("src/fixed_point/imperative/decompose.rs", "g_math::fixed_point::imperative::decompose", "linalg", None),
     ("src/fixed_point/imperative/derived.rs", "g_math::fixed_point::imperative::derived", "linalg", None),
     ("src/fixed_point/imperative/matrix_functions.rs", "g_math::fixed_point::imperative::matrix_functions", "linalg", None),

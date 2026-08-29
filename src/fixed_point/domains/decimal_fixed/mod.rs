@@ -23,11 +23,15 @@ pub mod decimal_negation;
 // Native decimal transcendental functions (tier N+1 with decimal scaling)
 pub mod transcendental;
 
+// Certified interval arithmetic over DecimalFixed (public API: DecimalInterval)
+pub mod decimal_interval;
+
 // Re-export the main DecimalFixed types
 pub use decimal_fixed::{
     DecimalFixed, DecimalFixed2, DecimalFixed3, DecimalFixed6, DecimalFixed9,
     Currency, HighPrecisionCurrency, ParseError, compile_time_power_of_10
 };
+pub use decimal_interval::DecimalInterval;
 
 // Universal 6-tier decimal types for FASC + UGOD
 pub use decimal_types::{

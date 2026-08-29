@@ -37,6 +37,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constructed ties, enclosure against exact integer references, the sqrt
   certificate on sampled inputs, typed errors), on every profile and in the
   narrow-profile CI matrix.
+- **Certified decimal intervals**: `g_math::fixed_point::DecimalInterval<D>`
+  over `DecimalFixed<D>`, the same design with `10^D` in place of `2^F`:
+  exact products at `2D` places in the decimal-domain `D256`, directed
+  narrowing from the truncating quotient and its remainder, `+ - * /`, `Neg`,
+  `sqrt` certified a posteriori by `k^2 <= x * 10^D < (k+1)^2` with an
+  integer Newton candidate, `dot`, and the certainty predicates. One code
+  path on every profile. Where the scalar `DecimalFixed` operators saturate
+  on overflow and on division by zero, the interval returns a typed error.
+  Gate: `tests/decimal_interval_enclosure.rs` (floor/ceil models, exact
+  halves against banker's rounding, the 256-bit intermediate path, the sqrt
+  certificate, typed errors), every profile.
+
+### Fixed
+
+- **`D256::Sub` and `D512::Sub` never propagated a borrow.** The borrow test
+  compared a `u128` difference against `u128::MAX`, which is never true, so
+  `0 - 1` produced `2^64 - 1` and any subtraction needing a borrow across a
+  64-bit word lost it. These are the operations behind the UGOD decimal
+  tier 5 and 6 subtraction arms. Found by the decimal interval gate.
+- **`Ord` on `I1024`, `I2048`, `D256` and `D512` ordered two negative
+  values backwards.** The word comparison was reversed for negatives, but
+  two's-complement negatives already order correctly as unsigned words, so
+  `-2` compared greater than `-1`. `I256` and `I512` had been corrected
+  earlier; these four had not. On the scientific profile the compute tier is
+  `I1024`, so `<`, `min` and `max` between two negative compute-tier values
+  there were wrong. Found by the decimal interval gate's negative-product
+  sweep.
+- Gate for both: `tests/wide_integer_sign_semantics.rs` (ordering of
+  negatives beyond i128 and mixed-sign sorts on all six wide types, borrow
+  chains through one and two words on `D256`/`D512`, and consistency with
+  i128 on every sign combination).
 
 ## [0.5.0] - 2026-08-24
 
