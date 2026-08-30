@@ -37,6 +37,23 @@ impl I2048 {
         I2048 { words }
     }
 
+    /// Checked addition: `None` on signed overflow.
+    ///
+    /// Operands that share a sign and produce a result of the other sign
+    /// have overflowed; the same test `I512` and `I1024` use.
+    #[inline(always)]
+    pub fn checked_add(self, rhs: I2048) -> Option<I2048> {
+        let result = self + rhs;
+        let self_negative = (self.words[31] as i64) < 0;
+        let rhs_negative = (rhs.words[31] as i64) < 0;
+        let result_negative = (result.words[31] as i64) < 0;
+        if (self_negative == rhs_negative) && (self_negative != result_negative) {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
     /// Maximum value for signed 2048-bit integer (2^2047 - 1)
     #[inline(always)]
     pub const fn max_value() -> Self {

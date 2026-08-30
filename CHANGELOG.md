@@ -5,6 +5,64 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-30
+
+### Upgrading
+
+Additive, with one enclosure getting tighter. `Interval::quadratic_form`
+now narrows once instead of once per stage: its width is at most 1 ulp on
+every profile (0 when the value is representable), where 0.6.0 measured a
+mean of 3.2 ulp at 7 dimensions and 5 to 64 ulp at 23. Endpoints move
+inward, never outward, so a consumer test that pinned a width bound still
+passes; a test that pinned the exact endpoints of a quadratic form will
+move. No other function changes its result.
+
+### Added
+
+- **`fused::quadratic_form(v, m)`** and **`fused::try_quadratic_form`**: the
+  scalar `v^T M v` with ONE rounding. Every term `v_i m_ij v_j` is an exact
+  triple product at `3 * FRAC_BITS` fractional bits on the profile's widest
+  accumulator (i128, I256, I512, I1024, I2048 by profile: the same
+  accumulators the orient3d predicate uses), the sum is exact and checked,
+  and the single narrowing rounds to nearest with ties toward positive
+  infinity, the binary house rule. The result is the correctly rounded value
+  of the form for the stored operands and always lies inside
+  `Interval::quadratic_form(v, m)`, which narrows the same exact value
+  outward. The two-stage scalar (`M v` rounded per row, then the dot product
+  rounded again) that consumers built from `dot` rounds twice with an error
+  that grows with `sum |v_i|`; this is the fix the geometric-validation
+  consumer's width decomposition asked for. Storage overflow is a panic on
+  the infallible form and `Err(TierOverflow)` on the `try_` twin.
+- `I2048::checked_add` (the scientific accumulator had no checked addition).
+- Gates: `tests/interval_enclosure.rs` asserts the interval is exactly
+  `[floor, ceil]` of the exact value and the fused scalar exactly its nearest
+  on 3000 random forms of dimension 2 to 7 (narrow profiles, i128 model),
+  constructed exact ties of both signs on every profile, the identity pin
+  `fused::quadratic_form(v, I) == fused::dot(v, v)`, and typed overflow on
+  both paths. `tests/certified_geometry_refs_validation.rs` gains quadratic
+  form references computed on VALUES with exact rationals (no raw-integer
+  shifts in common with the kernel) and cross-checked against mpmath at 700
+  digits, including operands near the storage maximum. Library unit tests
+  `wide_acc::` join the width-budget guard in the certified-geometry CI.
+
+### Changed
+
+- `Interval::quadratic_form` uses the fused accumulation above and narrows
+  once (floor and ceil of one exact value). Off-diagonal terms are paired,
+  `(m_ij + m_ji) v_i v_j`, without assuming symmetry of `M`; that halves the
+  wide multiplies. Cost on the embedded profile, release build, 2000 records,
+  min of 3 rounds: fused scalar 714 ns per record at n = 7 and 6832 ns at
+  n = 23, 85 to 89 percent of the two-stage scalar; the certified form 719
+  and 6862 ns, 107 to 122 percent of the 0.6.0 two-stage interval and 86 to
+  90 percent of the two-stage scalar. The two-stage interval form remains
+  available by composition (`Interval::dot` per row, then `dot_intervals`)
+  for anyone who wants its lower cost with the wider bracket.
+- The exact-accumulator trait and the per-profile accumulator table moved
+  out of `predicates.rs` into a private shared module (`wide_acc`), so the
+  predicates, the intervals and the fused form share one width budget. The
+  predicates' behaviour and API are unchanged.
+- `CONTRACT.md` section 3: the enclosure clause no longer says "unreleased".
+
 ## [0.6.0] - 2026-08-30
 
 ### Upgrading

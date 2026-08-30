@@ -19,6 +19,9 @@
 //!   compute-tier values there was wrong.
 //!
 //! Profile-independent: these types exist on every profile.
+//!
+//! Also here since 0.6.1: `I2048::checked_add`, added for the scientific
+//! profile's fused quadratic-form accumulator, which had no checked addition.
 
 use g_math::fixed_point::domains::decimal_fixed::{D256, D512};
 use g_math::fixed_point::{I1024, I2048, I256, I512};
@@ -147,4 +150,31 @@ fn d512_sub_propagates_borrow() {
     for (x, y) in [(5i128, 9i128), (-5, 9), (5, -9), (-5, -9), (i128::MIN + 1, 1), (0, i128::MAX)] {
         assert_eq!(D512::from_i128(x) - D512::from_i128(y), D512::from_i128(x - y), "{x} - {y}");
     }
+}
+
+/// `I2048::checked_add` (0.6.1, the scientific quadratic-form accumulator):
+/// the same sign test `I512` and `I1024` use, at both ends of the range and
+/// on in-range operands of every sign combination.
+#[test]
+fn i2048_checked_add_detects_signed_overflow() {
+    let max = I2048::max_value();
+    let min = I2048::min_value();
+    let one = I2048::one();
+    assert_eq!(max.checked_add(one), None, "max + 1 overflows");
+    assert_eq!(min.checked_add(-one), None, "min - 1 overflows");
+    assert_eq!(max.checked_add(-one), Some(max - one));
+    assert_eq!(min.checked_add(one), Some(min + one));
+    assert_eq!(max.checked_add(min), Some(-one));
+    let big = I2048::from_i128(i128::MAX);
+    assert_eq!(big.checked_add(big), Some(big + big));
+    assert_eq!((-big).checked_add(-big), Some(-(big + big)));
+    for (x, y) in [(5i128, 9i128), (-5, 9), (5, -9), (-5, -9), (i128::MIN + 1, 1), (0, i128::MAX)] {
+        assert_eq!(I2048::from_i128(x).checked_add(I2048::from_i128(y)), Some(I2048::from_i128(x + y)), "{x} + {y}");
+    }
+    // the top half of the range: 2^2046 + 2^2046 = 2^2047 does not fit
+    let mut w = [0u64; 32];
+    w[31] = 1 << 62;
+    let half_max = I2048::from_words(w);
+    assert_eq!(half_max.checked_add(half_max), None, "2^2046 + 2^2046 overflows");
+    assert_eq!(half_max.checked_add(-half_max), Some(I2048::zero()));
 }

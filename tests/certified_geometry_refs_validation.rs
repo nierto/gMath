@@ -16,12 +16,15 @@
 //!   the same dyadic matrices `tests/pd_verdict_validation.rs` builds;
 //! - every exact predicate returns the reference sign on configurations
 //!   scaled to within a factor of four of the storage maximum;
+//! - the fused quadratic form's interval equals `[floor, ceil]` and its scalar
+//!   the nearest of references computed on values with exact rationals;
 //! - decimal sqrt, product and quotient endpoints equal the references.
 
 use g_math::fixed_point::imperative::predicates::{orient2d, orient3d, pd_verdict, PdVerdict, Sign};
 #[cfg(not(table_format = "q256_256"))]
 use g_math::fixed_point::imperative::predicates::{incircle, insphere};
-use g_math::fixed_point::{DecimalFixed, DecimalInterval, FixedMatrix, FixedPoint, Interval};
+use g_math::fixed_point::imperative::fused;
+use g_math::fixed_point::{DecimalFixed, DecimalInterval, FixedMatrix, FixedPoint, FixedVector, Interval};
 
 #[allow(dead_code)]
 mod data {
@@ -100,6 +103,34 @@ fn product_and_quotient_endpoints_match_independent_references() {
     }
     assert!(near_max > 0, "references must exercise operands far above the small-value sweeps");
     assert!(refs::MUL.len() >= 50 && refs::DIV.len() >= 50);
+}
+
+/// The fused quadratic form against references computed on values with
+/// exact rationals (no raw-integer shifts in common with the kernel): the
+/// interval equals `[floor, ceil]` and the fused scalar equals the nearest
+/// with ties toward +infinity, on constructed ties, dyadic and random
+/// matrices, and operands near the storage maximum.
+#[test]
+fn quadratic_form_endpoints_and_nearest_match_independent_references() {
+    let mut near_max = 0usize;
+    let mut rounded_up = 0usize;
+    for (n, v, m, f, c, near) in refs::QF {
+        let fv = FixedVector::from_slice(&v.iter().map(|b| fp_le(b)).collect::<Vec<_>>());
+        let fm = FixedMatrix::from_slice(*n, *n, &m.iter().map(|b| fp_le(b)).collect::<Vec<_>>());
+        let iv = Interval::quadratic_form(&fv, &fm);
+        assert_eq!(iv.lo(), fp_le(f), "quadratic form floor, n = {n}");
+        assert_eq!(iv.hi(), fp_le(c), "quadratic form ceil, n = {n}");
+        let scalar = fused::quadratic_form(&fv, &fm);
+        assert_eq!(scalar, fp_le(near), "fused quadratic form nearest, n = {n}");
+        assert!(iv.contains(scalar));
+        // |raw| >= 2^(W/2): the upper half of the little-endian bytes is not sign fill
+        let fill = if v[0][v[0].len() - 1] & 0x80 != 0 { 0xFFu8 } else { 0u8 };
+        if v[0][v[0].len() / 2..].iter().any(|b| *b != fill) { near_max += 1; }
+        if fp_le(near) == fp_le(c) && fp_le(c) != fp_le(f) { rounded_up += 1; }
+    }
+    assert!(near_max >= 4, "references must exercise operands near the storage maximum");
+    assert!(rounded_up >= 2, "references must exercise inexact values rounded upward (the constructed ties)");
+    assert!(refs::QF.len() >= 20);
 }
 
 /// Bit-exact replica of the LCG in tests/pd_verdict_validation.rs, so the

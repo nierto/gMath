@@ -76,7 +76,7 @@ values passed in, or that a verdict is proven for the matrix passed in;
 the software is provided as is under its licenses, and the README's
 disclaimer applies to every certified operation.
 
-**Certified enclosures round outward, by design (unreleased on main).**
+**Certified enclosures round outward, by design (0.6.0).**
 `Interval` and `DecimalInterval<D>` are the one place a result is not
 rounded to nearest: the lower endpoint rounds toward −∞ and the upper toward
 +∞ at the single narrowing of each compound operation, because that
@@ -84,6 +84,13 @@ directed rounding is what makes the bracket sound. The scalar paths are
 untouched: the same exact compute-tier accumulation feeds `nearest` for a
 scalar and `floor`/`ceil` for an interval, so the scalar always lies inside
 its interval, and the table above still holds on every scalar path. The
+quadratic form is the worked case (0.6.1): `fused::quadratic_form` narrows
+ONE exact value (every `v_i m_ij v_j` an exact triple product at three times
+the fractional bits) to nearest with ties toward +∞, and
+`Interval::quadratic_form` narrows the same value to floor and ceil, so the
+scalar is correctly rounded and its bracket is at most 1 ulp wide. One
+rounding per expression, not per stage, is what the "round once" rule means
+for a compound operation. The
 exact predicates (`orient2d`, `orient3d`, `incircle`, `insphere`,
 `pd_verdict`) never round; they evaluate integer determinants exactly or
 run the interval Cholesky. The scientific-profile square-root engine now

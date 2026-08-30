@@ -312,6 +312,28 @@ Together with `pd_verdict` this delivers the "Exact geometric predicates"
 item below except segment intersection and containment, which have no
 consumer yet.
 
+### v0.6.1: Fused single-narrowing quadratic form
+
+**IMPLEMENTED 2026-08-30 on main, additive.** Requested by the
+geometric-validation consumer's width decomposition: the 1 to 5 ulp width
+of the certified `d^2` was, to the digit, `sum_i |v_i|` (one narrowing per
+row of `M v`) plus the final pair, so the lever was the narrowing count, not
+the profile. `fused::quadratic_form` / `try_quadratic_form` compute
+`v^T M v` from exact triple products at `3 * FRAC_BITS` on the orient3d
+accumulator of the profile (i128 / I256 / I512 / I1024 / I2048) and round
+ONCE to nearest, ties toward +infinity: the correctly rounded scalar.
+`Interval::quadratic_form` narrows the same exact value to floor and ceil:
+width at most 1 ulp, 0 when representable (was 3.2 ulp mean at n = 7, 5 to
+64 ulp at n = 23). Off-diagonal terms are paired without assuming symmetry.
+Measured on the embedded profile (release, min of 3): the fused scalar at
+85 to 89 percent of the two-stage scalar, the certified form at 86 to 90
+percent of it and 107 to 122 percent of the 0.6.0 two-stage interval. The
+accumulator trait moved to a private shared module; `I2048::checked_add`
+added. Gates: the enclosure gate asserts `[floor, ceil]` and nearest
+exactly on random forms and constructed ties; the reference gate carries
+quadratic-form references computed on values with exact rationals and
+mpmath at 700 digits; all five profiles in CI.
+
 ---
 
 ## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass

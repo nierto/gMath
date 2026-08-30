@@ -90,7 +90,9 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
   0.5.0, permanently test-gated: see [CONTRACT.md](CONTRACT.md) §3).
 - **Certified arithmetic and exact predicates** (0.6.0) - `Interval` and
   `DecimalInterval` return a bracket that provably contains the exact result
-  for `+ - * /`, square root, dot products and quadratic forms; `pd_verdict`
+  for `+ - * /`, square root, dot products and quadratic forms (0.6.1: the
+  quadratic form's bracket is at most 1 ulp wide, and `fused::quadratic_form`
+  is its correctly rounded scalar); `pd_verdict`
   proves a matrix positive definite (or not, or says it cannot decide and hands
   back the straddling bracket); `orient2d`, `orient3d`, `incircle`, `insphere`
   return an exact three-way sign. Transcendentals are deliberately excluded

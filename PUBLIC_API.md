@@ -248,6 +248,8 @@ Modules: g_math::fixed_point::imperative::fused
 | `euclidean_distance` | fn | Fused sqrt(Σ (a_i - b_i)²): Euclidean distance, entirely at compute tier. |
 | `euclidean_distance_squared` | fn | Fused Σ (a_i − b_i)²: squared Euclidean distance at compute tier, no sqrt (U1). |
 | `dot` | fn | Fused Σ a_i·b_i: dot product entirely at compute tier (U1). |
+| `quadratic_form` | fn | Fused quadratic form `v^T M v` with one rounding: every term is an exact triple product and the sum is narrowed once, to nearest. |
+| `try_quadratic_form` | fn | Fallible twin of [`quadratic_form`]: `Err(TierOverflow)` where the result leaves the storage tier. |
 | `mobius_denominator_sq` | fn | Fused squared Möbius denominator `\|1 − p̄q\|² = 1 − 2⟨p,q⟩ + \|p\|²·\|q\|²` (U1). |
 | `softmax` | fn | Stable softmax entirely at compute tier. |
 | `rms_norm_factor` | fn | Fused 1/sqrt(mean(x²) + eps): RMSNorm scaling factor at compute tier. |
@@ -283,7 +285,7 @@ A certified enclosure `[lo, hi]` of a real value, `lo <= hi`.
 | `try_sqrt` | Certified square root. `Err(DomainError)` if `lo < 0`. |
 | `try_dot` | Certified dot product of two point vectors, with one narrowing. |
 | `try_dot_intervals` | Certified dot product of two interval vectors, with one narrowing. |
-| `try_quadratic_form` | Certified quadratic form `v^T M v` for point inputs. |
+| `try_quadratic_form` | Certified quadratic form `v^T M v` for point inputs, with one narrowing. |
 | `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
 | `dot` | Certified dot product; panics on overflow. |
 | `quadratic_form` | Certified quadratic form; panics on overflow. |

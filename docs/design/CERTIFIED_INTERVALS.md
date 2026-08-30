@@ -158,6 +158,43 @@ arithmetic noise of scoring"; it is not an enclosure of a statistical quantity.
 Full record with verbatim output and the measurement kernel: the findings
 repository, `gmath-interval-width-and-cost-spike-2026-08-29`.
 
+### 4.1 One narrowing for the whole form (0.6.1)
+
+The consumer's own decomposition of the measured width (dimension 7, 246
+records) reproduced the model above to the second decimal: total 3.19 ulp =
+2.20 (`sum_i |v_i|`, every row product inexact) + 0.99 (the final pair). The
+width was a count of narrowings times a sensitivity, so the lever was the
+count. Since 0.6.1 the quadratic form narrows once:
+
+    d2_exact = sum_{i,j} v_i m_ij v_j     every term an exact triple product at 3F
+    interval = [floor(d2_exact), ceil(d2_exact)]      width <= 1 ulp, 0 if exact
+    scalar   = nearest(d2_exact), ties toward +inf     (fused::quadratic_form)
+
+Each `v_i v_j` is the exact compute-tier product (`2W` bits); off-diagonal
+pairs are folded into `(m_ij + m_ji) v_i v_j` at the compute width (no
+symmetry assumed), so a form costs `n(n+1)/2` widening multiplies, each
+`2W x 2W -> 4W` through the unsigned `mul_to_*` family on magnitudes with the
+sign reapplied and the bit budget asserted. The accumulator is the orient3d
+accumulator of the profile (section 10): a term is below `3W-2` bits and the
+sum below `3W-2+2 log2 n`, against `4W` available. The scalar and the
+interval narrow the same integer, so the scalar lies inside the bracket by
+construction rather than by measurement.
+
+Exact-integer model (Python, 400 random forms per row, coordinates below 1,
+metric entries below 16) before the port: two-stage width mean 2.7 to 2.8 ulp
+at n = 7 and 6.7 to 6.8 at n = 23 (max 10) on every profile; fused width
+exactly 1 ulp on every inexact form, 0 on exact ones; widest partial sum at
+about half the budget. Cost on the embedded profile (release build, 2000
+records, min of 3 rounds, ns per record): fused scalar 714 (n = 7) and 6832
+(n = 23), 85 to 89 percent of a two-stage scalar built from `fused::dot`;
+certified form 719 and 6862, 107 to 122 percent of the 0.6.0 two-stage
+interval and 86 to 90 percent of the two-stage scalar. A first port that
+multiplied on the full accumulator width measured 141 to 151 percent of the
+two-stage interval; routing the product through the compute-width `mul_to_*`
+family (4 x 4 words instead of 8 x 8 on I512) is what brought it down.
+The two-stage interval remains available by composition (`Interval::dot` per
+row, then `dot_intervals`).
+
 ## 5. The boundary: what is deliberately absent
 
 No transcendental interval is provided, not even labelled approximate. gMath's
@@ -257,8 +294,13 @@ wrap on the narrow profiles; an enclosure that wraps is worse than no enclosure.
 | balanced Q128.128 | 256 | 128 | I512 | `< 2^192` | I512 |
 | scientific Q256.256 | 512 | 256 | I1024 | `< 2^384` | I1024 |
 
+The fused quadratic form (section 4.1) accumulates at `3F` on the orient3d
+accumulator of section 10: i128, I256, I512, I1024, I2048 for the five
+profiles in the same order, with the narrowing to storage shifting by `2F`.
+
 All derived from `BinaryStorage` / `ComputeStorage` per `table_format`; no width
-is hand-maintained per profile beyond the existing type aliases.
+is hand-maintained per profile beyond the existing type aliases and the
+accumulator table shared with the predicates (`imperative/wide_acc.rs`).
 
 ## 9. Positive definiteness by interval Cholesky (`predicates::pd_verdict`)
 
@@ -354,9 +396,12 @@ consumer ever needs one at 77 digits.
   inexact and negative cases; constructed ties of both signs on every profile
 - enclosure: interval x interval products checked at exact scale on corners and
   interior points; `dot` equals `[floor, ceil]` of the exact sum; the quadratic
-  form encloses the exact value with width within the two-narrowing bound;
-  `quadratic_form(v, I) == dot(v, v)` structurally; composed chains contain the
-  scalar path on every profile
+  form equals `[floor, ceil]` of the exact value (width at most 1 ulp, 0 exactly
+  when representable) and `fused::quadratic_form` equals its nearest with ties
+  toward +infinity, on 3000 random forms and on constructed ties of both signs;
+  `quadratic_form(v, I) == dot(v, v)` and `fused::quadratic_form(v, I) ==
+  fused::dot(v, v)` structurally; typed overflow on both paths; composed chains
+  contain the scalar path on every profile
 - sqrt: 10,000 sampled inputs with `k^2 <= n < (k+1)^2` checked in u128, ceil
   equal to floor iff exact, scalar inside; perfect-square and monotone pins
 - errors: division by an interval containing zero, negative sqrt, inverted
@@ -372,7 +417,10 @@ opinion: reference values from `scripts/generate_certified_geometry_refs.py`
 cross-check, no code shared with the Rust side), covering sqrt, product and
 quotient endpoints with operands near the storage maximum on every profile,
 containment of the exact rational last Cholesky pivot at n = 23 and 50,
-predicate signs on configurations scaled to near the storage maximum, and the
+predicate signs on configurations scaled to near the storage maximum, the
+quadratic form's `[floor, ceil]` and nearest against references computed on
+values with exact rationals (mpmath at 700 digits as the cross-check, since
+the `3W`-bit sums exceed 300 digits on the scientific profile), and the
 decimal endpoints. The other gates use i128 models written alongside the code;
 this one does not, which is the point. All of these run on all five profiles
 in `.github/workflows/certified-geometry.yml`.

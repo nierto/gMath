@@ -11,11 +11,13 @@
 //!    negative infinity and the upper endpoint toward positive infinity.
 //!
 //! Compound operations ([`Interval::dot`], [`Interval::quadratic_form`])
-//! accumulate exactly and narrow once per stage. That is what keeps the
-//! enclosure tight: measured 5 to 64 ulp for a 23-dimensional quadratic form
-//! at Q64.64, and 12 to 24 times tighter than narrowing after every elementary
-//! operation. Width is set by the number of narrowings, not by cancellation,
-//! because cancellation inside an exact accumulator costs nothing.
+//! accumulate exactly and narrow once. That is what keeps the enclosure
+//! tight: `dot` and `quadratic_form` are `[floor, ceil]` of one exact value,
+//! at most 1 ulp wide. The quadratic form's earlier two-narrowing form
+//! measured 5 to 64 ulp for 23 dimensions at Q64.64, itself 12 to 24 times
+//! tighter than narrowing after every elementary operation. Width is set by
+//! the number of narrowings, not by cancellation, because cancellation inside
+//! an exact accumulator costs nothing.
 //!
 //! **What may carry the word certified.** `+`, `-`, `*`, `/` are sound by the
 //! standard endpoint argument. [`Interval::sqrt`] is certified a posteriori:
@@ -46,6 +48,7 @@
 
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
+use super::wide_acc::{narrow_triple_ceil, narrow_triple_floor, quadratic_form_exact};
 use super::{FixedMatrix, FixedPoint, FixedVector};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
@@ -98,7 +101,7 @@ fn compute_zero() -> ComputeStorage {
 /// reapplied, the same pattern as the scalar `fixed_multiply`; on Q64.64
 /// `mul_i128_to_i256` is sign-correct by itself.
 #[inline]
-fn exact_product(a: BinaryStorage, b: BinaryStorage) -> ComputeStorage {
+pub(crate) fn exact_product(a: BinaryStorage, b: BinaryStorage) -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
     {
         (a as i64) * (b as i64)
@@ -554,32 +557,21 @@ impl Interval {
         Ok(Self::from_raw(downscale_to_storage_floor(lo_acc)?, downscale_to_storage_ceil(hi_acc)?))
     }
 
-    /// Certified quadratic form `v^T M v` for point inputs.
+    /// Certified quadratic form `v^T M v` for point inputs, with one narrowing.
     ///
-    /// Two narrowings: each `(M v)_i` is an exact dot product narrowed to an
-    /// interval, and the outer sum `sum_i v_i (M v)_i` accumulates exactly
-    /// with the endpoint chosen by the sign of `v_i`, narrowed once more. This
-    /// is the form measured at 5 to 64 ulp for 23 dimensions at Q64.64.
+    /// Every term `v_i m_ij v_j` is an exact triple product on the profile's
+    /// widest accumulator (the orient3d accumulator: `3W+3` bits and up) and
+    /// the sum is exact, so the result is `[floor, ceil]` of ONE exact value:
+    /// the width is at most 1 ulp, and exactly 0 when the value is
+    /// representable. `fused::quadratic_form` rounds the same exact value to
+    /// nearest, so the scalar always lies inside this enclosure. The earlier
+    /// two-narrowing form (each `(M v)_i` narrowed, then the outer sum) measured
+    /// a mean of 3.2 ulp at 7 dimensions and 5 to 64 ulp at 23.
     ///
     /// Panics if `m` is not square or its size differs from `v`.
     pub fn try_quadratic_form(v: &FixedVector, m: &FixedMatrix) -> Result<Self, OverflowDetected> {
-        let n = v.len();
-        assert!(m.is_square() && m.rows() == n, "Interval::quadratic_form: dimension mismatch");
-        let mut lo_acc = compute_zero();
-        let mut hi_acc = compute_zero();
-        for i in 0..n {
-            let mut row_acc = compute_zero();
-            for j in 0..n {
-                row_acc = compute_checked_add(row_acc, exact_product(m.get(i, j).raw(), v[j].raw()))?;
-            }
-            let mv_lo = downscale_to_storage_floor(row_acc)?;
-            let mv_hi = downscale_to_storage_ceil(row_acc)?;
-            let r = v[i].raw();
-            let (l, h) = if v[i] >= FixedPoint::ZERO { (mv_lo, mv_hi) } else { (mv_hi, mv_lo) };
-            lo_acc = compute_checked_add(lo_acc, exact_product(r, l))?;
-            hi_acc = compute_checked_add(hi_acc, exact_product(r, h))?;
-        }
-        Ok(Self::from_raw(downscale_to_storage_floor(lo_acc)?, downscale_to_storage_ceil(hi_acc)?))
+        let acc = quadratic_form_exact(v, m)?;
+        Ok(Self::from_raw(narrow_triple_floor(acc)?, narrow_triple_ceil(acc)?))
     }
 
     // ------------------------------------------------------------------

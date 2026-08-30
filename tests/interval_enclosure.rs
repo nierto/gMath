@@ -11,10 +11,14 @@
 //!    result lies within the interval. On the narrow profiles the exact result
 //!    is computed in i128/u128 from raw values; on the wide profiles the
 //!    scalar path (whose enclosure is implied) and structural pins are used.
+//!    `quadratic_form` is `[floor, ceil]` of one exact value (width at most
+//!    1 ulp, 0 when representable) and `fused::quadratic_form` is its nearest
+//!    with ties toward +infinity, checked on sweeps and on constructed ties.
 //! 3. The sqrt certificate `k^2 <= n < (k+1)^2` holds for every sampled input.
 //!
 //! Overflow and domain errors are typed, never wrapped.
 
+use g_math::fixed_point::imperative::fused;
 use g_math::fixed_point::{FixedMatrix, FixedPoint, FixedVector, Interval, OverflowDetected};
 
 #[cfg(table_format = "q16_16")]
@@ -242,6 +246,8 @@ fn dot_encloses_exact_sum_with_one_narrowing() {
 #[test]
 fn quadratic_form_encloses_exact_value_and_stays_narrow() {
     let mut rng = Rng(0x0F0_12A);
+    let mut inexact_count = 0usize;
+    let mut negatives = 0usize;
     for _ in 0..3_000 {
         let n = 2 + (rng.next() % 6) as usize;
         let v: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect();
@@ -259,18 +265,91 @@ fn quadratic_form_encloses_exact_value_and_stays_narrow() {
         let mut fm = FixedMatrix::new(n, n);
         for i in 0..n { for j in 0..n { fm.set(i, j, from_i128(m[i][j])); } }
         let iv = Interval::quadratic_form(&fv, &fm);
-        // lo * 2^(2FB) <= num  <=>  lo * 2^FB <= floor(num / 2^FB), since the
-        // left side is an integer; likewise ceil(num / 2^FB) <= hi * 2^FB.
-        let lo_scaled = raw_i128(iv.lo()) << FB;
-        let hi_scaled = raw_i128(iv.hi()) << FB;
-        let num_floor = num >> FB;
-        let num_ceil = if num & ((1i128 << FB) - 1) != 0 { num_floor + 1 } else { num_floor };
-        assert!(lo_scaled <= num_floor, "quadratic form lower endpoint above the exact value");
-        assert!(num_ceil <= hi_scaled, "quadratic form upper endpoint below the exact value");
-        // two narrowings, each 1 ulp, times |v_i| < 1 unit in these samples: a few ulp at most
+        // One narrowing of one exact value: the interval IS [floor, ceil] of
+        // num / 2^(2FB) (two-step shifts: 2FB = 128 at Q64.64 is out of range
+        // for a single i128 shift).
+        let floor = (num >> FB) >> FB;
+        let inexact = ((floor << FB) << FB) != num;
+        let ceil = if inexact { floor + 1 } else { floor };
+        let round_bit = (num >> (2 * FB - 1)) & 1 == 1;
+        let nearest = if round_bit { floor + 1 } else { floor };
+        assert_eq!(raw_i128(iv.lo()), floor, "quadratic form lower endpoint is not the floor of the exact value");
+        assert_eq!(raw_i128(iv.hi()), ceil, "quadratic form upper endpoint is not the ceil of the exact value");
         let width = raw_i128(iv.width());
-        assert!(width <= (n as i128) + 2, "quadratic form width {width} ulp exceeds the two-narrowing bound for n = {n}");
+        assert!(width <= 1, "quadratic form width {width} ulp exceeds the one-narrowing bound for n = {n}");
+        assert_eq!(width == 0, !inexact, "width is zero exactly when the value is representable");
+        // the fused scalar is the nearest (ties toward +infinity) of the same exact value
+        let scalar = fused::quadratic_form(&fv, &fm);
+        assert_eq!(raw_i128(scalar), nearest, "fused quadratic form is not the correctly rounded value");
+        assert!(iv.contains(scalar));
+        if inexact { inexact_count += 1; }
+        if num < 0 { negatives += 1; }
     }
+    assert!(inexact_count > 2_000, "sweep must exercise inexact values, got {inexact_count}");
+    assert!(negatives > 1_000, "sweep must exercise negative values, got {negatives}");
+}
+
+/// Constructed ties on every profile: `v = [1/2]`, `m = [[2 ulp]]` makes the
+/// exact value exactly half an ulp. The interval is `[0, 1 ulp]`, the fused
+/// scalar rounds the tie toward +infinity to `1 ulp`; the negative twin gives
+/// `[-1 ulp, 0]` and a scalar of `0`.
+#[test]
+fn fused_quadratic_form_rounds_ties_toward_positive_infinity() {
+    let half = fp("0.5");
+    let two_ulp = ulp() + ulp();
+    let v = FixedVector::from_slice(&[half]);
+    let mut m = FixedMatrix::new(1, 1);
+    m.set(0, 0, two_ulp);
+    assert_eq!(Interval::quadratic_form(&v, &m), Interval::new(FixedPoint::ZERO, ulp()));
+    assert_eq!(fused::quadratic_form(&v, &m), ulp());
+    m.set(0, 0, -two_ulp);
+    assert_eq!(Interval::quadratic_form(&v, &m), Interval::new(-ulp(), FixedPoint::ZERO));
+    assert_eq!(fused::quadratic_form(&v, &m), FixedPoint::ZERO);
+    // 2 x 2 with an off-diagonal tie: v = [1/2, 1/2], m = [[0, 2 ulp], [2 ulp, 0]]
+    // exact = 2 * (1/4) * 2 ulp = 1 ulp, representable: point interval, scalar 1 ulp
+    let v2 = FixedVector::from_slice(&[half, half]);
+    let mut m2 = FixedMatrix::new(2, 2);
+    m2.set(0, 1, two_ulp);
+    m2.set(1, 0, two_ulp);
+    assert_eq!(Interval::quadratic_form(&v2, &m2), Interval::point(ulp()));
+    assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
+    // one-sided: m = [[0, 2 ulp], [0, 0]] -> exact half an ulp, the tie again
+    m2.set(1, 0, FixedPoint::ZERO);
+    assert_eq!(Interval::quadratic_form(&v2, &m2), Interval::new(FixedPoint::ZERO, ulp()));
+    assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
+}
+
+/// Structural pin on every profile: with the identity metric the fused
+/// scalar is `fused::dot(v, v)` bit for bit (the same exact value, the same
+/// nearest rounding), and the quadratic form's interval brackets it.
+#[test]
+fn fused_quadratic_form_with_identity_equals_fused_dot() {
+    let vs = [fp("0.3"), fp("-1.25"), fp("2.5"), fp("0.001"), fp("-0.333333")];
+    let v = FixedVector::from_slice(&vs);
+    let id = FixedMatrix::identity(5);
+    let scalar = fused::quadratic_form(&v, &id);
+    assert_eq!(scalar, fused::dot(&vs, &vs));
+    let iv = Interval::quadratic_form(&v, &id);
+    assert!(iv.contains(scalar));
+    assert!(iv.width() <= ulp());
+    assert_eq!(iv, Interval::dot(&vs, &vs));
+}
+
+/// The typed overflow: a quadratic form whose value leaves the storage tier
+/// is `TierOverflow` from `try_quadratic_form` on both the interval and the
+/// fused path, never a wrapped value.
+#[test]
+fn quadratic_form_overflow_is_typed_on_both_paths() {
+    // X = 2^ceil((SB - FB) / 3): X fits storage comfortably, X^3 does not.
+    let k = (ALL_SB - ALL_FB + 2) / 3;
+    let mut big = fp("1");
+    for _ in 0..k { big = big + big; }
+    let v = FixedVector::from_slice(&[big, big]);
+    let mut m = FixedMatrix::new(2, 2);
+    m.set(0, 0, big);
+    m.set(1, 1, big);
+    assert_eq!(Interval::try_quadratic_form(&v, &m), Err(OverflowDetected::TierOverflow));
+    assert_eq!(fused::try_quadratic_form(&v, &m), Err(OverflowDetected::TierOverflow));
 }
 
 #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]

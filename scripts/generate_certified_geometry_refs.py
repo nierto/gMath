@@ -322,6 +322,69 @@ def predicate_entries(W, with_circle):
     return entries
 
 
+def qf_entries(F, W):
+    """Fused quadratic form references: (n, v raws, m raws row-major, floor,
+    ceil, nearest) at the storage scale. The reference is computed on VALUES
+    with Fractions (v_i m_ij v_j as rationals, then floor/ceil/nearest of
+    q * 2^F), not on raws with integer shifts, so it shares no formulation
+    with the Rust kernel; mpmath at 700 digits (3W bits fit) cross-checks it.
+    """
+    one = 1 << F
+    rng = Rng(0x0F0_12A)
+
+    def signed(bits):
+        mag = rng.next() & ((1 << bits) - 1)
+        return -mag if rng.next() & 1 else mag
+
+    cases = [
+        # constructed ties: exact value = half an ulp (and its negative twin)
+        ([one // 2], [[2]]),
+        ([one // 2], [[-2]]),
+        ([one // 2, one // 2], [[0, 2], [2, 0]]),      # representable: point
+        ([one // 2, one // 2], [[0, 2], [0, 0]]),      # one-sided: the tie
+        # dyadic 3 x 3
+        ([one // 2, -3 * one // 4, 5 * one // 8],
+         [[one, one // 4, -one // 8], [one // 4, 2 * one, one // 16], [-one // 8, one // 16, one // 2]]),
+    ]
+    # random raws at a quarter of the storage width, dims 2..7
+    for n in (2, 3, 5, 7):
+        for _ in range(3):
+            v = [signed(W // 4) for _ in range(n)]
+            m = [[signed(W // 4) for _ in range(n)] for _ in range(n)]
+            cases.append((v, m))
+    # operands near the storage maximum with a result that still fits:
+    # raws of 2^k with k = (W - 1 + 2F) // 3 - 2, n = 2, four terms
+    k = (W - 1 + 2 * F) // 3 - 2
+    big = (1 << k) - 977
+    for sv, sm in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+        v = [sv * big, sv * (big - 12345)]
+        m = [[sm * big, sm * (big // 3)], [sm * (big // 5), sm * (big - 1)]]
+        cases.append((v, m))
+
+    out = []
+    for v, m in cases:
+        n = len(v)
+        q = sum(Fraction(v[i], one) * Fraction(m[i][j], one) * Fraction(v[j], one)
+                for i in range(n) for j in range(n))
+        scaled = q * one
+        f = scaled.numerator // scaled.denominator
+        c = f if scaled.denominator == 1 else f + 1
+        half = scaled + Fraction(1, 2)
+        near = half.numerator // half.denominator
+        assert f <= near <= c
+        assert -(1 << (W - 1)) <= f and c <= (1 << (W - 1)) - 1, "qf reference must fit storage"
+        with mp.workdps(700):
+            qm = mpf(0)
+            for i in range(n):
+                for j in range(n):
+                    qm += mpf(v[i]) * mpf(m[i][j]) * mpf(v[j])
+            qm = qm / mpf(one) / mpf(one)
+            assert int(mp.floor(qm)) == f, "mpmath disagrees with the Fraction floor"
+            assert int(mp.ceil(qm)) == c, "mpmath disagrees with the Fraction ceil"
+        out.append((n, v, [x for row in m for x in row], f, c, near))
+    return out
+
+
 def decimal_entries():
     out = {"DSQRT": [], "DMUL": [], "DDIV": []}
     for D in (2, 9):
@@ -388,6 +451,13 @@ def main():
         w("    pub const PIVOT: &[(usize, &[u8], &[u8])] = &[")
         for n, f, c in pivot_entries(F):
             w(f"        ({n}, {le_bytes(f, W)}, {le_bytes(c, W)}),")
+        w("    ];")
+        w("    /// (n, v raws, m raws row-major, floor_raw, ceil_raw, nearest_raw) of v^T M v.")
+        w("    pub const QF: &[(usize, &[&[u8]], &[&[u8]], &[u8], &[u8], &[u8])] = &[")
+        for n, v, m, f, c, near in qf_entries(F, W):
+            vs = ", ".join(le_bytes(x, W) for x in v)
+            ms = ", ".join(le_bytes(x, W) for x in m)
+            w(f"        ({n}, &[{vs}], &[{ms}], {le_bytes(f, W)}, {le_bytes(c, W)}, {le_bytes(near, W)}),")
         w("    ];")
         ents = predicate_entries(W, with_circle=(name != "q256_256"))
         for key, arity, dim in (("ORIENT2D", 3, 2), ("ORIENT3D", 4, 3), ("INCIRCLE", 4, 2), ("INSPHERE", 5, 3)):

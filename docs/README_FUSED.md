@@ -43,6 +43,8 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | `softmax_mix(&scores, &values)` | softmax(scores) · V, weights never materialized to storage |
 | `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε) |
 | `silu(x)` | x/(1+e⁻ˣ) |
+| `quadratic_form(&v, &m)` | vᵀMv with ONE rounding: exact triple products at 3·FRAC_BITS, nearest with ties toward +∞; the correctly rounded scalar, always inside `Interval::quadratic_form` (0.6.1) |
+| `try_quadratic_form(&v, &m)` | the same, `Err(TierOverflow)` instead of a panic where the result leaves storage |
 
 `softmax_mix` exists because materializing softmax weights to storage tier before
 the value mix imposes a 2^−FRAC_BITS resolution floor: under a low-fractional-bit

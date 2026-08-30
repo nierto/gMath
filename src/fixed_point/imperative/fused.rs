@@ -11,8 +11,9 @@
 //! - `rms_norm_factor`: Per-layer normalization in transformer architectures
 //! - `silu`: Gate activation in SwiGLU MLP layers
 
-use super::FixedPoint;
+use super::{FixedMatrix, FixedPoint, FixedVector};
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
+use super::wide_acc::{narrow_triple_nearest, quadratic_form_exact};
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_add, compute_checked_add, compute_subtract, compute_multiply, compute_divide,
     compute_negate, compute_is_zero, make_compute_int,
@@ -133,6 +134,32 @@ pub fn dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
         acc = compute_add(acc, compute_multiply(da, db));
     }
     FixedPoint::from_raw(round_to_storage(acc))
+}
+
+/// Fused quadratic form `v^T M v` with one rounding: every term is an exact triple product and the sum is narrowed once, to nearest.
+///
+/// The two-stage form (`M v` rounded to storage, then `v . (M v)` rounded
+/// again) rounds twice and its error grows with `sum_i |v_i|`. Here every
+/// `v_i m_ij v_j` is an exact triple product at `3 * FRAC_BITS` fractional
+/// bits on the profile's widest accumulator, the sum is exact and checked,
+/// and the single narrowing rounds to nearest with ties toward positive
+/// infinity, the binary house rule. The result is the correctly rounded
+/// value of `v^T M v` for the stored operands, and it always lies inside
+/// `Interval::quadratic_form(v, m)`, which narrows the same exact value
+/// outward.
+///
+/// **Use case**: Mahalanobis distances and metric-tensor scores where the
+/// verdict is taken on the scalar and must agree with its certificate.
+///
+/// Panics if `m` is not square or its size differs from `v`, and on storage
+/// overflow; [`try_quadratic_form`] returns `TierOverflow` instead.
+pub fn quadratic_form(v: &FixedVector, m: &FixedMatrix) -> FixedPoint {
+    try_quadratic_form(v, m).expect("quadratic_form: storage overflow")
+}
+
+/// Fallible twin of [`quadratic_form`]: `Err(TierOverflow)` where the result leaves the storage tier.
+pub fn try_quadratic_form(v: &FixedVector, m: &FixedMatrix) -> Result<FixedPoint, OverflowDetected> {
+    Ok(FixedPoint::from_raw(narrow_triple_nearest(quadratic_form_exact(v, m)?)?))
 }
 
 /// Fused squared Möbius denominator `|1 − p̄q|² = 1 − 2⟨p,q⟩ + |p|²·|q|²` (U1).

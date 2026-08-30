@@ -40,15 +40,6 @@ use super::{FixedMatrix, FixedPoint, Interval};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-use crate::fixed_point::I256;
-#[cfg(any(table_format = "q32_32", table_format = "q64_64"))]
-use crate::fixed_point::I512;
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
-use crate::fixed_point::I1024;
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-use crate::fixed_point::I2048;
-
 // ============================================================================
 // Sign
 // ============================================================================
@@ -77,25 +68,13 @@ impl Sign {
 }
 
 // ============================================================================
-// Exact accumulator arithmetic
+// Exact accumulator arithmetic (shared: super::wide_acc)
 // ============================================================================
 
-/// Exact signed integer arithmetic on a fixed-width accumulator.
-///
-/// Products are formed on magnitudes and the sign reapplied, so the wide
-/// types' `Mul` implementations are only ever entered with non-negative
-/// operands (a schoolbook or a truncated unsigned product, both exact there).
-/// Each product first asserts that the operands' bit lengths fit the type,
-/// which is the width budget made loud.
-trait Wide:
-    Copy + PartialEq + std::ops::Add<Output = Self> + std::ops::Sub<Output = Self> + std::ops::Mul<Output = Self> + std::ops::Neg<Output = Self>
-{
-    const BITS: u32;
-    fn zero() -> Self;
-    fn is_negative(self) -> bool;
-    /// Significant bits of a NON-NEGATIVE value.
-    fn bit_length(self) -> u32;
+use super::wide_acc::{acc, Wide};
 
+/// The sign of an exactly evaluated accumulator value.
+trait WideSign: Wide {
     #[inline]
     fn sign(self) -> Sign {
         if self.is_negative() {
@@ -106,105 +85,9 @@ trait Wide:
             Sign::Positive
         }
     }
-
-    #[inline]
-    fn mul_exact(self, rhs: Self) -> Self {
-        let neg = self.is_negative() != rhs.is_negative();
-        let a = if self.is_negative() { -self } else { self };
-        let b = if rhs.is_negative() { -rhs } else { rhs };
-        assert!(
-            a.bit_length() + b.bit_length() <= Self::BITS - 1,
-            "exact predicate: accumulator width budget violated"
-        );
-        let p = a * b;
-        if neg { -p } else { p }
-    }
 }
 
-#[inline]
-fn words_bit_length(words: &[u64]) -> u32 {
-    for i in (0..words.len()).rev() {
-        if words[i] != 0 {
-            return i as u32 * 64 + (64 - words[i].leading_zeros());
-        }
-    }
-    0
-}
-
-impl Wide for i128 {
-    const BITS: u32 = 128;
-    #[inline] fn zero() -> Self { 0 }
-    #[inline] fn is_negative(self) -> bool { self < 0 }
-    #[inline] fn bit_length(self) -> u32 { 128 - self.leading_zeros() }
-}
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-impl Wide for I256 {
-    const BITS: u32 = 256;
-    #[inline] fn zero() -> Self { I256::zero() }
-    #[inline] fn is_negative(self) -> bool { I256::is_negative(self) }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-}
-
-#[cfg(any(table_format = "q32_32", table_format = "q64_64"))]
-impl Wide for I512 {
-    const BITS: u32 = 512;
-    #[inline] fn zero() -> Self { I512::zero() }
-    #[inline] fn is_negative(self) -> bool { I512::is_negative(self) }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
-impl Wide for I1024 {
-    const BITS: u32 = 1024;
-    #[inline] fn zero() -> Self { I1024::zero() }
-    #[inline] fn is_negative(self) -> bool { (self.words[15] as i64) < 0 }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-}
-
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-impl Wide for I2048 {
-    const BITS: u32 = 2048;
-    #[inline] fn zero() -> Self { I2048::zero() }
-    #[inline] fn is_negative(self) -> bool { (self.words[31] as i64) < 0 }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-}
-
-// Per-profile accumulator selection, from the storage width W:
-//   orient2d 2W+2, orient3d 3W+3 -> Orient;  incircle 4W+5, insphere 5W+6 -> Circle.
-#[cfg(table_format = "q16_16")]
-mod acc {
-    pub type Orient = i128; // W = 32: 66 / 99 bits
-    pub type Circle = super::I256; // 133 / 166 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { v as i128 }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I256::from_i128(v as i128) }
-}
-#[cfg(table_format = "q32_32")]
-mod acc {
-    pub type Orient = super::I256; // W = 64: 130 / 195 bits
-    pub type Circle = super::I512; // 261 / 326 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I256::from_i128(v as i128) }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I512::from_i128(v as i128) }
-}
-#[cfg(table_format = "q64_64")]
-mod acc {
-    pub type Orient = super::I512; // W = 128: 258 / 387 bits
-    pub type Circle = super::I1024; // 517 / 646 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I512::from_i128(v) }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I1024::from_i128(v) }
-}
-#[cfg(table_format = "q128_128")]
-mod acc {
-    pub type Orient = super::I1024; // W = 256: 514 / 771 bits
-    pub type Circle = super::I2048; // 1029 / 1286 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I1024::from_i256(v) }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I2048::from_i256(v) }
-}
-#[cfg(table_format = "q256_256")]
-mod acc {
-    pub type Orient = super::I2048; // W = 512: 1026 / 1539 bits; circle predicates exceed 2048
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I2048::from_i512(v) }
-}
+impl<W: Wide> WideSign for W {}
 
 #[inline]
 fn p2<W: Wide>(p: [FixedPoint; 2], widen: fn(BinaryStorage) -> W) -> [W; 2] {

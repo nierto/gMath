@@ -22,6 +22,7 @@ pub mod projective;
 pub mod fiber_bundle;
 pub mod interval;
 pub mod predicates;
+mod wide_acc;
 mod serialization;
 
 pub use fixed_point::FixedPoint;
