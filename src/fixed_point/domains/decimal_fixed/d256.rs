@@ -163,7 +163,9 @@ impl std::ops::Sub for D256 {
         for i in 0..4 {
             let diff = (self.words[i] as u128).wrapping_sub((rhs.words[i] as u128) + (borrow as u128));
             result[i] = diff as u64;
-            borrow = if diff > u128::MAX { 1 } else { 0 };
+            // A wrapped u128 subtraction lands above u64::MAX; `diff > u128::MAX`
+            // can never be true, which is how the borrow used to vanish.
+            borrow = if diff > u64::MAX as u128 { 1 } else { 0 };
         }
         
         D256 { words: result }
@@ -222,10 +224,9 @@ impl Ord for D256 {
                 for i in (0..4).rev() {
                     match self.words[i].cmp(&other.words[i]) {
                         std::cmp::Ordering::Equal => continue,
-                        ordering => {
-                            // For negative numbers, reverse the comparison
-                            return if self_negative { ordering.reverse() } else { ordering };
-                        }
+                        // Same sign: two's complement words already order correctly
+                        // (for negatives, smaller raw value = more negative). No reversal.
+                        ordering => return ordering,
                     }
                 }
                 std::cmp::Ordering::Equal

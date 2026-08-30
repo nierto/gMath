@@ -5,6 +5,56 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-30
+
+A patch release: three defects in the published 0.5.0, found by the gates
+built for the certified-arithmetic work that follows in 0.6.0, fixed here
+with no change to the public API so that every `^0.5` user receives them.
+Two of the three are on the scientific profile; the third is in the widest
+decimal integer types. Results on the embedded profile's usual ranges are
+unchanged; if you compute on the scientific profile with values above about
+`2^200`, or subtract decimal values wider than 128 bits, your results were
+wrong before and are correct now.
+
+### Fixed
+
+- **Scientific profile: `FixedPoint::sqrt` lost precision for large
+  arguments.** The Q512.512 reciprocal-square-root engine ran its Newton
+  iteration directly on the input; for large inputs `1/sqrt(x)` and its
+  square are tiny and the Q512.512 grid left them only about 260
+  significant bits, so the iteration converged to a fixed point of the
+  truncated map: 0 ULP over the validated `[0.0001, 10000]` range, but
+  `2^124` ulp at `2^254 + 12345 ulp` and outside the certified enclosure
+  from roughly `2^200` upward. The engine now normalises the input to
+  `m in [1, 4)` (exact shift; no bit of a Q256.256 input is ever discarded),
+  iterates at full precision, certifies the result at the normalised scale
+  by the exact integer check `r^2 <= m * 2^512 < (r+1)^2` with a bounded
+  correction that panics rather than return an unverified value, and shifts
+  back exactly. Modelled exactly in Python before porting: 3220 inputs
+  spanning the whole Q256.256 range, storage results correctly rounded in
+  every case. Found by the new scalar-containment assertion of the
+  reference gate; a magnitude-ladder gate in `tests/interval_enclosure.rs`
+  now checks every profile's scalar sqrt against the certified enclosure
+  across its full range.
+- **`D256::Sub` and `D512::Sub` never propagated a borrow.** The borrow test
+  compared a `u128` difference against `u128::MAX`, which is never true, so
+  `0 - 1` produced `2^64 - 1` and any subtraction needing a borrow across a
+  64-bit word lost it. These are the operations behind the UGOD decimal
+  tier 5 and 6 subtraction arms. Found by the decimal interval gate.
+- **`Ord` on `I1024`, `I2048`, `D256` and `D512` ordered two negative
+  values backwards.** The word comparison was reversed for negatives, but
+  two's-complement negatives already order correctly as unsigned words, so
+  `-2` compared greater than `-1`. `I256` and `I512` had been corrected
+  earlier; these four had not. On the scientific profile the compute tier is
+  `I1024`, so `<`, `min` and `max` between two negative compute-tier values
+  there were wrong. Found by the decimal interval gate's negative-product
+  sweep.
+- Gate for both: `tests/wide_integer_sign_semantics.rs` (ordering of
+  negatives beyond i128 and mixed-sign sorts on all six wide types, borrow
+  chains through one and two words on `D256`/`D512`, and consistency with
+  i128 on every sign combination).
+
+
 ## [0.5.0] - 2026-08-24
 
 ### ⚠ Please read before upgrading to 0.5.0

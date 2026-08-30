@@ -1,0 +1,32 @@
+# Substrate gates for the 0.5.1 fixes on every deployment profile: borrow
+# propagation and negative ordering on all six wide integer types, and the
+# scalar square root across each profile's whole range against independent
+# references.
+name: wide-integer-sign
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Wide integer sign semantics and full-range sqrt
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: |
+          cargo test --no-fail-fast \
+            --test wide_integer_sign_semantics \
+            --test sqrt_full_range_validation
