@@ -51,7 +51,11 @@ decomposition, matrix chain, and fused op) computes at tier N+1 with double the
 fractional bits and rounds to storage exactly once, so the wide→storage downscale
 is the only rounding the result sees. The normative per-domain rounding table and
 the full explanation are in the rounding contract,
-**[CONTRACT.md §3](../CONTRACT.md#3-rounding-contract)**.
+**[CONTRACT.md §3](../CONTRACT.md#3-rounding-contract)**. The certified
+interval types are the deliberate exception: they round each endpoint
+outward (toward −∞ below, +∞ above) so that the bracket provably contains
+the exact result; the scalar paths keep the per-domain rules and always
+land inside the corresponding interval.
 
 ## Validation
 

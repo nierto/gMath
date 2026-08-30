@@ -260,9 +260,9 @@ dispatch-time shadow-exponent guard is the future path. Reasoning:
 `docs/design/TERNARY_ROUTING_COLUMN.md`. Measured end-to-end: ~1.06×
 vs the rational fallback (parse-dominated); the value is architectural.
 
-### Unreleased: Certified interval arithmetic
+### v0.6.0: Certified interval arithmetic, definiteness verdict, exact predicates
 
-**IMPLEMENTED 2026-08-29 on main, not yet released.**
+**IMPLEMENTED 2026-08-29 on main; released as 0.6.0 on 2026-08-30, with the three substrate fixes it found released separately as 0.5.1.**
 `g_math::fixed_point::Interval` (module `imperative::interval`): an enclosure
 `[lo, hi]` sound by construction, from exact compute-tier products and
 directed narrowing (floor for the lower endpoint, ceil for the upper) at the

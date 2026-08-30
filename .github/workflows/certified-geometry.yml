@@ -37,7 +37,8 @@ jobs:
             --test decimal_interval_enclosure \
             --test pd_verdict_validation \
             --test exact_predicates_validation \
-            --test certified_geometry_refs_validation
+            --test certified_geometry_refs_validation \
+            --test sqrt_full_range_validation
 
       - name: Width-budget guard (library unit tests)
         env:

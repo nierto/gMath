@@ -70,6 +70,28 @@ exactly once. The one contracted exception to nearest is the TQ1.9
 wide-output `matvec_q2f` narrowing, which stays truncation by its own
 published 0.4.31 bit-reproducibility contract.
 
+**"Certified" is a technical term, not a warranty**: it means the interval
+provably contains the exact result of the stated integer computation on the
+values passed in, or that a verdict is proven for the matrix passed in;
+the software is provided as is under its licenses, and the README's
+disclaimer applies to every certified operation.
+
+**Certified enclosures round outward, by design (unreleased on main).**
+`Interval` and `DecimalInterval<D>` are the one place a result is not
+rounded to nearest: the lower endpoint rounds toward −∞ and the upper toward
++∞ at the single narrowing of each compound operation, because that
+directed rounding is what makes the bracket sound. The scalar paths are
+untouched: the same exact compute-tier accumulation feeds `nearest` for a
+scalar and `floor`/`ceil` for an interval, so the scalar always lies inside
+its interval, and the table above still holds on every scalar path. The
+exact predicates (`orient2d`, `orient3d`, `incircle`, `insphere`,
+`pd_verdict`) never round; they evaluate integer determinants exactly or
+run the interval Cholesky. The scientific-profile square-root engine now
+computes an exact floor at tier N+1 (certified by an integer check) before
+the single nearest downscale, which is the rule above applied, not an
+exception to it. Gates: `tests/interval_enclosure.rs`,
+`tests/decimal_interval_enclosure.rs`, `tests/certified_geometry_refs_validation.rs`.
+
 History: before unification the rules differed by operation, by path, and
 (imperatively) by profile: direct storage-tier multiply diverged between
 paths on ~half of inexact products (measured 48.7% of 44k pairs, 1 ulp).

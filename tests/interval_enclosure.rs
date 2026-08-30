@@ -242,7 +242,7 @@ fn dot_encloses_exact_sum_with_one_narrowing() {
 #[test]
 fn quadratic_form_encloses_exact_value_and_stays_narrow() {
     let mut rng = Rng(0x0F0_12A);
-    for _ in 0..300 {
+    for _ in 0..3_000 {
         let n = 2 + (rng.next() % 6) as usize;
         let v: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect();
         let m: Vec<Vec<i128>> = (0..n).map(|_| (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect()).collect();

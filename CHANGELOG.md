@@ -5,7 +5,16 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-08-30
+
+### Upgrading
+
+Everything in 0.6.0 is additive: new types (`Interval`, `DecimalInterval`),
+a new module (`imperative::predicates` with `pd_verdict`, `PdVerdict`,
+`Sign`, `orient2d`, `orient3d`, `incircle`, `insphere`), and new gates. No
+existing function changes its signature or its rounding. The three defect
+fixes listed under 0.5.1 below are included; if you are on `^0.5` you can
+take them without adopting the new API by staying on 0.5.1.
 
 ### Added
 
@@ -97,6 +106,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no string parsing.
 - New workflow `certified-geometry.yml`: the six certified-geometry gates and
   the width-budget unit tests on all five profiles on every push.
+
+
+## [0.5.1] - 2026-08-30
+
+A patch release: three defects in the published 0.5.0, found by the gates
+built for the certified-arithmetic work in 0.6.0, fixed with no change to
+the public API so that every `^0.5` user receives them. Two of the three
+are on the scientific profile; the third is in the widest decimal integer
+types. If you compute on the scientific profile with values above about
+`2^200`, or subtract decimal values wider than 128 bits, your results were
+wrong before and are correct now.
 
 ### Fixed
 

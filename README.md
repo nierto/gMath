@@ -10,6 +10,12 @@ Built by **Niels Erik Toren** · published as `g_math` on [crates.io](https://cr
 > results end in a different final digit. It matters only if you store, hash, or
 > compare results across versions. The four-line summary is at the top of
 > [CHANGELOG.md](CHANGELOG.md).
+>
+> **0.6.0** adds certified arithmetic (`Interval`, `DecimalInterval`), a proven
+> positive-definiteness verdict (`pd_verdict`) and exact geometric predicates,
+> all additive. **0.5.1** carries only the three defect fixes that work found
+> in 0.5.0 (two on the scientific profile, one in the wide decimal integers);
+> every `^0.5` user receives them without adopting any new API.
 
 ---
 
@@ -82,6 +88,14 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
   and a direct imperative layer for known-domain hot loops. Results are
   path-independent: one rounding rule per domain on every path (unified
   0.5.0, permanently test-gated: see [CONTRACT.md](CONTRACT.md) §3).
+- **Certified arithmetic and exact predicates** (0.6.0) - `Interval` and
+  `DecimalInterval` return a bracket that provably contains the exact result
+  for `+ - * /`, square root, dot products and quadratic forms; `pd_verdict`
+  proves a matrix positive definite (or not, or says it cannot decide and hands
+  back the straddling bracket); `orient2d`, `orient3d`, `incircle`, `insphere`
+  return an exact three-way sign. Transcendentals are deliberately excluded
+  from the certified set until their bounds are proven. Design and measured
+  widths: `docs/design/CERTIFIED_INTERVALS.md`.
 - **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
   and Lie groups, and standalone TQ1.9 ternary inference.
 - **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;
@@ -126,6 +140,11 @@ for direct hot-loop arithmetic.
   implementation.
 - **Precision differs by profile.** A Q16.16 result cannot hold Q64.64 digits;
   choose the profile for your accuracy and range needs.
+- **Certified means the arithmetic, not your model.** A certified bracket
+  encloses the exact result of the computation on the values you passed in; it
+  cannot see rounding that happened while those values were produced. On the
+  realtime profile the brackets of a 50-dimensional interval Cholesky are a few
+  percent of the pivot; from the compact profile upward they are negligible.
 - **Switching profiles needs a clean incremental cache** (`rm -rf
   target/*/incremental/`), or stale `cfg` artifacts can crash the build.
 
@@ -158,6 +177,13 @@ This software is provided **"as is"**, without warranty of any kind, express or
 implied. Use of this software is entirely at your own risk. In no event shall the
 author or contributors be held liable for any damages arising from the use or
 inability to use this software.
+
+**"Certified" is a technical term, not a warranty.** Where this documentation
+says *certified*, *proven* or *enclosure*, it means exactly what
+[CONTRACT.md](CONTRACT.md) §3 and `docs/design/CERTIFIED_INTERVALS.md` define:
+a statement about the exact integer computation performed on the values passed
+in, established by construction and gated by tests. It is not a warranty of
+fitness for any purpose, and the paragraph above applies to it in full.
 
 ## License
 
