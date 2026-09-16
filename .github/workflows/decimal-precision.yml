@@ -55,10 +55,17 @@ jobs:
 
       # Oracle #2: decimal-scaled's adversarial golden corpus, pinned to the
       # exact commit gMath was validated against. Not vendored into this repo.
+      # Fetched by SHA: since 2026-09-16 the pinned commit is no longer on any
+      # upstream branch, so a clone cannot check it out ("reference is not a
+      # tree"), while GitHub still serves the commit itself.
       - name: Fetch decimal-scaled golden corpus (pinned)
         run: |
-          git clone https://github.com/mootable/decimal-scaled.git "${{ runner.temp }}/decimal-scaled"
-          git -C "${{ runner.temp }}/decimal-scaled" checkout e6c7497832be437cf464d07b841609a0b92aac87
+          mkdir -p "${{ runner.temp }}/decimal-scaled"
+          cd "${{ runner.temp }}/decimal-scaled"
+          git init -q
+          git remote add origin https://github.com/mootable/decimal-scaled.git
+          git fetch -q --depth 1 origin e6c7497832be437cf464d07b841609a0b92aac87
+          git checkout -q FETCH_HEAD
 
       # Balanced profile: the harness is cfg-gated to q128_128 (DecimalFixed<28>
       # needs compute dp 77 for guard digits). Single-threaded: the sweep swaps
