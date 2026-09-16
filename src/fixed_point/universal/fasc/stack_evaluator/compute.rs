@@ -868,6 +868,48 @@ pub(crate) fn compute_divide(a: ComputeStorage, b: ComputeStorage) -> Result<Com
     }
 }
 
+/// Divide two compute-tier values, reporting a quotient beyond the compute
+/// tier as `TierOverflow` (`compute_divide` truncates it into range).
+#[inline]
+pub(crate) fn compute_checked_divide(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(table_format = "q256_256")]
+    {
+        if b == I1024::zero() { return Err(OverflowDetected::DivisionByZero); }
+        use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
+        let q = i2048_div(I2048::from_i1024(a) << 512, I2048::from_i1024(b));
+        if !q.fits_in_i1024() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i1024())
+    }
+    #[cfg(table_format = "q128_128")]
+    {
+        if b == I512::zero() { return Err(OverflowDetected::DivisionByZero); }
+        let q = (I1024::from_i512(a) << 256) / I1024::from_i512(b);
+        if !q.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i512())
+    }
+    #[cfg(table_format = "q64_64")]
+    {
+        if b == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
+        let q = (I512::from_i256(a) << 128) / I512::from_i256(b);
+        if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i256())
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        if b == 0i128 { return Err(OverflowDetected::DivisionByZero); }
+        let q = (I256::from_i128(a) << 64) / I256::from_i128(b);
+        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i128())
+    }
+    #[cfg(table_format = "q16_16")]
+    {
+        if b == 0i64 { return Err(OverflowDetected::DivisionByZero); }
+        let q = ((a as i128) << frac_config::COMPUTE_FRAC_BITS) / (b as i128);
+        if q > i64::MAX as i128 || q < i64::MIN as i128 { return Err(OverflowDetected::TierOverflow); }
+        Ok(q as i64)
+    }
+}
+
 /// Halve a compute-tier value (right shift by 1)
 #[inline]
 pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {

@@ -53,6 +53,18 @@ See **[PUBLIC_API.md → Linear algebra](../PUBLIC_API.md#linear-algebra)** and
   ill-conditioned system (e.g. a Hilbert matrix) amplifies input error by orders
   of magnitude in any finite precision; iterative refinement recovers the residual
   but not the lost input information. See [the precision guide](README_PRECISION.md).
+- The iterative decompositions (`svd_decompose`, `eigen_symmetric`,
+  `schur_decompose`) either converge or return an error, never a partially
+  converged result: `Err(PrecisionLimit)` when the iteration budget runs out,
+  `Err(TierOverflow)` when a norm or an entry leaves the storage range. An
+  off-diagonal entry counts as zero within `2^-(2F/3)` of its diagonal
+  neighbours (about 12.6 digits at Q64.64), never below four quanta, so exactly
+  rank-deficient matrices converge. Singular values and symmetric eigenvalues
+  land within a few ulp of mpmath references on the validation cases;
+  reconstruction error follows the relative bound, and a Schur eigenvalue's error
+  is that bound times the eigenvalue's condition number. `schur_decompose`
+  returns a real Schur form: exact zeros below the subdiagonal, and 2×2 blocks
+  only for complex pairs. Gate: `tests/decomposition_convergence_validation.rs`.
 
 Determinism guarantees are in **[CONTRACT.md](../CONTRACT.md)**.
 

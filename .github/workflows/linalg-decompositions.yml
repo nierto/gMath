@@ -1,0 +1,63 @@
+# Iterative decompositions (SVD, symmetric eigenvalues, real Schur) on every
+# deployment profile.
+#
+# The convergence gate checks each decomposition against its definition and
+# against independent mpmath references (tests/data/decomposition_refs.rs) on
+# the inputs that exposed silent failures in 0.6.1: exactly rank-deficient
+# matrices, interior zero diagonals, real 2x2 Schur blocks, permutation
+# matrices, and entries whose squares leave the storage range. realtime also
+# runs at GMATH_FRAC_BITS=10, the configuration the SVD failure was reported on.
+name: linalg-decompositions
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Decomposition gates
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: |
+          cargo test --no-fail-fast \
+            --test decomposition_convergence_validation \
+            --test eigen_svd_schur_validation
+
+      - name: Iteration-budget contract (library unit tests)
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: "cargo test --lib -- decompose::"
+
+  realtime-q22-10:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      # eigen_svd_schur_validation is not run here: its decimal tolerances
+      # (0.01, 0.0001) are 10 ulp and 0 ulp at 10 fractional bits, and four of
+      # its tests failed at this split before these decompositions changed.
+      - name: Decomposition gate at Q22.10
+        env:
+          GMATH_PROFILE: realtime
+          GMATH_FRAC_BITS: "10"
+        run: |
+          cargo test --no-fail-fast --test decomposition_convergence_validation
+          cargo test --lib -- decompose::

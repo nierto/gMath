@@ -9,15 +9,19 @@
 use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
+use super::interval::exact_product;
 use super::linalg::{
     compute_tier_dot_raw, compute_tier_sub_dot_raw, compute_tier_sub_dot_compute,
-    upscale_to_compute, round_to_storage, givens, convergence_threshold,
-    convergence_threshold_tight, apply_givens_compute,
+    upscale_to_compute, round_to_storage, compute_abs, deflation_threshold, exact_dot,
+    householder_vector, noise_floor, reflect, scale_by, stagnation_threshold, ComputeStorage,
+    Rotation, STAGNATION_SWEEPS,
 };
+use super::wide_acc::widen_storage;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     sqrt_at_compute_tier, compute_divide, downscale_to_storage,
     compute_multiply, compute_add, compute_negate,
     compute_is_negative, compute_is_zero,
+    compute_checked_add, compute_checked_divide, compute_halve, make_compute_int,
 };
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -484,6 +488,93 @@ impl CholeskyDecomposition {
 }
 
 // ============================================================================
+// Shared kernels of the iterative decompositions
+// ============================================================================
+//
+// Jacobi, Golub-Kahan and Francis converge only if the orthogonal transforms
+// they apply inject less rounding noise than their convergence tests resolve.
+// A coefficient rounded to storage precision injects about |x| ulp into every
+// entry it touches, so every coefficient here stays at the compute tier and
+// every transformed entry is narrowed once, from an exact accumulator
+// (`Rotation`, `householder_vector` and `reflect` in `linalg`). Every step is
+// checked: leaving the storage range is a `TierOverflow`, never a wrap.
+
+/// Iteration budget of the QR-type iterations: this many steps per n².
+const ITERATIONS_PER_N_SQUARED: usize = 30;
+
+/// Sweep budget of the Jacobi iteration.
+const JACOBI_MAX_SWEEPS: usize = 100;
+
+/// Francis iterations on one block, after its two exceptional shifts, before
+/// the block is taken to sit at the precision floor.
+const SCHUR_FLOOR_ITERATIONS: usize = 30;
+
+/// Reflect column `col` of `mat`, rows `start..start + v.len()`, in the
+/// hyperplane orthogonal to `v`.
+fn reflect_column(
+    mat: &mut FixedMatrix, col: usize, start: usize, v: &[BinaryStorage], v_dot_v: ComputeStorage,
+) -> Result<(), OverflowDetected> {
+    let mut w: Vec<BinaryStorage> = (start..start + v.len()).map(|i| mat.get(i, col).raw()).collect();
+    reflect(&mut w, v, v_dot_v)?;
+    for (k, value) in w.into_iter().enumerate() {
+        mat.set(start + k, col, FixedPoint::from_raw(value));
+    }
+    Ok(())
+}
+
+/// Reflect row `row` of `mat`, columns `start..start + v.len()`, in the
+/// hyperplane orthogonal to `v`.
+fn reflect_row(
+    mat: &mut FixedMatrix, row: usize, start: usize, v: &[BinaryStorage], v_dot_v: ComputeStorage,
+) -> Result<(), OverflowDetected> {
+    let mut w: Vec<BinaryStorage> = (start..start + v.len()).map(|c| mat.get(row, c).raw()).collect();
+    reflect(&mut w, v, v_dot_v)?;
+    for (k, value) in w.into_iter().enumerate() {
+        mat.set(row, start + k, FixedPoint::from_raw(value));
+    }
+    Ok(())
+}
+
+/// Rotate columns `a` and `b` of every row:
+/// `(M_a, M_b) <- (cs M_a + sn M_b, -sn M_a + cs M_b)`.
+fn rotate_columns(mat: &mut FixedMatrix, a: usize, b: usize, rot: &Rotation) -> Result<(), OverflowDetected> {
+    for r in 0..mat.rows() {
+        let (new_a, new_b) = rot.apply(mat.get(r, a), mat.get(r, b))?;
+        mat.set(r, a, new_a);
+        mat.set(r, b, new_b);
+    }
+    Ok(())
+}
+
+fn checked_add_fp(a: FixedPoint, b: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+    a.raw().checked_add(b.raw()).map(FixedPoint::from_raw).ok_or(OverflowDetected::TierOverflow)
+}
+
+fn checked_sub_fp(a: FixedPoint, b: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+    a.raw().checked_sub(b.raw()).map(FixedPoint::from_raw).ok_or(OverflowDetected::TierOverflow)
+}
+
+fn compute_sum(terms: &[ComputeStorage]) -> Result<ComputeStorage, OverflowDetected> {
+    let mut acc = make_compute_int(0);
+    for term in terms {
+        acc = compute_checked_add(acc, *term)?;
+    }
+    Ok(acc)
+}
+
+/// `sqrt(a^2 + b^2)` of two compute raws in ratio form: neither is squared.
+fn compute_hypot(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    let (x, y) = (compute_abs(a), compute_abs(b));
+    let (big, small) = if x >= y { (x, y) } else { (y, x) };
+    if compute_is_zero(&big) {
+        return Ok(big);
+    }
+    let one = make_compute_int(1);
+    let ratio = compute_divide(small, big)?;
+    Ok(compute_multiply(big, sqrt_at_compute_tier(compute_add(one, compute_multiply(ratio, ratio)))))
+}
+
+// ============================================================================
 // Symmetric Eigenvalue Decomposition (Jacobi Method)
 // ============================================================================
 
@@ -499,25 +590,37 @@ pub struct EigenDecomposition {
 
 /// Symmetric eigenvalue decomposition via the classical Jacobi method.
 ///
-/// **Why Jacobi for fixed-point:** The method is inherently self-correcting.
-/// Each Givens rotation introduces ~1 ULP of rounding error, but subsequent
-/// rotations targeting the same off-diagonal element correct it. This makes
-/// Jacobi is numerically more stable than QR iteration for fixed-point arithmetic.
+/// **Why Jacobi for fixed-point:** each rotation zeroes one off-diagonal pair
+/// outright and later rotations absorb the rounding earlier ones left behind,
+/// so the method reaches the rounding floor without a shift strategy.
 ///
 /// **Algorithm:**
-/// 1. Cyclic-by-row sweeps: for each (i,j) with i<j, apply a Givens rotation
-///    to zero A[i][j] (and A[j][i] by symmetry).
-/// 2. Rotation angle computed via quadratic formula, NO trig functions.
-///    When a_ii == a_jj, use exact 45° rotation (cs = sn = √2/2).
-/// 3. Convergence: off-diagonal Frobenius norm drops below threshold, or
-///    stagnation detected (5 sweeps with no improvement).
+/// 1. Cyclic-by-row sweeps: every (p,q) with p<q whose entry exceeds its bound
+///    is zeroed by a rotation (and A[q][p] by symmetry).
+/// 2. The rotation angle comes from the quadratic formula, no trig: `t = tan θ`
+///    is the smaller root, formed without squaring τ when |τ| > 1. The diagonal
+///    is updated in Rutishauser's form `a_pp + t a_pq`, `a_qq - t a_pq`.
+/// 3. Converged when a whole sweep finds every off-diagonal entry within the
+///    tight relative bound of its two diagonal entries, floored at four quanta.
+///    The absolute floor matters: an exact zero eigenvalue pair is computed as
+///    rounding noise, which a purely relative test never passes. A run whose
+///    largest off-diagonal entry has not decreased for five sweeps has reached
+///    the precision floor and is accepted only if every entry is within the
+///    looser sqrt(quantum) relative bound.
 ///
-/// **Precision:** All rotation parameters (tau, t, cs, sn) computed at
-/// compute tier via upscale → compute_multiply/divide → downscale.
+/// **Precision:** rotation coefficients stay at the compute tier; every updated
+/// entry is narrowed once from an exact accumulator. No entry is squared at
+/// storage precision.
 ///
-/// Returns `Err(DomainError)` if matrix is not square.
-/// The input matrix should be symmetric; only the lower triangle is read.
+/// **Errors:** `Err(PrecisionLimit)` if neither criterion is met within 100
+/// sweeps (never a partially converged result); `Err(TierOverflow)` if an entry
+/// leaves the storage range. Panics if the matrix is not square. The matrix
+/// must be symmetric; that is not checked.
 pub fn eigen_symmetric(a: &FixedMatrix) -> Result<EigenDecomposition, OverflowDetected> {
+    eigen_symmetric_within(a, JACOBI_MAX_SWEEPS)
+}
+
+fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDecomposition, OverflowDetected> {
     assert!(a.is_square(), "eigen_symmetric: matrix must be square");
     let n = a.rows();
 
@@ -539,256 +642,46 @@ pub fn eigen_symmetric(a: &FixedMatrix) -> Result<EigenDecomposition, OverflowDe
     let mut s = a.clone();
     let mut v = FixedMatrix::identity(n);
 
-    let one = FixedPoint::one();
-    let two = FixedPoint::from_int(2);
-    let half = one / two;
-
-    // Tight convergence threshold: all rotations at compute tier → 1 ULP/step
-    // so we can converge to 2*FRAC_BITS/3 instead of FRAC_BITS/2
-    let diag_max = {
-        let mut m = FixedPoint::ZERO;
-        for i in 0..n {
-            let d = s.get(i, i).abs();
-            if d > m { m = d; }
-        }
-        m
-    };
-    let threshold = convergence_threshold_tight(diag_max);
-
-    // off-diagonal Frobenius norm squared (symmetric: count each pair once, multiply by 2)
-    let off_diag_norm_sq = |mat: &FixedMatrix| -> FixedPoint {
-        let mut sum = FixedPoint::ZERO;
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let v = mat.get(i, j);
-                sum += v * v;
+    let mut converged = false;
+    let mut best_off: Option<FixedPoint> = None;
+    let mut stagnant = 0usize;
+    for _sweep in 0..max_sweeps {
+        let mut rotated = false;
+        for p in 0..n {
+            for q in (p + 1)..n {
+                let bound = deflation_threshold(s.get(p, p).abs().max(s.get(q, q).abs()));
+                if s.get(p, q).abs() > bound {
+                    jacobi_rotate(&mut s, &mut v, p, q)?;
+                    rotated = true;
+                }
             }
         }
-        two * sum
-    };
-
-    let max_sweeps = 100;
-    let mut prev_off = off_diag_norm_sq(&s);
-    let mut stagnation_count = 0usize;
-
-    for _sweep in 0..max_sweeps {
-        // Check convergence: all off-diagonal elements negligible
-        let off = off_diag_norm_sq(&s);
-        if off <= threshold * threshold {
+        if !rotated {
+            converged = true;
             break;
         }
 
-        // Stagnation detection
-        if off >= prev_off {
-            stagnation_count += 1;
-            if stagnation_count >= 5 {
-                break;
-            }
+        let (off, _, _) = largest_off_diagonal(&s);
+        if best_off.map_or(true, |best| off < best) {
+            best_off = Some(off);
+            stagnant = 0;
         } else {
-            stagnation_count = 0;
+            stagnant += 1;
         }
-        prev_off = off;
-
-        // Cyclic-by-row sweep
-        for p in 0..n {
-            for q in (p + 1)..n {
-                let a_pq = s.get(p, q);
-                if a_pq.abs() <= threshold {
-                    continue; // Skip negligible elements
-                }
-
-                let a_pp = s.get(p, p);
-                let a_qq = s.get(q, q);
-                let diff = a_pp - a_qq;
-
-                // Compute rotation: tan(2θ) = 2*a_pq / (a_pp - a_qq)
-                // Solve quadratic: t² + 2τt - 1 = 0, where τ = (a_pp - a_qq) / (2*a_pq)
-                // Take the smaller root for numerical stability: t = sign(τ) / (|τ| + √(1+τ²))
-                let (cs, sn) = if diff.abs() <= threshold {
-                    // a_pp ≈ a_qq → θ = π/4, exact 45° rotation
-                    // cs = sn = 1/√2, but compute precisely
-                    let sqrt2_inv = (one + one).try_sqrt()
-                        .map(|s| one / s)
-                        .unwrap_or(half); // fallback: ~0.5 if sqrt fails
-                    let sn_val = if a_pq.is_negative() { -sqrt2_inv } else { sqrt2_inv };
-                    (sqrt2_inv, sn_val)
-                } else {
-                    // τ = (a_pp - a_qq) / (2 * a_pq)
-                    // Compute at compute tier for maximum precision
-                    let tau_compute = {
-                        let num = upscale_to_compute(diff.raw());
-                        let den = upscale_to_compute((two * a_pq).raw());
-                        compute_divide(num, den)
-                            .unwrap_or(upscale_to_compute(diff.raw())) // fallback
-                    };
-
-                    // t = sign(τ) / (|τ| + √(1 + τ²))
-                    // Compute 1 + τ² at compute tier
-                    let one_compute = upscale_to_compute(one.raw());
-                    let tau_sq = compute_multiply(tau_compute, tau_compute);
-                    let disc = compute_add(one_compute, tau_sq);
-                    let sqrt_disc = sqrt_at_compute_tier(disc);
-
-                    let abs_tau = if compute_is_negative(&tau_compute) {
-                        compute_negate(tau_compute)
-                    } else {
-                        tau_compute
-                    };
-                    let denom = compute_add(abs_tau, sqrt_disc);
-                    let t_compute = compute_divide(one_compute, denom)
-                        .unwrap_or(one_compute);
-
-                    // Apply sign of τ
-                    let t_compute = if compute_is_negative(&tau_compute) {
-                        compute_negate(t_compute)
-                    } else {
-                        t_compute
-                    };
-
-                    // cs = 1 / √(1 + t²)
-                    let t_sq = compute_multiply(t_compute, t_compute);
-                    let one_plus_tsq = compute_add(one_compute, t_sq);
-                    let sqrt_1pt = sqrt_at_compute_tier(one_plus_tsq);
-                    let cs_compute = compute_divide(one_compute, sqrt_1pt)
-                        .unwrap_or(one_compute);
-
-                    // sn = t * cs
-                    let sn_compute = compute_multiply(t_compute, cs_compute);
-
-                    // Downscale to storage
-                    let cs_val = FixedPoint::from_raw(round_to_storage(cs_compute));
-                    let sn_val = FixedPoint::from_raw(round_to_storage(sn_compute));
-                    (cs_val, sn_val)
-                };
-
-                // Apply Jacobi rotation: S' = Jᵀ S J
-                // All rotation applications at compute tier (1 ULP per element)
-                // Only rows/cols p and q change
-                for r in 0..n {
-                    if r == p || r == q { continue; }
-                    let s_rp = s.get(r, p);
-                    let s_rq = s.get(r, q);
-                    let (new_rp, new_rq) = apply_givens_compute(cs, sn, s_rp, s_rq);
-                    s.set(r, p, new_rp);
-                    s.set(p, r, new_rp); // symmetric
-                    s.set(r, q, new_rq);
-                    s.set(q, r, new_rq); // symmetric
-                }
-
-                // Update diagonal block at compute tier
-                // new_pp = cs²*a_pp + 2*cs*sn*a_pq + sn²*a_qq  (3-element dot at compute tier)
-                // new_qq = sn²*a_pp - 2*cs*sn*a_pq + cs²*a_qq
-                let a_pp = s.get(p, p);
-                let a_qq = s.get(q, q);
-                let cs_sq = cs * cs;
-                let sn_sq = sn * sn;
-                let cs_sn_2 = two * cs * sn;
-                let new_pp = FixedPoint::from_raw(compute_tier_dot_raw(
-                    &[cs_sq.raw(), cs_sn_2.raw(), sn_sq.raw()],
-                    &[a_pp.raw(), a_pq.raw(), a_qq.raw()],
-                ));
-                let new_qq = FixedPoint::from_raw(compute_tier_dot_raw(
-                    &[sn_sq.raw(), (-cs_sn_2).raw(), cs_sq.raw()],
-                    &[a_pp.raw(), a_pq.raw(), a_qq.raw()],
-                ));
-                s.set(p, p, new_pp);
-                s.set(q, q, new_qq);
-                s.set(p, q, FixedPoint::ZERO);
-                s.set(q, p, FixedPoint::ZERO);
-
-                // Accumulate rotation into V: V' = V * J (compute tier)
-                for r in 0..n {
-                    let v_rp = v.get(r, p);
-                    let v_rq = v.get(r, q);
-                    let (new_vp, new_vq) = apply_givens_compute(cs, sn, v_rp, v_rq);
-                    v.set(r, p, new_vp);
-                    v.set(r, q, new_vq);
-                }
-            }
+        if stagnant >= STAGNATION_SWEEPS && off_diagonal_within_stagnation_bound(&s) {
+            converged = true;
+            break;
         }
     }
+    if !converged {
+        return Err(OverflowDetected::PrecisionLimit);
+    }
 
-    // Post-convergence refinement: one targeted rotation on the largest
-    // remaining off-diagonal element. The last sweep may have exited with
-    // a residual off-diagonal that's below threshold but still contributes
-    // 1-2 ULP to the nearest eigenvalue. One extra rotation recovers this.
-    {
-        let mut max_abs = FixedPoint::ZERO;
-        let mut max_p = 0;
-        let mut max_q = 1;
-        for p in 0..n {
-            for q in (p + 1)..n {
-                let val = s.get(p, q).abs();
-                if val > max_abs {
-                    max_abs = val;
-                    max_p = p;
-                    max_q = q;
-                }
-            }
-        }
-        if !max_abs.is_zero() {
-            let p = max_p;
-            let q = max_q;
-            let a_pq = s.get(p, q);
-            let a_pp = s.get(p, p);
-            let a_qq = s.get(q, q);
-            let diff = a_pp - a_qq;
-
-            let (cs, sn) = if diff.abs().is_zero() {
-                let sqrt2_inv = (one + one).try_sqrt()
-                    .map(|s| one / s)
-                    .unwrap_or(half);
-                let sn_val = if a_pq.is_negative() { -sqrt2_inv } else { sqrt2_inv };
-                (sqrt2_inv, sn_val)
-            } else {
-                let tau_compute = {
-                    let num = upscale_to_compute(diff.raw());
-                    let den = upscale_to_compute((two * a_pq).raw());
-                    compute_divide(num, den).unwrap_or(upscale_to_compute(diff.raw()))
-                };
-                let one_compute = upscale_to_compute(one.raw());
-                let tau_sq = compute_multiply(tau_compute, tau_compute);
-                let disc = compute_add(one_compute, tau_sq);
-                let sqrt_disc = sqrt_at_compute_tier(disc);
-                let abs_tau = if compute_is_negative(&tau_compute) { compute_negate(tau_compute) } else { tau_compute };
-                let denom = compute_add(abs_tau, sqrt_disc);
-                let t_compute = compute_divide(one_compute, denom).unwrap_or(one_compute);
-                let t_compute = if compute_is_negative(&tau_compute) { compute_negate(t_compute) } else { t_compute };
-                let t_sq = compute_multiply(t_compute, t_compute);
-                let sqrt_1pt = sqrt_at_compute_tier(compute_add(one_compute, t_sq));
-                let cs_compute = compute_divide(one_compute, sqrt_1pt).unwrap_or(one_compute);
-                let sn_compute = compute_multiply(t_compute, cs_compute);
-                (FixedPoint::from_raw(round_to_storage(cs_compute)),
-                 FixedPoint::from_raw(round_to_storage(sn_compute)))
-            };
-
-            for r in 0..n {
-                if r == p || r == q { continue; }
-                let (new_rp, new_rq) = apply_givens_compute(cs, sn, s.get(r, p), s.get(r, q));
-                s.set(r, p, new_rp); s.set(p, r, new_rp);
-                s.set(r, q, new_rq); s.set(q, r, new_rq);
-            }
-            let a_pp = s.get(p, p);
-            let a_qq = s.get(q, q);
-            let cs_sq = cs * cs;
-            let sn_sq = sn * sn;
-            let cs_sn_2 = two * cs * sn;
-            s.set(p, p, FixedPoint::from_raw(compute_tier_dot_raw(
-                &[cs_sq.raw(), cs_sn_2.raw(), sn_sq.raw()],
-                &[a_pp.raw(), a_pq.raw(), a_qq.raw()],
-            )));
-            s.set(q, q, FixedPoint::from_raw(compute_tier_dot_raw(
-                &[sn_sq.raw(), (-cs_sn_2).raw(), cs_sq.raw()],
-                &[a_pp.raw(), a_pq.raw(), a_qq.raw()],
-            )));
-            s.set(p, q, FixedPoint::ZERO);
-            s.set(q, p, FixedPoint::ZERO);
-            for r in 0..n {
-                let (new_vp, new_vq) = apply_givens_compute(cs, sn, v.get(r, p), v.get(r, q));
-                v.set(r, p, new_vp);
-                v.set(r, q, new_vq);
-            }
-        }
+    // One rotation on the largest remaining off-diagonal entry: it is within
+    // the bound, but still contributes to the nearest eigenvalues.
+    let (largest, p, q) = largest_off_diagonal(&s);
+    if !largest.is_zero() {
+        jacobi_rotate(&mut s, &mut v, p, q)?;
     }
 
     // Extract eigenvalues from diagonal
@@ -809,6 +702,81 @@ pub fn eigen_symmetric(a: &FixedMatrix) -> Result<EigenDecomposition, OverflowDe
     }
 
     Ok(EigenDecomposition { values, vectors })
+}
+
+/// Largest |s[p][q]| over p < q, with its position (the first on ties).
+fn largest_off_diagonal(s: &FixedMatrix) -> (FixedPoint, usize, usize) {
+    let n = s.rows();
+    let (mut largest, mut at_p, mut at_q) = (FixedPoint::ZERO, 0, 1);
+    for p in 0..n {
+        for q in (p + 1)..n {
+            let value = s.get(p, q).abs();
+            if value > largest {
+                largest = value;
+                at_p = p;
+                at_q = q;
+            }
+        }
+    }
+    (largest, at_p, at_q)
+}
+
+fn off_diagonal_within_stagnation_bound(s: &FixedMatrix) -> bool {
+    let n = s.rows();
+    (0..n).all(|p| {
+        ((p + 1)..n).all(|q| s.get(p, q).abs() <= stagnation_threshold(s.get(p, p).abs().max(s.get(q, q).abs())))
+    })
+}
+
+/// Zero `s[p][q]` (and `s[q][p]`) by a Jacobi rotation, accumulating it into `v`.
+///
+/// With `τ = (a_pp - a_qq) / (2 a_pq)`, `t = sign(τ) / (|τ| + sqrt(1 + τ²))`,
+/// `cs = 1 / sqrt(1 + t²)`, `sn = t cs`, all at the compute tier. The
+/// off-diagonal rows rotate by `(cs, sn)`; the diagonal moves by `± t a_pq`.
+fn jacobi_rotate(s: &mut FixedMatrix, v: &mut FixedMatrix, p: usize, q: usize) -> Result<(), OverflowDetected> {
+    let n = s.rows();
+    let (a_pp, a_qq, a_pq) = (s.get(p, p), s.get(q, q), s.get(p, q));
+    if a_pq.is_zero() {
+        return Ok(());
+    }
+    let one = make_compute_int(1);
+    let num = compute_checked_add(upscale_to_compute(a_pp.raw()), compute_negate(upscale_to_compute(a_qq.raw())))?;
+    let den = compute_checked_add(upscale_to_compute(a_pq.raw()), upscale_to_compute(a_pq.raw()))?;
+    let negative = !compute_is_zero(&num) && (compute_is_negative(&num) != compute_is_negative(&den));
+    let (num_abs, den_abs) = (compute_abs(num), compute_abs(den));
+    let t_abs = if num_abs <= den_abs {
+        // |τ| <= 1
+        let tau = compute_divide(num_abs, den_abs)?;
+        let root = sqrt_at_compute_tier(compute_add(one, compute_multiply(tau, tau)));
+        compute_divide(one, compute_add(tau, root))?
+    } else {
+        // |τ| > 1: with r = 1/|τ|, t = r / (1 + sqrt(1 + r²))
+        let r = compute_divide(den_abs, num_abs)?;
+        let root = sqrt_at_compute_tier(compute_add(one, compute_multiply(r, r)));
+        compute_divide(r, compute_add(one, root))?
+    };
+    let t = if negative { compute_negate(t_abs) } else { t_abs };
+    let cs = compute_divide(one, sqrt_at_compute_tier(compute_add(one, compute_multiply(t, t))))?;
+    let rot = Rotation::from_parts(cs, compute_multiply(t, cs));
+
+    for r in 0..n {
+        if r == p || r == q {
+            continue;
+        }
+        let (new_rp, new_rq) = rot.apply(s.get(r, p), s.get(r, q))?;
+        s.set(r, p, new_rp);
+        s.set(p, r, new_rp);
+        s.set(r, q, new_rq);
+        s.set(q, r, new_rq);
+    }
+
+    let shift = scale_by(t, a_pq)?;
+    s.set(p, p, checked_add_fp(a_pp, shift)?);
+    s.set(q, q, checked_sub_fp(a_qq, shift)?);
+    s.set(p, q, FixedPoint::ZERO);
+    s.set(q, p, FixedPoint::ZERO);
+
+    rotate_columns(v, p, q, &rot)
 }
 
 // ============================================================================
@@ -836,18 +804,36 @@ pub struct SVDDecomposition {
 ///
 /// **Algorithm:**
 /// 1. Householder bidiagonalization: A = U₀ B V₀ᵀ (B upper bidiagonal)
-/// 2. Golub-Kahan implicit QR iteration with Wilkinson shift on B
+/// 2. Golub-Kahan implicit QR iteration with Wilkinson shift on B; a zero
+///    diagonal entry is chased out of the active block by rotations, with U
+///    (row rotations) or V (column rotations) taking the matching transpose
 /// 3. Singular values extracted from converged B diagonal
 ///
-/// **FASC-UGOD strategy:** Householder reflections reuse the QR
-/// infrastructure (compute-tier dot products). The Wilkinson shift
-/// computation (2×2 trailing block eigenvalue) is done entirely at
-/// compute tier to avoid overflow in the intermediate a²+b² term.
-/// Givens rotations use the existing ratio-based `givens()` helper.
+/// **Precision:** Householder factors `2 (v.w)/(v.v)` and rotation
+/// coefficients stay at the compute tier, and every transformed entry is
+/// narrowed once from an exact accumulator. The Wilkinson shift is formed at
+/// the compute tier from exact products.
+///
+/// **Convergence:** a superdiagonal entry is negligible within the tight
+/// relative bound of its diagonal neighbours, floored at four quanta, and a
+/// diagonal entry of at most four quanta is set to zero and deflated. An exact
+/// zero singular value is computed as a block of rounding noise that a purely
+/// relative test never passes. A block whose largest superdiagonal entry has
+/// not decreased for five iterations has reached the precision floor: its entry
+/// with the smallest backward error is deflated if it lies within the looser
+/// sqrt(quantum) relative bound.
+///
+/// **Errors:** `Err(PrecisionLimit)` if the iteration budget (30 n² steps) runs
+/// out: the unconverged diagonal is never returned. `Err(TierOverflow)` if a
+/// column or row norm, or a transformed entry, leaves the storage range.
 ///
 /// Returns singular values sorted descending. For m < n, transposes
 /// internally and adjusts U/V accordingly.
 pub fn svd_decompose(a: &FixedMatrix) -> Result<SVDDecomposition, OverflowDetected> {
+    svd_decompose_within(a, ITERATIONS_PER_N_SQUARED)
+}
+
+fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Result<SVDDecomposition, OverflowDetected> {
     let (m, n) = (a.rows(), a.cols());
 
     if m == 0 || n == 0 {
@@ -858,15 +844,11 @@ pub fn svd_decompose(a: &FixedMatrix) -> Result<SVDDecomposition, OverflowDetect
         });
     }
 
-    // If m < n, compute SVD of Aᵀ then swap U and V
+    // If m < n, compute SVD of Aᵀ then swap U and V:
+    // if Aᵀ = U' Σ' V'ᵀ then A = V' Σ'ᵀ U'ᵀ, so U_A = V' and Vᵀ_A = U'ᵀ.
     if m < n {
         let at = a.transpose();
-        let mut result = svd_decompose(&at)?;
-        // A = U Σ Vᵀ  ↔  Aᵀ = V Σᵀ Uᵀ
-        // So SVD(Aᵀ) gives (U', Σ', V'ᵀ) → A's SVD is (V'ᵀ)ᵀ, Σ', U'ᵀ...
-        // Actually: if Aᵀ = U' Σ' V'ᵀ then A = V' Σ'ᵀ U'ᵀ
-        // So U_A = V' (which is (V'ᵀ)ᵀ = result.vt.transpose())
-        // and V_A = U' (so Vᵀ_A = U'ᵀ = result.u.transpose())
+        let mut result = svd_decompose_within(&at, iterations_per_n_squared)?;
         let u_new = result.vt.transpose();
         let vt_new = result.u.transpose();
         result.u = u_new;
@@ -880,321 +862,174 @@ pub fn svd_decompose(a: &FixedMatrix) -> Result<SVDDecomposition, OverflowDetect
     let mut b = a.clone();
     let mut u_acc = FixedMatrix::identity(m);
     let mut v_acc = FixedMatrix::identity(n);
-    let two = FixedPoint::from_int(2);
-    let k = n.min(m); // number of bidiagonalization steps
 
-    for j in 0..k {
+    for j in 0..n {
         // ── Left Householder: zero out B[j+1..m, j] ──
-        if j < m {
-            let col_len = m - j;
-            let x_raw: Vec<BinaryStorage> = (j..m).map(|i| b.get(i, j).raw()).collect();
-            let norm_sq = FixedPoint::from_raw(compute_tier_dot_raw(&x_raw, &x_raw));
-            if !norm_sq.is_zero() {
-                let norm_x = norm_sq.try_sqrt()?;
-                let x_0 = b.get(j, j);
-                let alpha = if x_0.is_negative() { norm_x } else { -norm_x };
-
-                let mut v_hh = Vec::<FixedPoint>::with_capacity(col_len);
-                v_hh.push(x_0 - alpha);
-                for i in 1..col_len {
-                    v_hh.push(FixedPoint::from_raw(x_raw[i]));
-                }
-                let v_raw: Vec<BinaryStorage> = v_hh.iter().map(|fp| fp.raw()).collect();
-                let vtv = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &v_raw));
-
-                if !vtv.is_zero() {
-                    // Apply to B: B[j..m, j..n] -= 2 v (vᵀ B) / vᵀv
-                    for c in j..n {
-                        let col_raw: Vec<BinaryStorage> = (j..m).map(|i| b.get(i, c).raw()).collect();
-                        let vt_col = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &col_raw));
-                        let scale = two * vt_col / vtv;
-                        for i in j..m {
-                            b.set(i, c, b.get(i, c) - scale * v_hh[i - j]);
-                        }
-                    }
-                    // Accumulate into U: U[:, j..m] -= 2 (U v) vᵀ / vᵀv
-                    for r in 0..m {
-                        let u_row_raw: Vec<BinaryStorage> = (j..m).map(|c| u_acc.get(r, c).raw()).collect();
-                        let dot = FixedPoint::from_raw(compute_tier_dot_raw(&u_row_raw, &v_raw));
-                        let scale = two * dot / vtv;
-                        for c in j..m {
-                            u_acc.set(r, c, u_acc.get(r, c) - scale * v_hh[c - j]);
-                        }
-                    }
-                }
+        let column: Vec<BinaryStorage> = (j..m).map(|i| b.get(i, j).raw()).collect();
+        if let Some((v_hh, vtv)) = householder_vector(&column)? {
+            for c in j..n {
+                reflect_column(&mut b, c, j, &v_hh, vtv)?;
+            }
+            for r in 0..m {
+                reflect_row(&mut u_acc, r, j, &v_hh, vtv)?;
             }
         }
 
         // ── Right Householder: zero out B[j, j+2..n] ──
         if j + 1 < n {
-            let row_start = j + 1;
-            let row_len = n - row_start;
-            if row_len > 0 {
-                let x_raw: Vec<BinaryStorage> = (row_start..n).map(|c| b.get(j, c).raw()).collect();
-                let norm_sq = FixedPoint::from_raw(compute_tier_dot_raw(&x_raw, &x_raw));
-                if !norm_sq.is_zero() {
-                    let norm_x = norm_sq.try_sqrt()?;
-                    let x_0 = b.get(j, row_start);
-                    let alpha = if x_0.is_negative() { norm_x } else { -norm_x };
-
-                    let mut v_hh = Vec::<FixedPoint>::with_capacity(row_len);
-                    v_hh.push(x_0 - alpha);
-                    for i in 1..row_len {
-                        v_hh.push(FixedPoint::from_raw(x_raw[i]));
-                    }
-                    let v_raw: Vec<BinaryStorage> = v_hh.iter().map(|fp| fp.raw()).collect();
-                    let vtv = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &v_raw));
-
-                    if !vtv.is_zero() {
-                        // Apply to B: B[j..m, row_start..n] -= 2 (B v) vᵀ / vᵀv
-                        for r in j..m {
-                            let row_raw: Vec<BinaryStorage> = (row_start..n).map(|c| b.get(r, c).raw()).collect();
-                            let dot = FixedPoint::from_raw(compute_tier_dot_raw(&row_raw, &v_raw));
-                            let scale = two * dot / vtv;
-                            for c in row_start..n {
-                                b.set(r, c, b.get(r, c) - scale * v_hh[c - row_start]);
-                            }
-                        }
-                        // Accumulate into V: V[:, row_start..n] -= 2 (V v) vᵀ / vᵀv
-                        for r in 0..n {
-                            let v_row_raw: Vec<BinaryStorage> = (row_start..n).map(|c| v_acc.get(r, c).raw()).collect();
-                            let dot = FixedPoint::from_raw(compute_tier_dot_raw(&v_row_raw, &v_raw));
-                            let scale = two * dot / vtv;
-                            for c in row_start..n {
-                                v_acc.set(r, c, v_acc.get(r, c) - scale * v_hh[c - row_start]);
-                            }
-                        }
-                    }
+            let row: Vec<BinaryStorage> = (j + 1..n).map(|c| b.get(j, c).raw()).collect();
+            if let Some((v_hh, vtv)) = householder_vector(&row)? {
+                for r in j..m {
+                    reflect_row(&mut b, r, j + 1, &v_hh, vtv)?;
+                }
+                for r in 0..n {
+                    reflect_row(&mut v_acc, r, j + 1, &v_hh, vtv)?;
                 }
             }
         }
     }
 
     // ── Phase 2: Golub-Kahan Implicit QR Iteration ──
-    // Extract bidiagonal elements: diagonal d[0..n], superdiagonal e[0..n-1]
+    // Bidiagonal elements: diagonal d[0..n], superdiagonal e[0..n-1]
     let mut d: Vec<FixedPoint> = (0..n).map(|i| b.get(i, i)).collect();
     let mut e: Vec<FixedPoint> = (0..n.saturating_sub(1)).map(|i| b.get(i, i + 1)).collect();
 
-    let max_iter = 30 * n * n; // generous iteration budget
+    let floor = noise_floor();
+    let max_iter = iterations_per_n_squared * n * n;
     let mut iter_count = 0usize;
+    let mut q_end = n; // exclusive end of the unconverged part
 
-    // Work on the active submatrix d[p..=q], e[p..q-1]
-    // Find converged superdiagonals from the bottom
-    let mut q_end = n; // exclusive upper bound
+    // Stagnation state of the active block (p, q)
+    let mut stall_block = (usize::MAX, usize::MAX);
+    let mut stall_best = FixedPoint::ZERO;
+    let mut stall_count = 0usize;
 
-    while q_end > 1 && iter_count < max_iter {
-        // Find the largest q such that e[q-1] is negligible
-        let mut found_active = false;
-        for idx in (1..q_end).rev() {
-            let thresh_val = convergence_threshold(d[idx].abs().max(d[idx - 1].abs()));
-            if e[idx - 1].abs() <= thresh_val {
-                // e[idx-1] has converged — check if this splits the problem
-                if idx == q_end - 1 {
-                    q_end -= 1; // peel off converged singular value
-                } else {
-                    // Split point found but not at the boundary; continue
-                    found_active = true;
-                    break;
-                }
-            } else {
-                found_active = true;
-                break;
-            }
+    loop {
+        // Peel converged superdiagonal entries off the bottom
+        while q_end > 1
+            && e[q_end - 2].abs() <= deflation_threshold(d[q_end - 1].abs().max(d[q_end - 2].abs()))
+        {
+            q_end -= 1;
         }
-        if !found_active || q_end <= 1 {
+        if q_end <= 1 {
             break;
         }
+        if iter_count >= max_iter {
+            return Err(OverflowDetected::PrecisionLimit);
+        }
 
-        // Find the start of the active block (first non-negligible e from bottom)
-        let q = q_end - 1; // last index in active block
+        // Active block: d[p..=q], e[p..q]
+        let q = q_end - 1;
         let mut p = q;
-        while p > 0 {
-            let thresh_val = convergence_threshold(d[p].abs().max(d[p - 1].abs()));
-            if e[p - 1].abs() <= thresh_val {
-                break;
-            }
+        while p > 0 && e[p - 1].abs() > deflation_threshold(d[p].abs().max(d[p - 1].abs())) {
             p -= 1;
         }
 
-        // ── Zero-diagonal deflation (LAPACK dbdsqr approach) ──
-        // When d[i] ≈ 0 in the active block, the Wilkinson shift degenerates.
-        // Fix: eliminate e[i-1] or e[i] via Givens rotations, then re-check.
-        //
-        // For upper bidiagonal B:
-        //   Row i has: e[i-1] (from column i-1) and d[i] on diagonal.
-        //   If d[i] = 0, row i is [0, ..., e[i-1], 0, e[i], ...].
-        //
-        // Case d[q] ≈ 0 (bottom of active block):
-        //   Zero e[q-1] via RIGHT Givens on columns q-1 and q.
-        //   This affects V, not U. Chase the bulge upward through e[q-2], e[q-3], ...
-        //
-        // Case d[i] ≈ 0 for i < q (interior):
-        //   Zero e[i] via LEFT Givens on rows i and i+1.
-        //   Chase the bulge downward.
-        {
-            let mut deflated = false;
-
-            // Check d[q] first (most common case for rank-deficient)
-            {
-                let d_thresh = convergence_threshold(
-                    if q > 0 { d[q - 1].abs().max(e[q - 1].abs()) }
-                    else { e[0].abs().max(FixedPoint::one()) }
-                );
-                if d[q].abs() <= d_thresh {
-                    // d[q] ≈ 0: chase e[q-1] to zero via RIGHT Givens (columns)
-                    // Rotate columns q-1 and q to zero B[q-1, q] = e[q-1]
-                    // while B[q, q] = d[q] ≈ 0.
-                    let mut bulge = e[q - 1];
-                    e[q - 1] = FixedPoint::ZERO;
-                    for j in (p..q).rev() {
-                        // Givens to zero bulge against d[j]
-                        let (cs, sn) = givens(d[j], bulge);
-                        d[j] = cs * d[j] + sn * bulge;
-                        if j > p {
-                            // Bulge moves to e[j-1]
-                            bulge = -sn * e[j - 1];
-                            e[j - 1] = cs * e[j - 1];
-                        }
-                        // RIGHT rotation → update V columns j and q
-                        for r in 0..n {
-                            let v_rj = v_acc.get(r, j);
-                            let v_rq = v_acc.get(r, q);
-                            v_acc.set(r, j, cs * v_rj + sn * v_rq);
-                            v_acc.set(r, q, -sn * v_rj + cs * v_rq);
-                        }
-                    }
-                    deflated = true;
-                }
+        // ── Stagnation fallback ──
+        let largest = (p..q).map(|k| e[k].abs()).max().expect("active block has a superdiagonal entry");
+        let mut forced_zero: Option<usize> = None;
+        if stall_block != (p, q) || largest < stall_best {
+            stall_block = (p, q);
+            stall_best = largest;
+            stall_count = 0;
+        } else {
+            stall_count += 1;
+        }
+        if stall_count >= STAGNATION_SWEEPS {
+            stall_count = 0;
+            let ie = (p..q).min_by_key(|&k| e[k].abs()).expect("active block has a superdiagonal entry");
+            let id = (p..=q).min_by_key(|&k| d[k].abs()).expect("active block has a diagonal entry");
+            let e_ok = e[ie].abs() <= stagnation_threshold(d[ie].abs().max(d[ie + 1].abs()));
+            let mut neighbour = FixedPoint::ZERO;
+            if id > 0 {
+                neighbour = neighbour.max(d[id - 1].abs()).max(e[id - 1].abs());
             }
-
-            // Check interior d[i] for i in p..q
-            if !deflated {
-                for i in p..q {
-                    let d_thresh = convergence_threshold(
-                        e[i].abs().max(
-                            if i > 0 && i - 1 < e.len() { e[i.saturating_sub(1)].abs() }
-                            else { FixedPoint::one() }
-                        )
-                    );
-                    if d[i].abs() <= d_thresh {
-                        // d[i] ≈ 0: chase e[i] to zero via LEFT Givens (rows)
-                        let mut bulge = e[i];
-                        e[i] = FixedPoint::ZERO;
-                        for j in (i + 1)..=q {
-                            let (cs, sn) = givens(d[j], bulge);
-                            d[j] = cs * d[j] + sn * bulge;
-                            if j < q {
-                                bulge = -sn * e[j];
-                                e[j] = cs * e[j];
-                            }
-                            // LEFT rotation → update U columns i and j
-                            for r in 0..m {
-                                let u_ri = u_acc.get(r, i);
-                                let u_rj = u_acc.get(r, j);
-                                u_acc.set(r, i, cs * u_ri + sn * u_rj);
-                                u_acc.set(r, j, -sn * u_ri + cs * u_rj);
-                            }
-                        }
-                        deflated = true;
-                        break;
-                    }
-                }
+            if id < q {
+                neighbour = neighbour.max(e[id].abs());
             }
-
-            if deflated {
+            let d_ok = d[id].abs() <= stagnation_threshold(neighbour);
+            if e_ok && (!d_ok || e[ie].abs() <= d[id].abs()) {
+                e[ie] = FixedPoint::ZERO;
                 iter_count += 1;
                 continue;
             }
+            if d_ok {
+                forced_zero = Some(id);
+            }
         }
 
-        // Wilkinson shift: eigenvalue of trailing 2×2 of BᵀB closest to d[q]²
-        // The 2×2 block of BᵀB at bottom-right is:
-        //   [d[q-1]² + e[q-2]²,   d[q-1]*e[q-1]  ]
-        //   [d[q-1]*e[q-1],        d[q]² + e[q-1]² ]
-        // (simplified when e[q-2] doesn't exist for the first row)
-        let shift = {
-            let dq = d[q];
-            let eq_1 = e[q - 1];
-            let dq_1 = d[q - 1];
-
-            // Compute at storage tier — these are products of individual values,
-            // not long sums, so compute-tier isn't critical here
-            let f = dq_1 * dq_1 + if q >= 2 { e[q - 2] * e[q - 2] } else { FixedPoint::ZERO };
-            let g = dq * dq + eq_1 * eq_1;
-            let h = dq_1 * eq_1;
-
-            // Eigenvalue of [[f, h], [h, g]] closer to g (Wilkinson)
-            let half = FixedPoint::one() / FixedPoint::from_int(2);
-            let diff = (f - g) * half;
-            if diff.is_zero() && h.is_zero() {
-                g
-            } else {
-                let disc_sq = diff * diff + h * h;
-                let disc = disc_sq.try_sqrt().unwrap_or(diff.abs());
-                let signed_disc = if diff.is_negative() { -disc } else { disc };
-                g - h * h / (diff + signed_disc)
+        // ── Zero diagonal at the bottom of the block ──
+        // Chase e[q-1] upward with column rotations (columns j and q), which V takes.
+        if d[q].abs() <= floor || forced_zero == Some(q) {
+            d[q] = FixedPoint::ZERO;
+            let mut bulge = e[q - 1];
+            e[q - 1] = FixedPoint::ZERO;
+            for j in (p..q).rev() {
+                let rot = Rotation::zeroing(d[j], bulge)?;
+                d[j] = rot.combine(d[j], bulge)?;
+                if j > p {
+                    bulge = rot.neg_sin_times(e[j - 1])?;
+                    e[j - 1] = rot.cos_times(e[j - 1])?;
+                }
+                rotate_columns(&mut v_acc, j, q, &rot)?;
             }
-        };
+            iter_count += 1;
+            continue;
+        }
 
-        // ── Implicit QR step (Golub-Kahan) ──
-        // Chase the bulge from (p, p+1) to (q-1, q)
-        let mut x = d[p] * d[p] - shift;
-        let mut z = d[p] * e[p];
+        // ── Zero diagonal inside the block ──
+        // Chase e[i] downward with row rotations (rows j and i): the rows move by
+        // G, so U takes Gᵀ on columns (j, i).
+        if let Some(i) = (p..q).find(|&i| d[i].abs() <= floor || forced_zero == Some(i)) {
+            d[i] = FixedPoint::ZERO;
+            let mut bulge = e[i];
+            e[i] = FixedPoint::ZERO;
+            for j in (i + 1)..=q {
+                let rot = Rotation::zeroing(d[j], bulge)?;
+                d[j] = rot.combine(d[j], bulge)?;
+                if j < q {
+                    bulge = rot.neg_sin_times(e[j])?;
+                    e[j] = rot.cos_times(e[j])?;
+                }
+                rotate_columns(&mut u_acc, j, i, &rot)?;
+            }
+            iter_count += 1;
+            continue;
+        }
+
+        // ── Implicit QR step (Golub-Kahan), Wilkinson shift ──
+        let shift = wilkinson_shift(d[q - 1], e[q - 1], d[q], if q >= 2 { Some(e[q - 2]) } else { None })?;
+        let mut x = compute_checked_add(exact_product(d[p].raw(), d[p].raw()), compute_negate(shift))?;
+        let mut z = exact_product(d[p].raw(), e[p].raw());
+        let mut z_value = FixedPoint::ZERO;
 
         for i in p..q {
-            // ── Right Givens: all 2-element sums at compute tier ──
-            let (cs, sn) = givens(x, z);
-
+            // Right rotation on columns i, i+1
+            let rot = Rotation::zeroing_compute(x, z)?;
             if i > p {
-                // e[i-1] = cs*e[i-1] + sn*z (2-element dot)
-                e[i - 1] = FixedPoint::from_raw(compute_tier_dot_raw(
-                    &[cs.raw(), sn.raw()], &[e[i - 1].raw(), z.raw()]
-                ));
+                e[i - 1] = rot.combine(e[i - 1], z_value)?;
             }
-            let old_di = d[i];
-            let old_ei = e[i];
-            let (new_di, new_ei) = apply_givens_compute(cs, sn, old_di, old_ei);
+            let (new_di, new_ei) = rot.apply(d[i], e[i])?;
             d[i] = new_di;
             e[i] = new_ei;
-            let bulge = sn * d[i + 1]; // single multiply — no accumulation needed
-            d[i + 1] = cs * d[i + 1];
+            let bulge = rot.sin_times(d[i + 1])?;
+            d[i + 1] = rot.cos_times(d[i + 1])?;
+            rotate_columns(&mut v_acc, i, i + 1, &rot)?;
 
-            // V accumulation at compute tier
-            for r in 0..n {
-                let (new_v0, new_v1) = apply_givens_compute(
-                    cs, sn, v_acc.get(r, i), v_acc.get(r, i + 1));
-                v_acc.set(r, i, new_v0);
-                v_acc.set(r, i + 1, new_v1);
-            }
-
-            // ── Left Givens: all 2-element sums at compute tier ──
-            x = d[i];
-            z = bulge;
-            let (cs2, sn2) = givens(x, z);
-
-            // d[i] = cs2*d[i] + sn2*bulge (2-element dot)
-            d[i] = FixedPoint::from_raw(compute_tier_dot_raw(
-                &[cs2.raw(), sn2.raw()], &[d[i].raw(), bulge.raw()]
-            ));
-            let old_ei = e[i];
-            let old_di1 = d[i + 1];
-            let (new_ei, new_di1) = apply_givens_compute(cs2, sn2, old_ei, old_di1);
+            // Left rotation on rows i, i+1
+            let rot2 = Rotation::zeroing(d[i], bulge)?;
+            d[i] = rot2.combine(d[i], bulge)?;
+            let (new_ei, new_di1) = rot2.apply(e[i], d[i + 1])?;
             e[i] = new_ei;
             d[i + 1] = new_di1;
-
-            // U accumulation at compute tier
-            for r in 0..m {
-                let (new_u0, new_u1) = apply_givens_compute(
-                    cs2, sn2, u_acc.get(r, i), u_acc.get(r, i + 1));
-                u_acc.set(r, i, new_u0);
-                u_acc.set(r, i + 1, new_u1);
-            }
+            rotate_columns(&mut u_acc, i, i + 1, &rot2)?;
 
             // Set up for next iteration of the chase
             if i + 1 < q {
-                x = e[i];
-                z = sn2 * e[i + 1];
-                e[i + 1] = cs2 * e[i + 1];
+                x = upscale_to_compute(e[i].raw());
+                z_value = rot2.sin_times(e[i + 1])?;
+                z = upscale_to_compute(z_value.raw());
+                e[i + 1] = rot2.cos_times(e[i + 1])?;
             }
         }
 
@@ -1231,7 +1066,7 @@ pub fn svd_decompose(a: &FixedMatrix) -> Result<SVDDecomposition, OverflowDetect
         }
     }
 
-    // Copy remaining U columns (m > n case) — they stay as-is from identity
+    // Copy remaining U columns (m > n case)
     for new_idx in n..m {
         for r in 0..m {
             u_sorted.set(r, new_idx, u_acc.get(r, new_idx));
@@ -1243,6 +1078,36 @@ pub fn svd_decompose(a: &FixedMatrix) -> Result<SVDDecomposition, OverflowDetect
         sigma,
         vt: vt_sorted,
     })
+}
+
+/// Eigenvalue of the trailing 2×2 block of BᵀB closest to its last diagonal
+/// entry, as a compute raw:
+///   [d[q-1]² + e[q-2]²,  d[q-1] e[q-1]]
+///   [d[q-1] e[q-1],      d[q]² + e[q-1]²]
+/// The block's entries are exact products; the discriminant is formed in
+/// ratio form, without squaring them.
+fn wilkinson_shift(
+    d_prev: FixedPoint, e_last: FixedPoint, d_last: FixedPoint, e_prev: Option<FixedPoint>,
+) -> Result<ComputeStorage, OverflowDetected> {
+    let e_prev_sq = match e_prev {
+        Some(ep) => exact_product(ep.raw(), ep.raw()),
+        None => make_compute_int(0),
+    };
+    let f = compute_checked_add(exact_product(d_prev.raw(), d_prev.raw()), e_prev_sq)?;
+    let g = compute_checked_add(exact_product(d_last.raw(), d_last.raw()), exact_product(e_last.raw(), e_last.raw()))?;
+    let h = exact_product(d_prev.raw(), e_last.raw());
+    let diff = compute_halve(compute_checked_add(f, compute_negate(g))?);
+    if compute_is_zero(&diff) && compute_is_zero(&h) {
+        return Ok(g);
+    }
+    let disc = compute_hypot(diff, h)?;
+    let denom = if compute_is_negative(&diff) {
+        compute_checked_add(diff, compute_negate(disc))?
+    } else {
+        compute_checked_add(diff, disc)?
+    };
+    let ratio = compute_checked_divide(h, denom)?;
+    compute_checked_add(g, compute_negate(compute_multiply(h, ratio)))
 }
 
 // ============================================================================
@@ -1263,18 +1128,38 @@ pub struct SchurDecomposition {
 /// Real Schur decomposition via Hessenberg reduction + Francis implicit double-shift QR.
 ///
 /// For an n×n matrix A, computes A = Q T Qᵀ where Q is orthogonal and T is
-/// quasi-upper-triangular (real Schur form).
+/// quasi-upper-triangular (real Schur form): every entry below the
+/// subdiagonal is exactly zero, and a nonzero subdiagonal entry only opens a
+/// 2×2 block whose eigenvalues are a complex pair. A 2×2 block with real
+/// eigenvalues is split by a rotation, so the diagonal of T carries every real
+/// eigenvalue.
 ///
 /// **Algorithm:**
-/// 1. Reduce A to upper Hessenberg form H via Householder reflections
-/// 2. Apply Francis implicit double-shift QR iteration to H
-/// 3. Converged T has eigenvalues on diagonal (real) or in 2×2 blocks (complex pairs)
+/// 1. Reduce A to upper Hessenberg form H via Householder reflections, setting
+///    the annihilated entries to zero
+/// 2. Apply Francis double-shift QR steps to the bottom unreduced block, the
+///    bulge chased to the last row (a final 2×2 rotation) and the chased
+///    entries set to zero; exceptional shifts after 10 and 20 iterations
+///    without deflation break the cycles an ordinary shift can sit in
+/// 3. Deflate when a subdiagonal entry is within the tight relative bound of
+///    its diagonal neighbours, floored at four quanta (set to zero); split
+///    converged 2×2 blocks with real eigenvalues
 ///
-/// **FASC-UGOD strategy:** Householder reflections use compute-tier dot products
-/// (same as QR decomposition). Francis shifts are computed from the trailing 2×2
-/// block at storage tier, no transcendentals needed (just trace and determinant
-/// of a 2×2, which are additions and multiplications).
+/// **Precision:** Householder factors, rotation coefficients and shifts stay at
+/// the compute tier; every transformed entry is narrowed once from an exact
+/// accumulator. A block that has not deflated after 30 iterations has reached
+/// the precision floor: its smallest subdiagonal entry is deflated if it lies
+/// within the looser sqrt(quantum) relative bound.
+///
+/// **Errors:** `Err(PrecisionLimit)` if the iteration budget (30 n² steps) runs
+/// out: an unconverged T is never returned. `Err(TierOverflow)` if a norm or a
+/// transformed entry leaves the storage range. Panics if the matrix is not
+/// square.
 pub fn schur_decompose(a: &FixedMatrix) -> Result<SchurDecomposition, OverflowDetected> {
+    schur_decompose_within(a, ITERATIONS_PER_N_SQUARED)
+}
+
+fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Result<SchurDecomposition, OverflowDetected> {
     assert!(a.is_square(), "schur_decompose: matrix must be square");
     let n = a.rows();
 
@@ -1289,266 +1174,342 @@ pub fn schur_decompose(a: &FixedMatrix) -> Result<SchurDecomposition, OverflowDe
     // Reduce A to upper Hessenberg form H via Householder: Qᵀ A Q = H
     let mut h = a.clone();
     let mut q_acc = FixedMatrix::identity(n);
-    let two = FixedPoint::from_int(2);
 
     for k in 0..n.saturating_sub(2) {
-        let col_len = n - k - 1;
         let start = k + 1;
-
-        let x_raw: Vec<BinaryStorage> = (start..n).map(|i| h.get(i, k).raw()).collect();
-        let norm_sq = FixedPoint::from_raw(compute_tier_dot_raw(&x_raw, &x_raw));
-        if norm_sq.is_zero() {
-            continue;
+        let column: Vec<BinaryStorage> = (start..n).map(|i| h.get(i, k).raw()).collect();
+        let (v_hh, vtv) = match householder_vector(&column)? {
+            Some(reflector) => reflector,
+            None => continue,
+        };
+        // Left: H[start..n, :] ; columns before k are already zero in these rows
+        for c in k..n {
+            reflect_column(&mut h, c, start, &v_hh, vtv)?;
         }
-        let norm_x = norm_sq.try_sqrt()?;
-        let x_0 = h.get(start, k);
-        let alpha = if x_0.is_negative() { norm_x } else { -norm_x };
-
-        let mut v_hh = Vec::<FixedPoint>::with_capacity(col_len);
-        v_hh.push(x_0 - alpha);
-        for i in 1..col_len {
-            v_hh.push(FixedPoint::from_raw(x_raw[i]));
-        }
-        let v_raw: Vec<BinaryStorage> = v_hh.iter().map(|fp| fp.raw()).collect();
-        let vtv = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &v_raw));
-        if vtv.is_zero() {
-            continue;
-        }
-
-        // Left multiply: H[start..n, :] -= 2 v (vᵀ H[start..n, :]) / vᵀv
-        for c in 0..n {
-            let col_raw: Vec<BinaryStorage> = (start..n).map(|i| h.get(i, c).raw()).collect();
-            let dot = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &col_raw));
-            let scale = two * dot / vtv;
-            for i in start..n {
-                h.set(i, c, h.get(i, c) - scale * v_hh[i - start]);
-            }
-        }
-
-        // Right multiply: H[:, start..n] -= 2 (H[:, start..n] v) vᵀ / vᵀv
+        // Right: H[:, start..n]
         for r in 0..n {
-            let row_raw: Vec<BinaryStorage> = (start..n).map(|c| h.get(r, c).raw()).collect();
-            let dot = FixedPoint::from_raw(compute_tier_dot_raw(&row_raw, &v_raw));
-            let scale = two * dot / vtv;
-            for c in start..n {
-                h.set(r, c, h.get(r, c) - scale * v_hh[c - start]);
-            }
+            reflect_row(&mut h, r, start, &v_hh, vtv)?;
         }
-
-        // Accumulate into Q: Q[:, start..n] -= 2 (Q v) vᵀ / vᵀv
+        // Accumulate into Q: Q[:, start..n]
         for r in 0..n {
-            let q_row_raw: Vec<BinaryStorage> = (start..n).map(|c| q_acc.get(r, c).raw()).collect();
-            let dot = FixedPoint::from_raw(compute_tier_dot_raw(&q_row_raw, &v_raw));
-            let scale = two * dot / vtv;
-            for c in start..n {
-                q_acc.set(r, c, q_acc.get(r, c) - scale * v_hh[c - start]);
-            }
+            reflect_row(&mut q_acc, r, start, &v_hh, vtv)?;
+        }
+        for i in (start + 1)..n {
+            h.set(i, k, FixedPoint::ZERO);
         }
     }
 
     // ── Phase 2: Francis Implicit Double-Shift QR Iteration ──
-    let max_iter = 30 * n * n;
+    let max_iter = iterations_per_n_squared * n * n;
     let mut iter_count = 0usize;
-    let mut nn = n; // active submatrix is h[0..nn, 0..nn]
+    let mut its = 0usize; // iterations since the last deflation at the bottom
+    let mut nn = n; // h[0..nn, 0..nn] holds the unconverged part
 
-    while nn > 2 && iter_count < max_iter {
-        // Find the lowest converged subdiagonal
-        let thresh = convergence_threshold(
-            h.get(nn - 1, nn - 1).abs().max(h.get(nn - 2, nn - 2).abs())
-        );
-
-        if h.get(nn - 1, nn - 2).abs() <= thresh {
-            // 1×1 block converged at position nn-1
-            nn -= 1;
-            continue;
-        }
-
-        // Check for 2×2 block convergence
-        if nn >= 3 {
-            let thresh2 = convergence_threshold(
-                h.get(nn - 2, nn - 2).abs().max(h.get(nn - 3, nn - 3).abs())
-            );
-            if h.get(nn - 2, nn - 3).abs() <= thresh2 {
-                // 2×2 block at [nn-2..nn, nn-2..nn] has converged
-                nn -= 2;
-                continue;
-            }
-        }
-
-        // Find the start of the active unreduced Hessenberg block
-        let mut l = nn - 2;
+    while nn > 0 {
+        // Start l of the bottom unreduced block; a negligible subdiagonal entry
+        // is set to zero (its backward error is the entry itself)
+        let mut l = nn - 1;
         while l > 0 {
-            let thresh_l = convergence_threshold(
-                h.get(l, l).abs().max(h.get(l - 1, l - 1).abs())
-            );
-            if h.get(l, l - 1).abs() <= thresh_l {
+            let bound = deflation_threshold(h.get(l, l).abs().max(h.get(l - 1, l - 1).abs()));
+            if h.get(l, l - 1).abs() <= bound {
+                h.set(l, l - 1, FixedPoint::ZERO);
                 break;
             }
             l -= 1;
         }
 
-        // Special case: 2×2 active block — apply single Givens rotation
-        if l == nn - 2 {
-            // Wilkinson single shift from the 2×2 block
-            let a11 = h.get(l, l);
-            let a12 = h.get(l, l + 1);
-            let a21 = h.get(l + 1, l);
-            let a22 = h.get(l + 1, l + 1);
-            let half = FixedPoint::one() / two;
-            let d_val = (a11 - a22) * half;
-            let mu = if d_val.is_zero() && (a12 * a21).is_zero() {
-                a22
-            } else {
-                let disc_sq = d_val * d_val + a12 * a21;
-                let disc = disc_sq.abs().try_sqrt().unwrap_or(d_val.abs());
-                let signed_disc = if d_val.is_negative() { -disc } else { disc };
-                a22 - a21 * a12 / (d_val + signed_disc)
-            };
-
-            let x_val = h.get(l, l) - mu;
-            let y_val = h.get(l + 1, l);
-            let (cs, sn) = givens(x_val, y_val);
-
-            // Apply from left: H[l..l+2, :] — compute tier
-            for c in 0..n {
-                let (new0, new1) = apply_givens_compute(
-                    cs, sn, h.get(l, c), h.get(l + 1, c));
-                h.set(l, c, new0);
-                h.set(l + 1, c, new1);
+        match nn - l {
+            1 => {
+                nn -= 1;
+                its = 0;
+                continue;
             }
-            // Apply from right: H[:, l..l+2] — compute tier
-            for r in 0..nn {
-                let (new0, new1) = apply_givens_compute(
-                    cs, sn, h.get(r, l), h.get(r, l + 1));
-                h.set(r, l, new0);
-                h.set(r, l + 1, new1);
+            2 => {
+                split_real_block(&mut h, &mut q_acc, l)?;
+                nn -= 2;
+                its = 0;
+                continue;
             }
-            // Accumulate into Q — compute tier
-            for r in 0..n {
-                let (new0, new1) = apply_givens_compute(
-                    cs, sn, q_acc.get(r, l), q_acc.get(r, l + 1));
-                q_acc.set(r, l, new0);
-                q_acc.set(r, l + 1, new1);
-            }
-            iter_count += 1;
-            continue;
+            _ => {}
         }
 
-        // Compute double shift from trailing 2×2 block
-        // Eigenvalues are roots of x² - sx + p = 0
-        let s = h.get(nn - 2, nn - 2) + h.get(nn - 1, nn - 1);     // trace
-        let p = h.get(nn - 2, nn - 2) * h.get(nn - 1, nn - 1)
-              - h.get(nn - 2, nn - 1) * h.get(nn - 1, nn - 2);     // determinant
+        if iter_count >= max_iter {
+            return Err(OverflowDetected::PrecisionLimit);
+        }
 
-        // First column of M = H² - sH + pI
-        // m₁ = H[l,l]² + H[l,l+1]*H[l+1,l] - s*H[l,l] + p
-        // m₂ = H[l+1,l] * (H[l,l] + H[l+1,l+1] - s)
-        // m₃ = H[l+1,l] * H[l+2,l+1]  (only if l+2 < nn)
-        let h_ll = h.get(l, l);
-        let h_l1l = h.get(l + 1, l);
-        let h_ll1 = h.get(l, l + 1);
-        let h_l1l1 = h.get(l + 1, l + 1);
-
-        let mut x = h_ll * h_ll + h_ll1 * h_l1l - s * h_ll + p;
-        let mut y = h_l1l * (h_ll + h_l1l1 - s);
-        let mut z = if l + 2 < nn { h_l1l * h.get(l + 2, l + 1) } else { FixedPoint::ZERO };
-
-        // ── Bulge chase ──
-        for k in l..nn.saturating_sub(2) {
-            // Compute Householder to zero [y; z] in [x; y; z]
-            let col_size = if k + 2 < nn { 3 } else { 2 };
-
-            if col_size == 3 {
-                let vec_raw = [x.raw(), y.raw(), z.raw()];
-                let norm_sq = FixedPoint::from_raw(compute_tier_dot_raw(&vec_raw, &vec_raw));
-                if norm_sq.is_zero() { break; }
-                let norm_v = norm_sq.try_sqrt()?;
-                let alpha = if x.is_negative() { norm_v } else { -norm_v };
-                let v0 = x - alpha;
-                let v1 = y;
-                let v2 = z;
-                let v_raw = [v0.raw(), v1.raw(), v2.raw()];
-                let vtv = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &v_raw));
-                if vtv.is_zero() { break; }
-
-                // Apply from left: H[k..k+3, :] -= 2 v (vᵀ H) / vᵀv
-                // All dot products at compute tier
-                for c in 0..n {
-                    let col_raw = [h.get(k, c).raw(), h.get(k + 1, c).raw(), h.get(k + 2, c).raw()];
-                    let dot_val = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &col_raw));
-                    let scale = two * dot_val / vtv;
-                    h.set(k, c, h.get(k, c) - scale * v0);
-                    h.set(k + 1, c, h.get(k + 1, c) - scale * v1);
-                    h.set(k + 2, c, h.get(k + 2, c) - scale * v2);
-                }
-
-                // Apply from right: H[:, k..k+3] -= 2 (H v) vᵀ / vᵀv
-                let c_end = nn.min(k + 4);
-                for r in 0..c_end {
-                    let row_raw = [h.get(r, k).raw(), h.get(r, k + 1).raw(), h.get(r, k + 2).raw()];
-                    let dot_val = FixedPoint::from_raw(compute_tier_dot_raw(&row_raw, &v_raw));
-                    let scale = two * dot_val / vtv;
-                    h.set(r, k, h.get(r, k) - scale * v0);
-                    h.set(r, k + 1, h.get(r, k + 1) - scale * v1);
-                    h.set(r, k + 2, h.get(r, k + 2) - scale * v2);
-                }
-
-                // Accumulate into Q
-                for r in 0..n {
-                    let q_raw = [q_acc.get(r, k).raw(), q_acc.get(r, k + 1).raw(), q_acc.get(r, k + 2).raw()];
-                    let dot_val = FixedPoint::from_raw(compute_tier_dot_raw(&q_raw, &v_raw));
-                    let scale = two * dot_val / vtv;
-                    q_acc.set(r, k, q_acc.get(r, k) - scale * v0);
-                    q_acc.set(r, k + 1, q_acc.get(r, k + 1) - scale * v1);
-                    q_acc.set(r, k + 2, q_acc.get(r, k + 2) - scale * v2);
-                }
-            } else {
-                // 2×2 Givens rotation at the bottom of the chase — compute tier
-                let (cs, sn) = givens(x, y);
-
-                for c in 0..n {
-                    let (new0, new1) = apply_givens_compute(
-                        cs, sn, h.get(k, c), h.get(k + 1, c));
-                    h.set(k, c, new0);
-                    h.set(k + 1, c, new1);
-                }
-                for r in 0..nn {
-                    let (new0, new1) = apply_givens_compute(
-                        cs, sn, h.get(r, k), h.get(r, k + 1));
-                    h.set(r, k, new0);
-                    h.set(r, k + 1, new1);
-                }
-                for r in 0..n {
-                    let (new0, new1) = apply_givens_compute(
-                        cs, sn, q_acc.get(r, k), q_acc.get(r, k + 1));
-                    q_acc.set(r, k, new0);
-                    q_acc.set(r, k + 1, new1);
-                }
-            }
-
-            // Prepare next bulge chase values
-            if k + 3 < nn {
-                x = h.get(k + 1, k);
-                y = h.get(k + 2, k);
-                z = if k + 3 < nn { h.get(k + 3, k) } else { FixedPoint::ZERO };
-            } else if k + 2 < nn {
-                x = h.get(k + 1, k);
-                y = h.get(k + 2, k);
+        // Precision floor: deflate the smallest subdiagonal entry if it is
+        // within the loose bound
+        if its >= SCHUR_FLOOR_ITERATIONS {
+            let i = ((l + 1)..nn).min_by_key(|&i| h.get(i, i - 1).abs()).expect("block of size >= 3");
+            if h.get(i, i - 1).abs() <= stagnation_threshold(h.get(i, i).abs().max(h.get(i - 1, i - 1).abs())) {
+                h.set(i, i - 1, FixedPoint::ZERO);
+                its = 0;
+                iter_count += 1;
+                continue;
             }
         }
 
+        let (trace, det) = if its == 10 || its == 20 {
+            exceptional_shifts(&h, l, nn, its)?
+        } else {
+            trailing_shifts(&h, nn)?
+        };
+        francis_step(&mut h, &mut q_acc, l, nn, trace, det)?;
+        its += 1;
         iter_count += 1;
     }
 
-    // Clean up near-zero subdiagonal entries
-    for i in 1..n {
-        let thresh = convergence_threshold(
-            h.get(i, i).abs().max(h.get(i - 1, i - 1).abs())
-        );
-        if h.get(i, i - 1).abs() <= thresh {
-            h.set(i, i - 1, FixedPoint::ZERO);
+    Ok(SchurDecomposition { q: q_acc, t: h })
+}
+
+/// Trace and determinant of the trailing 2×2 block (the double-shift pair),
+/// as compute raws.
+fn trailing_shifts(h: &FixedMatrix, nn: usize) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
+    let (a, b) = (h.get(nn - 2, nn - 2), h.get(nn - 2, nn - 1));
+    let (c, d) = (h.get(nn - 1, nn - 2), h.get(nn - 1, nn - 1));
+    let trace = compute_checked_add(upscale_to_compute(a.raw()), upscale_to_compute(d.raw()))?;
+    let det = compute_checked_add(exact_product(a.raw(), d.raw()), compute_negate(exact_product(b.raw(), c.raw())))?;
+    Ok((trace, det))
+}
+
+/// Exceptional shift pair after 10 and 20 iterations without deflation
+/// (LAPACK `dlahqr`): the 2×2 block `[[w, -7/16 s], [s, w]]` with
+/// `w = h + 3/4 s`, where `s` sums two subdiagonal magnitudes (at the top of
+/// the block after 10 iterations, at the bottom after 20). It breaks the
+/// cycles an ordinary Francis step sits in, such as permutation matrices.
+fn exceptional_shifts(h: &FixedMatrix, l: usize, nn: usize, its: usize) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
+    let (s, anchor) = if its == 10 {
+        (checked_add_fp(h.get(l + 1, l).abs(), h.get(l + 2, l + 1).abs())?, h.get(l, l))
+    } else {
+        (checked_add_fp(h.get(nn - 1, nn - 2).abs(), h.get(nn - 2, nn - 3).abs())?, h.get(nn - 1, nn - 1))
+    };
+    let s_c = upscale_to_compute(s.raw());
+    let three_quarters = compute_divide(make_compute_int(3), make_compute_int(4))?;
+    let seven_sixteenths = compute_divide(make_compute_int(7), make_compute_int(16))?;
+    let w = compute_checked_add(upscale_to_compute(anchor.raw()), compute_multiply(three_quarters, s_c))?;
+    let trace = compute_checked_add(w, w)?;
+    let det = compute_checked_add(
+        compute_multiply(w, w),
+        compute_multiply(seven_sixteenths, compute_multiply(s_c, s_c)),
+    )?;
+    Ok((trace, det))
+}
+
+/// One Francis double-shift step on the unreduced block `h[l..nn, l..nn]`
+/// (size >= 3), applied to all of H (real Schur form) and accumulated into Q.
+/// The shifts only steer convergence; every transform applied is orthogonal.
+fn francis_step(
+    h: &mut FixedMatrix, q_acc: &mut FixedMatrix, l: usize, nn: usize,
+    trace: ComputeStorage, det: ComputeStorage,
+) -> Result<(), OverflowDetected> {
+    let n = h.rows();
+
+    // First column of (H - s1 I)(H - s2 I) = H² - trace H + det I
+    let (h11, h12, h21) = (h.get(l, l), h.get(l, l + 1), h.get(l + 1, l));
+    let (h22, h32) = (h.get(l + 1, l + 1), h.get(l + 2, l + 1));
+    let h11_c = upscale_to_compute(h11.raw());
+    let x = compute_sum(&[
+        exact_product(h11.raw(), h11.raw()),
+        exact_product(h12.raw(), h21.raw()),
+        compute_negate(compute_multiply(trace, h11_c)),
+        det,
+    ])?;
+    let y = compute_multiply(
+        upscale_to_compute(h21.raw()),
+        compute_sum(&[h11_c, upscale_to_compute(h22.raw()), compute_negate(trace)])?,
+    );
+    let z = exact_product(h21.raw(), h32.raw());
+
+    // Reflector introducing the bulge at rows l..l+3
+    let norm = compute_hypot(compute_hypot(x, y)?, z)?;
+    if compute_is_zero(&norm) {
+        return Ok(());
+    }
+    let lead = if compute_is_negative(&x) {
+        compute_checked_add(x, compute_negate(norm))?
+    } else {
+        compute_checked_add(x, norm)?
+    };
+    let v_hh = direction_to_storage(&[lead, y, z])?;
+    let vtv = exact_dot(&v_hh, &v_hh)?;
+    if !compute_is_zero(&vtv) {
+        for c in l..n {
+            reflect_column(h, c, l, &v_hh, vtv)?;
+        }
+        for r in 0..nn.min(l + 4) {
+            reflect_row(h, r, l, &v_hh, vtv)?;
+        }
+        for r in 0..n {
+            reflect_row(q_acc, r, l, &v_hh, vtv)?;
         }
     }
 
-    Ok(SchurDecomposition { q: q_acc, t: h })
+    // ── Bulge chase down to the last row of the block ──
+    for k in (l + 1)..(nn - 1) {
+        if k + 2 < nn {
+            // 3-element reflector on rows k..k+3 zeroes h[k+1, k-1], h[k+2, k-1]
+            let column: Vec<BinaryStorage> = (k..k + 3).map(|i| h.get(i, k - 1).raw()).collect();
+            if let Some((v_hh, vtv)) = householder_vector(&column)? {
+                for c in (k - 1)..n {
+                    reflect_column(h, c, k, &v_hh, vtv)?;
+                }
+                for r in 0..nn.min(k + 4) {
+                    reflect_row(h, r, k, &v_hh, vtv)?;
+                }
+                for r in 0..n {
+                    reflect_row(q_acc, r, k, &v_hh, vtv)?;
+                }
+            }
+            h.set(k + 1, k - 1, FixedPoint::ZERO);
+            h.set(k + 2, k - 1, FixedPoint::ZERO);
+        } else {
+            // Last step: a rotation on rows k, k+1 zeroes h[k+1, k-1]
+            let rot = Rotation::zeroing(h.get(k, k - 1), h.get(k + 1, k - 1))?;
+            for c in (k - 1)..n {
+                let (top, bottom) = rot.apply(h.get(k, c), h.get(k + 1, c))?;
+                h.set(k, c, top);
+                h.set(k + 1, c, bottom);
+            }
+            for r in 0..nn {
+                let (left, right) = rot.apply(h.get(r, k), h.get(r, k + 1))?;
+                h.set(r, k, left);
+                h.set(r, k + 1, right);
+            }
+            rotate_columns(q_acc, k, k + 1, &rot)?;
+            h.set(k + 1, k - 1, FixedPoint::ZERO);
+        }
+    }
+
+    Ok(())
+}
+
+/// Split the converged 2×2 block at rows and columns (i, i+1) into two 1×1
+/// blocks when its eigenvalues are real: rotate by the eigenvector
+/// `(λ - d, c)` of `λ = (a+d)/2 + sign(p) sqrt(p² + bc)`, `p = (a-d)/2`
+/// (no cancellation in `λ - d = p + sign(p) sqrt(..)`). A complex pair keeps
+/// its block.
+fn split_real_block(h: &mut FixedMatrix, q_acc: &mut FixedMatrix, i: usize) -> Result<(), OverflowDetected> {
+    let n = h.rows();
+    let (a, b) = (h.get(i, i), h.get(i, i + 1));
+    let (c, d) = (h.get(i + 1, i), h.get(i + 1, i + 1));
+    if c.is_zero() {
+        return Ok(());
+    }
+    let p = compute_halve(compute_checked_add(upscale_to_compute(a.raw()), compute_negate(upscale_to_compute(d.raw())))?);
+    let disc = compute_checked_add(compute_multiply(p, p), exact_product(b.raw(), c.raw()))?;
+    if compute_is_negative(&disc) {
+        return Ok(());
+    }
+    let root = sqrt_at_compute_tier(disc);
+    let lead = if compute_is_negative(&p) {
+        compute_checked_add(p, compute_negate(root))?
+    } else {
+        compute_checked_add(p, root)?
+    };
+    let rot = Rotation::zeroing_compute(lead, upscale_to_compute(c.raw()))?;
+    // Gᵀ H on rows i, i+1 (entries left of column i are zero in both rows)
+    for col in i..n {
+        let (top, bottom) = rot.apply(h.get(i, col), h.get(i + 1, col))?;
+        h.set(i, col, top);
+        h.set(i + 1, col, bottom);
+    }
+    // H G on columns i, i+1 (entries below row i+1 are zero in both columns)
+    for row in 0..(i + 2) {
+        let (left, right) = rot.apply(h.get(row, i), h.get(row, i + 1))?;
+        h.set(row, i, left);
+        h.set(row, i + 1, right);
+    }
+    rotate_columns(q_acc, i, i + 1, &rot)?;
+    h.set(i + 1, i, FixedPoint::ZERO);
+    Ok(())
+}
+
+/// An integer vector parallel to `values` (compute raws) whose largest entry
+/// lies in `(M/2, M]`, `M = 2^min(2F, W-3)` raw. All entries are halved or
+/// doubled together, so the direction is kept to one part in `M/2`; a
+/// reflector depends only on the direction of its vector. The size matters for
+/// `reflect`: its factor `2 (v.w)/(v.v)` is rounded at `2F` fractional bits,
+/// which moves an output entry by up to `|v_k| / 2^(2F+1)` ulp, so a direction
+/// much larger than `2^(2F)` would cost precision; and `M <= 2^(W-3)` keeps a
+/// three-entry `v.v` inside the compute tier.
+fn direction_to_storage(values: &[ComputeStorage]) -> Result<Vec<BinaryStorage>, OverflowDetected> {
+    let largest = |vs: &[ComputeStorage]| {
+        let mut big = make_compute_int(0);
+        for value in vs {
+            let magnitude = compute_abs(*value);
+            if magnitude > big {
+                big = magnitude;
+            }
+        }
+        big
+    };
+    let mut scaled = values.to_vec();
+    if compute_is_zero(&largest(&scaled)) {
+        return Ok(vec![FixedPoint::ZERO.raw(); values.len()]);
+    }
+    let limit = widen_storage(direction_magnitude());
+    while largest(&scaled) > limit {
+        for value in scaled.iter_mut() {
+            *value = compute_halve(*value);
+        }
+    }
+    let half_limit = compute_halve(limit);
+    while largest(&scaled) <= half_limit {
+        for value in scaled.iter_mut() {
+            *value = compute_checked_add(*value, *value)?;
+        }
+    }
+    Ok(scaled.into_iter().map(compute_to_storage_exact).collect())
+}
+
+/// `2^min(2F, W-3)` as a storage raw: the largest entry of a reflector
+/// direction built by `direction_to_storage`.
+#[inline]
+fn direction_magnitude() -> BinaryStorage {
+    #[cfg(table_format = "q16_16")]
+    { 1i32 << (2 * crate::fixed_point::frac_config::FRAC_BITS).min(29) }
+    #[cfg(table_format = "q32_32")]
+    { 1i64 << 61 }
+    #[cfg(table_format = "q64_64")]
+    { 1i128 << 125 }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::I256::from_i128(1) << 253usize }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::I512::from_i128(1) << 509usize }
+}
+
+/// A compute-width integer known to fit storage, as a storage integer.
+#[inline]
+fn compute_to_storage_exact(v: ComputeStorage) -> BinaryStorage {
+    #[cfg(table_format = "q16_16")]
+    { v as i32 }
+    #[cfg(table_format = "q32_32")]
+    { v as i64 }
+    #[cfg(table_format = "q64_64")]
+    { v.as_i128() }
+    #[cfg(table_format = "q128_128")]
+    { v.as_i256() }
+    #[cfg(table_format = "q256_256")]
+    { v.as_i512() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int_matrix(rows: &[&[i32]]) -> FixedMatrix {
+        FixedMatrix::from_fn(rows.len(), rows[0].len(), |i, j| FixedPoint::from_int(rows[i][j]))
+    }
+
+    /// Running out of iterations is an error, never a partially converged Ok.
+    #[test]
+    fn iteration_budget_exhaustion_is_an_error() {
+        let a = int_matrix(&[&[4, 1, 2], &[1, 3, 1], &[2, 1, 5]]);
+        assert_eq!(eigen_symmetric_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
+        assert_eq!(svd_decompose_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
+        assert_eq!(schur_decompose_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
+        assert!(eigen_symmetric(&a).is_ok());
+        assert!(svd_decompose(&a).is_ok());
+        assert!(schur_decompose(&a).is_ok());
+    }
 }

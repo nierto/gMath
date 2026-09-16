@@ -334,6 +334,28 @@ exactly on random forms and constructed ties; the reference gate carries
 quadratic-form references computed on values with exact rationals and
 mpmath at 700 digits; all five profiles in CI.
 
+### Unreleased: Iterative decompositions converge or fail loudly
+
+**IMPLEMENTED 2026-09-15 on main, not released.** A consumer report (SVD
+wrong at realtime Q22.10 since 0.5.0) traced to defects older than the
+rounding change it bisected to, on every profile, in all three iterative
+decompositions: `svd_decompose` returned the unconverged diagonal as `Ok` on
+exactly rank-deficient input and rotated U the wrong way in interior
+zero-diagonal deflation; `schur_decompose` stopped its bulge chase one step
+short, never reduced 2×2 blocks, had no exceptional shifts, and returned `Ok`
+on budget exhaustion; `eigen_symmetric` squared off-diagonal entries at
+storage precision in its convergence test (squares beyond range wrapped and
+passed at sweep zero) and returned `Ok` on stagnation. Fix: rotation
+coefficients, Householder factors and shifts at the compute tier with one
+narrowing per transformed entry; the existing tight relative bound floored at
+four quanta; absolute zero-diagonal tests with explicit zeros; a stagnation
+fallback bounded by the looser sqrt(quantum) test; `Err(PrecisionLimit)` and
+`Err(TierOverflow)` in place of silent results and panics. Design measured
+first on an exact-integer replica of the SVD, bit-exact against 0.6.1. Gate:
+`tests/decomposition_convergence_validation.rs` (37 cases, mpmath references
+cross-checked against exact characteristic polynomials), every profile plus
+realtime at `GMATH_FRAC_BITS=10` in CI.
+
 ---
 
 ## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass

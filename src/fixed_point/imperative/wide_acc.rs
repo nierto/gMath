@@ -173,7 +173,7 @@ pub(crate) mod acc {
 
 /// A storage value sign-extended to the compute width (no shift; exact).
 #[inline]
-fn widen_storage(v: BinaryStorage) -> ComputeStorage {
+pub(crate) fn widen_storage(v: BinaryStorage) -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
     {
         v as i64
@@ -210,7 +210,7 @@ fn compute_is_negative(v: ComputeStorage) -> bool {
 /// bit lengths are asserted against the accumulator first (the width budget
 /// made loud, as in [`Wide::mul_exact`]).
 #[inline]
-fn widen_product(a: ComputeStorage, b: ComputeStorage) -> acc::Orient {
+pub(crate) fn widen_product(a: ComputeStorage, b: ComputeStorage) -> acc::Orient {
     #[cfg(table_format = "q16_16")]
     {
         (a as i128) * (b as i128)

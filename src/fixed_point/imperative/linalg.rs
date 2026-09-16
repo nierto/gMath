@@ -3,7 +3,8 @@
 //! Core routines:
 //! - `compute_tier_dot`: accumulates dot products at tier N+1 (double width)
 //! - `compute_tier_sub_dot_raw`: fused init-minus-dot at compute tier
-//! - `givens`: Givens rotation without trig (ratio + sqrt only)
+//! - `Rotation`, `householder_vector`, `reflect`: orthogonal transforms whose
+//!   coefficients stay at the compute tier, each output narrowed once
 //!
 //! These are the matrix-operation analog of BinaryCompute chain persistence.
 
@@ -319,73 +320,221 @@ pub(crate) fn compute_tier_sub_dot_compute(
 }
 
 // ============================================================================
-// Givens rotation (no trig — ratio + sqrt only)
+// Compute-tier orthogonal transforms for the iterative decompositions
 // ============================================================================
+//
+// Jacobi, Golub-Kahan and Francis converge only if the transforms they apply
+// inject less rounding noise than their convergence tests resolve. A rotation
+// coefficient or Householder factor rounded to storage precision injects about
+// |x| ulp into every entry it touches (the rotation is no longer orthogonal to
+// storage precision). Here every coefficient stays at the compute tier and
+// every transformed entry is narrowed once from an exact accumulator, so a
+// transform adds at most about half an ulp per entry. Every step is checked:
+// leaving the storage range is a `TierOverflow`, never a wrap.
 
-/// Compute Givens rotation coefficients (cs, sn) such that:
-///   [[cs, sn], [-sn, cs]]^T * [a, b]^T = [r, 0]
+use super::interval::exact_product;
+use super::wide_acc::{acc, narrow_triple_nearest, widen_product, widen_storage, Wide};
+use crate::fixed_point::core_types::errors::OverflowDetected;
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
+    compute_checked_add, compute_checked_divide, compute_divide, compute_is_negative,
+    compute_is_zero, compute_multiply, compute_negate, make_compute_int, sqrt_at_compute_tier,
+};
+
+/// Consecutive non-improving iterations after which an iterative decomposition
+/// is taken to sit at its precision floor.
+pub(crate) const STAGNATION_SWEEPS: usize = 5;
+
+/// Absolute noise floor of the iterative decompositions: four quanta.
 ///
-/// Uses ratio-based computation with a single `sqrt` call.
-/// No `atan`, `sin`, or `cos`: avoids layering transcendental approximation
-/// error on top of fixed-point quantization.
-pub(crate) fn givens(a: FixedPoint, b: FixedPoint) -> (FixedPoint, FixedPoint) {
-    let one = FixedPoint::one();
-    let zero = FixedPoint::ZERO;
-
-    if b.is_zero() {
-        return (one, zero);
-    }
-    if a.is_zero() {
-        let sn = if b.is_negative() { -one } else { one };
-        return (zero, sn);
-    }
-
-    // Ratio-based approach avoids overflow from a^2 + b^2
-    if b.abs() > a.abs() {
-        let tau = a / b;
-        let sn = one / (one + tau * tau).sqrt();
-        let cs = sn * tau;
-        (cs, sn)
-    } else {
-        let tau = b / a;
-        let cs = one / (one + tau * tau).sqrt();
-        let sn = cs * tau;
-        (cs, sn)
-    }
-}
-
-// ============================================================================
-// Compute-tier Givens rotation application
-// ============================================================================
-
-/// Apply a 2×2 Givens rotation at compute tier (tier N+1).
-///
-/// Computes:
-///   new_x = cs*x + sn*y
-///   new_y = -sn*x + cs*y
-///
-/// Each result is a 2-element dot product accumulated at tier N+1 with a
-/// single downscale. This gives 1 ULP per output instead of the 3 ULP
-/// from storage-tier `cs * x + sn * y` (2 multiplies + 1 add, each rounding).
-///
-/// This is the rotation analog of `compute_tier_dot_raw`.
+/// An off-diagonal entry at or below it cannot be told apart from the rounding
+/// the iterations inject, and dropping it moves every eigen- or singular value
+/// by at most that much (Weyl). An exact zero eigen- or singular value is
+/// computed as a block of such noise, which a purely relative test floored at
+/// one quantum never deflates.
 #[inline]
-pub(crate) fn apply_givens_compute(
-    cs: FixedPoint, sn: FixedPoint, x: FixedPoint, y: FixedPoint,
-) -> (FixedPoint, FixedPoint) {
-    let cs_raw = cs.raw();
-    let sn_raw = sn.raw();
-    let neg_sn_raw = (-sn).raw();
-    let x_raw = x.raw();
-    let y_raw = y.raw();
-    let new_x = FixedPoint::from_raw(compute_tier_dot_raw(
-        &[cs_raw, sn_raw], &[x_raw, y_raw]
-    ));
-    let new_y = FixedPoint::from_raw(compute_tier_dot_raw(
-        &[neg_sn_raw, cs_raw], &[x_raw, y_raw]
-    ));
-    (new_x, new_y)
+pub(crate) fn noise_floor() -> FixedPoint {
+    FixedPoint::from_raw(noise_floor_raw())
 }
+
+/// Deflation bound for an entry beside diagonal magnitude `magnitude`: the
+/// tight relative bound, floored at the absolute noise floor.
+#[inline]
+pub(crate) fn deflation_threshold(magnitude: FixedPoint) -> FixedPoint {
+    convergence_threshold_tight(magnitude).max(noise_floor())
+}
+
+/// The looser sqrt(quantum) relative bound, floored at the noise floor,
+/// accepted only once an iteration has stopped improving.
+#[inline]
+pub(crate) fn stagnation_threshold(magnitude: FixedPoint) -> FixedPoint {
+    convergence_threshold(magnitude).max(noise_floor())
+}
+
+/// Magnitude of a compute-tier value.
+#[inline]
+pub(crate) fn compute_abs(v: ComputeStorage) -> ComputeStorage {
+    if compute_is_negative(&v) { compute_negate(v) } else { v }
+}
+
+#[inline]
+fn narrowed(value: acc::Orient) -> Result<FixedPoint, OverflowDetected> {
+    Ok(FixedPoint::from_raw(narrow_triple_nearest(value)?))
+}
+
+/// `c x` for a compute-tier coefficient `c` and a storage value `x`, narrowed
+/// once from the exact product.
+#[inline]
+pub(crate) fn scale_by(c: ComputeStorage, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+    narrowed(widen_product(c, widen_storage(x.raw())))
+}
+
+/// A plane rotation `[cs sn; -sn cs]` whose coefficients stay at the compute
+/// tier (`2 * FRAC_BITS` fractional bits).
+#[derive(Clone, Copy)]
+pub(crate) struct Rotation {
+    cs: ComputeStorage,
+    sn: ComputeStorage,
+}
+
+impl Rotation {
+    /// A rotation from coefficients already at the compute tier.
+    #[inline]
+    pub(crate) fn from_parts(cs: ComputeStorage, sn: ComputeStorage) -> Self {
+        Rotation { cs, sn }
+    }
+
+    /// The rotation taking `(a, b)` to `(r, 0)`: `cs = a / |r|`, `sn = b / |r|`
+    /// (`cs = 1`, `sn = 0` when `b` is zero). `a` and `b` are compute raws at a
+    /// common scale. Ratio form with one square root; neither input is squared,
+    /// and no trig function is involved.
+    pub(crate) fn zeroing_compute(a: ComputeStorage, b: ComputeStorage) -> Result<Self, OverflowDetected> {
+        let one = make_compute_int(1);
+        let zero = make_compute_int(0);
+        if compute_is_zero(&b) {
+            return Ok(Rotation { cs: one, sn: zero });
+        }
+        if compute_is_zero(&a) {
+            let sn = if compute_is_negative(&b) { compute_negate(one) } else { one };
+            return Ok(Rotation { cs: zero, sn });
+        }
+        if compute_abs(b) > compute_abs(a) {
+            let tau = compute_divide(a, b)?;
+            let inv = compute_divide(one, sqrt_at_compute_tier(compute_add(one, compute_multiply(tau, tau))))?;
+            let sn = if compute_is_negative(&b) { compute_negate(inv) } else { inv };
+            Ok(Rotation { cs: compute_multiply(sn, tau), sn })
+        } else {
+            let tau = compute_divide(b, a)?;
+            let inv = compute_divide(one, sqrt_at_compute_tier(compute_add(one, compute_multiply(tau, tau))))?;
+            let cs = if compute_is_negative(&a) { compute_negate(inv) } else { inv };
+            Ok(Rotation { cs, sn: compute_multiply(cs, tau) })
+        }
+    }
+
+    /// The rotation taking the storage values `(a, b)` to `(r, 0)`.
+    #[inline]
+    pub(crate) fn zeroing(a: FixedPoint, b: FixedPoint) -> Result<Self, OverflowDetected> {
+        Self::zeroing_compute(upscale_to_compute(a.raw()), upscale_to_compute(b.raw()))
+    }
+
+    /// `(cs x + sn y, -sn x + cs y)`, each narrowed once from its exact value.
+    pub(crate) fn apply(&self, x: FixedPoint, y: FixedPoint) -> Result<(FixedPoint, FixedPoint), OverflowDetected> {
+        let (xw, yw) = (widen_storage(x.raw()), widen_storage(y.raw()));
+        let first = widen_product(self.cs, xw).add_exact(widen_product(self.sn, yw))?;
+        let second = widen_product(compute_negate(self.sn), xw).add_exact(widen_product(self.cs, yw))?;
+        Ok((narrowed(first)?, narrowed(second)?))
+    }
+
+    /// `cs x + sn y` alone.
+    pub(crate) fn combine(&self, x: FixedPoint, y: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+        let sum = widen_product(self.cs, widen_storage(x.raw()))
+            .add_exact(widen_product(self.sn, widen_storage(y.raw())))?;
+        narrowed(sum)
+    }
+
+    /// `cs x`.
+    #[inline]
+    pub(crate) fn cos_times(&self, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+        scale_by(self.cs, x)
+    }
+
+    /// `sn x`.
+    #[inline]
+    pub(crate) fn sin_times(&self, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+        scale_by(self.sn, x)
+    }
+
+    /// `-sn x`.
+    #[inline]
+    pub(crate) fn neg_sin_times(&self, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+        scale_by(compute_negate(self.sn), x)
+    }
+}
+
+/// Exact `sum a_i b_i` of storage values as a compute raw (`2 * FRAC_BITS`
+/// fractional bits). A sum beyond the compute tier is a `TierOverflow`.
+pub(crate) fn exact_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<ComputeStorage, OverflowDetected> {
+    assert_eq!(a.len(), b.len(), "exact_dot: length mismatch");
+    let mut acc = make_compute_int(0);
+    for i in 0..a.len() {
+        acc = compute_checked_add(acc, exact_product(a[i], b[i]))?;
+    }
+    Ok(acc)
+}
+
+/// Householder direction `v = x - alpha e_1` for `x`, with
+/// `alpha = -sign(x_0) ||x||` (no cancellation in `v_0`), and the exact `v.v`.
+/// `None` when `x` is zero. `||x||` is a compute-tier square root of the exact
+/// sum of squares, so a column whose squared norm exceeds the storage range is
+/// still reflected; only a norm (or `v_0`) beyond storage is a `TierOverflow`.
+pub(crate) fn householder_vector(
+    x: &[BinaryStorage],
+) -> Result<Option<(Vec<BinaryStorage>, ComputeStorage)>, OverflowDetected> {
+    let xx = exact_dot(x, x)?;
+    if compute_is_zero(&xx) {
+        return Ok(None);
+    }
+    let norm = FixedPoint::from_raw(downscale_to_storage(sqrt_at_compute_tier(xx))?);
+    let alpha = if FixedPoint::from_raw(x[0]).is_negative() { norm } else { -norm };
+    let mut v = x.to_vec();
+    v[0] = x[0].checked_sub(alpha.raw()).ok_or(OverflowDetected::TierOverflow)?;
+    let vv = exact_dot(&v, &v)?;
+    if compute_is_zero(&vv) {
+        return Ok(None);
+    }
+    Ok(Some((v, vv)))
+}
+
+/// Reflect `w` in the hyperplane orthogonal to `v`: `w - 2 v (v.w) / (v.v)`.
+///
+/// `v` is an integer direction at any scale (the scale cancels) and `v_dot_v`
+/// its exact `v.v`. The factor `2 (v.w) / (v.v)` is formed once at the compute
+/// tier from exact sums, and each output entry is narrowed once from its exact
+/// product with `v_k`.
+pub(crate) fn reflect(
+    w: &mut [BinaryStorage], v: &[BinaryStorage], v_dot_v: ComputeStorage,
+) -> Result<(), OverflowDetected> {
+    let vw = exact_dot(v, w)?;
+    if compute_is_zero(&vw) {
+        return Ok(());
+    }
+    let factor = compute_checked_divide(compute_checked_add(vw, vw)?, v_dot_v)?;
+    for (wk, vk) in w.iter_mut().zip(v) {
+        let update = narrow_triple_nearest(widen_product(factor, widen_storage(*vk)))?;
+        *wk = wk.checked_sub(update).ok_or(OverflowDetected::TierOverflow)?;
+    }
+    Ok(())
+}
+
+#[cfg(table_format = "q64_64")]
+fn noise_floor_raw() -> BinaryStorage { 4i128 }
+#[cfg(table_format = "q32_32")]
+fn noise_floor_raw() -> BinaryStorage { 4i64 }
+#[cfg(table_format = "q16_16")]
+fn noise_floor_raw() -> BinaryStorage { 4i32 }
+#[cfg(table_format = "q128_128")]
+fn noise_floor_raw() -> BinaryStorage { I256::from_i128(4) }
+#[cfg(table_format = "q256_256")]
+fn noise_floor_raw() -> BinaryStorage { I512::from_i128(4) }
 
 // ============================================================================
 // Convergence threshold for fixed-point iterative algorithms
@@ -414,7 +563,7 @@ pub(crate) fn convergence_threshold(magnitude: FixedPoint) -> FixedPoint {
 /// Tighter convergence threshold for compute-tier iterative algorithms.
 ///
 /// When all rotation/accumulation steps happen at tier N+1 (via
-/// `apply_givens_compute`, `compute_tier_dot_raw`), each step introduces
+/// `Rotation`, `reflect`, `compute_tier_dot_raw`), each step introduces
 /// only 1 ULP of error, NOT √quantum. So we can converge to
 /// `magnitude >> (2 * FRAC_BITS / 3)` instead of `>> (FRAC_BITS / 2)`.
 ///

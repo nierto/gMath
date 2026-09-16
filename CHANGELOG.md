@@ -5,6 +5,109 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Upgrading
+
+`svd_decompose`, `eigen_symmetric` and `schur_decompose` could return `Ok`
+with a wrong decomposition. They now return a decomposition that meets their
+contract, or an error. Their results move, and so do results built on them
+(`pseudoinverse`, `rank`, `nullspace`, `condition_number_2`, the SVD-based
+Grassmannian, Stiefel and SPD manifold maps, `truncated_svd`,
+`tucker_decompose`). Two error cases are new: `Err(PrecisionLimit)` where an
+iteration used to return its unconverged state after running out of budget,
+and `Err(TierOverflow)` where a norm or an entry beyond the storage range used
+to panic or wrap. If you persist, hash or compare against stored results of
+these functions, regenerate them in one pass. No signature changes.
+
+### Fixed
+
+- **`svd_decompose` returned the unconverged diagonal as singular values** on
+  exactly rank-deficient input, on every profile. An exact zero singular value
+  is computed as a block of a few ulp of rounding noise; the purely relative
+  convergence test (floored at one quantum) never passes on it, the iteration
+  only advances the bottom unreduced block, and on exhausting its `30 n²`
+  budget the loop returned `Ok`. Measured on 0.6.1: a rank-6 8×8 integer matrix
+  on realtime at `GMATH_FRAC_BITS=10` returned singular values up to 15 percent
+  off with a reconstruction error of 4.69; a rank-3 8×8 on embedded returned
+  17.69, 14.69, 1.24 for 38.54, 30.96, 26.29 (reconstruction error 17.65). On
+  the first matrix the failure appeared with 0.5.0 because the rounding
+  unification changed its rounding noise; the defect is older, and the 0.4.x
+  result for that matrix was itself not orthogonal (off by 0.40).
+- **`svd_decompose` rotated U the wrong way** in interior zero-diagonal
+  deflation: U took the rotation instead of its transpose. Singular values and
+  orthogonality were unaffected, so only reconstruction could show it: a 3×3
+  bidiagonal input with an interior zero reconstructed 2.0 off on realtime and
+  on embedded.
+- **`schur_decompose` did not return a real Schur form.** The Francis bulge
+  chase stopped one step short and left an entry below the subdiagonal; 2×2
+  blocks, including a 2×2 input, were never reduced; there were no exceptional
+  shifts, so a cyclic permutation matrix stalled; and budget exhaustion
+  returned `Ok`. A symmetric 3×3 on embedded returned `T[2,0] = 0.274` and a
+  diagonal entry 7.0319 for the eigenvalue 7.0489. On realtime it panicked in
+  `round_to_storage` on a random 8×8 integer matrix with entries in [-10, 10],
+  squaring the shift column at storage precision.
+- **`eigen_symmetric` squared off-diagonal entries at storage precision** in
+  its convergence test: squares beyond the storage range wrapped and could pass
+  at the first sweep. On `v (J - I)` 3×3 with `v = 592` at `GMATH_FRAC_BITS=10`
+  it returned 592, -592, 0 for 1184, -592, -592 (the same on embedded with `v`
+  near 5.2e18). On realtime a random symmetric 64×64 integer matrix came back
+  as its own diagonal: reconstruction off by 20. Stagnation and sweep
+  exhaustion returned `Ok` whether converged or not.
+
+### Changed
+
+- Transforms: rotation coefficients and Householder factors stay at the
+  compute tier, and every transformed entry is narrowed once from an exact
+  accumulator; shifts are formed at the compute tier from exact products.
+  Coefficients rounded to storage precision injected about `|x|` ulp per
+  transform, enough to keep rank-deficient inputs above any few-ulp convergence
+  floor. The crate-internal storage-precision `givens` and
+  `apply_givens_compute` helpers are removed.
+- Convergence: an off-diagonal entry is negligible within the tight relative
+  bound `2^-(2F/3)` of its diagonal neighbours, floored at four quanta; a
+  diagonal entry of at most four quanta is deflated and set to exactly zero. An
+  iteration that stops improving is taken to be at its precision floor and
+  deflates its smallest-backward-error entry only within the looser
+  sqrt(quantum) relative bound; otherwise it continues until its budget runs
+  out and returns `Err(PrecisionLimit)`.
+- `schur_decompose` returns exact zeros below the subdiagonal, splits 2×2
+  blocks with real eigenvalues, and uses the LAPACK `dlahqr` exceptional shifts
+  after 10 and 20 iterations without deflation.
+- `eigen_symmetric` updates the diagonal in Rutishauser's form
+  (`a_pp + t a_pq`, `a_qq - t a_pq`) and forms `tan θ` without squaring `τ`.
+- Measured on the new gate, largest error over its cases, in ulp (singular
+  values / symmetric eigenvalues / Schur eigenvalues): realtime 18 / 212 / 888;
+  realtime at `GMATH_FRAC_BITS=10` 14 / 5 / 288; compact 5 / 4 / 105716;
+  embedded 9 / 4 / 19728208; balanced 4 / 4 / 2051743236; scientific 5 / 5 /
+  4.1e18. Reconstruction errors follow the relative deflation bound, and a Schur
+  eigenvalue's error is that backward error times the eigenvalue's condition
+  number (up to 252 among the cases). A matvec through the SVD of the rank-6
+  matrix above: worst relative error 21.65 per mille at `GMATH_FRAC_BITS=10`
+  (2172.97 on 0.6.1).
+- Cost against 0.6.1, release build, min of repetitions, random integer
+  matrices from 8×8 to 64×64: SVD of full-rank matrices takes 1.16 to 1.21
+  times as long on realtime and 1.22 to 1.43 times on embedded; symmetric
+  eigenvalues 0.86 to 0.98 times. Rank-deficient SVD and Schur are faster (down
+  to 0.03 times) where 0.6.1 ran out its iteration budget, and 0.6.1 panicked on
+  realtime for Schur at every size and for rank-deficient SVD from 32×32.
+
+### Added
+
+- `tests/decomposition_convergence_validation.rs`: 17 SVD, 8 symmetric
+  eigenvalue and 12 Schur cases (exactly rank-deficient matrices, interior zero
+  diagonals, real 2×2 blocks, permutation and companion matrices, up to
+  16×16), each checked for reconstruction, orthogonality, its spectrum against
+  references and, for Schur, exact real Schur structure; plus large entries
+  whose squares leave storage, and `TierOverflow` beyond range. References from
+  `scripts/generate_decomposition_refs.py` (mpmath at 120 digits, cross-checked
+  against exact characteristic-polynomial roots); bounds measured per profile.
+  On 0.6.1 the gate fails on realtime and embedded.
+- A library unit test that budget exhaustion is `Err(PrecisionLimit)` for all
+  three decompositions.
+- CI workflow `linalg-decompositions` on all five profiles, plus realtime at
+  `GMATH_FRAC_BITS=10`.
+
 ## [0.6.1] - 2026-08-30
 
 ### Upgrading
