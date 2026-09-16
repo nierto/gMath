@@ -5,20 +5,41 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.2] - 2026-09-16
 
 ### Upgrading
 
-`svd_decompose`, `eigen_symmetric` and `schur_decompose` could return `Ok`
-with a wrong decomposition. They now return a decomposition that meets their
-contract, or an error. Their results move, and so do results built on them
-(`pseudoinverse`, `rank`, `nullspace`, `condition_number_2`, the SVD-based
-Grassmannian, Stiefel and SPD manifold maps, `truncated_svd`,
-`tucker_decompose`). Two error cases are new: `Err(PrecisionLimit)` where an
-iteration used to return its unconverged state after running out of budget,
-and `Err(TierOverflow)` where a norm or an entry beyond the storage range used
-to panic or wrap. If you persist, hash or compare against stored results of
-these functions, regenerate them in one pass. No signature changes.
+A patch release with no API change: three matrix decompositions could return
+a wrong answer as if it were right, and now either return a correct one or an
+error. Everyone on `^0.6` receives it on their next `cargo update`.
+
+**Do you need to act?**
+
+- **You do not call `svd_decompose`, `eigen_symmetric` or `schur_decompose`,
+  nor anything built on them** (`pseudoinverse`, `rank`, `nullspace`,
+  `condition_number_2`, the Grassmannian, Stiefel and SPD manifold maps,
+  `truncated_svd`, `tucker_decompose`) → Nothing changes for you.
+- **You call them** → Their results change, usually by a few ulp, and on some
+  inputs from a wrong value to a right one. If you store, hash or compare
+  against earlier results, regenerate them in one pass.
+- **You `unwrap` their results** → Two errors are new. `Err(PrecisionLimit)`
+  where an iteration used to run out of steps and return what it had, and
+  `Err(TierOverflow)` where a norm or an entry beyond the storage range used to
+  panic or wrap. Both mean the old `Ok` was not a correct answer.
+
+**What was wrong, in plain terms**
+
+1. **The SVD gave up silently** on matrices that are exactly rank-deficient,
+   on every profile, and returned its unfinished state as the answer. It could
+   also rotate one of its factors the wrong way, which changed the matrix it
+   reconstructs without changing the singular values.
+2. **The real Schur form was not a Schur form.** Its last step was skipped, 2×2
+   blocks were never reduced, and some matrices made it loop until it gave up.
+3. **The symmetric eigenvalue solver could believe it had converged** when the
+   squares in its convergence test overflowed, and returned the diagonal
+   unchanged.
+
+Full detail and measurements follow below.
 
 ### Fixed
 
@@ -64,33 +85,58 @@ these functions, regenerate them in one pass. No signature changes.
   transform, enough to keep rank-deficient inputs above any few-ulp convergence
   floor. The crate-internal storage-precision `givens` and
   `apply_givens_compute` helpers are removed.
+- `svd_decompose` carries the bidiagonal's diagonal and superdiagonal at the
+  compute tier through the whole QR iteration and narrows each singular value
+  once at the end. A chase rounded to storage after every rotation loses a
+  bulge smaller than one quantum, and the shift with it: on entries of a few
+  hundred quanta the step then reproduces its input (or its input with signs
+  flipped) and the iteration spends its budget. The Wilkinson shift is formed
+  from the compute-tier values, and every product is rounded once from its
+  exact value and fits-checked.
 - Convergence: an off-diagonal entry is negligible within the tight relative
   bound `2^-(2F/3)` of its diagonal neighbours, floored at four quanta; a
   diagonal entry of at most four quanta is deflated and set to exactly zero. An
   iteration that stops improving is taken to be at its precision floor and
   deflates its smallest-backward-error entry only within the looser
   sqrt(quantum) relative bound; otherwise it continues until its budget runs
-  out and returns `Err(PrecisionLimit)`.
+  out and returns `Err(PrecisionLimit)`. "Stops improving" means that no
+  off-diagonal (and, for the SVD, no diagonal) entry of the active block has
+  reached a new smallest magnitude for five iterations, and for Schur that the
+  block has also run 30 iterations. The largest entry, or a count of
+  iterations alone, is no such evidence: on scientific a rank-deficient 8×8
+  deflated a zero singular value at iteration 5 while it was still shrinking
+  (reconstruction 9.3e-48 instead of 4.8e-69), and on embedded a
+  well-conditioned 10×10 Schur ended at the loose bound after an exceptional
+  shift interrupted its convergence (backward error 100 times that of any
+  other case in its corpus). On realtime that looser bound shifts
+  by `min(8, F/2)` bits for `F = GMATH_FRAC_BITS`: the shared threshold's fixed
+  shift of 8 is sqrt(quantum) only at Q16.16, and at Q22.10 it sat under the
+  rounding floor of a Francis step on entries near one.
 - `schur_decompose` returns exact zeros below the subdiagonal, splits 2×2
   blocks with real eigenvalues, and uses the LAPACK `dlahqr` exceptional shifts
-  after 10 and 20 iterations without deflation.
+  every 10 iterations without deflation (anchored alternately at the top and
+  the bottom of the block). With shifts at 10 and 20 only, a non-normal 8×8
+  with a repeated eigenvalue took 1232 of its 1920 iterations on compact; now
+  36.
 - `eigen_symmetric` updates the diagonal in Rutishauser's form
   (`a_pp + t a_pq`, `a_qq - t a_pq`) and forms `tan θ` without squaring `τ`.
-- Measured on the new gate, largest error over its cases, in ulp (singular
-  values / symmetric eigenvalues / Schur eigenvalues): realtime 18 / 212 / 888;
-  realtime at `GMATH_FRAC_BITS=10` 14 / 5 / 288; compact 5 / 4 / 105716;
-  embedded 9 / 4 / 19728208; balanced 4 / 4 / 2051743236; scientific 5 / 5 /
-  4.1e18. Reconstruction errors follow the relative deflation bound, and a Schur
-  eigenvalue's error is that backward error times the eigenvalue's condition
-  number (up to 252 among the cases). A matvec through the SVD of the rank-6
-  matrix above: worst relative error 21.65 per mille at `GMATH_FRAC_BITS=10`
-  (2172.97 on 0.6.1).
+- Measured on the new gate, largest error over its fixed cases, in ulp
+  (singular values / symmetric eigenvalues / Schur eigenvalues): realtime
+  17 / 212 / 888; realtime at `GMATH_FRAC_BITS=10` 10 / 5 / 288; compact
+  3 / 4 / 105716; embedded 3 / 4 / 19728208; balanced 4 / 4 / 2051743236;
+  scientific 3 / 5 / 4.1e18. Reconstruction errors follow the relative
+  deflation bound, and a Schur eigenvalue's error is that backward error times
+  the eigenvalue's condition number (up to 252 among the cases). A matvec
+  through the SVD of the rank-6 matrix above: worst relative error 26.14 per
+  mille at `GMATH_FRAC_BITS=10` (2172.97 on 0.6.1).
 - Cost against 0.6.1, release build, min of repetitions, random integer
-  matrices from 8×8 to 64×64: SVD of full-rank matrices takes 1.16 to 1.21
-  times as long on realtime and 1.22 to 1.43 times on embedded; symmetric
-  eigenvalues 0.86 to 0.98 times. Rank-deficient SVD and Schur are faster (down
-  to 0.03 times) where 0.6.1 ran out its iteration budget, and 0.6.1 panicked on
-  realtime for Schur at every size and for rank-deficient SVD from 32×32.
+  matrices of 8×8, 32×32 and 64×64: SVD of full-rank matrices takes 1.08 to
+  1.19 times as long on realtime and 1.34 to 1.54 times on embedded; symmetric
+  eigenvalues 0.92 to 1.05 times. Rank-deficient SVD and Schur are faster
+  (0.04 to 0.64 times) where 0.6.1 ran out its iteration budget, and 0.6.1
+  panicked on realtime for Schur at every size and for rank-deficient SVD from
+  32×32. The 64×64 symmetric case on realtime took 31 µs on 0.6.1 because it
+  returned the diagonal unchanged (see Fixed); it now takes 90 ms.
 
 ### Added
 
@@ -103,10 +149,38 @@ these functions, regenerate them in one pass. No signature changes.
   `scripts/generate_decomposition_refs.py` (mpmath at 120 digits, cross-checked
   against exact characteristic-polynomial roots); bounds measured per profile.
   On 0.6.1 the gate fails on realtime and embedded.
+- A seeded random corpus in the same gate: 64 cases per decomposition drawn
+  from the failure classes above plus rectangular, scaled (entries up to 600)
+  and small-valued (`k/64`) matrices, Gram and repeated spectra, signed
+  permutations, hidden complex pairs and companion matrices, sizes 2 to 12
+  (`tests/data/decomposition_random_refs.rs`, seed 20260916;
+  `scripts/generate_decomposition_refs.py --random --seed S --cases N`
+  regenerates any corpus, with the same mpmath references and cross-checks; a
+  non-normal matrix with a repeated eigenvalue carries no Schur spectrum
+  references, being possibly defective). Every case must decompose, meet the
+  structure checks, and stay within bounds on spectrum and reconstruction error
+  per unit of its largest entry and on orthogonality. A failing run lists every
+  failing case and the command that regenerates its corpus;
+  `DECOMP_CALIBRATE=1` prints every measurement instead of asserting. The
+  bounds come from calibration corpora on other seeds, 52,736
+  decompositions in all (512 cases per seed; 8 seeds on realtime at both
+  `GMATH_FRAC_BITS` 16 and 10 and on compact, 4 on embedded and scientific, 3 on
+  balanced, fewer for symmetric eigenvalues on the two widest), every one
+  converged; the committed corpus and a fresh one pass on all six
+  configurations. Bounds are four times the largest calibrated value (sixteen
+  times for Schur spectrum and reconstruction on embedded and wider, where some
+  small-valued cases deflate at the looser bound). Before this release's
+  compute-tier chase and threshold changes the same calibration found
+  `Err(PrecisionLimit)` from the SVD on realtime (2×2 to 8×8 matrices, among
+  them a 2×2 with singular values 0.2134 and 0.0103 at `GMATH_FRAC_BITS=10`)
+  and from Schur at `GMATH_FRAC_BITS=10` (a signed 10×10 permutation).
 - A library unit test that budget exhaustion is `Err(PrecisionLimit)` for all
   three decompositions.
 - CI workflow `linalg-decompositions` on all five profiles, plus realtime at
-  `GMATH_FRAC_BITS=10`.
+  `GMATH_FRAC_BITS=10`, running both gates on every push; and
+  `linalg-decompositions-fresh`, weekly and on demand, which draws a new seed,
+  generates its corpus with mpmath 1.3.0, and runs it on the same six
+  configurations (the seed is printed; a manual run accepts one).
 
 ## [0.6.1] - 2026-08-30
 

@@ -12,7 +12,7 @@ use super::FixedMatrix;
 use super::interval::exact_product;
 use super::linalg::{
     compute_tier_dot_raw, compute_tier_sub_dot_raw, compute_tier_sub_dot_compute,
-    upscale_to_compute, round_to_storage, compute_abs, deflation_threshold, exact_dot,
+    upscale_to_compute, round_to_storage, compute_abs, compute_product, deflation_threshold, exact_dot,
     householder_vector, noise_floor, reflect, scale_by, stagnation_threshold, ComputeStorage,
     Rotation, STAGNATION_SWEEPS,
 };
@@ -506,7 +506,7 @@ const ITERATIONS_PER_N_SQUARED: usize = 30;
 const JACOBI_MAX_SWEEPS: usize = 100;
 
 /// Francis iterations on one block, after its two exceptional shifts, before
-/// the block is taken to sit at the precision floor.
+/// a stagnant block may be taken to sit at the precision floor.
 const SCHUR_FLOOR_ITERATIONS: usize = 30;
 
 /// Reflect column `col` of `mat`, rows `start..start + v.len()`, in the
@@ -818,10 +818,10 @@ pub struct SVDDecomposition {
 /// relative bound of its diagonal neighbours, floored at four quanta, and a
 /// diagonal entry of at most four quanta is set to zero and deflated. An exact
 /// zero singular value is computed as a block of rounding noise that a purely
-/// relative test never passes. A block whose largest superdiagonal entry has
-/// not decreased for five iterations has reached the precision floor: its entry
-/// with the smallest backward error is deflated if it lies within the looser
-/// sqrt(quantum) relative bound.
+/// relative test never passes. A block in which no diagonal or superdiagonal
+/// entry has reached a new smallest magnitude for five iterations has reached
+/// the precision floor: its entry with the smallest backward error is deflated
+/// if it lies within the looser sqrt(quantum) relative bound.
 ///
 /// **Errors:** `Err(PrecisionLimit)` if the iteration budget (30 n² steps) runs
 /// out: the unconverged diagonal is never returned. `Err(TierOverflow)` if a
@@ -890,24 +890,31 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     }
 
     // ── Phase 2: Golub-Kahan Implicit QR Iteration ──
-    // Bidiagonal elements: diagonal d[0..n], superdiagonal e[0..n-1]
-    let mut d: Vec<FixedPoint> = (0..n).map(|i| b.get(i, i)).collect();
-    let mut e: Vec<FixedPoint> = (0..n.saturating_sub(1)).map(|i| b.get(i, i + 1)).collect();
+    // Bidiagonal elements: diagonal d[0..n], superdiagonal e[0..n-1], carried at
+    // the compute tier for the whole iteration and narrowed once at the end. A
+    // chase rounded to storage loses a bulge of less than one quantum, and with
+    // it the shift: on entries of a few hundred quanta the step then repeats
+    // itself exactly and the block never converges.
+    let mut d: Vec<ComputeStorage> = (0..n).map(|i| upscale_to_compute(b.get(i, i).raw())).collect();
+    let mut e: Vec<ComputeStorage> = (0..n.saturating_sub(1)).map(|i| upscale_to_compute(b.get(i, i + 1).raw())).collect();
+    let zero = make_compute_int(0);
 
     let floor = noise_floor();
     let max_iter = iterations_per_n_squared * n * n;
     let mut iter_count = 0usize;
     let mut q_end = n; // exclusive end of the unconverged part
 
-    // Stagnation state of the active block (p, q)
+    // Stagnation state of the active block (p, q): the smallest magnitude each
+    // superdiagonal and diagonal entry has reached, and the iterations since any
+    // entry last reached a new one
     let mut stall_block = (usize::MAX, usize::MAX);
-    let mut stall_best = FixedPoint::ZERO;
+    let mut stall_best: Vec<ComputeStorage> = Vec::new();
     let mut stall_count = 0usize;
 
     loop {
         // Peel converged superdiagonal entries off the bottom
         while q_end > 1
-            && e[q_end - 2].abs() <= deflation_threshold(d[q_end - 1].abs().max(d[q_end - 2].abs()))
+            && compute_within(e[q_end - 2], deflation_threshold(storage_magnitude(d[q_end - 1], d[q_end - 2])?))
         {
             q_end -= 1;
         }
@@ -921,35 +928,47 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // Active block: d[p..=q], e[p..q]
         let q = q_end - 1;
         let mut p = q;
-        while p > 0 && e[p - 1].abs() > deflation_threshold(d[p].abs().max(d[p - 1].abs())) {
+        while p > 0 && !compute_within(e[p - 1], deflation_threshold(storage_magnitude(d[p], d[p - 1])?)) {
             p -= 1;
         }
 
         // ── Stagnation fallback ──
-        let largest = (p..q).map(|k| e[k].abs()).max().expect("active block has a superdiagonal entry");
+        // A block in which no entry has reached a new smallest magnitude for
+        // STAGNATION_SWEEPS iterations sits at the precision floor. The largest
+        // entry alone is no such evidence: it often holds while the bottom of
+        // the block converges.
+        let magnitudes: Vec<ComputeStorage> =
+            (p..q).map(|k| compute_abs(e[k])).chain((p..=q).map(|k| compute_abs(d[k]))).collect();
         let mut forced_zero: Option<usize> = None;
-        if stall_block != (p, q) || largest < stall_best {
+        if stall_block != (p, q) {
             stall_block = (p, q);
-            stall_best = largest;
+            stall_best = magnitudes;
             stall_count = 0;
         } else {
-            stall_count += 1;
+            let mut improved = false;
+            for (best, magnitude) in stall_best.iter_mut().zip(magnitudes) {
+                if magnitude < *best {
+                    *best = magnitude;
+                    improved = true;
+                }
+            }
+            stall_count = if improved { 0 } else { stall_count + 1 };
         }
         if stall_count >= STAGNATION_SWEEPS {
             stall_count = 0;
-            let ie = (p..q).min_by_key(|&k| e[k].abs()).expect("active block has a superdiagonal entry");
-            let id = (p..=q).min_by_key(|&k| d[k].abs()).expect("active block has a diagonal entry");
-            let e_ok = e[ie].abs() <= stagnation_threshold(d[ie].abs().max(d[ie + 1].abs()));
-            let mut neighbour = FixedPoint::ZERO;
+            let ie = (p..q).min_by_key(|&k| compute_abs(e[k])).expect("active block has a superdiagonal entry");
+            let id = (p..=q).min_by_key(|&k| compute_abs(d[k])).expect("active block has a diagonal entry");
+            let e_ok = compute_within(e[ie], stagnation_threshold(storage_magnitude(d[ie], d[ie + 1])?));
+            let mut neighbour = zero;
             if id > 0 {
-                neighbour = neighbour.max(d[id - 1].abs()).max(e[id - 1].abs());
+                neighbour = neighbour.max(compute_abs(d[id - 1])).max(compute_abs(e[id - 1]));
             }
             if id < q {
-                neighbour = neighbour.max(e[id].abs());
+                neighbour = neighbour.max(compute_abs(e[id]));
             }
-            let d_ok = d[id].abs() <= stagnation_threshold(neighbour);
-            if e_ok && (!d_ok || e[ie].abs() <= d[id].abs()) {
-                e[ie] = FixedPoint::ZERO;
+            let d_ok = compute_within(d[id], stagnation_threshold(storage_magnitude(neighbour, zero)?));
+            if e_ok && (!d_ok || compute_abs(e[ie]) <= compute_abs(d[id])) {
+                e[ie] = zero;
                 iter_count += 1;
                 continue;
             }
@@ -960,16 +979,16 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 
         // ── Zero diagonal at the bottom of the block ──
         // Chase e[q-1] upward with column rotations (columns j and q), which V takes.
-        if d[q].abs() <= floor || forced_zero == Some(q) {
-            d[q] = FixedPoint::ZERO;
+        if compute_within(d[q], floor) || forced_zero == Some(q) {
+            d[q] = zero;
             let mut bulge = e[q - 1];
-            e[q - 1] = FixedPoint::ZERO;
+            e[q - 1] = zero;
             for j in (p..q).rev() {
-                let rot = Rotation::zeroing(d[j], bulge)?;
-                d[j] = rot.combine(d[j], bulge)?;
+                let rot = Rotation::zeroing_compute(d[j], bulge)?;
+                d[j] = rot.combine_compute(d[j], bulge)?;
                 if j > p {
-                    bulge = rot.neg_sin_times(e[j - 1])?;
-                    e[j - 1] = rot.cos_times(e[j - 1])?;
+                    bulge = rot.neg_sin_times_compute(e[j - 1])?;
+                    e[j - 1] = rot.cos_times_compute(e[j - 1])?;
                 }
                 rotate_columns(&mut v_acc, j, q, &rot)?;
             }
@@ -980,16 +999,16 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // ── Zero diagonal inside the block ──
         // Chase e[i] downward with row rotations (rows j and i): the rows move by
         // G, so U takes Gᵀ on columns (j, i).
-        if let Some(i) = (p..q).find(|&i| d[i].abs() <= floor || forced_zero == Some(i)) {
-            d[i] = FixedPoint::ZERO;
+        if let Some(i) = (p..q).find(|&i| compute_within(d[i], floor) || forced_zero == Some(i)) {
+            d[i] = zero;
             let mut bulge = e[i];
-            e[i] = FixedPoint::ZERO;
+            e[i] = zero;
             for j in (i + 1)..=q {
-                let rot = Rotation::zeroing(d[j], bulge)?;
-                d[j] = rot.combine(d[j], bulge)?;
+                let rot = Rotation::zeroing_compute(d[j], bulge)?;
+                d[j] = rot.combine_compute(d[j], bulge)?;
                 if j < q {
-                    bulge = rot.neg_sin_times(e[j])?;
-                    e[j] = rot.cos_times(e[j])?;
+                    bulge = rot.neg_sin_times_compute(e[j])?;
+                    e[j] = rot.cos_times_compute(e[j])?;
                 }
                 rotate_columns(&mut u_acc, j, i, &rot)?;
             }
@@ -999,37 +1018,31 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 
         // ── Implicit QR step (Golub-Kahan), Wilkinson shift ──
         let shift = wilkinson_shift(d[q - 1], e[q - 1], d[q], if q >= 2 { Some(e[q - 2]) } else { None })?;
-        let mut x = compute_checked_add(exact_product(d[p].raw(), d[p].raw()), compute_negate(shift))?;
-        let mut z = exact_product(d[p].raw(), e[p].raw());
-        let mut z_value = FixedPoint::ZERO;
+        let mut x = compute_checked_add(compute_product(d[p], d[p])?, compute_negate(shift))?;
+        let mut z = compute_product(d[p], e[p])?;
 
         for i in p..q {
             // Right rotation on columns i, i+1
             let rot = Rotation::zeroing_compute(x, z)?;
             if i > p {
-                e[i - 1] = rot.combine(e[i - 1], z_value)?;
+                e[i - 1] = rot.combine_compute(e[i - 1], z)?;
             }
-            let (new_di, new_ei) = rot.apply(d[i], e[i])?;
-            d[i] = new_di;
-            e[i] = new_ei;
-            let bulge = rot.sin_times(d[i + 1])?;
-            d[i + 1] = rot.cos_times(d[i + 1])?;
+            (d[i], e[i]) = rot.apply_compute(d[i], e[i])?;
+            let bulge = rot.sin_times_compute(d[i + 1])?;
+            d[i + 1] = rot.cos_times_compute(d[i + 1])?;
             rotate_columns(&mut v_acc, i, i + 1, &rot)?;
 
             // Left rotation on rows i, i+1
-            let rot2 = Rotation::zeroing(d[i], bulge)?;
-            d[i] = rot2.combine(d[i], bulge)?;
-            let (new_ei, new_di1) = rot2.apply(e[i], d[i + 1])?;
-            e[i] = new_ei;
-            d[i + 1] = new_di1;
+            let rot2 = Rotation::zeroing_compute(d[i], bulge)?;
+            d[i] = rot2.combine_compute(d[i], bulge)?;
+            (e[i], d[i + 1]) = rot2.apply_compute(e[i], d[i + 1])?;
             rotate_columns(&mut u_acc, i, i + 1, &rot2)?;
 
             // Set up for next iteration of the chase
             if i + 1 < q {
-                x = upscale_to_compute(e[i].raw());
-                z_value = rot2.sin_times(e[i + 1])?;
-                z = upscale_to_compute(z_value.raw());
-                e[i + 1] = rot2.cos_times(e[i + 1])?;
+                x = e[i];
+                z = rot2.sin_times_compute(e[i + 1])?;
+                e[i + 1] = rot2.cos_times_compute(e[i + 1])?;
             }
         }
 
@@ -1037,9 +1050,10 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     }
 
     // ── Phase 3: Make singular values non-negative and sort descending ──
+    let mut values: Vec<FixedPoint> = Vec::with_capacity(n);
     for i in 0..n {
-        if d[i].is_negative() {
-            d[i] = -d[i];
+        values.push(FixedPoint::from_raw(downscale_to_storage(compute_abs(d[i]))?));
+        if compute_is_negative(&d[i]) {
             // Flip sign of corresponding V column (row of Vᵀ)
             for r in 0..n {
                 v_acc.set(r, i, -v_acc.get(r, i));
@@ -1049,14 +1063,14 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 
     // Sort by descending singular value
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| d[b].partial_cmp(&d[a]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| values[b].cmp(&values[a]));
 
     let mut sigma = FixedVector::new(n);
     let mut u_sorted = FixedMatrix::new(m, m);
     let mut vt_sorted = FixedMatrix::new(n, n);
 
     for (new_idx, &old_idx) in indices.iter().enumerate() {
-        sigma[new_idx] = d[old_idx];
+        sigma[new_idx] = values[old_idx];
         for r in 0..m {
             u_sorted.set(r, new_idx, u_acc.get(r, old_idx));
         }
@@ -1084,18 +1098,18 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 /// entry, as a compute raw:
 ///   [d[q-1]² + e[q-2]²,  d[q-1] e[q-1]]
 ///   [d[q-1] e[q-1],      d[q]² + e[q-1]²]
-/// The block's entries are exact products; the discriminant is formed in
-/// ratio form, without squaring them.
+/// The entries are compute raws; each product is rounded once at the compute
+/// tier. The discriminant is formed in ratio form, without squaring the block.
 fn wilkinson_shift(
-    d_prev: FixedPoint, e_last: FixedPoint, d_last: FixedPoint, e_prev: Option<FixedPoint>,
+    d_prev: ComputeStorage, e_last: ComputeStorage, d_last: ComputeStorage, e_prev: Option<ComputeStorage>,
 ) -> Result<ComputeStorage, OverflowDetected> {
     let e_prev_sq = match e_prev {
-        Some(ep) => exact_product(ep.raw(), ep.raw()),
+        Some(ep) => compute_product(ep, ep)?,
         None => make_compute_int(0),
     };
-    let f = compute_checked_add(exact_product(d_prev.raw(), d_prev.raw()), e_prev_sq)?;
-    let g = compute_checked_add(exact_product(d_last.raw(), d_last.raw()), exact_product(e_last.raw(), e_last.raw()))?;
-    let h = exact_product(d_prev.raw(), e_last.raw());
+    let f = compute_checked_add(compute_product(d_prev, d_prev)?, e_prev_sq)?;
+    let g = compute_checked_add(compute_product(d_last, d_last)?, compute_product(e_last, e_last)?)?;
+    let h = compute_product(d_prev, e_last)?;
     let diff = compute_halve(compute_checked_add(f, compute_negate(g))?);
     if compute_is_zero(&diff) && compute_is_zero(&h) {
         return Ok(g);
@@ -1108,6 +1122,18 @@ fn wilkinson_shift(
     };
     let ratio = compute_checked_divide(h, denom)?;
     compute_checked_add(g, compute_negate(compute_multiply(h, ratio)))
+}
+
+/// The larger of `|a|` and `|b|` (compute raws) at the storage scale, for the
+/// convergence thresholds. A magnitude beyond storage is a `TierOverflow`.
+fn storage_magnitude(a: ComputeStorage, b: ComputeStorage) -> Result<FixedPoint, OverflowDetected> {
+    Ok(FixedPoint::from_raw(downscale_to_storage(compute_abs(a).max(compute_abs(b)))?))
+}
+
+/// `|v| <= bound` for a compute raw and a storage bound.
+#[inline]
+fn compute_within(v: ComputeStorage, bound: FixedPoint) -> bool {
+    compute_abs(v) <= upscale_to_compute(bound.raw())
 }
 
 // ============================================================================
@@ -1139,17 +1165,18 @@ pub struct SchurDecomposition {
 ///    the annihilated entries to zero
 /// 2. Apply Francis double-shift QR steps to the bottom unreduced block, the
 ///    bulge chased to the last row (a final 2×2 rotation) and the chased
-///    entries set to zero; exceptional shifts after 10 and 20 iterations
-///    without deflation break the cycles an ordinary shift can sit in
+///    entries set to zero; exceptional shifts every 10 iterations without
+///    deflation break the cycles an ordinary shift can sit in
 /// 3. Deflate when a subdiagonal entry is within the tight relative bound of
 ///    its diagonal neighbours, floored at four quanta (set to zero); split
 ///    converged 2×2 blocks with real eigenvalues
 ///
 /// **Precision:** Householder factors, rotation coefficients and shifts stay at
 /// the compute tier; every transformed entry is narrowed once from an exact
-/// accumulator. A block that has not deflated after 30 iterations has reached
-/// the precision floor: its smallest subdiagonal entry is deflated if it lies
-/// within the looser sqrt(quantum) relative bound.
+/// accumulator. A block that has not deflated after 30 iterations and in which
+/// no subdiagonal entry has reached a new minimum for five iterations has
+/// reached the precision floor: its smallest subdiagonal entry is deflated if
+/// it lies within the looser sqrt(quantum) relative bound.
 ///
 /// **Errors:** `Err(PrecisionLimit)` if the iteration budget (30 n² steps) runs
 /// out: an unconverged T is never returned. `Err(TierOverflow)` if a norm or a
@@ -1205,6 +1232,13 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
     let mut its = 0usize; // iterations since the last deflation at the bottom
     let mut nn = n; // h[0..nn, 0..nn] holds the unconverged part
 
+    // Stagnation state of the active block (l, nn): the smallest magnitude
+    // each subdiagonal entry has reached, and the iterations since any entry
+    // last reached a new one
+    let mut stall_block = (usize::MAX, usize::MAX);
+    let mut stall_best: Vec<FixedPoint> = Vec::new();
+    let mut stall_count = 0usize;
+
     while nn > 0 {
         // Start l of the bottom unreduced block; a negligible subdiagonal entry
         // is set to zero (its backward error is the entry itself)
@@ -1237,19 +1271,37 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
             return Err(OverflowDetected::PrecisionLimit);
         }
 
-        // Precision floor: deflate the smallest subdiagonal entry if it is
-        // within the loose bound
-        if its >= SCHUR_FLOOR_ITERATIONS {
+        // Precision floor: once the block has run its exceptional shifts and no
+        // subdiagonal entry has reached a new minimum for five iterations,
+        // deflate the smallest entry if it is within the loose bound. A block
+        // that is still converging, however slowly, keeps iterating.
+        let subdiagonal: Vec<FixedPoint> = ((l + 1)..nn).map(|i| h.get(i, i - 1).abs()).collect();
+        if stall_block != (l, nn) {
+            stall_block = (l, nn);
+            stall_best = subdiagonal.clone();
+            stall_count = 0;
+        } else {
+            let mut improved = false;
+            for (best, entry) in stall_best.iter_mut().zip(&subdiagonal) {
+                if *entry < *best {
+                    *best = *entry;
+                    improved = true;
+                }
+            }
+            stall_count = if improved { 0 } else { stall_count + 1 };
+        }
+        if its >= SCHUR_FLOOR_ITERATIONS && stall_count >= STAGNATION_SWEEPS {
             let i = ((l + 1)..nn).min_by_key(|&i| h.get(i, i - 1).abs()).expect("block of size >= 3");
             if h.get(i, i - 1).abs() <= stagnation_threshold(h.get(i, i).abs().max(h.get(i - 1, i - 1).abs())) {
                 h.set(i, i - 1, FixedPoint::ZERO);
                 its = 0;
+                stall_count = 0;
                 iter_count += 1;
                 continue;
             }
         }
 
-        let (trace, det) = if its == 10 || its == 20 {
+        let (trace, det) = if its > 0 && its % 10 == 0 {
             exceptional_shifts(&h, l, nn, its)?
         } else {
             trailing_shifts(&h, nn)?
@@ -1272,13 +1324,14 @@ fn trailing_shifts(h: &FixedMatrix, nn: usize) -> Result<(ComputeStorage, Comput
     Ok((trace, det))
 }
 
-/// Exceptional shift pair after 10 and 20 iterations without deflation
-/// (LAPACK `dlahqr`): the 2×2 block `[[w, -7/16 s], [s, w]]` with
-/// `w = h + 3/4 s`, where `s` sums two subdiagonal magnitudes (at the top of
-/// the block after 10 iterations, at the bottom after 20). It breaks the
-/// cycles an ordinary Francis step sits in, such as permutation matrices.
+/// Exceptional shift pair every 10 iterations without deflation (LAPACK
+/// `dlahqr`): the 2×2 block `[[w, -7/16 s], [s, w]]` with `w = h + 3/4 s`,
+/// where `s` sums two subdiagonal magnitudes, at the top of the block after
+/// 10, 30, 50, ... iterations and at the bottom after 20, 40, .... It breaks
+/// the cycles an ordinary Francis step sits in, such as permutation matrices;
+/// with shifts at 10 and 20 only, a cycle entered later persisted.
 fn exceptional_shifts(h: &FixedMatrix, l: usize, nn: usize, its: usize) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
-    let (s, anchor) = if its == 10 {
+    let (s, anchor) = if its % 20 == 10 {
         (checked_add_fp(h.get(l + 1, l).abs(), h.get(l + 2, l + 1).abs())?, h.get(l, l))
     } else {
         (checked_add_fp(h.get(nn - 1, nn - 2).abs(), h.get(nn - 2, nn - 3).abs())?, h.get(nn - 1, nn - 1))

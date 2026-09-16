@@ -334,27 +334,49 @@ exactly on random forms and constructed ties; the reference gate carries
 quadratic-form references computed on values with exact rationals and
 mpmath at 700 digits; all five profiles in CI.
 
-### Unreleased: Iterative decompositions converge or fail loudly
+### v0.6.2: Iterative decompositions converge or fail loudly
 
-**IMPLEMENTED 2026-09-15 on main, not released.** A consumer report (SVD
-wrong at realtime Q22.10 since 0.5.0) traced to defects older than the
-rounding change it bisected to, on every profile, in all three iterative
-decompositions: `svd_decompose` returned the unconverged diagonal as `Ok` on
-exactly rank-deficient input and rotated U the wrong way in interior
-zero-diagonal deflation; `schur_decompose` stopped its bulge chase one step
-short, never reduced 2×2 blocks, had no exceptional shifts, and returned `Ok`
-on budget exhaustion; `eigen_symmetric` squared off-diagonal entries at
-storage precision in its convergence test (squares beyond range wrapped and
-passed at sweep zero) and returned `Ok` on stagnation. Fix: rotation
-coefficients, Householder factors and shifts at the compute tier with one
-narrowing per transformed entry; the existing tight relative bound floored at
-four quanta; absolute zero-diagonal tests with explicit zeros; a stagnation
-fallback bounded by the looser sqrt(quantum) test; `Err(PrecisionLimit)` and
-`Err(TierOverflow)` in place of silent results and panics. Design measured
-first on an exact-integer replica of the SVD, bit-exact against 0.6.1. Gate:
-`tests/decomposition_convergence_validation.rs` (37 cases, mpmath references
-cross-checked against exact characteristic polynomials), every profile plus
-realtime at `GMATH_FRAC_BITS=10` in CI.
+**Patch release 2026-09-16, no API change.** A consumer report (SVD wrong at
+realtime Q22.10 since 0.5.0) traced to defects older than the rounding change
+it bisected to, on every profile, in all three iterative decompositions:
+`svd_decompose` returned the unconverged diagonal as `Ok` on exactly
+rank-deficient input and rotated U the wrong way in interior zero-diagonal
+deflation; `schur_decompose` stopped its bulge chase one step short, never
+reduced 2×2 blocks, had no exceptional shifts, and returned `Ok` on budget
+exhaustion; `eigen_symmetric` squared off-diagonal entries at storage
+precision in its convergence test (squares beyond range wrapped and passed at
+sweep zero) and returned `Ok` on stagnation. Fix: rotation coefficients,
+Householder factors and shifts at the compute tier with one narrowing per
+transformed entry; the SVD's bidiagonal carried at the compute tier through its
+whole iteration; the existing tight relative bound floored at four quanta;
+absolute zero-diagonal tests with explicit zeros; a stagnation fallback bounded
+by the looser sqrt(quantum) test (on realtime following `GMATH_FRAC_BITS`);
+`Err(PrecisionLimit)` and `Err(TierOverflow)` in place of silent results and
+panics. Design measured first on an exact-integer replica of the SVD,
+bit-exact against 0.6.1. Gates: `tests/decomposition_convergence_validation.rs`
+with 37 fixed cases and a seeded random corpus of 64 cases per decomposition
+drawn from the same failure classes (mpmath references cross-checked against
+exact characteristic polynomials), every profile plus realtime at
+`GMATH_FRAC_BITS=10` on every push, and a fresh seed weekly
+(`linalg-decompositions-fresh`). Calibration of the random corpus on other
+seeds (52,736 decompositions over six configurations, every one converged)
+found three more defects before release, all fixed: the SVD's bidiagonal
+chase rounded to storage lost sub-quantum bulges and stalled on small-valued
+matrices; the realtime stagnation bound was fixed at the Q16.16 shift and too
+tight at Q22.10; and both stagnation fallbacks fired during normal convergence
+(the largest entry holding, or a count of iterations), deflating at the loose
+bound where the tight one was reachable. Schur now repeats its exceptional
+shifts every 10 iterations.
+
+Follow-up, measured and not in 0.6.2: `schur_decompose` still applies its
+Francis steps to H at storage precision. On embedded, a random 10×10 with
+entries `k/64` stops improving above the tight bound and deflates at the
+looser sqrt(quantum) bound after 64 iterations (backward error 2.8e7 ulp);
+divided by a further 64 or 4096 it takes 210 to 220 iterations, and
+multiplied by 64 it converges at the tight bound in 20. This is inside the
+documented contract and never an error, but carrying H at the compute tier
+through the Francis phase, as the SVD now carries its bidiagonal, is the
+likely way to lift it (a hypothesis, not yet measured).
 
 ---
 

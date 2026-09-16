@@ -5,8 +5,11 @@
 # against independent mpmath references (tests/data/decomposition_refs.rs) on
 # the inputs that exposed silent failures in 0.6.1: exactly rank-deficient
 # matrices, interior zero diagonals, real 2x2 Schur blocks, permutation
-# matrices, and entries whose squares leave the storage range. realtime also
-# runs at GMATH_FRAC_BITS=10, the configuration the SVD failure was reported on.
+# matrices, and entries whose squares leave the storage range. The same test
+# binary runs a seeded random corpus from those classes (64 cases per
+# decomposition, tests/data/decomposition_random_refs.rs, mpmath references);
+# linalg-decompositions-fresh draws a new seed weekly. realtime also runs at
+# GMATH_FRAC_BITS=10, the configuration the SVD failure was reported on.
 name: linalg-decompositions
 
 on:

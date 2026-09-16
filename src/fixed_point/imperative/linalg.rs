@@ -333,7 +333,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
 // leaving the storage range is a `TierOverflow`, never a wrap.
 
 use super::interval::exact_product;
-use super::wide_acc::{acc, narrow_triple_nearest, widen_product, widen_storage, Wide};
+use super::wide_acc::{acc, narrow_product_to_compute, narrow_triple_nearest, widen_product, widen_storage, Wide};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_checked_add, compute_checked_divide, compute_divide, compute_is_negative,
@@ -365,9 +365,24 @@ pub(crate) fn deflation_threshold(magnitude: FixedPoint) -> FixedPoint {
 
 /// The looser sqrt(quantum) relative bound, floored at the noise floor,
 /// accepted only once an iteration has stopped improving.
+///
+/// On realtime the shared [`convergence_threshold`] shifts by 8 whatever
+/// `GMATH_FRAC_BITS` is. That is sqrt(quantum) at Q16.16 and looser above it,
+/// but below it the bound is tighter than the precision floor: at Q22.10 it is
+/// 4 ulps beside entries near one, under the rounding floor of a Francis step
+/// there, and the iteration stalls until its budget runs out. So the shift is
+/// `min(8, F/2)`.
 #[inline]
 pub(crate) fn stagnation_threshold(magnitude: FixedPoint) -> FixedPoint {
-    convergence_threshold(magnitude).max(noise_floor())
+    #[cfg(table_format = "q16_16")]
+    {
+        let shift = (frac_config::FRAC_BITS / 2).min(8);
+        FixedPoint::from_raw(magnitude.abs().raw() >> shift).max(noise_floor())
+    }
+    #[cfg(not(table_format = "q16_16"))]
+    {
+        convergence_threshold(magnitude).max(noise_floor())
+    }
 }
 
 /// Magnitude of a compute-tier value.
@@ -444,30 +459,45 @@ impl Rotation {
         Ok((narrowed(first)?, narrowed(second)?))
     }
 
-    /// `cs x + sn y` alone.
-    pub(crate) fn combine(&self, x: FixedPoint, y: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-        let sum = widen_product(self.cs, widen_storage(x.raw()))
-            .add_exact(widen_product(self.sn, widen_storage(y.raw())))?;
-        narrowed(sum)
+    /// `(cs x + sn y, -sn x + cs y)` on compute raws, each rounded once at the
+    /// compute tier from its exact value.
+    pub(crate) fn apply_compute(
+        &self, x: ComputeStorage, y: ComputeStorage,
+    ) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
+        let first = widen_product(self.cs, x).add_exact(widen_product(self.sn, y))?;
+        let second = widen_product(compute_negate(self.sn), x).add_exact(widen_product(self.cs, y))?;
+        Ok((narrow_product_to_compute(first)?, narrow_product_to_compute(second)?))
     }
 
-    /// `cs x`.
-    #[inline]
-    pub(crate) fn cos_times(&self, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-        scale_by(self.cs, x)
+    /// `cs x + sn y` alone, on compute raws.
+    pub(crate) fn combine_compute(&self, x: ComputeStorage, y: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+        narrow_product_to_compute(widen_product(self.cs, x).add_exact(widen_product(self.sn, y))?)
     }
 
-    /// `sn x`.
+    /// `cs x` on a compute raw.
     #[inline]
-    pub(crate) fn sin_times(&self, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-        scale_by(self.sn, x)
+    pub(crate) fn cos_times_compute(&self, x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+        compute_product(self.cs, x)
     }
 
-    /// `-sn x`.
+    /// `sn x` on a compute raw.
     #[inline]
-    pub(crate) fn neg_sin_times(&self, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-        scale_by(compute_negate(self.sn), x)
+    pub(crate) fn sin_times_compute(&self, x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+        compute_product(self.sn, x)
     }
+
+    /// `-sn x` on a compute raw.
+    #[inline]
+    pub(crate) fn neg_sin_times_compute(&self, x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+        compute_product(compute_negate(self.sn), x)
+    }
+}
+
+/// `a b` of two compute raws, rounded once at the compute tier from the exact
+/// product. A product beyond the compute tier is a `TierOverflow`.
+#[inline]
+pub(crate) fn compute_product(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    narrow_product_to_compute(widen_product(a, b))
 }
 
 /// Exact `sum a_i b_i` of storage values as a compute raw (`2 * FRAC_BITS`

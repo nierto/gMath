@@ -398,6 +398,70 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
     }
 }
 
+/// Narrow an exact product of two compute raws (`4F` fractional bits, from
+/// [`widen_product`]) to the compute scale (`2F`), rounding to nearest with
+/// ties toward positive infinity. The result is fits-checked against the
+/// compute width; a value beyond it is a `TierOverflow`, never a wrap.
+#[inline]
+pub(crate) fn narrow_product_to_compute(a: acc::Orient) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(table_format = "q16_16")]
+    let (floor, round_bit, unit) = {
+        let shift = 2 * frac_config::FRAC_BITS;
+        let round_bit = ((a >> (shift - 1)) & 1) == 1;
+        let shifted = a >> shift;
+        if shifted > i64::MAX as i128 || shifted < i64::MIN as i128 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        (shifted as i64, round_bit, 1i64)
+    };
+    #[cfg(table_format = "q32_32")]
+    let (floor, round_bit, unit) = {
+        // I256 >> 64: the discarded bits are exactly words[0]
+        let round_bit = (a.words[0] >> 63) == 1;
+        let shifted = a >> 64u32;
+        if !shifted.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        (shifted.as_i128(), round_bit, 1i128)
+    };
+    #[cfg(table_format = "q64_64")]
+    let (floor, round_bit, unit) = {
+        // I512 >> 128: the discarded bits are words[0..2]
+        let round_bit = (a.words[1] >> 63) == 1;
+        let shifted = a >> 128usize;
+        if !shifted.fits_in_i256() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        (shifted.as_i256(), round_bit, crate::fixed_point::I256::from_i128(1))
+    };
+    #[cfg(table_format = "q128_128")]
+    let (floor, round_bit, unit) = {
+        // I1024 >> 256: the discarded bits are words[0..4]
+        let round_bit = (a.words[3] >> 63) == 1;
+        let shifted = a >> 256usize;
+        if !shifted.fits_in_i512() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        (shifted.as_i512(), round_bit, crate::fixed_point::I512::from_i128(1))
+    };
+    #[cfg(table_format = "q256_256")]
+    let (floor, round_bit, unit) = {
+        // I2048 >> 512: the discarded bits are words[0..8]
+        let round_bit = (a.words[7] >> 63) == 1;
+        let shifted = a >> 512usize;
+        if !shifted.fits_in_i1024() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        (shifted.as_i1024(), round_bit, crate::fixed_point::I1024::from_i128(1))
+    };
+    if round_bit {
+        floor.checked_add(unit).ok_or(OverflowDetected::TierOverflow)
+    } else {
+        Ok(floor)
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,62 @@
+# Fresh randomized decomposition corpus, weekly and on demand.
+#
+# Draws a new seed, regenerates tests/data/decomposition_random_refs.rs with
+# mpmath (pinned, in a virtualenv), and runs the randomized gate on every
+# profile and at GMATH_FRAC_BITS=10. The committed corpus runs on every push in
+# linalg-decompositions; this job keeps drawing cases no one has looked at. All
+# jobs of one run share the seed, the log prints it, and a failing case names
+# the command that reproduces its corpus.
+name: linalg-decompositions-fresh
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Corpus seed (empty: the run id)"
+        required: false
+        default: ""
+
+jobs:
+  fresh-seed:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { profile: realtime, frac_bits: "" }
+          - { profile: realtime, frac_bits: "10" }
+          - { profile: compact, frac_bits: "" }
+          - { profile: embedded, frac_bits: "" }
+          - { profile: balanced, frac_bits: "" }
+          - { profile: scientific, frac_bits: "" }
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Install mpmath
+        run: |
+          python3 -m venv /tmp/refs-venv
+          /tmp/refs-venv/bin/pip install -q mpmath==1.3.0
+
+      - name: Draw the corpus
+        env:
+          INPUT_SEED: ${{ github.event.inputs.seed }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          SEED="${INPUT_SEED:-$RUN_ID}"
+          echo "corpus seed: $SEED"
+          /tmp/refs-venv/bin/python scripts/generate_decomposition_refs.py --random --seed "$SEED" --cases 64
+
+      - name: Randomized decomposition gate
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+          FRAC_BITS: ${{ matrix.frac_bits }}
+        run: |
+          if [ -n "$FRAC_BITS" ]; then export GMATH_FRAC_BITS="$FRAC_BITS"; fi
+          cargo test --no-fail-fast --test decomposition_convergence_validation random_corpus -- --nocapture

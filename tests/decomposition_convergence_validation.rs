@@ -96,115 +96,208 @@ fn half_max() -> FixedPoint {
     }
 }
 
-/// Largest spectrum, reconstruction and orthogonality errors of one case, in ulps.
+/// Largest spectrum, reconstruction and orthogonality errors of one case, in
+/// ulps, and the case's scale: its largest entry magnitude rounded up to a
+/// whole number, at least one.
 #[derive(Debug)]
 struct Measured {
     case: &'static str,
+    scale: i128,
     spectrum: i128,
     reconstruction: i128,
     orthogonality: i128,
 }
 
-fn measure_svd(case: &Case, refs: &[&str]) -> Measured {
+fn scale_of(case: &Case) -> i128 {
+    let largest = case.entries.iter().map(|v| (*v as i128).abs()).max().unwrap_or(0);
+    let unit = 1i128 << case.shift;
+    ((largest + unit - 1) / unit).max(1)
+}
+
+fn measure_svd(case: &Case, refs: &[&str]) -> Result<Measured, String> {
     let a = build(case);
-    let svd = svd_decompose(&a).unwrap_or_else(|e| panic!("{}: svd_decompose returned {e:?}", case.name));
-    assert_eq!(svd.sigma.len(), refs.len(), "{}: singular value count", case.name);
+    let svd = svd_decompose(&a).map_err(|e| format!("{}: svd_decompose returned {e:?}", case.name))?;
+    if svd.sigma.len() != refs.len() {
+        return Err(format!("{}: {} singular values, {} references", case.name, svd.sigma.len(), refs.len()));
+    }
     let spectrum = (0..refs.len()).map(|i| ulps(svd.sigma[i] - reference(refs[i]))).max().unwrap_or(0);
     let rebuilt = &(&svd.u * &diagonal(a.rows(), a.cols(), &svd.sigma)) * &svd.vt;
     let orth_u = max_abs_diff(&(&svd.u.transpose() * &svd.u), &FixedMatrix::identity(svd.u.rows()));
     let orth_v = max_abs_diff(&(&svd.vt * &svd.vt.transpose()), &FixedMatrix::identity(svd.vt.rows()));
-    Measured {
+    Ok(Measured {
         case: case.name,
+        scale: scale_of(case),
         spectrum,
         reconstruction: ulps(max_abs_diff(&rebuilt, &a)),
         orthogonality: ulps(orth_u.max(orth_v)),
-    }
+    })
 }
 
-fn measure_eigen(case: &Case, refs: &[&str]) -> Measured {
+fn measure_eigen(case: &Case, refs: &[&str]) -> Result<Measured, String> {
     let a = build(case);
     let n = a.rows();
-    let eig = eigen_symmetric(&a).unwrap_or_else(|e| panic!("{}: eigen_symmetric returned {e:?}", case.name));
+    let eig = eigen_symmetric(&a).map_err(|e| format!("{}: eigen_symmetric returned {e:?}", case.name))?;
     let mut values: Vec<FixedPoint> = (0..n).map(|i| eig.values[i]).collect();
     values.sort();
     let spectrum = (0..n).map(|i| ulps(values[i] - reference(refs[i]))).max().unwrap_or(0);
     let rebuilt = &(&eig.vectors * &diagonal(n, n, &eig.values)) * &eig.vectors.transpose();
     let orth = max_abs_diff(&(&eig.vectors.transpose() * &eig.vectors), &FixedMatrix::identity(n));
-    Measured {
+    Ok(Measured {
         case: case.name,
+        scale: scale_of(case),
         spectrum,
         reconstruction: ulps(max_abs_diff(&rebuilt, &a)),
         orthogonality: ulps(orth),
-    }
+    })
 }
 
-/// Every entry below the subdiagonal is exactly zero, no two consecutive
-/// subdiagonal entries are nonzero, and every 2×2 block has a complex pair.
-fn assert_real_schur_form(name: &str, t: &FixedMatrix) {
+/// Every entry below the subdiagonal is exactly zero and no two consecutive
+/// subdiagonal entries are nonzero.
+fn real_schur_structure(name: &str, t: &FixedMatrix) -> Result<(), String> {
     let n = t.rows();
     for i in 0..n {
-        for j in 0..n {
-            if i > j + 1 {
-                assert!(t.get(i, j).is_zero(), "{name}: T[{i},{j}] = {} below the subdiagonal", t.get(i, j));
+        for j in 0..i.saturating_sub(1) {
+            if !t.get(i, j).is_zero() {
+                return Err(format!("{name}: T[{i},{j}] = {} below the subdiagonal", t.get(i, j)));
             }
         }
     }
     for i in 1..n.saturating_sub(1) {
-        assert!(
-            t.get(i, i - 1).is_zero() || t.get(i + 1, i).is_zero(),
-            "{name}: consecutive nonzero subdiagonal entries at rows {i}, {}",
-            i + 1
-        );
+        if !t.get(i, i - 1).is_zero() && !t.get(i + 1, i).is_zero() {
+            return Err(format!("{name}: consecutive nonzero subdiagonal entries at rows {i}, {}", i + 1));
+        }
+    }
+    Ok(())
+}
+
+/// Eigenvalues `(re, im)` of the 2×2 block `[a b; c d]`, from its
+/// discriminant `(a - d)² + 4bc`: complex for a negative one, a double or
+/// nearly double real pair for one within the reading's own rounding, and an
+/// error for one clearly above zero (real eigenvalues the decomposition should
+/// have split off). `schur_decompose` splits a block whose discriminant, formed
+/// at the compute tier from the stored entries, is non-negative.
+///
+/// On the narrow profiles the discriminant is formed exactly on the raws
+/// (units of ulp², so that a block the decomposition left whole reads at most
+/// 2); on the wide ones at storage precision (two rounded products, at most 3
+/// ulps), where the corpus' entries are far from the range limit.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+fn block_eigenvalues(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint) -> Result<[(FixedPoint, FixedPoint); 2], String> {
+    let (a, b, c, d) = (a.raw() as i128, b.raw() as i128, c.raw() as i128, d.raw() as i128);
+    let gap_squared = (a - d).checked_mul(a - d).expect("2x2 block beyond the exact reading");
+    let four_bc = b.checked_mul(c).and_then(|bc| bc.checked_mul(4)).expect("2x2 block beyond the exact reading");
+    let disc = gap_squared.checked_add(four_bc).expect("2x2 block beyond the exact reading");
+    let re = FixedPoint::from_raw(((a + d) / 2) as _);
+    if disc < 0 {
+        let im = FixedPoint::from_raw((isqrt(disc.unsigned_abs()) / 2) as _);
+        Ok([(re, -im), (re, im)])
+    } else if disc <= 2 {
+        let half_gap = FixedPoint::from_raw((isqrt(disc as u128) / 2) as _);
+        Ok([(re - half_gap, FixedPoint::ZERO), (re + half_gap, FixedPoint::ZERO)])
+    } else {
+        Err(format!("real eigenvalues (discriminant {disc} ulp²)"))
     }
 }
 
-/// Eigenvalues read from a real Schur form, sorted by (re, im).
-fn schur_spectrum(name: &str, t: &FixedMatrix) -> Vec<(FixedPoint, FixedPoint)> {
+#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+fn block_eigenvalues(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint) -> Result<[(FixedPoint, FixedPoint); 2], String> {
+    let (two, four) = (FixedPoint::from_int(2), FixedPoint::from_int(4));
+    let gap = a - d;
+    let disc = gap * gap + four * (b * c);
+    let re = (a + d) / two;
+    if disc.is_negative() {
+        let im = (-disc).sqrt() / two;
+        Ok([(re, -im), (re, im)])
+    } else if ulps(disc) <= 4 {
+        let half_gap = disc.sqrt() / two;
+        Ok([(re - half_gap, FixedPoint::ZERO), (re + half_gap, FixedPoint::ZERO)])
+    } else {
+        Err(format!("real eigenvalues (discriminant {disc})"))
+    }
+}
+
+/// Floor of the square root.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+fn isqrt(n: u128) -> u128 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = 1u128 << ((128 - n.leading_zeros() + 1) / 2);
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x {
+            return x;
+        }
+        x = y;
+    }
+}
+
+/// Eigenvalues `(re, im)` read from a real Schur form.
+fn schur_spectrum(name: &str, t: &FixedMatrix) -> Result<Vec<(FixedPoint, FixedPoint)>, String> {
     let n = t.rows();
-    let half = FixedPoint::one() / FixedPoint::from_int(2);
     let mut out = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
         if i + 1 < n && !t.get(i + 1, i).is_zero() {
-            let (a, b) = (t.get(i, i), t.get(i, i + 1));
-            let (c, d) = (t.get(i + 1, i), t.get(i + 1, i + 1));
-            let re = (a + d) * half;
-            let p = (a - d) * half;
-            let disc = p * p + b * c;
-            assert!(disc.is_negative(), "{name}: 2x2 block at {i} has real eigenvalues (discriminant {disc})");
-            let im = (-disc).sqrt();
-            out.push((re, -im));
-            out.push((re, im));
+            let pair = block_eigenvalues(t.get(i, i), t.get(i, i + 1), t.get(i + 1, i), t.get(i + 1, i + 1))
+                .map_err(|e| format!("{name}: 2x2 block at {i} has {e}"))?;
+            out.extend(pair);
             i += 2;
         } else {
             out.push((t.get(i, i), FixedPoint::ZERO));
             i += 1;
         }
     }
-    out.sort();
-    out
+    Ok(out)
 }
 
-fn measure_schur(case: &Case, refs: &[(&str, &str)]) -> Measured {
+/// Largest error of the computed eigenvalues against the references, each
+/// reference matched to one computed value: pairs are taken in increasing
+/// distance, so near-equal real parts cannot shuffle the matching the way a
+/// sort order would.
+fn matched_spectrum_error(values: &[(FixedPoint, FixedPoint)], refs: &[(FixedPoint, FixedPoint)]) -> i128 {
+    let mut pairs: Vec<(i128, usize, usize)> = Vec::with_capacity(values.len() * refs.len());
+    for (i, (re, im)) in values.iter().enumerate() {
+        for (j, (ref_re, ref_im)) in refs.iter().enumerate() {
+            pairs.push((ulps(*re - *ref_re).max(ulps(*im - *ref_im)), i, j));
+        }
+    }
+    pairs.sort();
+    let (mut value_used, mut ref_used) = (vec![false; values.len()], vec![false; refs.len()]);
+    let mut worst = 0;
+    for (distance, i, j) in pairs {
+        if !value_used[i] && !ref_used[j] {
+            value_used[i] = true;
+            ref_used[j] = true;
+            worst = worst.max(distance);
+        }
+    }
+    worst
+}
+
+fn measure_schur(case: &Case, refs: &[(&str, &str)]) -> Result<Measured, String> {
     let a = build(case);
     let n = a.rows();
-    let schur = schur_decompose(&a).unwrap_or_else(|e| panic!("{}: schur_decompose returned {e:?}", case.name));
-    assert_real_schur_form(case.name, &schur.t);
-    let values = schur_spectrum(case.name, &schur.t);
-    let spectrum = values
-        .iter()
-        .zip(refs)
-        .map(|((re, im), (ref_re, ref_im))| ulps(*re - reference(ref_re)).max(ulps(*im - reference(ref_im))))
-        .max()
-        .unwrap_or(0);
+    let schur = schur_decompose(&a).map_err(|e| format!("{}: schur_decompose returned {e:?}", case.name))?;
+    real_schur_structure(case.name, &schur.t)?;
+    let values = schur_spectrum(case.name, &schur.t)?;
+    let spectrum = if refs.is_empty() {
+        0
+    } else if refs.len() != n {
+        return Err(format!("{}: {} eigenvalue references for n = {n}", case.name, refs.len()));
+    } else {
+        let refs: Vec<(FixedPoint, FixedPoint)> = refs.iter().map(|(re, im)| (reference(re), reference(im))).collect();
+        matched_spectrum_error(&values, &refs)
+    };
     let rebuilt = &(&schur.q * &schur.t) * &schur.q.transpose();
     let orth = max_abs_diff(&(&schur.q.transpose() * &schur.q), &FixedMatrix::identity(n));
-    Measured {
+    Ok(Measured {
         case: case.name,
+        scale: scale_of(case),
         spectrum,
         reconstruction: ulps(max_abs_diff(&rebuilt, &a)),
         orthogonality: ulps(orth),
-    }
+    })
 }
 
 // ============================================================================
@@ -236,57 +329,57 @@ struct ProfileBounds {
 // symmetric problems stay at a few ulp. realtime covers GMATH_FRAC_BITS 16
 // and 10 (the configuration the SVD failure was reported on).
 
-// Measured, Q16.16 / Q22.10: SVD 18/14 13 ulp, 14035/4261, 7/9; EIGEN 212/5,
+// Measured, Q16.16 / Q22.10: SVD 17/10, 14035/4694, 7/8; EIGEN 212/5,
 // 41673/3046, 5/5; SCHUR 888/288, 169/108, 5/17; large entries 1/777;
-// consumer 0.318/21.650 per mille.
+// consumer 0.343/26.143 per mille.
 #[cfg(table_format = "q16_16")]
 const BOUNDS: ProfileBounds = ProfileBounds {
-    svd: Bounds { spectrum: 36, reconstruction: 28_070, orthogonality: 18 },
+    svd: Bounds { spectrum: 34, reconstruction: 28_070, orthogonality: 16 },
     eigen: Bounds { spectrum: 424, reconstruction: 83_346, orthogonality: 10 },
     schur: Bounds { spectrum: 1_776, reconstruction: 338, orthogonality: 34 },
     large_entries: 1_554,
-    consumer_per_mille: Some(44),
+    consumer_per_mille: Some(53),
 };
 
-// Measured: SVD 5, 784821, 7; EIGEN 4, 382866, 5; SCHUR 105716, 5689, 6;
-// large entries 0; consumer 0.0033 per mille.
+// Measured: SVD 3, 38131, 7; EIGEN 4, 382866, 5; SCHUR 105716, 5689, 6;
+// large entries 0; consumer 0.0000056 per mille.
 #[cfg(table_format = "q32_32")]
 const BOUNDS: ProfileBounds = ProfileBounds {
-    svd: Bounds { spectrum: 10, reconstruction: 1_569_642, orthogonality: 14 },
+    svd: Bounds { spectrum: 6, reconstruction: 76_262, orthogonality: 14 },
     eigen: Bounds { spectrum: 8, reconstruction: 765_732, orthogonality: 10 },
     schur: Bounds { spectrum: 211_432, reconstruction: 11_378, orthogonality: 12 },
     large_entries: 4,
     consumer_per_mille: Some(1),
 };
 
-// Measured: SVD 9, 120899440, 17; EIGEN 4, 53730421, 6; SCHUR 19728208,
+// Measured: SVD 3, 31748562, 11; EIGEN 4, 53730421, 6; SCHUR 19728208,
 // 13598728, 6; large entries 0.
 #[cfg(table_format = "q64_64")]
 const BOUNDS: ProfileBounds = ProfileBounds {
-    svd: Bounds { spectrum: 18, reconstruction: 241_798_880, orthogonality: 34 },
+    svd: Bounds { spectrum: 6, reconstruction: 63_497_124, orthogonality: 22 },
     eigen: Bounds { spectrum: 8, reconstruction: 107_460_842, orthogonality: 12 },
     schur: Bounds { spectrum: 39_456_416, reconstruction: 27_197_456, orthogonality: 12 },
     large_entries: 4,
     consumer_per_mille: Some(1),
 };
 
-// Measured: SVD 4, 53635673698058, 13; EIGEN 4, 14812482421293, 8; SCHUR
+// Measured: SVD 4, 53635673698500, 10; EIGEN 4, 14812482421293, 8; SCHUR
 // 2051743236, 2051151661, 6; large entries 1.
 #[cfg(table_format = "q128_128")]
 const BOUNDS: ProfileBounds = ProfileBounds {
-    svd: Bounds { spectrum: 8, reconstruction: 107_271_347_396_116, orthogonality: 26 },
+    svd: Bounds { spectrum: 8, reconstruction: 107_271_347_397_000, orthogonality: 20 },
     eigen: Bounds { spectrum: 8, reconstruction: 29_624_964_842_586, orthogonality: 16 },
     schur: Bounds { spectrum: 4_103_486_472, reconstruction: 4_102_303_322, orthogonality: 12 },
     large_entries: 4,
     consumer_per_mille: Some(1),
 };
 
-// Measured: SVD 5, 310000759421178177745326185, 9; EIGEN 5,
+// Measured: SVD 3, 36744658944906152699548111, 12; EIGEN 5,
 // 134357540171219206938798178, 7; SCHUR 4066454156856757657,
 // 30469357409272137978, 9; large entries 1.
 #[cfg(table_format = "q256_256")]
 const BOUNDS: ProfileBounds = ProfileBounds {
-    svd: Bounds { spectrum: 10, reconstruction: 620_001_518_842_356_355_490_652_370, orthogonality: 18 },
+    svd: Bounds { spectrum: 6, reconstruction: 73_489_317_889_812_305_399_096_222, orthogonality: 24 },
     eigen: Bounds { spectrum: 10, reconstruction: 268_715_080_342_438_413_877_596_356, orthogonality: 14 },
     schur: Bounds {
         spectrum: 8_132_908_313_713_515_314,
@@ -302,6 +395,9 @@ fn check(kind: &str, m: &Measured, b: &Bounds) {
         "{kind:5} {:32} spectrum {:>12} ulp  reconstruction {:>12} ulp  orthogonality {:>8} ulp",
         m.case, m.spectrum, m.reconstruction, m.orthogonality
     );
+    if calibrating() {
+        return;
+    }
     assert!(m.spectrum <= b.spectrum, "{kind} {}: spectrum error {} ulp > {}", m.case, m.spectrum, b.spectrum);
     assert!(
         m.reconstruction <= b.reconstruction,
@@ -322,21 +418,21 @@ fn check(kind: &str, m: &Measured, b: &Bounds) {
 #[test]
 fn svd_converges_to_the_references_on_every_case() {
     for (case, refs) in data::SVD {
-        check("SVD", &measure_svd(case, refs), &BOUNDS.svd);
+        check("SVD", &measure_svd(case, refs).unwrap_or_else(|e| panic!("{e}")), &BOUNDS.svd);
     }
 }
 
 #[test]
 fn eigen_symmetric_converges_to_the_references_on_every_case() {
     for (case, refs) in data::EIGEN {
-        check("EIGEN", &measure_eigen(case, refs), &BOUNDS.eigen);
+        check("EIGEN", &measure_eigen(case, refs).unwrap_or_else(|e| panic!("{e}")), &BOUNDS.eigen);
     }
 }
 
 #[test]
 fn schur_is_a_real_schur_form_with_the_reference_spectrum_on_every_case() {
     for (case, refs) in data::SCHUR {
-        check("SCHUR", &measure_schur(case, refs), &BOUNDS.schur);
+        check("SCHUR", &measure_schur(case, refs).unwrap_or_else(|e| panic!("{e}")), &BOUNDS.schur);
     }
 }
 
@@ -366,6 +462,9 @@ fn consumer_matvec_through_the_svd() {
         worst_per_mille = worst_per_mille.max((y[i] - direct[i]).abs() * thousand / direct[i].abs());
     }
     println!("consumer matvec: worst relative error {worst_per_mille} per mille");
+    if calibrating() {
+        return;
+    }
     if let Some(bound) = BOUNDS.consumer_per_mille {
         assert!(
             worst_per_mille <= FixedPoint::from_int(bound),
@@ -393,12 +492,15 @@ fn large_entries_decompose_without_wrapping() {
     let svd_err = ulps(svd.sigma[0] - two_x).max(ulps(svd.sigma[1] - x)).max(ulps(svd.sigma[2] - x));
 
     let schur = schur_decompose(&a).expect("schur_decompose on large entries");
-    assert_real_schur_form("large_entries", &schur.t);
+    real_schur_structure("large_entries", &schur.t).unwrap_or_else(|e| panic!("{e}"));
     let mut diag: Vec<FixedPoint> = (0..3).map(|i| schur.t.get(i, i)).collect();
     diag.sort();
     let schur_err = ulps(diag[0] + x).max(ulps(diag[1] + x)).max(ulps(diag[2] - two_x));
 
     println!("large entries x = {x}: eigen {eig_err} ulp, svd {svd_err} ulp, schur {schur_err} ulp");
+    if calibrating() {
+        return;
+    }
     for (kind, err) in [("eigen", eig_err), ("svd", svd_err), ("schur", schur_err)] {
         assert!(err <= BOUNDS.large_entries, "{kind} on large entries: {err} ulp > {}", BOUNDS.large_entries);
     }
@@ -415,4 +517,184 @@ fn storage_overflow_is_an_error() {
     // eigenvalue 3h of the 4x4 h (J - I) is 1.5 times the storage maximum
     let pattern = FixedMatrix::from_fn(4, 4, |i, j| if i == j { FixedPoint::ZERO } else { h });
     assert_eq!(eigen_symmetric(&pattern).unwrap_err(), OverflowDetected::TierOverflow);
+}
+
+// ============================================================================
+// Randomized corpus
+// ============================================================================
+//
+// A seeded draw from the same failure classes (`tests/data/decomposition_random_refs.rs`,
+// `scripts/generate_decomposition_refs.py --random`): full and exactly or nearly
+// rank-deficient matrices, interior zero diagonals, rectangular, scaled and
+// dyadic entries, symmetric Gram, repeated and large-pattern spectra, signed
+// permutations, hidden complex-pair blocks and companion matrices, sizes 2 to 12.
+// Every case must decompose. CI runs the committed seed on every push and a fresh
+// seed on a schedule. Non-normal Schur cases with a repeated eigenvalue carry no
+// spectrum references (they can be defective); their structure, reconstruction
+// and orthogonality are still checked.
+//
+// `DECOMP_CALIBRATE=1` prints the measurements of both gates without asserting
+// the bounds: the bounds below were set from calibration corpora drawn from
+// other seeds.
+
+#[allow(dead_code)]
+mod random_data {
+    include!("data/decomposition_random_refs.rs");
+}
+
+/// Bounds of the randomized corpus. Spectrum and reconstruction errors are in
+/// ulps per unit of the case's scale (its largest entry, at least one): the
+/// relative deflation bounds make both grow with the entries, and the corpus
+/// mixes entries of 1/64 with entries of 600. Orthogonality is in ulps.
+struct CorpusBounds {
+    svd: Bounds,
+    eigen: Bounds,
+    schur: Bounds,
+}
+
+// Bounds are four times the largest value over calibration corpora drawn from
+// seeds 910001 to 910008 (512 cases per decomposition each, as many seeds as
+// noted per profile; realtime at both GMATH_FRAC_BITS 16 and 10), at least 8. Spectrum and reconstruction are per
+// unit of scale. Across seeds, a single 512-case corpus reached at most 2.5
+// times the largest value of all the others, except where a case deflates at
+// the looser sqrt(quantum) bound (Schur on embedded and wider, entries of k/64:
+// 7.2 times), so those two Schur bounds carry sixteen times instead.
+
+// Measured (8 seeds x 2 splits): SVD 15, 137, 14; EIGEN 8, 245, 12;
+// SCHUR 552, 82, 81.
+#[cfg(table_format = "q16_16")]
+const RANDOM_BOUNDS: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 60, reconstruction: 548, orthogonality: 56 },
+    eigen: Bounds { spectrum: 32, reconstruction: 980, orthogonality: 48 },
+    schur: Bounds { spectrum: 2_208, reconstruction: 328, orthogonality: 324 },
+};
+
+// Measured (8 seeds): SVD 4, 4017, 12; EIGEN 8, 5837, 16; SCHUR 8085, 3396, 14.
+#[cfg(table_format = "q32_32")]
+const RANDOM_BOUNDS: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 16, reconstruction: 16_068, orthogonality: 48 },
+    eigen: Bounds { spectrum: 32, reconstruction: 23_348, orthogonality: 64 },
+    schur: Bounds { spectrum: 32_340, reconstruction: 13_584, orthogonality: 56 },
+};
+
+// Measured (4 seeds): SVD 4, 4844403, 14; EIGEN 8, 10477994, 14;
+// SCHUR 7598536, 28140422, 17.
+#[cfg(table_format = "q64_64")]
+const RANDOM_BOUNDS: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 16, reconstruction: 19_377_612, orthogonality: 56 },
+    eigen: Bounds { spectrum: 32, reconstruction: 41_911_976, orthogonality: 56 },
+    schur: Bounds { spectrum: 121_576_576, reconstruction: 450_246_752, orthogonality: 68 },
+};
+
+// Measured (3 seeds; 2 for EIGEN): SVD 3, 7351100874557, 13; EIGEN 9,
+// 11606855531448, 13; SCHUR 12609614450267, 5249142221058, 16.
+#[cfg(table_format = "q128_128")]
+const RANDOM_BOUNDS: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 12, reconstruction: 29_404_403_498_228, orthogonality: 52 },
+    eigen: Bounds { spectrum: 36, reconstruction: 46_427_422_125_792, orthogonality: 52 },
+    schur: Bounds { spectrum: 201_753_831_204_272, reconstruction: 83_986_275_536_928, orthogonality: 64 },
+};
+
+// Measured (4 seeds; 3 for EIGEN): SVD 4, 65264279754820543537335586, 13;
+// EIGEN 9, 79553277197671885282619982, 17; SCHUR 97775698778712928235678976,
+// 67547999648902949788246757, 21.
+#[cfg(table_format = "q256_256")]
+const RANDOM_BOUNDS: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 16, reconstruction: 261_057_119_019_282_174_149_342_344, orthogonality: 52 },
+    eigen: Bounds { spectrum: 36, reconstruction: 318_213_108_790_687_541_130_479_928, orthogonality: 68 },
+    schur: Bounds {
+        spectrum: 1_564_411_180_459_406_851_770_863_616,
+        reconstruction: 1_080_767_994_382_447_196_611_948_112,
+        orthogonality: 84,
+    },
+};
+
+fn calibrating() -> bool {
+    std::env::var_os("DECOMP_CALIBRATE").is_some()
+}
+
+/// `x / scale`, rounded up.
+fn per_unit(x: i128, scale: i128) -> i128 {
+    if x == i128::MAX { x } else { (x + scale - 1) / scale }
+}
+
+/// Measure every case of one corpus, print the failures and the largest errors
+/// per class and overall, then assert that every case decomposed within the
+/// bounds (unless calibrating, which also prints every case). All cases are
+/// measured before anything is asserted, so one run reports every failing case.
+fn check_corpus<R>(
+    kind: &str, cases: &[(Case, R)], bounds: &Bounds, measure: impl Fn(&Case, &R) -> Result<Measured, String>,
+) {
+    use std::collections::BTreeMap;
+    let seed = random_data::SEED;
+    let reproduce = format!(
+        "python3 scripts/generate_decomposition_refs.py --random --seed {seed} --cases {}",
+        cases.len()
+    );
+    println!("{kind} corpus: seed {seed}, {} cases; spectrum and reconstruction in ulp per unit of scale", cases.len());
+    let mut failures: Vec<String> = Vec::new();
+    let mut by_class: BTreeMap<&str, [i128; 3]> = BTreeMap::new();
+    let mut overall = [0i128; 3];
+    let mut errors = 0usize;
+    for (case, refs) in cases {
+        let m = match measure(case, refs) {
+            Ok(m) => m,
+            Err(error) => {
+                println!("{kind:5} ERROR {error}");
+                failures.push(error);
+                errors += 1;
+                continue;
+            }
+        };
+        let (spectrum, reconstruction) = (per_unit(m.spectrum, m.scale), per_unit(m.reconstruction, m.scale));
+        if calibrating() {
+            println!(
+                "{kind:5} CASE {} {}x{} scale {} spectrum {} reconstruction {} orthogonality {}",
+                m.case, case.rows, case.cols, m.scale, m.spectrum, m.reconstruction, m.orthogonality
+            );
+        }
+        let class = m.case.rsplit_once('_').map_or(m.case, |(class, _)| class);
+        let worst = by_class.entry(class).or_insert([0; 3]);
+        for (slot, value) in [spectrum, reconstruction, m.orthogonality].into_iter().enumerate() {
+            worst[slot] = worst[slot].max(value);
+            overall[slot] = overall[slot].max(value);
+        }
+        if spectrum > bounds.spectrum || reconstruction > bounds.reconstruction || m.orthogonality > bounds.orthogonality {
+            failures.push(format!(
+                "{} (scale {}): spectrum {} / reconstruction {} per unit, orthogonality {} ulp exceed {} / {} / {}",
+                m.case, m.scale, spectrum, reconstruction, m.orthogonality,
+                bounds.spectrum, bounds.reconstruction, bounds.orthogonality
+            ));
+        }
+    }
+    for (class, worst) in &by_class {
+        println!(
+            "{kind:5} class {class:26} spectrum {:>12}  reconstruction {:>12}  orthogonality {:>8} ulp",
+            worst[0], worst[1], worst[2]
+        );
+    }
+    println!(
+        "{kind:5} OVERALL seed {seed} ({} cases, {errors} errors): spectrum {}, reconstruction {} per unit, orthogonality {} ulp",
+        cases.len(),
+        overall[0], overall[1], overall[2]
+    );
+    if calibrating() {
+        return;
+    }
+    assert!(failures.is_empty(), "{kind}: {} failing cases. Reproduce the corpus: {reproduce}\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn random_corpus_svd() {
+    check_corpus("SVD", random_data::SVD, &RANDOM_BOUNDS.svd, |case, refs| measure_svd(case, refs));
+}
+
+#[test]
+fn random_corpus_eigen_symmetric() {
+    check_corpus("EIGEN", random_data::EIGEN, &RANDOM_BOUNDS.eigen, |case, refs| measure_eigen(case, refs));
+}
+
+#[test]
+fn random_corpus_schur() {
+    check_corpus("SCHUR", random_data::SCHUR, &RANDOM_BOUNDS.schur, |case, refs| measure_schur(case, refs));
 }

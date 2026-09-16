@@ -64,7 +64,11 @@ See **[PUBLIC_API.md → Linear algebra](../PUBLIC_API.md#linear-algebra)** and
   reconstruction error follows the relative bound, and a Schur eigenvalue's error
   is that bound times the eigenvalue's condition number. `schur_decompose`
   returns a real Schur form: exact zeros below the subdiagonal, and 2×2 blocks
-  only for complex pairs. Gate: `tests/decomposition_convergence_validation.rs`.
+  only for complex pairs. Gate: `tests/decomposition_convergence_validation.rs`,
+  37 fixed cases plus a seeded random corpus from the same failure classes
+  (rank-deficient, interior zero diagonals, rectangular, scaled and small
+  entries, repeated spectra, signed permutations, hidden complex pairs,
+  companion matrices); CI draws a fresh seed weekly.
 
 Determinism guarantees are in **[CONTRACT.md](../CONTRACT.md)**.
 
