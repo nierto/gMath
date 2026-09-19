@@ -45,9 +45,13 @@ and reproducible scientific computation.
 
 The mechanism is a hard constraint: no `f32`/`f64` appears anywhere in the
 arithmetic, validation, or comparison paths. Float conversions exist **only** as
-caller-convenience wrappers (`from_f64` / `to_f64`) and are never used for internal
-correctness. All rounding is integer arithmetic, so the result (including any
-error) is identical everywhere.
+caller-convenience wrappers (`from_f64` / `to_f64` and their f32 twins) and are
+never used for internal correctness. They are themselves integer operations on the
+IEEE bits: `to_f64` / `to_f32` are exact when the raw value fits the significand
+and round to nearest with ties to even otherwise; `from_f64` / `from_f32`
+truncate toward zero and reject NaN, infinity and out-of-range values (an error
+from the `try_` forms, a panic otherwise, never a wrapped value). All rounding is
+integer arithmetic, so the result (including any error) is identical everywhere.
 
 ## 3. Rounding contract
 

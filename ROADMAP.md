@@ -378,6 +378,25 @@ documented contract and never an error, but carrying H at the compute tier
 through the Francis phase, as the SVD now carries its bidiagonal, is the
 likely way to lift it (a hypothesis, not yet measured).
 
+### v0.6.3: Exact float boundary
+
+**Patch release 2026-09-19.** A downstream report (realtime at
+`GMATH_FRAC_BITS=10`) showed `to_f64` printing a truncated decimal string and
+parsing it: 1024 raw values mapped to 1000 f64 values, and every
+`from_f64(to_f64(x))` round trip lost a step toward zero. Confirmed on every
+profile (the cut was worth up to 1.0 raw step at Q22.10, 6.6 at Q16.16, 4.3 on
+compact). `to_f64` / `to_f32` now assemble the IEEE bits from the raw integer:
+exact whenever the raw value fits the significand, nearest-even otherwise, f32
+subnormal, zero or infinite at the wide profiles' extremes; 16 to 99 times
+faster. Checking the report also found `from_f64` / `from_f32` wrapping
+out-of-range values silently on every profile; they now panic, and the new
+`try_from_f64` / `try_from_f32` return `TierOverflow` (NaN: `InvalidInput`).
+In-range `from_f64` / `from_f32` stay bit-identical to 0.6.2 (compared on
+200,000 inputs per profile), and `x.to_string().parse::<f64>()` reproduces the
+0.6.2 `to_f64` exactly for replays. Gate `tests/float_boundary_validation.rs`
+(exact-rational references, `scripts/generate_float_boundary_refs.py`), CI
+`float-boundary` on every profile plus Q22.10.
+
 ---
 
 ## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass

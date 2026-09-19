@@ -27,7 +27,10 @@ Code wins over docs.
 @DETERMINISM (core guarantee):
   fixed-profile + identical-input → bit-identical-output ∀ platform/arch
   mechanism: FLOAT_BAN, no f32/f64 in arithmetic|validation|comparison
-  exception: from_f64/to_f64 = caller-convenience ONLY, never internal
+  exception: from_f64/to_f64 (+ f32 twins) = caller-convenience ONLY, never internal
+  float-boundary: to_f64|to_f32 := IEEE bits assembled from raw (integer ops) → exact if raw fits significand, else nearest-even
+                  from_f64|from_f32 := truncate toward zero; NaN → InvalidInput, inf|out-of-range → TierOverflow (try_), panic (infallible), never wrap
+                  gate: tests/float_boundary_validation.rs
   use-cases: consensus, financial-audit, reproducible-science
 
 @ROUNDING (deterministic, integer-only; UNIFIED 0.5.0; one rule per domain,

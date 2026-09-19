@@ -221,17 +221,6 @@ fn direct_atan(x: ComputeStorage) -> ComputeStorage {
     { crate::fixed_point::domains::binary_fixed::transcendental::atan_binary_i1024(x) }
 }
 
-#[cfg(table_format = "q16_16")]
-const MAX_DECIMAL_DIGITS: usize = crate::fixed_point::frac_config::MAX_DECIMAL_DIGITS;
-#[cfg(table_format = "q32_32")]
-const MAX_DECIMAL_DIGITS: usize = 9;
-#[cfg(table_format = "q64_64")]
-const MAX_DECIMAL_DIGITS: usize = 19;
-#[cfg(table_format = "q128_128")]
-const MAX_DECIMAL_DIGITS: usize = 38;
-#[cfg(table_format = "q256_256")]
-const MAX_DECIMAL_DIGITS: usize = 77;
-
 // ============================================================================
 // FixedPoint struct
 // ============================================================================
@@ -376,78 +365,114 @@ impl FixedPoint {
     // f32/f64 conversions (user-convenience boundary only)
     // ========================================================================
 
-    /// Create from an f32 value.
+    /// Create from an f32 value, truncated toward zero to the profile's raw step.
     ///
-    /// Uses IEEE 754 bit extraction for exact conversion, no float arithmetic
-    /// is performed internally. Panics on NaN or infinity.
+    /// Reads the IEEE 754 bits; no float arithmetic is performed. Panics on NaN,
+    /// infinity, or a value outside the profile's range; see
+    /// [`try_from_f32`](Self::try_from_f32) for the fallible form.
     pub fn from_f32(v: f32) -> Self {
-        let bits = v.to_bits();
-        // Handle +0.0 and -0.0
-        if bits & 0x7FFF_FFFF == 0 {
-            return Self::ZERO;
-        }
-        let sign = (bits >> 31) != 0;
-        let raw_exp = ((bits >> 23) & 0xFF) as i32;
-        let raw_mantissa = bits & 0x7F_FFFF;
-
-        if raw_exp == 0xFF {
-            panic!("FixedPoint::from_f32: infinity or NaN");
-        }
-
-        let (mantissa, exp_offset) = if raw_exp == 0 {
-            // Subnormal: no implicit 1, exponent = -126
-            (raw_mantissa as i128, -126 - 23)
-        } else {
-            // Normal: implicit 1 bit
-            ((raw_mantissa | 0x80_0000) as i128, raw_exp - 127 - 23)
-        };
-
-        let shift = exp_offset + FRAC_BITS;
-        let raw = Self::shift_mantissa_to_raw(mantissa, shift);
-        if sign { -Self { raw } } else { Self { raw } }
+        Self::try_from_f32(v).unwrap_or_else(|e| panic!("FixedPoint::from_f32: {}", Self::float_input_error(e)))
     }
 
-    /// Create from an f64 value.
+    /// Create from an f32 value like `from_f32`, returning an error instead of panicking.
     ///
-    /// Uses IEEE 754 bit extraction for exact conversion, no float arithmetic
-    /// is performed internally. Panics on NaN or infinity.
-    pub fn from_f64(v: f64) -> Self {
+    /// Truncates toward zero to the profile's raw step. `Err(InvalidInput)` for
+    /// NaN, `Err(TierOverflow)` for infinity or a value outside the profile's
+    /// range.
+    pub fn try_from_f32(v: f32) -> Result<Self, OverflowDetected> {
         let bits = v.to_bits();
-        // Handle +0.0 and -0.0
-        if bits & 0x7FFF_FFFF_FFFF_FFFF == 0 {
-            return Self::ZERO;
+        let negative = (bits >> 31) != 0;
+        let raw_exp = ((bits >> 23) & 0xFF) as i32;
+        let fraction = (bits & 0x7F_FFFF) as u64;
+        if raw_exp == 0xFF {
+            return Err(if fraction == 0 { OverflowDetected::TierOverflow } else { OverflowDetected::InvalidInput });
         }
-        let sign = (bits >> 63) != 0;
-        let raw_exp = ((bits >> 52) & 0x7FF) as i32;
-        let raw_mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
-
-        if raw_exp == 0x7FF {
-            panic!("FixedPoint::from_f64: infinity or NaN");
-        }
-
         let (mantissa, exp_offset) = if raw_exp == 0 {
-            (raw_mantissa as i128, -1022 - 52)
+            // Subnormal (or zero): no implicit 1, exponent -126
+            (fraction, -126 - 23)
         } else {
-            ((raw_mantissa | 0x0010_0000_0000_0000) as i128, raw_exp - 1023 - 52)
+            (fraction | 0x80_0000, raw_exp - 127 - 23)
         };
-
-        let shift = exp_offset + FRAC_BITS;
-        let raw = Self::shift_mantissa_to_raw(mantissa, shift);
-        if sign { -Self { raw } } else { Self { raw } }
+        Ok(Self { raw: Self::truncated_raw(mantissa, exp_offset + FRAC_BITS, negative)? })
     }
 
-    /// Convert to f32 (lossy: for display/interop only).
+    /// Create from an f64 value, truncated toward zero to the profile's raw step.
+    ///
+    /// Reads the IEEE 754 bits; no float arithmetic is performed. Panics on NaN,
+    /// infinity, or a value outside the profile's range; see
+    /// [`try_from_f64`](Self::try_from_f64) for the fallible form.
+    pub fn from_f64(v: f64) -> Self {
+        Self::try_from_f64(v).unwrap_or_else(|e| panic!("FixedPoint::from_f64: {}", Self::float_input_error(e)))
+    }
+
+    /// Create from an f64 value like `from_f64`, returning an error instead of panicking.
+    ///
+    /// Truncates toward zero to the profile's raw step. `Err(InvalidInput)` for
+    /// NaN, `Err(TierOverflow)` for infinity or a value outside the profile's
+    /// range.
+    pub fn try_from_f64(v: f64) -> Result<Self, OverflowDetected> {
+        let bits = v.to_bits();
+        let negative = (bits >> 63) != 0;
+        let raw_exp = ((bits >> 52) & 0x7FF) as i32;
+        let fraction = bits & 0x000F_FFFF_FFFF_FFFF;
+        if raw_exp == 0x7FF {
+            return Err(if fraction == 0 { OverflowDetected::TierOverflow } else { OverflowDetected::InvalidInput });
+        }
+        let (mantissa, exp_offset) = if raw_exp == 0 {
+            // Subnormal (or zero): no implicit 1, exponent -1022
+            (fraction, -1022 - 52)
+        } else {
+            (fraction | 0x0010_0000_0000_0000, raw_exp - 1023 - 52)
+        };
+        Ok(Self { raw: Self::truncated_raw(mantissa, exp_offset + FRAC_BITS, negative)? })
+    }
+
+    fn float_input_error(e: OverflowDetected) -> &'static str {
+        match e {
+            OverflowDetected::InvalidInput => "NaN",
+            _ => "infinity or value outside the profile's range",
+        }
+    }
+
+    /// Convert to f32: exact when the raw value fits 24 bits, else nearest-even.
+    ///
+    /// Below f32's normal range the result is subnormal or zero, and beyond its
+    /// range (scientific profile only) it is infinite. The f32 is assembled from
+    /// the raw integer's bits; no float arithmetic is performed.
     pub fn to_f32(self) -> f32 {
-        let sv = self.to_stack_value();
-        let s = sv.to_decimal_string(10);
-        s.parse::<f32>().unwrap_or(0.0)
+        f32::from_bits(self.float_bits(23, 8) as u32)
     }
 
-    /// Convert to f64 (lossy: for display/interop only).
+    /// Convert to f64: exact when the raw value fits 53 bits, else nearest-even.
+    ///
+    /// Exact for every realtime value and for compact values below 2^21 in
+    /// magnitude, and exact conversions round trip:
+    /// `FixedPoint::from_f64(x.to_f64()) == x`. The f64 is assembled from the
+    /// raw integer's bits; no float arithmetic is performed.
+    ///
+    /// Before 0.6.3 this printed a truncated decimal string and parsed it;
+    /// `x.to_string().parse::<f64>()` reproduces that result.
     pub fn to_f64(self) -> f64 {
-        let sv = self.to_stack_value();
-        let s = sv.to_decimal_string(MAX_DECIMAL_DIGITS);
-        s.parse::<f64>().unwrap_or(0.0)
+        f64::from_bits(self.float_bits(52, 11))
+    }
+
+    /// IEEE 754 bits of this value in a format with `fraction_bits` stored
+    /// fraction bits and `exponent_bits` exponent bits.
+    fn float_bits(self, fraction_bits: u32, exponent_bits: u32) -> u64 {
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+        {
+            let magnitude = (self.raw as i128).unsigned_abs();
+            let words = [magnitude as u64, (magnitude >> 64) as u64];
+            ieee_bits(self.raw < 0, &words, FRAC_BITS, fraction_bits, exponent_bits)
+        }
+        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+        {
+            let negative = self.raw.is_negative();
+            // two's complement negation wraps at the minimum, whose words then
+            // read as the unsigned magnitude 2^(W-1)
+            let magnitude = if negative { -self.raw } else { self.raw };
+            ieee_bits(negative, &magnitude.words, FRAC_BITS, fraction_bits, exponent_bits)
+        }
     }
 
     /// Parse from a decimal string (e.g., "3.14159").
@@ -937,80 +962,146 @@ impl FixedPoint {
         Self::try_from_stack_value(result)
     }
 
-    /// Shift a non-negative mantissa into Q-format raw storage.
-    fn shift_mantissa_to_raw(mantissa: i128, shift: i32) -> BinaryStorage {
-        #[cfg(table_format = "q16_16")]
+    /// `mantissa x 2^shift` truncated toward zero, with the sign applied, as a
+    /// storage raw. `mantissa` has at most 53 significant bits. A magnitude
+    /// outside the storage range (above `2^(W-1) - 1`, or `2^(W-1)` for a
+    /// negative value) is a `TierOverflow`, never a wrap.
+    fn truncated_raw(mantissa: u64, shift: i32, negative: bool) -> Result<BinaryStorage, OverflowDetected> {
+        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
         {
-            if shift >= 32 {
-                panic!("FixedPoint: value too large for Q16.16");
-            } else if shift >= 0 {
-                // Shift wide, then narrow — mantissa has 53 significant bits
-                let wide = mantissa.checked_shl(shift as u32)
-                    .expect("FixedPoint: value too large for Q16.16");
-                wide as i32
+            #[cfg(table_format = "q16_16")]
+            const WIDTH: u32 = 32;
+            #[cfg(table_format = "q32_32")]
+            const WIDTH: u32 = 64;
+            #[cfg(table_format = "q64_64")]
+            const WIDTH: u32 = 128;
+            let magnitude: u128 = if shift >= 0 {
+                // a magnitude of more than 128 bits overflows every width here
+                if 64 - mantissa.leading_zeros() as i32 + shift > 128 {
+                    return Err(OverflowDetected::TierOverflow);
+                }
+                (mantissa as u128) << shift
             } else if shift > -128 {
-                // Right-shift on full i128 first to preserve precision, then narrow
-                (mantissa >> ((-shift) as u32)) as i32
+                (mantissa as u128) >> (-shift)
             } else {
-                0i32
+                0
+            };
+            let limit = 1u128 << (WIDTH - 1);
+            if magnitude > limit || (magnitude == limit && !negative) {
+                return Err(OverflowDetected::TierOverflow);
             }
+            let value = if negative { (magnitude as i128).wrapping_neg() } else { magnitude as i128 };
+            Ok(value as BinaryStorage)
         }
-        #[cfg(table_format = "q32_32")]
+        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
         {
-            if shift >= 64 {
-                panic!("FixedPoint: value too large for Q32.32");
-            } else if shift >= 0 {
-                // Shift wide, then narrow — mantissa has 53 significant bits
-                let wide = mantissa.checked_shl(shift as u32)
-                    .expect("FixedPoint: value too large for Q32.32");
-                wide as i64
-            } else if shift > -128 {
-                // Right-shift on full i128 first to preserve precision, then narrow
-                (mantissa >> ((-shift) as u32)) as i64
+            #[cfg(table_format = "q128_128")]
+            let (width, one, zero) = (256i32, I256::from_i128(1), I256::zero());
+            #[cfg(table_format = "q256_256")]
+            let (width, one, zero) = (512i32, I512::from_i128(1), I512::zero());
+            let magnitude = if shift < 0 {
+                if shift <= -64 { zero } else { from_u64(mantissa >> (-shift)) }
             } else {
-                0i64
-            }
-        }
-        #[cfg(table_format = "q64_64")]
-        {
-            if shift >= 128 {
-                panic!("FixedPoint: value too large for Q64.64");
-            } else if shift >= 0 {
-                mantissa.checked_shl(shift as u32)
-                    .expect("FixedPoint: value too large for Q64.64")
-            } else if shift > -128 {
-                mantissa >> ((-shift) as u32)
-            } else {
-                0i128
-            }
-        }
-        #[cfg(table_format = "q128_128")]
-        {
-            let m = I256::from_i128(mantissa);
-            if shift >= 256 {
-                panic!("FixedPoint: value too large for Q128.128");
-            } else if shift >= 0 {
-                m << (shift as usize)
-            } else if shift > -256 {
-                m >> ((-shift) as u32)
-            } else {
-                I256::zero()
-            }
-        }
-        #[cfg(table_format = "q256_256")]
-        {
-            let m = I512::from_i128(mantissa);
-            if shift >= 512 {
-                panic!("FixedPoint: value too large for Q256.256");
-            } else if shift >= 0 {
-                m << (shift as usize)
-            } else if shift > -512 {
-                m >> ((-shift) as usize)
-            } else {
-                I512::zero()
-            }
+                let length = 64 - mantissa.leading_zeros() as i32 + shift;
+                if length < width {
+                    from_u64(mantissa) << (shift as usize)
+                } else if length == width && negative && mantissa.is_power_of_two() {
+                    // exactly 2^(W-1): the storage minimum
+                    return Ok(one << ((width - 1) as usize));
+                } else {
+                    return Err(OverflowDetected::TierOverflow);
+                }
+            };
+            Ok(if negative { -magnitude } else { magnitude })
         }
     }
+}
+
+/// A `u64` widened to the storage type (wide profiles).
+#[cfg(table_format = "q128_128")]
+#[inline]
+fn from_u64(v: u64) -> I256 {
+    I256::from_i128(v as i128)
+}
+#[cfg(table_format = "q256_256")]
+#[inline]
+fn from_u64(v: u64) -> I512 {
+    I512::from_i128(v as i128)
+}
+
+/// IEEE 754 bits of `magnitude x 2^-frac_bits`, `magnitude` given as
+/// little-endian 64-bit words, in a binary format with `fraction_bits` stored
+/// fraction bits and `exponent_bits` exponent bits: rounded to
+/// `fraction_bits + 1` significant bits, nearest with ties to even; subnormal
+/// or zero below the normal range, infinite above it. Integer operations only.
+fn ieee_bits(negative: bool, magnitude: &[u64], frac_bits: i32, fraction_bits: u32, exponent_bits: u32) -> u64 {
+    let length = word_bit_length(magnitude);
+    if length == 0 {
+        return 0;
+    }
+    let sign = (negative as u64) << (fraction_bits + exponent_bits);
+    let bias = (1i32 << (exponent_bits - 1)) - 1;
+    let top = length as i32 - 1 - frac_bits; // exponent of the leading bit
+    // weight of the lowest bit kept: fraction_bits below the leading bit, but
+    // never below the subnormal quantum
+    let lowest = (top - fraction_bits as i32).max(1 - bias - fraction_bits as i32);
+    let shift = lowest + frac_bits; // bits of the magnitude below the kept ones
+    let mut significand = if shift <= 0 {
+        // everything is kept: the magnitude has at most fraction_bits + 1 bits
+        magnitude[0] << (-shift) as u32
+    } else {
+        let shift = shift as u32;
+        let kept = word_bits_from(magnitude, shift);
+        let round = word_bit(magnitude, shift - 1);
+        let sticky = word_any_below(magnitude, shift - 1);
+        kept + (round && (sticky || kept & 1 == 1)) as u64
+    };
+    let mut lowest = lowest;
+    if significand >> (fraction_bits + 1) != 0 {
+        // rounding carried into a new leading bit
+        significand >>= 1;
+        lowest += 1;
+    }
+    if significand == 0 {
+        return sign;
+    }
+    if significand >> fraction_bits == 0 {
+        return sign | significand; // subnormal: exponent field 0
+    }
+    let biased = lowest + fraction_bits as i32 + bias;
+    let infinite = (1i32 << exponent_bits) - 1;
+    if biased >= infinite {
+        return sign | ((infinite as u64) << fraction_bits);
+    }
+    sign | ((biased as u64) << fraction_bits) | (significand & ((1u64 << fraction_bits) - 1))
+}
+
+fn word_bit_length(words: &[u64]) -> u32 {
+    for i in (0..words.len()).rev() {
+        if words[i] != 0 {
+            return i as u32 * 64 + 64 - words[i].leading_zeros();
+        }
+    }
+    0
+}
+
+fn word_bit(words: &[u64], i: u32) -> bool {
+    words.get((i / 64) as usize).map_or(false, |w| (w >> (i % 64)) & 1 == 1)
+}
+
+/// Any bit below position `i` set.
+fn word_any_below(words: &[u64], i: u32) -> bool {
+    let (w, b) = ((i / 64) as usize, i % 64);
+    words.iter().take(w.min(words.len())).any(|&x| x != 0)
+        || (b > 0 && words.get(w).map_or(false, |&x| x & ((1u64 << b) - 1) != 0))
+}
+
+/// The magnitude shifted right by `i`, low 64 bits (callers keep at most 54).
+fn word_bits_from(words: &[u64], i: u32) -> u64 {
+    let (w, b) = ((i / 64) as usize, i % 64);
+    let low = words.get(w).map_or(0, |&x| x >> b);
+    let high = if b == 0 { 0 } else { words.get(w + 1).map_or(0, |&x| x << (64 - b)) };
+    low | high
 }
 
 // ============================================================================

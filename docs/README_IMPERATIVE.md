@@ -53,7 +53,9 @@ let root  = "2".parse::<DecimalFixed<9>>().unwrap().sqrt(); // native decimal tr
 - **[PUBLIC_API.md → FixedPoint](../PUBLIC_API.md#fixedpoint)**: `Copy` Q-format
   scalar: arithmetic, comparisons, `abs`, `from_str`/`from_int`/`from_raw`, all 18
   [transcendentals](README_TRANSCENDENTALS.md), `sincos`, `sinhcosh`, float
-  conversions for interop, and a fallible `try_*` variant per transcendental.
+  conversions for interop (`to_f64`/`to_f32`, `from_f64`/`from_f32` and their
+  fallible `try_from_f64`/`try_from_f32`), and a fallible `try_*` variant per
+  transcendental.
 - **[PUBLIC_API.md → FixedVector](../PUBLIC_API.md#fixedvector)**: `dot`, `length`,
   `length_fused`, `normalized`, `distance_to`, `cross`, `outer_product`, `map`,
   indexing, operators. Dot products accumulate at the compute tier.
@@ -75,6 +77,14 @@ Live signatures on [docs.rs](https://docs.rs/g_math).
 - A single imperative `.exp().sin()` materializes between the two calls; for chain
   persistence across transcendentals use the canonical layer
   (`gmath("x").exp().sin()`).
+- Float conversions are integer operations on the IEEE bits. `to_f64` is exact
+  whenever the raw value has at most 53 significant bits (every realtime value;
+  compact values below 2^21), so `from_f64(x.to_f64()) == x` there; wider values
+  round to nearest with ties to even. `to_f32` does the same with 24 bits,
+  subnormal or zero below f32's range and infinite above it. `from_f64` /
+  `from_f32` truncate toward zero; NaN, infinity and values outside the
+  profile's range are an error from `try_from_f64` / `try_from_f32` and a panic
+  from the infallible forms.
 - `DecimalFixed` computes natively in the decimal domain (no binary round-trip),
   so its results are correctly rounded *in decimal*; see
   [the precision guide](README_PRECISION.md).

@@ -58,10 +58,12 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `abs` | Absolute value. |
 | `is_negative` | Check if negative. |
 | `is_zero` | Check if zero. |
-| `from_f32` | Create from an f32 value. |
-| `from_f64` | Create from an f64 value. |
-| `to_f32` | Convert to f32 (lossy: for display/interop only). |
-| `to_f64` | Convert to f64 (lossy: for display/interop only). |
+| `from_f32` | Create from an f32 value, truncated toward zero to the profile's raw step. |
+| `try_from_f32` | Create from an f32 value like `from_f32`, returning an error instead of panicking. |
+| `from_f64` | Create from an f64 value, truncated toward zero to the profile's raw step. |
+| `try_from_f64` | Create from an f64 value like `from_f64`, returning an error instead of panicking. |
+| `to_f32` | Convert to f32: exact when the raw value fits 24 bits, else nearest-even. |
+| `to_f64` | Convert to f64: exact when the raw value fits 53 bits, else nearest-even. |
 | `from_str` | Parse from a decimal string (e.g., "3.14159"). |
 | `exp` | e^x |
 | `ln` | ln(x), x > 0 |

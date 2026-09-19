@@ -1,0 +1,50 @@
+# The f64/f32 boundary of FixedPoint on every deployment profile.
+#
+# to_f64 / to_f32 must be exact when the raw value fits the significand and
+# round to nearest with ties to even otherwise; from_f64 / from_f32 must
+# truncate toward zero and reject NaN, infinity and out-of-range values (errors
+# from try_from_*, panics otherwise, never a wrapped value). References in
+# tests/data/float_boundary_refs.rs come from exact rationals
+# (scripts/generate_float_boundary_refs.py). realtime also runs at
+# GMATH_FRAC_BITS=10.
+name: float-boundary
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Float boundary gate
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --no-fail-fast --test float_boundary_validation
+
+  realtime-q22-10:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Float boundary gate at Q22.10
+        env:
+          GMATH_PROFILE: realtime
+          GMATH_FRAC_BITS: "10"
+        run: cargo test --no-fail-fast --test float_boundary_validation

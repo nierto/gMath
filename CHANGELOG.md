@@ -5,6 +5,75 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-09-19
+
+### Upgrading
+
+A patch release: `FixedPoint`'s float conversions become exact wherever the
+format allows, and values outside the profile's range are refused instead of
+wrapped. Two functions are added; nothing is removed. Everyone on `^0.6`
+receives it on their next `cargo update`.
+
+**Do you need to act?**
+
+- **You never convert `FixedPoint` to or from `f64` / `f32`** → Nothing changes
+  for you.
+- **You call `to_f64` / `to_f32`** → Results move to the exact value (or the
+  nearest float). 0.6.2 was low in magnitude, always toward zero, by up to one
+  unit of the last decimal digit it printed: in raw steps up to 1.0 at
+  `GMATH_FRAC_BITS=10`, 6.6 at the default realtime split, 4.3 on compact and
+  1.8 on embedded; on embedded and wider this shows only for values small
+  enough for an f64 to resolve that digit. If you replay earlier runs bit for
+  bit, `x.to_string().parse::<f64>()` gives exactly what 0.6.2's `to_f64`
+  returned, and `format!("{:.10}", x).parse::<f32>()` what its `to_f32`
+  returned, on every profile.
+- **You call `from_f64` / `from_f32` with values inside your profile's range**
+  → Nothing changes: the results are bit-identical to 0.6.2 (still truncated
+  toward zero).
+- **You pass values outside the range, or NaN or infinity** → 0.6.2 returned a
+  wrapped, wrong value for out-of-range input (at `GMATH_FRAC_BITS=10`,
+  `from_f64(3e6)` gave -1194304 and `from_f64(4194304.0)` gave 0). Now
+  `from_f64` / `from_f32` panic, and the new `try_from_f64` / `try_from_f32`
+  return `Err(TierOverflow)` (`Err(InvalidInput)` for NaN).
+
+### Fixed
+
+- **`to_f64` / `to_f32` were lossy by construction.** They printed the value as
+  a decimal string with a capped digit count (realtime `floor(F log10 2)`: 3
+  digits at `GMATH_FRAC_BITS=10`, 4 at the default; compact 9, embedded 19,
+  balanced 38, scientific 77), cut the remaining digits, and parsed the string.
+  The cut was worth up to 1.0 raw step at `GMATH_FRAC_BITS=10`, 6.6 at the
+  default realtime split, 4.3 on compact and 1.8 on embedded, always toward
+  zero. At `GMATH_FRAC_BITS=10`, 1024 consecutive raw values gave 1000 distinct
+  f64 values, and `from_f64(x.to_f64())` came back one step lower in magnitude
+  for 1016 of every 1024; every further round trip lost one more step. The float
+  is now assembled from the raw integer's bits with integer operations: exact
+  whenever the raw value has at most 53 (f32: 24) significant bits, which is
+  every realtime value, and otherwise rounded to nearest with ties to even. For
+  f32 on the balanced and scientific profiles, values below f32's normal range
+  become subnormal or zero and (scientific only) values beyond it infinite. The
+  conversion is 16 to 99 times faster (151,936 conversions, release build:
+  realtime 17.3 ms to 0.51 ms, scientific 266 ms to 2.7 ms).
+- **`from_f64` / `from_f32` wrapped out-of-range values** on every profile. The
+  "value too large" panic only fired once the shift reached the full storage
+  width; below that the magnitude was narrowed by an unchecked cast or shift. A
+  magnitude outside the storage range is now `TierOverflow` (the minimum,
+  exactly `-2^(W-1)` raw, is still accepted). Compared with the published 0.6.2
+  on 200,000 random in-range inputs per profile, f64 and f32: identical.
+
+### Added
+
+- `FixedPoint::try_from_f64` and `FixedPoint::try_from_f32`.
+- `tests/float_boundary_validation.rs`: to-float conversions bit-identical to
+  references computed on exact rationals (round half to even, f64 cross-checked
+  against CPython's correctly rounded division; 351 to 1630 raws per profile,
+  including rounding ties, carries, the range ends and f32's subnormal and
+  overflow boundaries); from-float truncation and range errors on about 400 f64
+  and up to 400 f32 inputs per profile; exactness and round trips on about
+  200,000 raws; sign symmetry and monotonicity; NaN, infinity and panics.
+  References from `scripts/generate_float_boundary_refs.py`. CI workflow
+  `float-boundary` on all five profiles plus realtime at `GMATH_FRAC_BITS=10`.
+
 ## [0.6.2] - 2026-09-16
 
 ### Upgrading
