@@ -38,7 +38,11 @@ let det = lu.determinant();
   `nullspace`, `least_squares`, `condition_number_1` / `_2`.
 - **Matrix functions** (`matrix_functions`): `matrix_exp` (Padé +
   scaling-and-squaring), `matrix_sqrt` (Denman-Beavers), `matrix_log` (inverse
-  scaling-and-squaring), `matrix_pow`: all chained through `ComputeMatrix`.
+  scaling-and-squaring), `matrix_pow`: all chained through `ComputeMatrix`
+  (on realtime through a Q64.64 matrix, since the realtime compute tier holds
+  only `2F` bits), one rounding per output entry. Against mpmath they are
+  correctly rounded on every profile and at realtime 8 to 24 fraction bits,
+  including norms up to 7 and SPD spectra from 1/8 to 60.
 
 ## Public API
 
@@ -53,17 +57,33 @@ See **[PUBLIC_API.md → Linear algebra](../PUBLIC_API.md#linear-algebra)** and
   ill-conditioned system (e.g. a Hilbert matrix) amplifies input error by orders
   of magnitude in any finite precision; iterative refinement recovers the residual
   but not the lost input information. See [the precision guide](README_PRECISION.md).
+- LU, Cholesky and QR factor at the compute tier (`2F` fractional bits) and keep
+  those factors: `solve`, `inverse`, `determinant` and `refine` run on them,
+  every sum exact, and round the result once. The public `l`, `u`, `q`, `r`
+  fields are the same factors rounded once, for inspection. Against exact
+  rationals and mpmath on well-conditioned 2x2 to 4x4 systems, factors,
+  solutions, inverses and determinants are within one unit on every profile and
+  at realtime 8 to 24 fraction bits (0.6.3 stored the factors at storage
+  precision: up to 114 units in a solve, 70 in a determinant). On an
+  ill-conditioned system the error before the final rounding grows as
+  `kappa * 2^-2F`, so a solve stays within a unit while `kappa` is well below
+  `2^F`.
 - The iterative decompositions (`svd_decompose`, `eigen_symmetric`,
-  `schur_decompose`) either converge or return an error, never a partially
-  converged result: `Err(PrecisionLimit)` when the iteration budget runs out,
-  `Err(TierOverflow)` when a norm or an entry leaves the storage range. An
-  off-diagonal entry counts as zero within `2^-(2F/3)` of its diagonal
-  neighbours (about 12.6 digits at Q64.64), never below four quanta, so exactly
-  rank-deficient matrices converge. Singular values and symmetric eigenvalues
-  land within a few ulp of mpmath references on the validation cases;
-  reconstruction error follows the relative bound, and a Schur eigenvalue's error
-  is that bound times the eigenvalue's condition number. `schur_decompose`
-  returns a real Schur form: exact zeros below the subdiagonal, and 2×2 blocks
+  `schur_decompose`) carry the matrix being reduced and the accumulated
+  transforms at the compute tier and round them to storage once. They either
+  converge or return an error, never a partially converged result:
+  `Err(PrecisionLimit)` when the iteration budget runs out, `Err(TierOverflow)`
+  when a norm or an entry leaves the range. An off-diagonal entry counts as
+  zero within `2^-(3F/2)` of its diagonal neighbours, never below `2^-(3F/2)`
+  absolute, so exactly rank-deficient matrices converge. Against mpmath on
+  well-separated spectra, eigenvalues and eigenvectors, singular values and
+  vectors, and Schur eigenvalues are within one unit on every profile and
+  split (0.6.3 converged to `2^-(2F/3)`: up to 1483 units at Q16.16 and past
+  `2^30` units on the wide profiles). A Schur eigenvalue's error is still the
+  deflation bound times the eigenvalue's condition number, and a vector of a
+  nearly repeated eigen- or singular value is only as well determined as the
+  gap allows. `schur_decompose` returns a real Schur form: exact zeros below
+  the subdiagonal, and 2×2 blocks
   only for complex pairs. Gate: `tests/decomposition_convergence_validation.rs`,
   37 fixed cases plus a seeded random corpus from the same failure classes
   (rank-deficient, interior zero diagonals, rectangular, scaled and small

@@ -21,6 +21,10 @@ pub mod tq19;
 #[cfg(feature = "inference")]
 pub mod compute_tier;
 
+/// Q64.64 transcendentals, π constants and an exact decimal-literal parser
+/// for quantities outside the storage and compute tiers. Every profile.
+pub mod wide;
+
 /// Build-time Q-format configuration (FRAC_BITS and derived constants).
 #[doc(hidden)] pub mod frac_config;
 

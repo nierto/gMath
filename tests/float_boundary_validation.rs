@@ -80,14 +80,9 @@ fn small_raw(value: i64) -> FixedPoint {
 /// Fraction bits of this build: one is `2^F` raw, so count the exact halvings
 /// that take it down to raw 1.
 fn frac_bits() -> u32 {
-    let (two, unit) = (FixedPoint::from_int(2), small_raw(1));
-    let mut x = FixedPoint::one();
-    let mut bits = 0;
-    while x != unit {
-        x = x / two;
-        bits += 1;
-    }
-    bits
+    // the build's split (halving one with from_int(2) fails where 2 is out of
+    // range, at GMATH_FRAC_BITS = 30)
+    g_math::fixed_point::frac_config::FRAC_BITS
 }
 
 /// The profile's reference tables, or `None` for a realtime split the

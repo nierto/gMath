@@ -17,6 +17,34 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
+/// A difference in storage units (its raw value), for printing measured
+/// errors. Doubling the value instead would leave the range at 24 fraction
+/// bits, where the scalar operators wrap.
+fn in_ulps(d: FixedPoint) -> String { format!("{:?}", d.raw()) }
+
+/// Below 10 fraction bits a decimal step such as 0.01 is a few units with a
+/// large representation error (3/256 = 0.0117 at 8 bits) and every step
+/// rounds a state increment of about one unit: those builds step by 2^-k.
+fn coarse() -> bool { g_math::fixed_point::frac_config::FRAC_BITS < 10 }
+
+/// 2^-k exactly.
+fn pow2_neg(k: u32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..k { u = u / FixedPoint::from_int(2); }
+    u
+}
+
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
     assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
@@ -42,10 +70,12 @@ fn test_rk4_exponential_decay() {
     let x0 = FixedVector::from_slice(&[fp("1")]);
     let t0 = fp("0");
     let t_end = fp("1");
-    let h = fp("0.01"); // 100 steps
+    // 100 steps; 16 steps of 1/16 below 10 fraction bits (see coarse())
+    let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
 
     let trajectory = rk4_integrate(&sys, &x0, t0, t_end, h);
     let final_point = trajectory.last().unwrap();
+    println!("exp decay error: {} ulp", in_ulps((final_point.x[0] - fp("0.36787944117144232159647396907")).abs()));
 
     // x(1) = e^(-1) ≈ 0.36787944117144232
     // mpmath: mp.dps=50; exp(-1) = 0.36787944117144232159647396907...
@@ -65,6 +95,10 @@ fn test_rk4_exponential_decay() {
     let rk4_tol = fp("0.01");  // 100 steps × 16-bit precision
     #[cfg(not(table_format = "q16_16"))]
     let rk4_tol = fp("0.00001");
+    // 16 steps, one rounding of at most half a unit each, contracted by
+    // |1 - h + ...| < 1: at most 8 units (the RK4 truncation error at h = 1/16
+    // is below 1e-7), plus 0.02 unit for the 4-digit expected value
+    let rk4_tol = at_least(rk4_tol, 9);
     assert_fp(final_point.x[0], expected, rk4_tol, "exp_decay_rk4");
 }
 
@@ -148,10 +182,17 @@ fn test_rk4_single_step_mpmath() {
 
     let sys = ExponentialDecay;
     let x0 = FixedVector::from_slice(&[fp("1")]);
-    let result = rk4_step(&sys, fp("0"), &x0, fp("0.1"));
+    // h = 0.1 is not representable in binary (102/1024 at 10 fraction bits),
+    // so the step is h = 3/32: the RK4 polynomial 1 - h + h^2/2 - h^3/6 + h^4/24
+    // is then exactly 7637915/8388608 on every profile.
+    let result = rk4_step(&sys, fp("0"), &x0, fp("0.09375"));
+    assert_fp(result[0], fp("0.91051042079925537109375"), at_least(fp("0.0001"), 2), "rk4_single_step");
 
-    // mpmath: the RK4 approximation for this step is 0.9048375
-    assert_fp(result[0], fp("0.9048375"), fp("0.0001"), "rk4_single_step");
+    // the original h = 0.1 on the profiles that resolve it (0.9048375)
+    if g_math::fixed_point::frac_config::FRAC_BITS >= 16 {
+        let result = rk4_step(&sys, fp("0"), &x0, fp("0.1"));
+        assert_fp(result[0], fp("0.9048375"), fp("0.0001"), "rk4_single_step h = 0.1");
+    }
 }
 
 // ============================================================================
@@ -188,7 +229,15 @@ fn test_rk45_adaptive_activates() {
     }
 
     let x0 = FixedVector::from_slice(&[fp("1")]);
-    let config = Rk45Config::new(fp("0.001"), fp("0.5"));
+    // 0.001 is a single unit at 10 fraction bits: below a few units the error
+    // estimate is all rounding and the step cannot shrink usefully
+    // h_init 0.25, not 0.5: at h = 0.5 the Dormand-Prince stage values of
+    // this system reach -110.8 and f = -10 x reaches 1108, beyond the Q8.24
+    // range (+-128), where the FixedPoint operators panic instead of
+    // wrapping. At 0.25 the stages stay within 7.6 (f within 76) and the
+    // controller still rejects the first steps (2 rejections in exact
+    // arithmetic at tol = 0.001, 3 at h_init = 0.5; same final value).
+    let config = Rk45Config::new(at_least(fp("0.001"), 32), fp("0.25"));
 
     let (trajectory, _rejected) = rk45_integrate(&FastDecay, &x0, fp("0"), fp("1"), &config).unwrap();
 
@@ -196,7 +245,8 @@ fn test_rk45_adaptive_activates() {
     // accept smaller ones. We just verify it converges.
     let final_val = trajectory.last().unwrap().x[0];
     // e^(-10) ≈ 0.0000453999...
-    assert!(final_val.abs() < fp("0.001"), "Fast decay should converge near zero");
+    println!("rk45 fast decay final value: {final_val}");
+    assert!(final_val.abs() < at_least(fp("0.001"), 4), "Fast decay should converge near zero: {final_val}");
 }
 
 // ============================================================================
@@ -229,12 +279,18 @@ fn test_verlet_harmonic_oscillator() {
     let q0 = FixedVector::from_slice(&[fp("1")]);
     let p0 = FixedVector::from_slice(&[fp("0")]);
 
-    let trajectory = verlet_integrate(&sys, &q0, &p0, fp("0"), fp("6.28318530717959"), fp("0.01"));
+    let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
+    let trajectory = verlet_integrate(&sys, &q0, &p0, fp("0"), fp("6.28318530717959"), h);
 
     let final_point = trajectory.last().unwrap();
-    // After one full period (2π), should return to q≈1, p≈0
-    assert_fp(final_point.q[0], fp("1"), fp("0.01"), "verlet_q_period");
-    assert_fp(final_point.p[0], fp("0"), fp("0.01"), "verlet_p_period");
+    // After one full period (2π), should return to q≈1, p≈0. At h = 0.01 the
+    // 628 kicks of about 5 units each round by up to half a unit: 42 units of
+    // accumulated state rounding at Q22.10, where 0.01 is only 10 units.
+    // Below 10 bits (h = 1/16, 101 steps) measured 6 and 4 units.
+    println!("verlet period: q = {}, p = {}; errors {} / {} ulp", final_point.q[0], final_point.p[0],
+        in_ulps((final_point.q[0] - fp("1")).abs()), in_ulps(final_point.p[0].abs()));
+    assert_fp(final_point.q[0], fp("1"), at_least(fp("0.01"), 64), "verlet_q_period");
+    assert_fp(final_point.p[0], fp("0"), at_least(fp("0.01"), 64), "verlet_p_period");
 }
 
 #[test]
@@ -254,7 +310,10 @@ fn test_verlet_energy_conservation() {
 
     // Symplectic integrator: energy should oscillate but not drift
     // Over 100 time units (10000 steps), max energy drift should be small
-    assert!(max_drift < fp("0.01"),
+    // storage rounding of each kick bounds the drift in units, not in 0.01:
+    // 10 units measured at Q22.10, where 0.01 is 10 units
+    println!("verlet max energy drift: {max_drift}");
+    assert!(max_drift < at_least(fp("0.01"), 64),
         "Verlet energy drift {} exceeds tolerance over 10000 steps", max_drift);
 }
 
@@ -272,11 +331,21 @@ fn test_verlet_single_step_mpmath() {
     let q0 = FixedVector::from_slice(&[fp("1")]);
     let p0 = FixedVector::from_slice(&[fp("0")]);
 
-    let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.1"));
+    // h = 0.1 is 26/256 at 8 fraction bits (q_new is then 0.99484, 0.0011 from
+    // 0.995 before any rounding), so the step is h = 3/32 on every profile:
+    // q_new = 1 - h^2/2 = 2039/2048, p_new = -(h/2)(1 + q_new) = -12261/131072
+    // (python3 fractions). Three roundings of half a unit, weights <= 1.
+    let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.09375"));
+    assert_fp(q_new[0], fp("0.99560546875"), at_least(fp("0.001"), 2), "verlet_step_q h = 3/32");
+    assert_fp(p_new[0], fp("-0.09354400634765625"), at_least(fp("0.001"), 2), "verlet_step_p h = 3/32");
 
-    // Verlet is 2nd-order, so these won't be exact but close
-    assert_fp(q_new[0], fp("0.995"), fp("0.001"), "verlet_step_q");
-    assert_fp(p_new[0], fp("-0.09975"), fp("0.001"), "verlet_step_p");
+    // the original h = 0.1 on the profiles that resolve it
+    if g_math::fixed_point::frac_config::FRAC_BITS >= 16 {
+        let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.1"));
+        // Verlet is 2nd-order, so these won't be exact but close
+        assert_fp(q_new[0], fp("0.995"), fp("0.001"), "verlet_step_q");
+        assert_fp(p_new[0], fp("-0.09975"), fp("0.001"), "verlet_step_p");
+    }
 }
 
 // ============================================================================
@@ -288,18 +357,23 @@ fn test_monitor_invariant_exact() {
     // For the harmonic oscillator, energy x[0]²+x[1]² should be constant=1
     let sys = HarmonicOscillator;
     let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]);
-    let trajectory = rk4_integrate(&sys, &x0, fp("0"), fp("1"), fp("0.01"));
+    let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
+    let trajectory = rk4_integrate(&sys, &x0, fp("0"), fp("1"), h);
 
     let (max_drift, drifts) = monitor_invariant(
         |x| x[0] * x[0] + x[1] * x[1],
         &trajectory,
     );
+    println!("rk4 invariant drift: {} ulp", in_ulps(max_drift));
 
     // RK4 doesn't preserve the Hamiltonian exactly, but drift should be small
     #[cfg(table_format = "q16_16")]
     let inv_tol = fp("0.01");
     #[cfg(not(table_format = "q16_16"))]
     let inv_tol = fp("0.0001");
+    // measured drift in units: 6 at 8 fraction bits (h = 1/16), 4 at 10-16,
+    // 12 at 20, 11 at 24; 0.01 is 2.56 units at 8 bits
+    let inv_tol = at_least(inv_tol, 8);
     assert!(max_drift < inv_tol,
         "RK4 energy drift {} over 100 steps", max_drift);
     assert_eq!(drifts.len(), trajectory.len());
@@ -330,7 +404,8 @@ fn test_rk4_lotka_volterra() {
     }
 
     let x0 = FixedVector::from_slice(&[fp("10"), fp("5")]);
-    let trajectory = rk4_integrate(&LotkaVolterra, &x0, fp("0"), fp("1"), fp("0.001"));
+    // 0.001 rounds to 0 below 10 fraction bits (an empty trajectory): one unit
+    let trajectory = rk4_integrate(&LotkaVolterra, &x0, fp("0"), fp("1"), at_least(fp("0.001"), 1));
 
     // Just verify the integration completes and values stay positive
     let final_point = trajectory.last().unwrap();

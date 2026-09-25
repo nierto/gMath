@@ -14,6 +14,17 @@ fn fp(s: &str) -> FixedPoint {
     if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
     else { FixedPoint::from_str(s) }
 }
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
 fn tol() -> FixedPoint {
     #[cfg(table_format = "q16_16")]
     { fp("0.01") }  // RK4 integration at 16-bit precision accumulates more error
@@ -167,7 +178,7 @@ fn test_gln_exp_large_entries_mpmath() {
 #[test]
 fn test_sln_exp_large_mpmath() {
     // Adversarial: large traceless algebra element
-    // mpmath 50 digits: expm([[5, 2], [-3, -5]])
+    // mpmath: expm([[5, 2], [-3, -5]]) (100 digits in the asserts below)
     //   [0,0] = 83.918720100582232469
     //   [0,1] = 17.930726283430598968
     //   [1,0] = -26.896089425145898452
@@ -178,14 +189,32 @@ fn test_sln_exp_large_mpmath() {
     let xi = FixedVector::from_slice(&[fp("5"), fp("2"), fp("-3")]);
     let g = sl.lie_exp(&xi).unwrap();
 
-    assert_fp(g.get(0, 0), fp("83.918720100582232469"), tol(), "SL large exp [0,0]");
-    assert_fp(g.get(0, 1), fp("17.930726283430598968"), tol(), "SL large exp [0,1]");
-    assert_fp(g.get(1, 0), fp("-26.896089425145898452"), tol(), "SL large exp [1,0]");
-    assert_fp(g.get(1, 1), fp("-5.7349113165707623710"), tol(), "SL large exp [1,1]");
+    // The result is about 84 and scaling and squaring (four squarings here)
+    // amplifies the working resolution: at the realtime compute tier's 2F
+    // bits the entries were 8, 2, 2, 1 units off at 8 fraction bits. The
+    // matrix functions now run at Q64.64 on realtime: correctly rounded on
+    // every build (assert_fp is strict, so ulps(1) admits only 0).
+    assert_fp(g.get(0, 0), fp("83.91872010058223246954388803185160330589607209650807833735155368235331772998142731341517786975646802"), ulps(1), "SL large exp [0,0]");
+    assert_fp(g.get(0, 1), fp("17.93072628343059896812096124731467572361497306578726479512144267056290158969229400429775958719058020"), ulps(1), "SL large exp [0,1]");
+    assert_fp(g.get(1, 0), fp("-26.89608942514589845218144187097201358542245959868089719268216400584435238453844100644663938078587030"), ulps(1), "SL large exp [1,0]");
+    assert_fp(g.get(1, 1), fp("-5.734911316570762371060918204721775312178793232428245638255659670461190218480042708073620066196432979"), ulps(1), "SL large exp [1,1]");
 
     // det = 1 (algebraic: det(exp(A)) = exp(tr(A)) = exp(0) = 1)
-    let det = g.get(0, 0) * g.get(1, 1) - g.get(0, 1) * g.get(1, 0);
-    assert_fp(det, fp("1"), tol(), "SL large exp det=1 (mpmath)");
+    // g00 g11 - g01 g10 as one dot product: exact products summed at the
+    // compute tier and rounded once. The products themselves (about 481) are
+    // beyond the Q8.24 storage range (+-128), where the FixedPoint operators
+    // panic instead of wrapping.
+    let det = FixedVector::from_slice(&[g.get(0, 0), -g.get(0, 1)])
+        .dot(&FixedVector::from_slice(&[g.get(1, 1), g.get(1, 0)]));
+    // Correctly rounded entries move the det by up to
+    // (|g00| + |g11| + |g01| + |g10|) / 2 units (about 67 at Q22.10, where
+    // the correctly rounded entries give 990/1024); the bound is that spread
+    // in units, each term scaled by one unit first so the sum (134.5) never
+    // leaves storage.
+    let spread_units = g.get(0, 0).abs() * ulps(1) + g.get(1, 1).abs() * ulps(1)
+        + g.get(0, 1).abs() * ulps(1) + g.get(1, 0).abs() * ulps(1);
+    let det_tol = if spread_units > tol() { spread_units } else { tol() };
+    assert_fp(det, fp("1"), det_tol, "SL large exp det=1 (mpmath)");
 }
 
 #[test]
@@ -332,14 +361,16 @@ fn test_ugod_transcendental_chain_persistence() {
     use g_math::canonical::{gmath, evaluate};
     let expr = gmath("0.5").exp().sin(); // builds LazyExpr::Sin(LazyExpr::Exp(Literal))
     let result_sv = evaluate(&expr).unwrap();
-    let result_str = format!("{}", result_sv);
 
     // The FASC path evaluates the entire tree at BinaryCompute tier.
     // Single downscale at materialization → best possible precision.
     // Verify against mpmath to profile-appropriate precision.
-    let result_fp = fp(&result_str);
+    // compare the raw result, not a Display round trip (Display truncates
+    // to 3 digits at Q22.10, which alone moved the value by a unit)
+    let result_fp = FixedPoint::from_raw(result_sv.as_binary_storage().expect("binary storage"));
     let expected = fp("0.9969653876139675347");
-    assert_fp(result_fp, expected, fp("0.0001"),
+    // the nearest storage value; 0.0001 is 0 units at Q22.10
+    assert_fp(result_fp, expected, at_least(fp("0.0001"), 1),
         "UGOD: sin(exp(x)) FASC chain persistence via LazyExpr");
 }
 
@@ -429,12 +460,9 @@ fn test_ugod_fasc_chain_vs_imperative_precision() {
     use g_math::canonical::reset_gmath_mode;
     reset_gmath_mode();
 
-    // Extract as FixedPoint via the StackValue → binary conversion
-    let fasc_str = format!("{}", fasc_result);
-    // Parse the decimal string output back to FixedPoint
-    let fasc_val = FixedPoint::from_str(
-        fasc_str.trim_matches(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
-    );
+    // The raw result, not a Display round trip (Display truncates to 3
+    // digits at Q22.10: 0.5859 printed as 0.585 and re-parsed a unit low)
+    let fasc_val = FixedPoint::from_raw(fasc_result.as_binary_storage().expect("binary storage"));
 
     // Imperative path: multiple materializations
     let imp_val = (fp("0.7").sin() + fp("0.3")).cos();
@@ -455,7 +483,7 @@ fn test_ugod_fasc_chain_vs_imperative_precision() {
     println!("  diff:        {}", diff);
 
     // They should agree within tolerance (both use tier N+1 internally)
-    assert!(diff < fp("0.001"),
+    assert!(diff < at_least(fp("0.001"), 2),
         "FASC and imperative should agree: diff={}", diff);
 }
 
@@ -580,10 +608,10 @@ fn test_gln_compose_uses_compute_tier() {
     let ab = gl.compose(&a, &b);
 
     // mpmath exact: [[0.95, 0.15], [-0.01, 1.79]]
-    assert_fp(ab.get(0, 0), fp("0.95"), fp("0.0001"), "tier N+1 matmul [0,0]");
-    assert_fp(ab.get(0, 1), fp("0.15"), fp("0.0001"), "tier N+1 matmul [0,1]");
-    assert_fp(ab.get(1, 0), fp("-0.01"), fp("0.0001"), "tier N+1 matmul [1,0]");
-    assert_fp(ab.get(1, 1), fp("1.79"), fp("0.0001"), "tier N+1 matmul [1,1]");
+    assert_fp(ab.get(0, 0), fp("0.95"), at_least(fp("0.0001"), 2), "tier N+1 matmul [0,0]");
+    assert_fp(ab.get(0, 1), fp("0.15"), at_least(fp("0.0001"), 2), "tier N+1 matmul [0,1]");
+    assert_fp(ab.get(1, 0), fp("-0.01"), at_least(fp("0.0001"), 2), "tier N+1 matmul [1,0]");
+    assert_fp(ab.get(1, 1), fp("1.79"), at_least(fp("0.0001"), 2), "tier N+1 matmul [1,1]");
 }
 
 #[test]
@@ -619,7 +647,9 @@ fn test_sln_exp_det_precision() {
 
     // With tier N+1 compute, det should be within a few ULP of 1.0
     let det_err = (det - FixedPoint::one()).abs();
-    assert!(det_err < fp("0.001"),
+    // entries correctly rounded; the storage det of rounded entries is off by
+    // up to 0.5 * sum|g| units (1 unit measured at Q22.10, where 0.001 is 1)
+    assert!(det_err < at_least(fp("0.001"), 4),
         "SL det error {} — tier N+1 should keep det≈1 to high precision", det_err);
 }
 
@@ -775,9 +805,19 @@ fn test_geodesic_flat_straight_line() {
     let points = geodesic_integrate(&metric, &p, &v, fp("1"), 100).unwrap();
     let final_pt = points.last().unwrap();
 
-    // After t=1: position = (0,0) + 1*(1, 0.5) = (1, 0.5)
-    assert_fp(final_pt[0], fp("1"), tol(), "flat geodesic x");
-    assert_fp(final_pt[1], fp("0.5"), tol(), "flat geodesic y");
+    // After t=1: position = (0,0) + 1*(1, 0.5) = (1, 0.5). The step
+    // boundaries k/100 and the state stay at the compute tier and the
+    // position is rounded once per point, so the endpoint is exact: 0 units
+    // on every build (0.6.3 rounded each step: up to N/2 = 50 units, 12
+    // measured at 10 fraction bits).
+    assert_fp(final_pt[0], fp("1"), ulps(1), "flat geodesic x");
+    assert_fp(final_pt[1], fp("0.5"), ulps(1), "flat geodesic y");
+
+    // With a step that is a power of two every update is exact.
+    let points = geodesic_integrate(&metric, &p, &v, fp("1"), 128).unwrap();
+    let final_pt = points.last().unwrap();
+    assert_fp(final_pt[0], fp("1"), ulps(1), "flat geodesic x, 128 steps");
+    assert_fp(final_pt[1], fp("0.5"), ulps(1), "flat geodesic y, 128 steps");
 }
 
 #[test]
@@ -802,7 +842,9 @@ fn test_parallel_transport_hyperbolic_preserves_norm() {
 
     // Euler method on a short curve — norm preservation to within a few percent
     let drift = (final_norm - initial_norm).abs();
-    assert!(drift < fp("0.05"),
+    // At 8 fraction bits the step 0.005 is stored as 1/256 and every update
+    // rounds to a unit of 1/256: measured 19 units (0.074); 8 at 10 bits.
+    assert!(drift < at_least(fp("0.05"), 24),
         "H² PT norm drift {} should be < 0.05 (Euler on short curve)", drift);
 }
 

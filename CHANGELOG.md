@@ -5,6 +5,431 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-09-25
+
+### Upgrading
+
+Mostly additive (new functions, the `g_math::wide` module, `try_` twins), with
+three kinds of behaviour change: an overflow that used to wrap or saturate now
+panics (or returns an error from the new `try_` twin); results that were
+rounded several times are now rounded once, so computed values move toward the
+exact result; and several functions that returned wrong values now return the
+right ones. Everyone on `^0.6` receives it on their next `cargo update`.
+
+**Do you need to act?**
+
+- **You rely on `FixedPoint` `+ - * /` or unary `-` wrapping on overflow** →
+  They now panic ("FixedPoint: addition overflow", "division by zero", ...),
+  like every other infallible path in the crate. Use `try_add`, `try_sub`,
+  `try_mul`, `try_div`, `try_neg` for `Err(TierOverflow)` /
+  `Err(DivisionByZero)`, or the canonical API (`gmath`/`evaluate`) for
+  automatic promotion. In range the results are bit-identical to 0.6.3.
+- **You rely on `DecimalFixed` operators saturating** at `i128::MAX` /
+  `i128::MIN` (overflow, division by zero) → They now panic; the new
+  `try_add`, `try_sub`, `try_mul`, `try_div`, `try_neg` return the error.
+  `from_parts` with a fraction of `10^DECIMALS` or more panics instead of
+  clamping; `integer_part`, `fractional_part`, `abs` and
+  `convert_with_rounding` panic where they wrapped or saturated.
+- **You call `FixedPoint::to_int` on values of 2^31 or more** (embedded and
+  wider) → It wrapped; it now panics. `try_to_int` returns the error.
+- **You call `FixedPoint::from_int` out of range** → It panics (it shifted
+  without a check); `try_from_int` returns the error.
+- **You persist or compare computed results bit for bit** → Solvers,
+  factorizations, eigen-, singular-value and Schur decompositions, ODE
+  integrators, geodesics, manifold and Lie-group maps, curvature, projective
+  maps and tensor decompositions now round once instead of at every step, so
+  their results move (toward the exact value; see "State carried at the
+  compute tier"). Conversions (`from_str`, `from_f64`, `from_int`) and the
+  scalar transcendentals are unchanged.
+- **You use `sectional_curvature`, `StiefelManifold::distance`, or
+  `Grassmannian::log_map` / `parallel_transport` with k >= 2** → They returned
+  wrong values (see Fixed); results change.
+- **You call `HyperbolicSpace` `distance` / `log_map` with points off the
+  hyperboloid's upper sheet** → They now return `Err(DomainError)` instead of
+  clamping the Minkowski product. `SPDManifold::inner_product` panics on a
+  singular base point instead of silently using the identity metric.
+- **You build `LUDecomposition`, `QRDecomposition` or
+  `CholeskyDecomposition` with a struct literal** → They now carry private
+  compute-tier factors; obtain them from `lu_decompose` / `qr_decompose` /
+  `cholesky_decompose`. The public fields are unchanged.
+- **You depend on how `DecimalFixed` rounds an exact tie** → Decimal rounding is half to even
+  wherever it occurs (transcendental results, dp above the compute dp,
+  `from_binary_q256`); it was half away from zero or truncation in places.
+
+- **You call `FixedPoint::from_str` with plain decimals of up to 38 fraction
+  digits** → Nothing changes: the results are bit-identical to 0.6.3 (checked
+  against the old path on 20,000 random literals per profile). Exponent
+  notation (`"1e-06"`, `"1.5e3"`) now parses instead of panicking, `.5` and
+  `5.` are accepted, and literals with more than 38 fraction digits are rounded
+  exactly instead of being truncated to 38 digits first.
+- **You call `from_str` on realtime at `GMATH_FRAC_BITS=10` with 4 fraction
+  digits and a magnitude of 214748.3648 or more** → 0.6.3 returned a wrapped,
+  wrong value (`"467295.6470"` gave 37799.9); you now get the right one.
+- **You pass a small RMSNorm epsilon on realtime** → `rms_norm_factor` is
+  unchanged and still drops any epsilon below `2^-FRAC_BITS`; switch to
+  `rms_norm_factor_eps_wide` to apply it at the compute tier.
+- **You write hex or binary literals (`"0xFF"`, `"0b101"`) in `gmath()` or
+  `from_str`** → They now denote their integer (`0xFF` is 255) on every path.
+  0.6.3 stored the digits as raw storage bits, so `gmath("0xFF")` evaluated to
+  `255 / 2^FRAC_BITS` alone, to `1 + 255/65536` inside `+ 1` on embedded, and
+  its exact shadow said 255; `FixedPoint::from_str("0x10")` was raw 16.
+- **You evaluate canonical decimals near or beyond your profile's range, or
+  literals with more than 38 digits** → You now get the exact value, the
+  nearest binary value, or `Err(TierOverflow)`, where 0.6.3 returned a wrapped
+  or one-unit-off value (see Fixed).
+- **You reach `exp_q64_64_native` / `ln_q64_64_native` through
+  `fixed_point::domains`** → `g_math::wide::exp_q64` / `ln_q64` are the same
+  functions with a documented contract (bit-identical; `ln_q64` returns
+  `Option` instead of the `i128::MIN` sentinel). The hidden paths stay.
+
+### Added
+
+- **`fused::rms_norm_factor_eps_wide(values, eps_q64)`**: RMSNorm factor with
+  epsilon given in Q64.64 and added at the compute tier (`2 x FRAC_BITS`
+  fractional bits), rounded once to nearest, ties toward +infinity; exact on
+  compact and wider. `rms_norm_factor` took epsilon at the storage tier, where
+  `1e-5` and `1e-6` are zero at realtime Q22.10, so an all-zero input was
+  `Err(DivisionByZero)` rather than `1/sqrt(eps)`. The realtime compute tier
+  still bounds the result: at Q22.10, `1e-5` becomes `10 / 2^20` and an
+  all-zero input gives 323.83 (exact `1/sqrt(1e-5)`: 316.23); at Q16.16 it
+  gives 316.23.
+- **`FixedPoint::try_from_str`**, and exponent notation in `from_str`: decimal
+  literals are converted exactly with integer arithmetic (any digit count) and
+  rounded once to nearest, ties toward +infinity. Hex, binary, ternary,
+  fraction, repeating-decimal and named-constant literals still go through the
+  canonical parser. `Err(ParseError)` / `Err(TierOverflow)` instead of a panic.
+- **`g_math::wide`**: `exp_q64`, `ln_q64` (returns `Option`), `sin_q64`,
+  `cos_q64`, `sincos_q64` over raw Q64.64 `i128`, the same engines and results
+  on every profile; `ONE_Q64`, `PI_Q64`, `TWO_PI_Q64`, `PI_HALF_Q64`, `PI_Q32`,
+  `TWO_PI_Q32`, each `floor(c * 2^f)`; `try_from_str(s, frac_bits)`, the exact
+  literal parser for any Q format up to 127 fraction bits. Measured accuracy
+  against mpmath in units of `2^-64`: `exp` 4 relative to the result, `ln` 55,
+  `sin`/`cos` 3 for `|x| <= 2 pi`, growing as `0.34 |x|` beyond because range
+  reduction subtracts multiples of the truncated `PI_HALF_Q64` (1390 below
+  `2^12`, 8e-11 absolute below `2^32`).
+- **`FixedPoint::sincos_wide_q64(angle_q64)`** (realtime and compact): the
+  computation behind `sincos_wide` without truncating the angle to Q32.32;
+  `sincos_wide(a) == sincos_wide_q64((a as i128) << 32)`.
+- Gate `tests/wide_q64_validation.rs` (references
+  `scripts/generate_wide_refs.py`: mpmath 120 digits, exact fractions for the
+  literals), CI `wide-tier` on every profile plus Q22.10.
+- **`try_add`, `try_sub`, `try_mul`, `try_div`, `try_neg`** on `FixedPoint`
+  and `DecimalFixed`, and `FixedPoint::try_to_int`, `try_from_int`,
+  `DecimalFixed::try_from_integer`, `try_from_binary_q256`: the fallible twins
+  of operations that now panic instead of wrapping or saturating. Gates
+  `tests/operator_overflow_validation.rs` (every profile and realtime split
+  2 to 30) and `tests/narrowing_defects_validation.rs`.
+- **`DecimalFixed` `try_` transcendentals**: `try_exp`, `try_ln`, `try_sqrt`,
+  `try_sin`, `try_cos`, `try_sincos`, `try_tan`, `try_atan`, `try_atan2`,
+  `try_asin`, `try_acos`, `try_sinh`, `try_cosh`, `try_sinhcosh`, `try_tanh`,
+  `try_asinh`, `try_acosh`, `try_atanh`. `Err(DomainError)` outside the domain,
+  `Err(TierOverflow)` when a result or intermediate leaves the range,
+  `Err(PrecisionLimit)` when an in-domain argument rounds onto a domain
+  boundary at a compute precision coarser than `D` (for example `ln(1e-38)` at
+  38 decimals on embedded). They never panic (a sweep of 14,859 extreme calls
+  per build under `catch_unwind`) and equal the infallible methods bit for bit
+  whenever those return. Gate `tests/decimal_try_transcendentals_validation.rs`.
+
+### Fixed
+
+Silent wraps and rounding slips in the canonical (`gmath`) layer, all found
+while checking the parser change; each is gated in
+`tests/ugod_promotion_validation.rs`, `tests/wide_q64_validation.rs` or the
+parser equivalence unit test:
+
+- **Decimal literals wrapped on realtime and compact.** `parse_decimal` stored
+  `value * 10^dp` in the storage-width decimal through a truncating cast. At
+  `GMATH_FRAC_BITS=10`, `gmath("467295.6470")` was 37798.9, `"214748.3648"` was
+  -214748.3648 and `"3000000.0001"` was -6477.1. Beyond the decimal storage the
+  literal is now kept as the exact rational.
+- **Decimal arithmetic results wrapped on every profile.** Decimal UGOD promoted
+  correctly, then `decimal_to_storage` narrowed the promoted result back with
+  truncating casts (`as i32`, `as_i128`, `as_i256`): at Q22.10
+  `214748.3647 + 1` was -214747.3649. It is now checked, and add, subtract,
+  multiply and divide fall back to the exact rational.
+- **Decimal-to-binary coercion wrapped out-of-range values on every profile**
+  (`decimal_to_binary_storage`; at Q22.10 `"-3745932.2"` in binary mode came
+  back as an in-range value). It now returns `TierOverflow`.
+- **Decimal compute results rounded toward zero when converted to binary**
+  (`decimal_compute_to_binary_storage`), up to one unit off the nearest rule the
+  rest of the crate uses. Now nearest, ties toward +infinity.
+- **Literals past 38 digits.** The I256 fallback (integer part times `10^dp`
+  beyond i128) truncated toward zero, one unit off on embedded, balanced and
+  scientific; wide profiles dropped fraction digits past 38 (76 on scientific)
+  before converting, which on balanced (one unit is 2.9e-39) can lose whole
+  units; the scientific two-part path rounded ties away from zero; integer
+  parts past i128 were a `ParseError` even where the profile's range holds
+  them; on realtime and compact, digits past the 38-digit rational budget
+  were dropped, which can turn a value just past a tie into a tie. All of
+  these now use the exact converter behind `FixedPoint::try_from_str`.
+- **Hex and binary literals** mixed three meanings and wrapped beyond the
+  storage width (see Upgrading); they are now integers through the same range
+  check as decimal integers.
+- `sincos_wide`'s documentation example called a function that does not exist.
+
+Defects that only showed at a realtime split other than Q16.16 (found by
+running the whole suite at `GMATH_FRAC_BITS=10`, where 49 tests failed; 0 now),
+plus the ones behind them that affect every profile:
+
+- **`StackValue::to_rational` read realtime binary values with 16 fraction
+  bits** whatever `GMATH_FRAC_BITS` was: at Q22.10 every shadowless binary value
+  came out 64 times too small (`-1000 + 1/1` became -999/64).
+- **Curvature finite differences hardcoded 16 fraction bits** on realtime: the
+  step was 2.0 and the `1/(2h)` scale 64 times too large at Q22.10, so
+  Riemann, Ricci and sectional curvature were wrong at any other split. The
+  shift is now checked instead of wrapping on overflow, on every profile.
+- **RK4 rounded h/6 to storage before using it**: at h = 0.01 on Q22.10 every
+  step ran 20% long (a flat geodesic ended at 1.171, not 1); at Q16.16 the same
+  test was 38.7 units off. Every Runge-Kutta stage is now formed at the compute
+  tier from the exact coefficients and rounded once, on every profile.
+- **Dormand-Prince (`rk45_integrate`) left the b*7 k7 term out of its
+  4th-order solution**, so the error estimate carried a constant `h k / 40`
+  instead of the local error; its tableau coefficients were also rounded to
+  storage, and the step-growth test `err < tol / 32` rounded to zero for small
+  tolerances. All three fixed (one extra function evaluation per step).
+- **Verlet's half kicks used a floored h/2** for an odd raw step.
+- **`geodesic_integrate` rounded T/N to storage**, so N steps missed T by up to
+  N/2 units (0.977 instead of 1 at Q22.10, N = 100); step k now runs from
+  round(kT/N) to round((k+1)T/N).
+- **Matrix exponential and logarithm coefficients were rounded to storage**:
+  the Pade coefficients were 21-digit decimals parsed at storage precision (b5
+  and b6 were 0 at 10 fraction bits, and the wide profiles got 21 digits rather
+  than their own), and the log series k/(k+1) likewise. Both are now exact
+  fractions at the compute tier.
+- **`downscale_to_storage` checked the range before adding the round bit**, so
+  a value rounding up to 2^(W-1) passed the check and then overflowed (a panic
+  in debug builds, a wrap in release), on every profile.
+
+Realtime splits other than 16 and 10 (`GMATH_FRAC_BITS` 2 to 30; the suite now
+gates 8 to 24 in full and the rest with correctness gates) exposed more of the
+same classes, all fixed:
+
+- **Silent wraps at narrow ranges.** `FixedPoint::from_int` shifted without a
+  range check (now panics; new `try_from_int`); `make_compute_int` likewise;
+  `compute_divide` narrowed its quotient with a truncating cast on every profile
+  and returned the wrapped value as `Ok` (now `Err(TierOverflow)`); symbolic,
+  decimal and decimal-compute values converted to the compute tier through
+  unchecked casts (`atan(999999999)` at 24 fraction bits returned -pi/2);
+  compute-tier sums in dot products, norms and the fused operations used plain
+  additions (now checked). Library code that turned counts or constants into
+  storage values (`from_int(720)` in the Rodrigues series, `from_int(n)` for a
+  vector length or `n!`) no longer requires them to fit the storage range.
+- **Rodrigues threshold** `0.001` was zero at 8 fraction bits, so `exp(0)` erred
+  and `log(I)` panicked on SO(3) and SE(3); it is now at least one unit.
+- **`rms_norm_factor`, `softmax`, `softmax_mix`** panicked instead of returning
+  `Err(TierOverflow)` when a result left storage.
+
+Wrong results and silent wraps found while moving state to the compute tier
+(each gated in the test named with the change):
+
+- **`sectional_curvature` returned rounding noise on every profile.** It
+  contracted `R^l_ijk u^i v^j v^k w_l`, which is exactly zero because `R` is
+  antisymmetric in its last two indices (the sphere of radius 1.5 gave 0.0,
+  not 1/r^2 = 0.444). It now computes `<R(u,v)v, u>`.
+- **`StiefelManifold::distance` returned the square root of the distance**
+  (`frobenius_norm(..).sqrt()`, and `frobenius_norm` already takes the root).
+- **`Grassmannian::log_map` and `parallel_transport`** paired the i-th largest
+  sine with the i-th largest cosine, wrong for k >= 2 with distinct angles, and
+  used the wrong singular vectors, which flipped the sign for k = 1 when
+  `Q1^T Q2 < 0`.
+- **SO(3) and SE(3) `lie_exp` returned `Err(DivisionByZero)` for small
+  angles** on realtime (theta^2 rounded to zero at storage precision while
+  theta was above the series threshold: `omega = [0.002, 0, 0]` at Q16.16).
+  The SE(3) small-angle branch kept only the constants 1/2 and 1/6: 746 units
+  at |omega| = 8.8e-6 on Q64.64, over 10^6 on Q128.128 and Q256.256.
+- **Sphere and hyperbolic `exp_map` / `log_map` panicked at 24 fraction bits**
+  for tangents shorter than 1/128 (1/theta left the storage range).
+- **`FixedPoint::atan2` panicked on every realtime split** (`atan2(1, 1)`):
+  the direct engine call passed the `Q(2F)` compute values to the Q64.64
+  engine unscaled and truncated its angle. `try_atan2` was right; the two now
+  agree bit for bit (`tests/try_direct_bypass_validation.rs`).
+- **`cross_ratio` returned a false `DomainError`** at 8 to 12 fraction bits
+  when a small nonzero denominator rounded to zero.
+- **`FixedPoint::to_int` wrapped** at 2^31 on embedded and wider
+  (`"3000000000"` gave -1294967296).
+- **`DecimalFixed`**: transcendental results beyond i128 wrapped (`exp(50)` at
+  19 decimals on embedded); large inputs were truncated into the realtime and
+  compact compute tier (`sqrt(20)` at 18 decimals on realtime gave 1.2463);
+  `from_binary_q256` wrapped (`2^300` gave a negative value); `from_integer`
+  overflowed, `from_parts(1, 100)` gave 1.99, `integer_part` wrapped; the
+  operators saturated on overflow and division by zero; `Display` dropped
+  the sign of values in (-1, 0) (`-0.5` printed `0.5`); the parser accepted
+  `"--5"` and `"1.+5"` and rejected fractions of 20 or more digits.
+- **Decimal `exp` was inaccurate at large arguments and wrapped on
+  realtime.** Its integer-power table was `e * e * ... * e` at the compute
+  precision, multiplying `e`'s rounding by k: realtime `exp(22)` at 4 decimals
+  was 446565 units off, `exp` past 22.9 wrapped (`exp(22.9451)` gave
+  -9222509832.1468), embedded lost up to 267 units at 19 decimals, balanced
+  490 at 38, scientific 20 at 77 with errors for large negative arguments;
+  its `|x| > 30` path shifted without a check (compact `exp(44.28)` gave
+  -1.7e28). It now reduces `x = n ln2 + r` at a wider working precision and
+  rounds once: correctly rounded over the whole range on every profile
+  (`tests/decimal_exp_range_validation.rs`, mpmath at 500 digits). `sinh`
+  and `cosh` combine both exponentials at that precision.
+- **Decimal `sin`/`cos` range reduction** used pi at the compute precision and
+  an i64 quadrant count that wrapped: up to 19938 units off at 4 decimals on
+  realtime (`sin(1e9)` had the wrong sign), garbage at 0 decimals on embedded,
+  panics for large arguments on balanced and scientific. The reduction is now
+  exact at the wider precision; results are correctly rounded.
+- **Decimal `tanh`** formed `2x` before any check (wrapped on realtime for
+  |x| > 4.6e9); **`asinh` / `acosh`** squared their argument past the compute
+  tier (`asinh(1e30)` on embedded died in `sqrt`), and `asinh` of a negative
+  argument cancelled; it is now odd by construction.
+- **`DecimalFixed` `sin`, `cos`, `sincos`, `atan` and `tanh` panicked on the
+  compute tier's minimum value**, as did the compact decimal wide multiply;
+  `atan2` failed when `|y/x|` left the compute tier although the angle is
+  representable (it now uses `sign(y) pi/2 - atan(x/y)` there). Behaviour
+  change: `DecimalFixed::sqrt` of a negative argument below the compute
+  resolution panics (it returned 0), like every other negative argument.
+- **Canonical compute-tier arithmetic** (`gmath` chains of transcendental
+  results, binary and decimal) wrapped on overflow; it now returns
+  `Err(TierOverflow)` like the rest of the canonical layer.
+- **`I256` and `I512` `Display`** printed values beyond i128 truncated (or as
+  a saturated approximation); it is exact at every width.
+- **Compute-tier arithmetic wrapped or truncated**: `compute_add`,
+  `compute_subtract`, `compute_multiply` and `compute_negate` wrapped (and the
+  multiply narrowed with unchecked casts), and every compute-tier quotient was
+  truncated toward zero instead of rounded to nearest. `D256`, `D512`,
+  `I256`, `I512`, `I1024` and `I2048` division by zero returned a saturated
+  quotient (or 0); it now panics like integer division. The scientific `ln`
+  engine's Q512.512 divide returned 0 for a zero divisor and narrowed its
+  quotient unchecked (both unreachable from its table-factor callers, now
+  asserted).
+
+One rounding instead of two, and no overflow of intermediates that were never
+results (owner decision: rework rather than document):
+
+- `FixedVector::dot` and `dot_precise` **floored** the compute-tier sum; they now
+  round to nearest, ties toward +infinity, like `mat_mul` and every other binary
+  result (results move by at most one unit, toward the exact value).
+- Norms and distances (`FixedVector::length`, `metric_distance_safe`,
+  `frobenius_norm`, the Grassmann distance, the SO(3) angle) rounded the sum of
+  squares to storage and then took the root: two roundings, amplified by
+  1/(2|x|) for small norms, and an overflow once the SQUARED norm left storage.
+  The root is now taken at the compute tier with one rounding.
+- `qr_decompose` rounded ||x||^2 and v^T v to storage and R and Q after every
+  reflection; both now stay at the compute tier (see "State carried at the
+  compute tier" below).
+- The Minkowski product of `HyperbolicSpace` rounded its spatial and temporal
+  parts separately before they cancel; it is one compute-tier sum.
+- `symmetrize` / `antisymmetrize` rounded the sum of n! terms and multiplied by
+  a rounded 1/n!; they now divide the exact sum once.
+- The Householder reflection shared by the SVD, Schur and QR formed the factor
+  2 (v.w) / (v.v) at the compute tier; for a short v (the noise column of a
+  rank-deficient matrix) it left the realtime compute tier at 24 fraction bits
+  although every update fits (`svd_decompose([[1,2],[2,4]])` was
+  `TierOverflow`). Each update is now one exact quotient, rounded once.
+- **`matrix_exp` and `matrix_log` were accurate only up to Q32.32.** Pade [6/6]
+  at ||B|| < 0.5 truncates at about 2^-55 and the 22-term log series at
+  ||X|| < 0.25 near 2^-50, both amplified by the scaling: 21 units off on
+  Q64.64 and about 2^31 units (29 of 38 digits) on Q128.128 and Q256.256. The
+  scaling now follows the precision (12k >= F - 36.4 + log2 ||A|| extra
+  halvings for exp, square roots to 2^-m with 22m >= F + 6 + s for log);
+  realtime and compact keep the previous scaling. `matrix_sqrt`
+  (Denman-Beavers) stopped at a step of sqrt(quantum) (a fixed 2^-8 on
+  realtime), which `matrix_log`'s unscaling amplified to 122 units at 24
+  fraction bits; it now iterates to one relative unit.
+
+A new mpmath gate, `tests/one_rounding_validation.rs` (references from
+`scripts/generate_one_rounding_refs.py`), measures these operations against
+the correctly rounded result on every profile and at realtime 8, 10, 16 and 24
+fraction bits. Worst errors in storage units, 0.6.3 then now: dot 1 to 0;
+length, distance, Frobenius and Minkowski norms up to 29 to 0; symmetrize 4 to
+10 to 0; QR R 3 to 23 to 0; SO(3) exp up to 12 to 1; matrix_exp up to about
+2^31 to at most 1; matrix_log and matrix_sqrt at most 1.
+
+### State carried at the compute tier
+
+Multi-step computations kept their running state at storage precision and
+rounded it after every step, so errors grew with the number of steps, the
+matrix size or the iteration count. They now carry the state at the compute
+tier (`2 x FRAC_BITS` fractional bits), form every sum of products exactly,
+and round to storage once. Each is gated against mpmath or exact rationals on
+every profile and at realtime 8, 10, 12, 16, 20 and 24 fraction bits; worst
+errors in storage units, 0.6.3 then now:
+
+| Operation | 0.6.3 | now |
+| --- | --- | --- |
+| LU solve / inverse / determinant (well-conditioned 2x2 to 4x4) | 114 / 42 / 70 | 1 / 1 / 1 |
+| Cholesky solve / determinant; QR solve | 2 / 43; 27 | 1 / 1; 1 |
+| `eigen_symmetric` values / vectors | 8 / past 2^30 | 0 / 1 |
+| `svd_decompose` values / vectors | 25 / past 2^30 | 1 / 1 |
+| `schur_decompose` eigenvalues | past 2^30 | 1 |
+| RK4, Dormand-Prince, Verlet (same scheme in exact arithmetic) | 24 | 1 |
+| `geodesic_integrate`, `parallel_transport_ode` | 1536 | 1 |
+| Christoffel / Riemann / scalar curvature (same scheme) | 1e25 | 0 |
+| Sphere, hyperbolic, Grassmann, SPD, Stiefel maps and distances | past 2^40 | 1 |
+| SO(3) / SE(3) log near pi, manifold maps of SO(n), GL(n), SL(n) | past 10^6 | 3 |
+| Fiber-bundle transport, projective maps, Moebius, cross ratio | 198 | 0 |
+| Tucker / CP-ALS factors, pseudoinverse terms, `normalize` | 23 | 2 |
+| `matrix_exp` / `matrix_log` on realtime at 8 fraction bits | 8 / 6 | 0 / 0 |
+
+- **LU, Cholesky and QR** factor at the compute tier and keep those factors:
+  `solve`, `inverse`, `determinant` and `refine` run on them. The public
+  `l`, `u`, `q`, `r` fields are the same factors rounded once.
+- **Jacobi, Golub-Kahan SVD and Francis Schur** carry the matrix being
+  reduced and the accumulated transforms at the compute tier; an
+  off-diagonal entry now counts as zero within `2^-(3F/2)` of its diagonal
+  neighbours (was `2^-(2F/3)`). Householder vectors are scaled by a power of
+  two before use (at 10 fraction bits a small column kept a few significant
+  bits of `v.v` and the reflection lost orthogonality; a large column
+  overflowed the realtime compute tier), and SVD and Schur form their shifts
+  from the active block scaled up by a power of two (a block near `2^-8`
+  froze the iteration at 8 and 10 fraction bits).
+- **ODE integrators, `geodesic_integrate`, `parallel_transport_ode`,
+  `VectorBundle::parallel_transport_along`** carry their state across steps
+  at the compute tier; the user's right-hand side still sees storage values.
+- **Manifolds** compute angles from exact products (`atan2` of the cross and
+  dot parts on the sphere, the `ln` form of `acosh` on the hyperboloid,
+  principal angles `atan2(|P_i|, |C_i|)` on the Grassmannian) instead of
+  `acos`/`acosh` of a rounded cosine, which lost half the bits for close
+  points; SPD maps keep `P^1/2`, its inverse, the products and `expm`/`logm`
+  at the compute tier.
+- **Lie groups**: SO(3)/SE(3) exp and log (the axis beyond 90 degrees from
+  the symmetric part), group products, inverses (compute-tier LU), adjoints
+  and brackets at the compute tier.
+- **Curvature**: metric partials, the inverse metric, Christoffel symbols and
+  their central differences at the compute tier (a storage rounding inside a
+  central difference came out multiplied by `2^(k-1)`).
+- **Projective and tensor code**: cross ratios, projective transforms,
+  Moebius maps, `FixedVector::cross` and `normalize`, Tucker and CP-ALS
+  (factors across iterations), SVD reconstruction, `pseudoinverse` and
+  `condition_number_1`.
+
+- **Matrix functions on realtime run at Q64.64.** The realtime compute tier
+  holds `2F` fractional bits (16 at 8 fraction bits), and scaling and
+  squaring amplified it: `matrix_exp` of a norm-7 matrix was 8 units off and
+  `matrix_log` 6 at 8 fraction bits (1 at 10 to 16). `matrix_exp`,
+  `matrix_log`, `matrix_sqrt`, `matrix_pow` and their compute-tier forms used
+  by the Lie groups and manifolds now run on i128 values with 64 fractional
+  bits on realtime (inputs widened exactly, results rounded once), and
+  Denman-Beavers stops at `2^-(F + 8)` relative, compared at the working
+  precision, on every profile (a stop at one storage unit left `2^-2F`, which
+  the logarithm's unscaling amplified). Measured: 0 units on every profile and
+  split, including norms up to 7 and SPD spectra from 1/8 to 60.
+  `ComputeMatrix` products are one rounding of their exact sums (each product
+  was rounded first). The public matrix functions return `Err(TierOverflow)`
+  where a result leaves storage (they panicked).
+
+Gates: `tests/one_rounding_validation.rs`, `tests/ode_compute_state_validation.rs`,
+`tests/curvature_compute_tier_validation.rs`,
+`tests/manifold_compute_tier_validation.rs`,
+`tests/lie_fiber_compute_tier_validation.rs`,
+`tests/projective_tensor_compute_tier_validation.rs`, each with its reference
+generator in `scripts/`.
+
+### Performance
+
+- **Checked operators.** Release-mode cost per operation against 0.6.3,
+  measured on one core: `+` and `-` unchanged; `*` 0.24 ns slower on realtime
+  (1.69 to 1.93 ns), 0.44 ns on compact (1.78 to 2.22), 15% on balanced (15.9
+  to 18.3), unchanged on embedded and scientific; `/` unchanged.
+- **Decimal-domain multiplication on balanced and scientific** divided by
+  10^77 / 10^154 with a bit-serial long division (2048 steps for I2048), once
+  per multiply, which made canonical decimal transcendentals on scientific
+  about 570 times slower than the binary engine. The division by the constant
+  is now limb-wise (bit-identical, gated by a unit test).
+
 ## [0.6.3] - 2026-09-19
 
 ### Upgrading

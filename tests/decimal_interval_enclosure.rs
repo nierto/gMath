@@ -293,20 +293,20 @@ fn sqrt_pins() {
 // ----------------------------------------------------------------------------
 
 #[test]
-fn errors_are_typed_where_the_scalar_saturates() {
+fn errors_are_typed_like_the_scalar_try_twins() {
     let straddle = I9::new(d9("-1"), d9("1"));
     assert_eq!(p9("1").try_div(straddle), Err(OverflowDetected::DivisionByZero));
     assert_eq!(p9("1").try_div(p9("0")), Err(OverflowDetected::DivisionByZero));
-    // the scalar saturates on the same input; the interval refuses
-    assert_eq!((d9("1") / d9("0")).raw_value(), i128::MAX);
+    // the scalar's try twin gives the same typed error (0.6.3 saturated)
+    assert_eq!(d9("1").try_div(d9("0")), Err(OverflowDetected::DivisionByZero));
 
     assert_eq!(I9::new(d9("-1"), d9("4")).try_sqrt(), Err(OverflowDetected::DomainError));
     assert_eq!(I9::try_new(d9("2"), d9("1")), Err(OverflowDetected::InvalidInput));
 
     let max = I9::point(D9::from_raw(i128::MAX));
     assert_eq!(max.try_add(I9::point(ulp9())), Err(OverflowDetected::TierOverflow));
-    // the scalar saturates on the same input
-    assert_eq!((D9::from_raw(i128::MAX) + ulp9()).raw_value(), i128::MAX);
+    // likewise the scalar's try twin (0.6.3 saturated)
+    assert_eq!(D9::from_raw(i128::MAX).try_add(ulp9()), Err(OverflowDetected::TierOverflow));
     assert_eq!(max.try_mul(p9("2")), Err(OverflowDetected::TierOverflow));
     let min = I9::point(D9::from_raw(i128::MIN));
     assert_eq!(min.try_neg(), Err(OverflowDetected::TierOverflow));

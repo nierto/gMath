@@ -68,10 +68,6 @@ pub use sin_cos_tier_n_plus_1::{sin_binary_i1024, cos_binary_i1024, pi_half_i102
 #[cfg(table_format = "q256_256")]
 pub use atan_tier_n_plus_1::{atan_binary_i1024, atan2_binary_i1024};
 
-// Signed Q512.512 multiply helper - used by all Q512.512 transcendental implementations
-#[cfg(table_format = "q256_256")]
-pub(crate) use ln_tier_n_plus_1::multiply_i1024_q512_512;
-
 // Compute-tier dispatch functions for StackEvaluator tier N+1 integration
 #[cfg(table_format = "q256_256")]
 pub use sin_cos_tier_n_plus_1::{sin_compute_tier_i1024, cos_compute_tier_i1024};

@@ -31,6 +31,7 @@
 //! `tests/decimal_transcendental_validation.rs`.
 
 pub mod decimal_compute;
+mod hp;
 pub mod exp;
 pub mod ln;
 pub mod sqrt;
@@ -48,6 +49,7 @@ pub use decimal_compute::{
     decimal_compute_sub,
     decimal_compute_neg,
     decimal_compute_mul,
+    try_decimal_compute_mul, try_decimal_compute_add, try_decimal_compute_sub, try_decimal_compute_neg,
     decimal_compute_div,
     decimal_compute_div_int,
     decimal_compute_halve,

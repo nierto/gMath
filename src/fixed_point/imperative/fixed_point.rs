@@ -15,9 +15,6 @@ use crate::fixed_point::universal::fasc::stack_evaluator::{
 pub use crate::fixed_point::core_types::errors::OverflowDetected;
 
 #[cfg(table_format = "q64_64")]
-use crate::fixed_point::multiply_binary_i128;
-
-#[cfg(table_format = "q64_64")]
 use crate::fixed_point::I256;
 
 #[cfg(table_format = "q128_128")]
@@ -126,8 +123,11 @@ fn direct_cos(x: ComputeStorage) -> ComputeStorage {
 }
 
 fn direct_atan2(y: ComputeStorage, x: ComputeStorage) -> ComputeStorage {
+    // realtime: the Q(2F) compute raws go through the Q64.64 engine and back
+    // (0.6.3 passed them to the Q64.64 engine unscaled and truncated its
+    // Q64.64 angle into the Q(2F) raw: atan2(1, 1) panicked on every split)
     #[cfg(table_format = "q16_16")]
-    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i128(y as i128, x as i128) as i64 }
+    { crate::fixed_point::domains::binary_fixed::transcendental::atan2_compute_tier_i64(y, x) }
     #[cfg(table_format = "q32_32")]
     { crate::fixed_point::domains::binary_fixed::transcendental::atan2_binary_i128(y, x) }
     #[cfg(table_format = "q64_64")]
@@ -308,33 +308,90 @@ impl FixedPoint {
     }
 
     /// Create from an integer value.
+    ///
+    /// Panics when `v` is outside the profile's integer range, which only the
+    /// realtime profile can reach (`|v| >= 2^(31 - GMATH_FRAC_BITS)`: 32768 at
+    /// Q16.16, 128 at Q8.24). Before 0.6.4 the shift wrapped silently.
+    /// [`try_from_int`](Self::try_from_int) returns `Err(TierOverflow)` instead.
     #[inline]
     pub fn from_int(v: i32) -> Self {
+        Self::try_from_int(v).expect("FixedPoint::from_int: value outside the profile's range")
+    }
+
+    /// Create from an integer value, `Err(TierOverflow)` outside the range.
+    ///
+    /// Only the realtime profile can refuse: every i32 fits the wider ones.
+    #[inline]
+    pub fn try_from_int(v: i32) -> Result<Self, OverflowDetected> {
         #[cfg(table_format = "q16_16")]
-        { Self { raw: (v as i32) << FRAC_BITS } }
+        {
+            let raw = (v as i64) << FRAC_BITS;
+            i32::try_from(raw).map(|raw| Self { raw }).map_err(|_| OverflowDetected::TierOverflow)
+        }
         #[cfg(table_format = "q32_32")]
-        { Self { raw: (v as i64) << 32 } }
+        { Ok(Self { raw: (v as i64) << 32 }) }
         #[cfg(table_format = "q64_64")]
-        { Self { raw: (v as i128) << 64 } }
+        { Ok(Self { raw: (v as i128) << 64 }) }
         #[cfg(table_format = "q128_128")]
-        { Self { raw: I256::from_i128(v as i128) << 128usize } }
+        { Ok(Self { raw: I256::from_i128(v as i128) << 128usize }) }
         #[cfg(table_format = "q256_256")]
-        { Self { raw: I512::from_i128(v as i128) << 256usize } }
+        { Ok(Self { raw: I512::from_i128(v as i128) << 256usize }) }
+    }
+
+    /// `self * n` for a count or dimension `n`: exact at the compute tier (the
+    /// count need not fit the storage range), panics if the product does not.
+    pub(crate) fn mul_count(self, n: usize) -> Self {
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_mul_div_int;
+        let c = compute_mul_div_int(upscale_to_compute(self.raw), n as i64, 1)
+            .expect("FixedPoint::mul_count: product exceeds the compute tier");
+        Self { raw: downscale_to_storage(c).expect("FixedPoint::mul_count: product exceeds storage") }
+    }
+
+    /// `self / n` for a count or dimension `n > 0`: the storage division when
+    /// `n` fits the storage range (bit-identical to `self / from_int(n)`),
+    /// the compute tier when it does not (a realtime count past 2^(31 - F)).
+    pub(crate) fn div_count(self, n: usize) -> Self {
+        match i32::try_from(n).ok().and_then(|n| Self::try_from_int(n).ok()) {
+            Some(nf) => self / nf,
+            None => {
+                use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_mul_div_int;
+                let c = compute_mul_div_int(upscale_to_compute(self.raw), 1, n as i64)
+                    .expect("FixedPoint::div_count: n > 0");
+                Self { raw: downscale_to_storage(c).expect("FixedPoint::div_count: quotient fits storage") }
+            }
+        }
     }
 
     /// Extract the integer part (floor toward negative infinity).
+    ///
+    /// Panics when the floor is outside the i32 range (`|x| >= 2^31`, reachable
+    /// on every profile but realtime); the cast wrapped silently before 0.6.4.
+    /// [`try_to_int`](Self::try_to_int) returns `Err(TierOverflow)` instead.
     #[inline]
     pub fn to_int(self) -> i32 {
+        self.try_to_int().expect("FixedPoint::to_int: integer part outside the i32 range")
+    }
+
+    /// The integer part (floor toward negative infinity), `Err(TierOverflow)`
+    /// when it is outside the i32 range.
+    #[inline]
+    pub fn try_to_int(self) -> Result<i32, OverflowDetected> {
         #[cfg(table_format = "q16_16")]
-        { (self.raw >> FRAC_BITS) as i32 }
+        { Ok(self.raw >> FRAC_BITS) }
         #[cfg(table_format = "q32_32")]
-        { (self.raw >> 32) as i32 }
+        { i32::try_from(self.raw >> 32).map_err(|_| OverflowDetected::TierOverflow) }
         #[cfg(table_format = "q64_64")]
-        { (self.raw >> 64) as i32 }
+        { i32::try_from(self.raw >> 64).map_err(|_| OverflowDetected::TierOverflow) }
         #[cfg(table_format = "q128_128")]
-        { (self.raw >> 128u32).as_i128() as i32 }
+        { i32::try_from((self.raw >> 128u32).as_i128()).map_err(|_| OverflowDetected::TierOverflow) }
         #[cfg(table_format = "q256_256")]
-        { (self.raw >> 256usize).as_i128() as i32 }
+        {
+            let floor = self.raw >> 256usize;
+            if !floor.fits_in_i128() {
+                return Err(OverflowDetected::TierOverflow);
+            }
+            i32::try_from(floor.as_i128()).map_err(|_| OverflowDetected::TierOverflow)
+        }
     }
 
     /// Absolute value.
@@ -439,6 +496,9 @@ impl FixedPoint {
     /// Below f32's normal range the result is subnormal or zero, and beyond its
     /// range (scientific profile only) it is infinite. The f32 is assembled from
     /// the raw integer's bits; no float arithmetic is performed.
+    ///
+    /// For display and interop only: never decode a value for further
+    /// computation through a float.
     pub fn to_f32(self) -> f32 {
         f32::from_bits(self.float_bits(23, 8) as u32)
     }
@@ -452,6 +512,9 @@ impl FixedPoint {
     ///
     /// Before 0.6.3 this printed a truncated decimal string and parsed it;
     /// `x.to_string().parse::<f64>()` reproduces that result.
+    ///
+    /// For display and interop only: never decode a value for further
+    /// computation through a float.
     pub fn to_f64(self) -> f64 {
         f64::from_bits(self.float_bits(52, 11))
     }
@@ -475,26 +538,46 @@ impl FixedPoint {
         }
     }
 
-    /// Parse from a decimal string (e.g., "3.14159").
+    /// Parse from a decimal string (e.g., "3.14159", "1e-06").
     ///
-    /// Routes through FASC with forced binary mode for correct conversion.
+    /// Panics where [`try_from_str`](Self::try_from_str) returns an error.
     pub fn from_str(s: &str) -> Self {
+        Self::try_from_str(s).expect("FixedPoint::from_str: parse failed")
+    }
+
+    /// Parse from a string without panicking.
+    ///
+    /// A decimal literal, optionally in exponent notation
+    /// (`[+-]? digits [. digits] [e [+-]? digits]`, also `.5` and `5.`,
+    /// surrounding whitespace ignored), is converted exactly with integer
+    /// arithmetic and rounded once to the nearest storage value, ties toward
+    /// +infinity. Any number of digits is accepted. Any other string (hex
+    /// `0x..`, binary `0b..`, ternary `0t..`, fractions `1/3`, repeating
+    /// decimals `0.3...`, named constants `pi`) is parsed by the canonical
+    /// evaluator in binary mode, as before.
+    ///
+    /// `Err(ParseError)` for a malformed string, `Err(TierOverflow)` when the
+    /// value does not fit storage.
+    pub fn try_from_str(s: &str) -> Result<Self, OverflowDetected> {
+        match super::decimal_literal::parse(s, FRAC_BITS as u32, crate::fixed_point::frac_config::STORAGE_BITS) {
+            Some(converted) => converted.map(|c| Self { raw: super::decimal_literal::to_storage(&c) }),
+            None => Self::try_from_str_canonical(s),
+        }
+    }
+
+    /// The literal through the canonical evaluator in binary:binary mode.
+    fn try_from_str_canonical(s: &str) -> Result<Self, OverflowDetected> {
         use crate::fixed_point::universal::fasc::mode;
 
-        // Temporarily set binary:binary mode to force binary domain parsing
         let old_mode = mode::get_mode();
         mode::set_mode(mode::GmathMode {
             compute: mode::ComputeMode::Binary,
             output: mode::OutputMode::Binary,
         });
-
-        let expr = gmath_parse(s).expect("FixedPoint::from_str: parse failed");
-        let result = evaluate(&expr).expect("FixedPoint::from_str: eval failed");
-
-        // Restore previous mode
+        let result = gmath_parse(s).and_then(|expr| evaluate(&expr));
         mode::set_mode(old_mode);
 
-        Self::from_stack_value(result)
+        Self::try_from_stack_value(result?)
     }
 
     // ========================================================================
@@ -742,26 +825,37 @@ impl FixedPoint {
     /// 32 fractional bits). This gives ±2.1 billion integer range regardless of
     /// the profile's FRAC_BITS, covering all practical RoPE frequencies.
     ///
-    /// Internally computes at Q64.64 (i128) via the native sincos path,
-    /// then narrows to storage tier. Output sin/cos always fits in [-1, 1].
-    ///
-    /// # Use case
-    /// RoPE position encoding where `theta^(2i/d) × position` exceeds storage range.
-    /// ```ignore
-    /// // Precompute frequency at i64 precision:
-    /// let angle_q32: i64 = compute_rope_angle_i64(freq, position);
-    /// let (sin_val, cos_val) = FixedPoint::sincos_wide(angle_q32);
-    /// ```
+    /// Identical to [`sincos_wide_q64`](Self::sincos_wide_q64) of the angle
+    /// shifted to Q64.64. Output sin/cos always fits in [-1, 1].
     #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
     pub fn sincos_wide(angle_q32_32: i64) -> (Self, Self) {
+        // Fixed Q32.32→Q64.64 upscale (always 32, independent of profile FRAC_BITS)
+        Self::sincos_wide_q64((angle_q32_32 as i128) << 32)
+    }
+
+    /// Fused sin+cos of a Q64.64 angle (`radians * 2^64`), rounded to storage.
+    ///
+    /// Computes [`wide::sincos_q64`](crate::fixed_point::wide::sincos_q64) and
+    /// rounds each result once to storage. The Q64.64 angle needs no caller-side
+    /// truncation to Q32.32.
+    ///
+    /// # Use case
+    /// RoPE position encoding, where `theta^(-2i/d) * position` exceeds the
+    /// storage range:
+    /// ```ignore
+    /// use g_math::fixed_point::{wide, FixedPoint};
+    /// let (theta, i, d, position) = (10_000i128, 3i128, 64i128, 4_095i128);
+    /// let ln_theta = wide::ln_q64(theta << 64).unwrap();
+    /// let inv_freq = wide::exp_q64(-(2 * i * ln_theta) / d);   // Q64.64
+    /// let (sin, cos) = FixedPoint::sincos_wide_q64(inv_freq * position);
+    /// ```
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    pub fn sincos_wide_q64(angle_q64: i128) -> (Self, Self) {
         use crate::fixed_point::domains::binary_fixed::transcendental::{
             sin_binary_i128, cos_binary_i128,
         };
-        // Fixed Q32.32→Q64.64 upscale (always 32, independent of profile FRAC_BITS)
-        let angle_q64 = (angle_q32_32 as i128) << 32;
         let sin_q64 = sin_binary_i128(angle_q64);
         let cos_q64 = cos_binary_i128(angle_q64);
-
         // Downscale Q64.64 → storage tier: shift = 64 - FRAC_BITS
         #[cfg(table_format = "q16_16")]
         {
@@ -929,10 +1023,6 @@ impl FixedPoint {
     #[inline]
     pub(crate) fn to_stack_value(self) -> StackValue {
         StackValue::Binary(STORAGE_TIER, self.raw, CompactShadow::None)
-    }
-
-    pub(crate) fn from_stack_value(sv: StackValue) -> Self {
-        Self::try_from_stack_value(sv).expect("FixedPoint: domain conversion failed")
     }
 
     pub(crate) fn try_from_stack_value(sv: StackValue) -> Result<Self, OverflowDetected> {
@@ -1126,14 +1216,20 @@ impl Default for FixedPoint {
 // Arithmetic operators — direct Q-format integer ops (no FASC overhead)
 // ============================================================================
 
+// The operators never wrap: a result outside the storage range panics, like
+// every other infallible path in the crate. Before 0.6.4 `+ - neg` used
+// wrapping arithmetic and `* /` narrowed their exact wide results with
+// truncating casts, so an overflow returned a plausible wrong value. The
+// `try_` methods return `Err(TierOverflow)` / `Err(DivisionByZero)` instead;
+// for automatic promotion to a wider tier or an exact rational, evaluate the
+// expression through the canonical API (`gmath` / `evaluate`), where UGOD
+// applies.
+
 impl Add for FixedPoint {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-        { Self { raw: self.raw.wrapping_add(rhs.raw) } }
-        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-        { Self { raw: self.raw + rhs.raw } }
+        self.try_add(rhs).expect("FixedPoint: addition overflow")
     }
 }
 
@@ -1141,10 +1237,7 @@ impl Sub for FixedPoint {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-        { Self { raw: self.raw.wrapping_sub(rhs.raw) } }
-        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-        { Self { raw: self.raw - rhs.raw } }
+        self.try_sub(rhs).expect("FixedPoint: subtraction overflow")
     }
 }
 
@@ -1152,7 +1245,7 @@ impl Mul for FixedPoint {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        Self { raw: fixed_multiply(self.raw, rhs.raw) }
+        self.try_mul(rhs).expect("FixedPoint: multiplication overflow")
     }
 }
 
@@ -1160,7 +1253,11 @@ impl Div for FixedPoint {
     type Output = Self;
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        Self { raw: fixed_divide(self.raw, rhs.raw) }
+        match self.try_div(rhs) {
+            Ok(v) => v,
+            Err(OverflowDetected::DivisionByZero) => panic!("FixedPoint: division by zero"),
+            Err(_) => panic!("FixedPoint: division overflow"),
+        }
     }
 }
 
@@ -1168,10 +1265,41 @@ impl Neg for FixedPoint {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-        { Self { raw: self.raw.wrapping_neg() } }
-        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-        { Self { raw: -self.raw } }
+        self.try_neg().expect("FixedPoint: negation overflow")
+    }
+}
+
+impl FixedPoint {
+    /// `self + rhs`, `Err(TierOverflow)` when the sum leaves storage.
+    #[inline]
+    pub fn try_add(self, rhs: Self) -> Result<Self, OverflowDetected> {
+        self.raw.checked_add(rhs.raw).map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// `self - rhs`, `Err(TierOverflow)` when the difference leaves storage.
+    #[inline]
+    pub fn try_sub(self, rhs: Self) -> Result<Self, OverflowDetected> {
+        self.raw.checked_sub(rhs.raw).map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// `-self`, `Err(TierOverflow)` for the storage minimum (no positive twin).
+    #[inline]
+    pub fn try_neg(self) -> Result<Self, OverflowDetected> {
+        self.raw.checked_neg().map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// `self * rhs`, rounded to nearest (ties toward +infinity) from the exact
+    /// product; `Err(TierOverflow)` when it leaves storage.
+    #[inline]
+    pub fn try_mul(self, rhs: Self) -> Result<Self, OverflowDetected> {
+        try_fixed_multiply(self.raw, rhs.raw).map(|raw| Self { raw })
+    }
+
+    /// `self / rhs`, rounded to nearest (ties toward +infinity) from the exact
+    /// quotient; `Err(DivisionByZero)` or `Err(TierOverflow)`.
+    #[inline]
+    pub fn try_div(self, rhs: Self) -> Result<Self, OverflowDetected> {
+        try_fixed_divide(self.raw, rhs.raw).map(|raw| Self { raw })
     }
 }
 
@@ -1199,69 +1327,107 @@ impl DivAssign for FixedPoint {
 // Q-format fixed-point multiply
 // ============================================================================
 
-/// Multiply two Q-format fixed-point values.
-///
-/// Uses tier N+1 widening multiplication with right-shift by FRAC_BITS.
+/// Multiply two Q-format fixed-point values: the exact wide product rounded
+/// to nearest (ties toward +infinity) and range-checked.
 #[inline]
-fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
+fn try_fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> Result<BinaryStorage, OverflowDetected> {
+    let overflow = OverflowDetected::TierOverflow;
     #[cfg(table_format = "q16_16")]
     {
-        // i32*i32→i64, >>FRAC_BITS with round-bit: nearest, ties toward +∞
-        // (0.5.0 rounding unification — was floor via bare shift)
+        // i32*i32->i64, >>FRAC_BITS with round-bit: nearest, ties toward +inf
         let wide = (a as i64) * (b as i64);
-        let round_bit = (wide >> (FRAC_BITS - 1)) & 1;
-        ((wide >> FRAC_BITS) + round_bit) as i32
+        let round_bit = ((wide >> (FRAC_BITS - 1)) & 1) as i32;
+        let q = wide >> FRAC_BITS;
+        if q as i32 as i64 != q { return Err(overflow); }
+        (q as i32).checked_add(round_bit).ok_or(overflow)
     }
     #[cfg(table_format = "q32_32")]
     {
-        // i64*i64→i128, >>32 with round-bit: nearest, ties toward +∞
-        // (0.5.0 rounding unification — was floor via bare shift)
+        // i64*i64->i128, >>32 with round-bit: nearest, ties toward +inf
         let wide = (a as i128) * (b as i128);
-        let round_bit = (wide >> 31) & 1;
-        ((wide >> 32) + round_bit) as i64
+        let round_bit = ((wide >> 31) & 1) as i64;
+        let q = wide >> 32;
+        if q as i64 as i128 != q { return Err(overflow); }
+        (q as i64).checked_add(round_bit).ok_or(overflow)
     }
     #[cfg(table_format = "q64_64")]
     {
-        // multiply_binary_i128: i128*i128→I256, >>64, nearest ties toward +∞ (0.5.0)
-        multiply_binary_i128(a, b)
+        // i128*i128->I256, >>64 plus the round bit (bit 63 of the product):
+        // the rounding of multiply_binary_i128, range-checked
+        let product = crate::fixed_point::i256::mul_i128_to_i256(a, b);
+        let mut scaled = product >> 64u32;
+        if product.words[0] >= 1u64 << 63 { scaled = scaled + I256::from_i128(1); }
+        if !scaled.fits_in_i128() { return Err(overflow); }
+        Ok(scaled.as_i128())
     }
     #[cfg(table_format = "q128_128")]
     {
-        // I256*I256→I512, >>128: nearest, ties toward +∞ (0.5.0 rounding
-        // unification — was truncate toward zero). Computed on magnitudes
-        // (mul_to_i512 is unsigned): for a positive result round the
-        // magnitude up on remainder >= half (tie goes up = toward +∞);
-        // for a negative result round the magnitude up only on
-        // remainder > half (tie stays = toward +∞ after negation).
+        // I256*I256->I512 on magnitudes (mul_to_i512 is unsigned), read by
+        // words: the magnitude before rounding is words 2..6, the remainder
+        // words 0..2. A positive result rounds the magnitude up on
+        // remainder >= half (tie up), a negative one only on remainder > half
+        // (tie toward +inf).
         let a_neg = a.is_negative();
         let b_neg = b.is_negative();
         let result_neg = a_neg != b_neg;
         let abs_a = if a_neg { -a } else { a };
         let abs_b = if b_neg { -b } else { b };
-        let product = abs_a.mul_to_i512(abs_b);
-        let half = I512::from_i128(1) << 127usize;
-        let rem = product & ((I512::from_i128(1) << 128usize) - I512::from_i128(1));
-        let mut mag = (product >> 128usize).as_i256();
-        let bump = if result_neg { rem > half } else { rem >= half };
-        if bump { mag = mag + I256::from_i128(1); }
-        if result_neg { -mag } else { mag }
+        let w = abs_a.mul_to_i512(abs_b).words;
+        let top = 1u64 << 63;
+        let bump = if result_neg { w[1] > top || (w[1] == top && w[0] != 0) } else { w[1] >= top };
+        if w[6] != 0 || w[7] != 0 || w[5] > top {
+            return Err(overflow);
+        }
+        // round: add the bump through the carry chain (the top word is at
+        // most 2^63, so it cannot carry out)
+        let mut m = [w[2], w[3], w[4], w[5]];
+        let mut carry = bump as u64;
+        for x in m.iter_mut() {
+            let (v, c) = x.overflowing_add(carry);
+            *x = v;
+            carry = c as u64;
+        }
+        if m[3] >= top {
+            // 2^255 or more: only the negative minimum, magnitude exactly 2^255
+            return if result_neg && m == [0, 0, 0, top] { Ok(I256::min_value()) } else { Err(overflow) };
+        }
+        let mag = I256 { words: m };
+        Ok(if result_neg { -mag } else { mag })
     }
     #[cfg(table_format = "q256_256")]
     {
-        // I512*I512→I1024, >>256: nearest, ties toward +∞ (0.5.0 rounding
-        // unification — was truncate toward zero; see q128_128 arm).
+        // I512*I512->I1024 on magnitudes, read by words (see q128_128): the
+        // magnitude before rounding is words 4..12, the remainder words 0..4
         let a_neg = a.is_negative();
         let b_neg = b.is_negative();
         let result_neg = a_neg != b_neg;
         let abs_a = if a_neg { -a } else { a };
         let abs_b = if b_neg { -b } else { b };
-        let product = abs_a.mul_to_i1024(abs_b);
-        let half = I1024::from_i128(1) << 255usize;
-        let rem = product & ((I1024::from_i128(1) << 256usize) - I1024::from_i128(1));
-        let bump = if result_neg { rem > half } else { rem >= half };
-        let mut shifted = (product >> 256usize).as_i512();
-        if bump { shifted = shifted + I512::from_i128(1); }
-        if result_neg { -shifted } else { shifted }
+        let w = abs_a.mul_to_i1024(abs_b).words;
+        let top = 1u64 << 63;
+        let bump = if result_neg {
+            w[3] > top || (w[3] == top && (w[0] | w[1] | w[2]) != 0)
+        } else {
+            w[3] >= top
+        };
+        if w[12..].iter().any(|&x| x != 0) || w[11] > top {
+            return Err(overflow);
+        }
+        let mut m = [0u64; 8];
+        m.copy_from_slice(&w[4..12]);
+        let mut carry = bump as u64;
+        for x in m.iter_mut() {
+            let (v, c) = x.overflowing_add(carry);
+            *x = v;
+            carry = c as u64;
+        }
+        if m[7] >= top {
+            // 2^511 or more: only the negative minimum, magnitude exactly 2^511
+            let exact_min = m[7] == top && m[..7].iter().all(|&x| x == 0);
+            return if result_neg && exact_min { Ok(I512::min_value()) } else { Err(overflow) };
+        }
+        let mag = I512 { words: m };
+        Ok(if result_neg { -mag } else { mag })
     }
 }
 
@@ -1276,38 +1442,40 @@ fn fixed_multiply(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
 /// zero). The exact quotient's sign decides the tie direction: positive
 /// results bump on 2|rem| >= |den| (tie goes up), negative results bump
 /// only on 2|rem| > |den| (tie stays, which is toward +∞).
-/// Panics on division by zero.
+/// `Err(DivisionByZero)` / `Err(TierOverflow)`; the quotient was narrowed
+/// with a truncating cast before 0.6.4.
 #[inline]
-fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
+fn try_fixed_divide(a: BinaryStorage, b: BinaryStorage) -> Result<BinaryStorage, OverflowDetected> {
+    let overflow = OverflowDetected::TierOverflow;
     #[cfg(table_format = "q16_16")]
     {
         let num = (a as i64) << FRAC_BITS;
         let den = b as i64;
-        assert!(den != 0, "FixedPoint: division by zero");
+        if den == 0 { return Err(OverflowDetected::DivisionByZero); }
         let q = num / den;
         let rem2 = (num - q * den).unsigned_abs() << 1;
         let dabs = den.unsigned_abs();
         let positive = (num < 0) == (den < 0);
         let bump = if positive { rem2 >= dabs } else { rem2 > dabs };
-        (if bump { q + if positive { 1 } else { -1 } } else { q }) as i32
+        i32::try_from(if bump { q + if positive { 1 } else { -1 } } else { q }).map_err(|_| overflow)
     }
     #[cfg(table_format = "q32_32")]
     {
         let num = (a as i128) << 32;
         let den = b as i128;
-        assert!(den != 0, "FixedPoint: division by zero");
+        if den == 0 { return Err(OverflowDetected::DivisionByZero); }
         let q = num / den;
         let rem2 = (num - q * den).unsigned_abs() << 1;
         let dabs = den.unsigned_abs();
         let positive = (num < 0) == (den < 0);
         let bump = if positive { rem2 >= dabs } else { rem2 > dabs };
-        (if bump { q + if positive { 1 } else { -1 } } else { q }) as i64
+        i64::try_from(if bump { q + if positive { 1 } else { -1 } } else { q }).map_err(|_| overflow)
     }
     #[cfg(table_format = "q64_64")]
     {
         let num = I256::from_i128(a) << 64usize;
         let den = I256::from_i128(b);
-        assert!(!den.is_zero(), "FixedPoint: division by zero");
+        if den.is_zero() { return Err(OverflowDetected::DivisionByZero); }
         let q = num / den;
         let rem = num - q * den;
         let rem_abs = if rem.is_negative() { -rem } else { rem };
@@ -1316,13 +1484,15 @@ fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
         let rem2 = rem_abs + rem_abs;
         let bump = if positive { rem2 >= den_abs } else { rem2 > den_abs };
         let one = I256::from_i128(1);
-        (if bump { if positive { q + one } else { q - one } } else { q }).as_i128()
+        let q = if bump { if positive { q + one } else { q - one } } else { q };
+        if !q.fits_in_i128() { return Err(overflow); }
+        Ok(q.as_i128())
     }
     #[cfg(table_format = "q128_128")]
     {
         let num = I512::from_i256(a) << 128usize;
         let den = I512::from_i256(b);
-        assert!(!den.is_zero(), "FixedPoint: division by zero");
+        if den.is_zero() { return Err(OverflowDetected::DivisionByZero); }
         let q = num / den;
         let rem = num - q * den;
         let rem_abs = if rem.is_negative() { -rem } else { rem };
@@ -1331,13 +1501,15 @@ fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
         let rem2 = rem_abs + rem_abs;
         let bump = if positive { rem2 >= den_abs } else { rem2 > den_abs };
         let one = I512::from_i128(1);
-        (if bump { if positive { q + one } else { q - one } } else { q }).as_i256()
+        let q = if bump { if positive { q + one } else { q - one } } else { q };
+        if !q.fits_in_i256() { return Err(overflow); }
+        Ok(q.as_i256())
     }
     #[cfg(table_format = "q256_256")]
     {
         let num = I1024::from_i512(a) << 256usize;
         let den = I1024::from_i512(b);
-        assert!(!den.is_zero(), "FixedPoint: division by zero");
+        if den.is_zero() { return Err(OverflowDetected::DivisionByZero); }
         let q = num / den;
         let rem = num - q * den;
         let rem_abs = if rem < I1024::zero() { -rem } else { rem };
@@ -1346,6 +1518,49 @@ fn fixed_divide(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
         let rem2 = rem_abs + rem_abs;
         let bump = if positive { rem2 >= den_abs } else { rem2 > den_abs };
         let one = I1024::from_i128(1);
-        (if bump { if positive { q + one } else { q - one } } else { q }).as_i512()
+        let q = if bump { if positive { q + one } else { q - one } } else { q };
+        if !q.fits_in_i512() { return Err(overflow); }
+        Ok(q.as_i512())
+    }
+}
+
+#[cfg(test)]
+mod literal_parser_tests {
+    use super::FixedPoint;
+
+    /// The exact parser agrees bit for bit with the canonical evaluator on
+    /// every plain decimal and integer literal, in range or not: any digit
+    /// count (before 0.6.4 the canonical parser truncated past 38 digits and
+    /// wrapped `value * 10^dp` into i32 decimal storage on realtime).
+    #[test]
+    fn exact_parser_matches_the_canonical_path() {
+        let int_digits = crate::fixed_point::frac_config::INTEGER_BITS as u64 * 30103 / 100000 + 2;
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = |bound: u64| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) % bound
+        };
+        let mut checked = 0;
+        for _ in 0..20_000 {
+            let mut s = String::new();
+            if next(2) == 0 { s.push('-'); }
+            let int_len = 1 + next(int_digits);
+            for _ in 0..int_len { s.push((b'0' + next(10) as u8) as char); }
+            let frac_len = next(46);
+            if frac_len > 0 || next(2) == 0 {
+                s.push('.');
+                for _ in 0..frac_len.max(1) { s.push((b'0' + next(10) as u8) as char); }
+            }
+            let exact = FixedPoint::try_from_str(&s);
+            let canonical = FixedPoint::try_from_str_canonical(&s);
+            match (&exact, &canonical) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "{s}"),
+                (Err(_), Err(_)) => {}
+                _ => panic!("{s}: exact {exact:?}, canonical {canonical:?}"),
+            }
+            checked += exact.is_ok() as u32;
+        }
+        // most literals fit (at 30 fraction bits only |v| < 2 does)
+        assert!(checked > 2_000, "{checked}");
     }
 }

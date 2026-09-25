@@ -1,7 +1,9 @@
 //! Tensor decompositions: truncated SVD, Tucker/HOSVD, CP/ALS.
 //!
 //! Built on the existing `svd_decompose` (Golub-Kahan bidiagonalization) and
-//! `Tensor` infrastructure. All inner products accumulated at compute tier.
+//! `Tensor` infrastructure. Multi-step computations (the Tucker core across
+//! modes, the CP-ALS factors across iterations, every reconstruction) carry
+//! their state at the compute tier and round to storage once at the end.
 //!
 //! **Use cases**:
 //! - Weight compression (truncated SVD: 4096×4096 → rank-128 factors, 32× memory reduction)
@@ -11,6 +13,15 @@
 use super::{FixedPoint, FixedVector, FixedMatrix};
 use super::tensor::Tensor;
 use super::decompose::svd_decompose;
+use super::compute_matrix::{compute_lu_decompose, ComputeMatrix};
+use super::linalg::{compute_product, downscale_to_storage, exact_dot, upscale_to_compute, ComputeStorage};
+use super::wide_acc::{
+    acc, divide_to_storage_nearest, exact_dot_compute, narrow_product_to_compute, narrow_triple_nearest,
+    widen_product, widen_storage, Wide,
+};
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
+    compute_add, compute_is_zero, make_compute_int, sqrt_at_compute_tier,
+};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
@@ -32,19 +43,30 @@ pub struct TruncatedSVD {
 
 impl TruncatedSVD {
     /// Reconstruct the rank-k approximation: U_k Σ_k V_k^T.
+    ///
+    /// Each entry `sum_r u_ir σ_r vt_rj` is exact (`u_ir σ_r` at the compute
+    /// tier, the triple product and the sum above it) and rounded to storage
+    /// once. Panics if an entry exceeds storage.
     pub fn reconstruct(&self) -> FixedMatrix {
+        const OVERFLOW: &str = "TruncatedSVD::reconstruct: entry exceeds storage";
         let m = self.u.rows();
         let n = self.vt.cols();
         let k = self.sigma.len();
+        // u_ir σ_r, exact at 2F
+        let mut u_sigma = Vec::with_capacity(m * k);
+        for i in 0..m {
+            for r in 0..k {
+                u_sigma.push(exact_dot(&[self.u.get(i, r).raw()], &[self.sigma[r].raw()]).expect(OVERFLOW));
+            }
+        }
         let mut result = FixedMatrix::new(m, n);
-        for r in 0..k {
-            let sv = self.sigma[r];
-            for i in 0..m {
-                let u_ir = self.u.get(i, r) * sv;
-                for j in 0..n {
-                    let val = result.get(i, j) + u_ir * self.vt.get(r, j);
-                    result.set(i, j, val);
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = <acc::Orient as Wide>::zero();
+                for r in 0..k {
+                    sum = sum.add_exact(widen_product(u_sigma[i * k + r], widen_storage(self.vt.get(r, j).raw()))).expect(OVERFLOW);
                 }
+                result.set(i, j, FixedPoint::from_raw(narrow_triple_nearest(sum).expect(OVERFLOW)));
             }
         }
         result
@@ -102,9 +124,8 @@ pub fn truncated_svd_auto(a: &FixedMatrix, threshold: Option<FixedPoint>) -> Res
     let thresh = threshold.unwrap_or_else(|| {
         if svd.sigma.len() == 0 { return FixedPoint::one(); }
         let sigma_max = svd.sigma[0];
-        let dim_factor = FixedPoint::from_int(a.rows().max(a.cols()) as i32);
         let eps = super::linalg::convergence_threshold(sigma_max);
-        dim_factor * eps
+        eps.mul_count(a.rows().max(a.cols()))
     });
 
     let mut k = 0;
@@ -133,14 +154,22 @@ pub struct TuckerDecomposition {
 
 impl TuckerDecomposition {
     /// Reconstruct the full tensor from core + factors.
+    ///
+    /// The mode products run at the compute tier (each entry an exact dot
+    /// rounded to the compute tier) and the result is rounded to storage
+    /// once. Panics if an entry exceeds the compute tier or storage.
     pub fn reconstruct(&self) -> Tensor {
         // T = G ×₁ U₁ ×₂ U₂ ... ×_N U_N
         // Mode-n product: contract core's n-th index with U_n's columns
-        let mut result = self.core.clone();
-        for (n, u) in self.factors.iter().enumerate() {
-            result = mode_n_product(&result, u, n);
-        }
-        result
+        let chain = || -> Result<Tensor, OverflowDetected> {
+            let mut data = to_compute(&self.core);
+            let mut shape = self.core.shape().to_vec();
+            for (n, u) in self.factors.iter().enumerate() {
+                (data, shape) = mode_n_product_compute(&data, &shape, u, n)?;
+            }
+            to_storage_tensor(&data, &shape)
+        };
+        chain().expect("TuckerDecomposition::reconstruct: entry exceeds the compute tier or storage")
     }
 
     /// Compression ratio: original_elements / (core + factor) elements.
@@ -157,7 +186,8 @@ impl TuckerDecomposition {
 /// Compute Tucker decomposition via HOSVD.
 ///
 /// `ranks[n]` specifies the truncation rank for mode n. If ranks[n] >= d_n,
-/// that mode is not compressed.
+/// that mode is not compressed. The core `T ×₁ U₁ᵀ ... ×_N U_Nᵀ` stays at the
+/// compute tier across modes and is rounded to storage once.
 pub fn tucker_decompose(t: &Tensor, ranks: &[usize]) -> Result<TuckerDecomposition, OverflowDetected> {
     let ndim = t.rank();
     assert_eq!(ranks.len(), ndim, "ranks must have one entry per tensor mode");
@@ -173,11 +203,12 @@ pub fn tucker_decompose(t: &Tensor, ranks: &[usize]) -> Result<TuckerDecompositi
     }
 
     // Step 2: Core tensor = T ×₁ U₁ᵀ ×₂ U₂ᵀ ... ×_N U_Nᵀ
-    let mut core = t.clone();
+    let mut data = to_compute(t);
+    let mut shape = t.shape().to_vec();
     for (n, u) in factors.iter().enumerate() {
-        let ut = u.transpose();
-        core = mode_n_product(&core, &ut, n);
+        (data, shape) = mode_n_product_compute(&data, &shape, &u.transpose(), n)?;
     }
+    let core = to_storage_tensor(&data, &shape)?;
 
     Ok(TuckerDecomposition { core, factors })
 }
@@ -199,10 +230,14 @@ pub struct CPDecomposition {
 
 impl CPDecomposition {
     /// Reconstruct the full tensor from CP factors.
+    ///
+    /// Each weighted rank-1 term is a product chain at the compute tier and
+    /// the terms are summed there; every entry is rounded to storage once.
+    /// Panics if an entry exceeds the compute tier or storage.
     pub fn reconstruct(&self, shape: &[usize]) -> Tensor {
         let rank = self.weights.len();
         let total: usize = shape.iter().product();
-        let mut data = vec![FixedPoint::ZERO; total];
+        let mut data = vec![make_compute_int(0); total];
 
         // For each rank-1 component
         for r in 0..rank {
@@ -211,7 +246,7 @@ impl CPDecomposition {
             add_rank1_to_flat(&mut data, shape, &self.factors, r, w);
         }
 
-        Tensor::from_data(shape, &data)
+        to_storage_tensor(&data, shape).expect("CPDecomposition::reconstruct: entry exceeds storage")
     }
 }
 
@@ -220,6 +255,13 @@ impl CPDecomposition {
 /// `rank`: number of rank-1 components (R).
 /// `max_iter`: maximum ALS iterations.
 /// `tol`: convergence tolerance (relative change in reconstruction error).
+///
+/// The factors stay at the compute tier across iterations: the Khatri-Rao
+/// products, `VᵀV` and `T_(n) V` (exact dots rounded at the compute tier) and
+/// the solve `factor VᵀV = T_(n) V` (compute-tier LU). The column norms are
+/// compute-tier roots of exact sums; each normalized factor entry is one
+/// division rounded to storage, each weight one rounding of the norms'
+/// compute-tier product.
 pub fn cp_decompose(
     t: &Tensor,
     rank: usize,
@@ -230,16 +272,16 @@ pub fn cp_decompose(
     let shape = t.shape().to_vec();
 
     // Initialize factor matrices via first `rank` left singular vectors of mode-0 unfolding
-    let mut factors: Vec<FixedMatrix> = Vec::with_capacity(ndim);
+    let mut factors: Vec<ComputeMatrix> = Vec::with_capacity(ndim);
     for n in 0..ndim {
         let unfolded = mode_unfold(t, n);
         let k = rank.min(unfolded.rows()).min(unfolded.cols());
         let svd = svd_decompose(&unfolded)?;
-        let mut f = FixedMatrix::new(shape[n], rank);
+        let mut f = ComputeMatrix::new(shape[n], rank);
         for i in 0..shape[n] {
             for r in 0..rank {
                 if r < k {
-                    f.set(i, r, svd.u.get(i, r));
+                    f.set(i, r, upscale_to_compute(svd.u.get(i, r).raw()));
                 }
                 // Remaining columns stay zero (will be refined by ALS)
             }
@@ -251,22 +293,39 @@ pub fn cp_decompose(
     for _iter in 0..max_iter {
         for n in 0..ndim {
             // Compute Khatri-Rao product of all factors except n
-            let v = khatri_rao_except(&factors, n, &shape);
+            let v = khatri_rao_except(&factors, n, &shape)?;
             // Unfolded tensor × V gives the new factor
             let unfolded = mode_unfold(t, n);
-            // factors[n] = unfolded * V * (VᵀV)⁻¹
-            let vt = v.transpose();
-            let vtv = &vt * &v;          // R × R
-            let rhs = &unfolded * &v;    // d_n × R
-            // Solve: factors[n] * VᵀV = rhs → factors[n] = rhs * (VᵀV)⁻¹
-            match super::derived::inverse(&vtv) {
-                Ok(vtv_inv) => {
-                    factors[n] = &rhs * &vtv_inv;
+            let cols: Vec<Vec<ComputeStorage>> = (0..rank).map(|r| v.col_vec(r)).collect();
+            // VᵀV (R × R): exact dots rounded at the compute tier
+            let mut vtv = ComputeMatrix::new(rank, rank);
+            for a in 0..rank {
+                for b in 0..rank {
+                    vtv.set(a, b, narrow_product_to_compute(exact_dot_compute(&cols[a], &cols[b])?)?);
                 }
-                Err(_) => {
-                    // Singular VᵀV — skip update for this mode
-                    continue;
+            }
+            // Solve: factors[n] * VᵀV = T_(n) V, row by row (VᵀV is symmetric)
+            let lu = match compute_lu_decompose(&vtv) {
+                Ok(lu) => lu,
+                // Singular VᵀV: skip update for this mode
+                Err(_) => continue,
+            };
+            let mut next = ComputeMatrix::new(shape[n], rank);
+            let mut solved = true;
+            for i in 0..shape[n] {
+                let row: Vec<ComputeStorage> = (0..unfolded.cols()).map(|c| upscale_to_compute(unfolded.get(i, c).raw())).collect();
+                let mut rhs = Vec::with_capacity(rank);
+                for col in &cols {
+                    rhs.push(narrow_product_to_compute(exact_dot_compute(&row, col)?)?);
                 }
+                match lu.solve(&rhs) {
+                    Ok(x) => for r in 0..rank { next.set(i, r, x[r]); },
+                    // numerically singular VᵀV: skip update for this mode
+                    Err(_) => { solved = false; break; }
+                }
+            }
+            if solved {
+                factors[n] = next;
             }
         }
 
@@ -276,27 +335,27 @@ pub fn cp_decompose(
 
     // Extract weights: normalize factor columns, put norms into weights
     let mut weights = FixedVector::new(rank);
+    let mut out: Vec<FixedMatrix> = (0..ndim).map(|n| FixedMatrix::new(shape[n], rank)).collect();
     for r in 0..rank {
-        let mut norm_product = FixedPoint::one();
+        let mut norm_product = make_compute_int(1);
         for n in 0..ndim {
-            let mut col_norm_sq = FixedPoint::ZERO;
-            for i in 0..shape[n] {
-                let v = factors[n].get(i, r);
-                col_norm_sq = col_norm_sq + v * v;
-            }
-            let col_norm = col_norm_sq.sqrt();
-            if !col_norm.is_zero() {
+            let col = factors[n].col_vec(r);
+            let col_norm = sqrt_at_compute_tier(narrow_product_to_compute(exact_dot_compute(&col, &col)?)?);
+            if !compute_is_zero(&col_norm) {
                 for i in 0..shape[n] {
-                    let v = factors[n].get(i, r);
-                    factors[n].set(i, r, v / col_norm);
+                    out[n].set(i, r, FixedPoint::from_raw(divide_to_storage_nearest(lift_to_triple(col[i]), col_norm)?));
                 }
-                norm_product = norm_product * col_norm;
+                norm_product = compute_product(norm_product, col_norm)?;
+            } else {
+                for i in 0..shape[n] {
+                    out[n].set(i, r, FixedPoint::from_raw(downscale_to_storage(col[i])?));
+                }
             }
         }
-        weights[r] = norm_product;
+        weights[r] = FixedPoint::from_raw(downscale_to_storage(norm_product)?);
     }
 
-    Ok(CPDecomposition { weights, factors })
+    Ok(CPDecomposition { weights, factors: out })
 }
 
 // ============================================================================
@@ -349,24 +408,57 @@ fn mode_unfold(t: &Tensor, mode: usize) -> FixedMatrix {
     result
 }
 
-/// Mode-n product: multiply tensor by matrix along mode n.
+/// A compute raw (`2F` fractional bits) as an exact `3F` value, the numerator
+/// scale of [`divide_to_storage_nearest`] over a `2F` denominator.
+#[inline]
+fn lift_to_triple(c: ComputeStorage) -> acc::Orient {
+    widen_product(c, widen_storage(FixedPoint::one().raw()))
+}
+
+/// A tensor's entries at the compute tier (row-major, exact).
+fn to_compute(t: &Tensor) -> Vec<ComputeStorage> {
+    t.data().iter().map(|x| upscale_to_compute(x.raw())).collect()
+}
+
+/// Compute-tier entries rounded to storage once each (checked).
+fn to_storage_tensor(data: &[ComputeStorage], shape: &[usize]) -> Result<Tensor, OverflowDetected> {
+    let entries = data.iter().map(|c| downscale_to_storage(*c).map(FixedPoint::from_raw)).collect::<Result<Vec<_>, _>>()?;
+    Ok(Tensor::from_data(shape, &entries))
+}
+
+/// Mode-n product at the compute tier: multiply a tensor (row-major compute
+/// raws of shape `shape`) by a storage matrix along mode n.
 ///
 /// T ×_n M: if T has shape (..., d_n, ...) and M is (r, d_n),
-/// result has shape (..., r, ...).
-fn mode_n_product(t: &Tensor, m: &FixedMatrix, mode: usize) -> Tensor {
-    let shape = t.shape();
+/// result has shape (..., r, ...). Each entry `sum_k M[i,k] T[...k...]` is an
+/// exact dot rounded once to the compute tier, so a chain of mode products
+/// rounds to storage only when the caller narrows the final tensor.
+fn mode_n_product_compute(
+    data: &[ComputeStorage],
+    shape: &[usize],
+    m: &FixedMatrix,
+    mode: usize,
+) -> Result<(Vec<ComputeStorage>, Vec<usize>), OverflowDetected> {
     let ndim = shape.len();
     let d_n = shape[mode];
     let r = m.rows(); // Output dimension for this mode
 
     assert_eq!(m.cols(), d_n, "Matrix cols must match tensor mode dimension");
 
+    // row-major strides of the source
+    let mut strides = vec![1usize; ndim];
+    for d in (0..ndim.saturating_sub(1)).rev() {
+        strides[d] = strides[d + 1] * shape[d + 1];
+    }
     // New shape: replace d_n with r
     let mut new_shape = shape.to_vec();
     new_shape[mode] = r;
+    let m_rows: Vec<Vec<ComputeStorage>> = (0..r)
+        .map(|i| (0..d_n).map(|k| upscale_to_compute(m.get(i, k).raw())).collect())
+        .collect();
 
     let total: usize = new_shape.iter().product();
-    let mut result = Tensor::new(&new_shape);
+    let mut result = Vec::with_capacity(total);
 
     // For each element in the result
     let mut out_indices = vec![0usize; ndim];
@@ -379,16 +471,12 @@ fn mode_n_product(t: &Tensor, m: &FixedMatrix, mode: usize) -> Tensor {
 
         // Sum over mode dimension: result[...i...] = sum_k M[i,k] * T[...k...]
         let i = out_indices[mode];
-        let mut sum = FixedPoint::ZERO;
-        let mut src_indices = out_indices.clone();
-        for k in 0..d_n {
-            src_indices[mode] = k;
-            sum = sum + m.get(i, k) * t.get(&src_indices);
-        }
-        result.set(&out_indices, sum);
+        let base: usize = (0..ndim).filter(|&d| d != mode).map(|d| out_indices[d] * strides[d]).sum();
+        let fiber: Vec<ComputeStorage> = (0..d_n).map(|k| data[base + k * strides[mode]]).collect();
+        result.push(narrow_product_to_compute(exact_dot_compute(&m_rows[i], &fiber)?)?);
     }
 
-    result
+    Ok((result, new_shape))
 }
 
 /// Khatri-Rao product of all factor matrices except mode n.
@@ -396,7 +484,7 @@ fn mode_n_product(t: &Tensor, m: &FixedMatrix, mode: usize) -> Tensor {
 /// Result is a (product of d_i for i != n) × R matrix, where each column
 /// is the element-wise (Hadamard) product of the corresponding columns
 /// from all factors except n.
-fn khatri_rao_except(factors: &[FixedMatrix], skip: usize, shape: &[usize]) -> FixedMatrix {
+fn khatri_rao_except(factors: &[ComputeMatrix], skip: usize, shape: &[usize]) -> Result<ComputeMatrix, OverflowDetected> {
     let rank = factors[0].cols();
     let ndim = factors.len();
 
@@ -406,7 +494,7 @@ fn khatri_rao_except(factors: &[FixedMatrix], skip: usize, shape: &[usize]) -> F
         .map(|(_, &d)| d)
         .product();
 
-    let mut result = FixedMatrix::new(rows, rank);
+    let mut result = ComputeMatrix::new(rows, rank);
 
     // For each column (rank component)
     for r in 0..rank {
@@ -417,22 +505,23 @@ fn khatri_rao_except(factors: &[FixedMatrix], skip: usize, shape: &[usize]) -> F
         for row in 0..rows {
             // Decompose row index into per-mode indices
             let mut rem = row;
-            let mut val = FixedPoint::one();
+            let mut val = make_compute_int(1);
             for &m in active_modes.iter().rev() {
                 let idx = rem % shape[m];
                 rem /= shape[m];
-                val = val * factors[m].get(idx, r);
+                val = compute_product(val, factors[m].get(idx, r))?;
             }
             result.set(row, r, val);
         }
     }
 
-    result
+    Ok(result)
 }
 
-/// Add a weighted rank-1 component to a flat data array.
+/// Add a weighted rank-1 component to a flat array of compute raws: the
+/// product chain `w a_i b_j ...` at the compute tier, summed there.
 fn add_rank1_to_flat(
-    data: &mut [FixedPoint],
+    data: &mut [ComputeStorage],
     shape: &[usize],
     factors: &[FixedMatrix],
     r: usize,
@@ -449,10 +538,11 @@ fn add_rank1_to_flat(
             rem /= shape[d];
         }
 
-        let mut val = weight;
+        let mut val = upscale_to_compute(weight.raw());
         for n in 0..ndim {
-            val = val * factors[n].get(indices[n], r);
+            val = compute_product(val, upscale_to_compute(factors[n].get(indices[n], r).raw()))
+                .expect("CPDecomposition::reconstruct: term exceeds the compute tier");
         }
-        data[flat] = data[flat] + val;
+        data[flat] = compute_add(data[flat], val);
     }
 }

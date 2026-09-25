@@ -8,6 +8,7 @@
 use super::FixedPoint;
 use super::FixedMatrix;
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
+use super::wide_acc::exact_sub_dot_compute;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
     compute_halve, compute_is_zero, compute_is_negative, sqrt_at_compute_tier,
@@ -23,6 +24,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// Used internally by matrix functions (exp, sqrt, log) to keep all
 /// intermediate operations at double width. Downscale once at the end
 /// via `to_fixed_matrix()` for 0-1 ULP final precision.
+#[derive(Clone, Debug)]
 pub(crate) struct ComputeMatrix {
     rows: usize,
     cols: usize,
@@ -121,16 +123,16 @@ impl ComputeMatrix {
             compute_halve(self.get(r, c)))
     }
 
-    /// Matrix multiply at compute tier.
+    /// Matrix multiply at compute tier: each entry one rounding of its exact
+    /// sum of products (0.6.3 rounded every product first). Panics if an
+    /// entry leaves the compute tier.
     pub fn mat_mul(&self, other: &Self) -> Self {
         assert_eq!(self.cols, other.rows);
-        let k = self.cols;
         Self::from_fn(self.rows, other.cols, |r, c| {
-            let mut acc = compute_zero();
-            for m in 0..k {
-                acc = compute_add(acc, compute_multiply(self.get(r, m), other.get(m, c)));
-            }
-            acc
+            let row: Vec<ComputeStorage> = (0..self.cols).map(|m| self.get(r, m)).collect();
+            let col = other.col_vec(c);
+            exact_sub_dot_compute(compute_zero(), &row, &col.iter().map(|v| compute_negate(*v)).collect::<Vec<_>>())
+                .expect("ComputeMatrix::mat_mul: entry exceeds the compute tier")
         })
     }
 
@@ -143,12 +145,12 @@ impl ComputeMatrix {
     /// Both matrix and vector stay at tier N+1, no mid-chain downscale.
     pub fn mul_vector_compute(&self, v: &[ComputeStorage]) -> Vec<ComputeStorage> {
         assert_eq!(self.cols, v.len());
+        // each entry one rounding of its exact sum of products
+        let neg: Vec<ComputeStorage> = v.iter().map(|x| compute_negate(*x)).collect();
         (0..self.rows).map(|r| {
-            let mut acc = compute_zero();
-            for c in 0..self.cols {
-                acc = compute_add(acc, compute_multiply(self.get(r, c), v[c]));
-            }
-            acc
+            let row: Vec<ComputeStorage> = (0..self.cols).map(|c| self.get(r, c)).collect();
+            exact_sub_dot_compute(compute_zero(), &row, &neg)
+                .expect("ComputeMatrix::mul_vector_compute: entry exceeds the compute tier")
         }).collect()
     }
 
@@ -206,19 +208,17 @@ impl ComputeMatrix {
 // Compute-tier LU decomposition
 // ============================================================================
 
+#[derive(Clone, Debug)]
 pub(crate) struct ComputeLU {
     l: ComputeMatrix,
     u: ComputeMatrix,
     perm: Vec<usize>,
+    num_swaps: usize,
 }
 
-/// Compute-tier sub-dot: init - sum(a[i] * b[i])
-fn compute_sub_dot(init: ComputeStorage, a: &[ComputeStorage], b: &[ComputeStorage]) -> ComputeStorage {
-    let mut acc = init;
-    for i in 0..a.len() {
-        acc = compute_subtract(acc, compute_multiply(a[i], b[i]));
-    }
-    acc
+/// Compute-tier sub-dot `init - sum(a[i] * b[i])`: exact sum, one rounding.
+fn compute_sub_dot(init: ComputeStorage, a: &[ComputeStorage], b: &[ComputeStorage]) -> Result<ComputeStorage, OverflowDetected> {
+    exact_sub_dot_compute(init, a, b)
 }
 
 fn compute_abs(a: ComputeStorage) -> ComputeStorage {
@@ -231,6 +231,7 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
     let mut l = ComputeMatrix::new(n, n);
     let mut u = ComputeMatrix::new(n, n);
     let mut perm: Vec<usize> = (0..n).collect();
+    let mut num_swaps = 0;
 
     for k in 0..n {
         // Pivoting: find max |candidate| for rows k..n
@@ -242,7 +243,7 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
             } else {
                 let l_row: Vec<ComputeStorage> = (0..k).map(|j| l.get(i, j)).collect();
                 let u_col: Vec<ComputeStorage> = (0..k).map(|j| u.get(j, k)).collect();
-                compute_sub_dot(pa.get(i, k), &l_row, &u_col)
+                compute_sub_dot(pa.get(i, k), &l_row, &u_col)?
             };
             let abs_c = compute_abs(candidate);
             if abs_c > max_abs {
@@ -258,6 +259,7 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
         if max_row != k {
             pa.swap_rows(k, max_row);
             perm.swap(k, max_row);
+            num_swaps += 1;
             for j in 0..k {
                 let tmp = l.get(k, j);
                 l.set(k, j, l.get(max_row, j));
@@ -272,7 +274,7 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
             } else {
                 let l_row: Vec<ComputeStorage> = (0..k).map(|m| l.get(k, m)).collect();
                 let u_col: Vec<ComputeStorage> = (0..k).map(|m| u.get(m, j)).collect();
-                compute_sub_dot(pa.get(k, j), &l_row, &u_col)
+                compute_sub_dot(pa.get(k, j), &l_row, &u_col)?
             };
             u.set(k, j, val);
         }
@@ -286,16 +288,39 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
             } else {
                 let l_row: Vec<ComputeStorage> = (0..k).map(|m| l.get(i, m)).collect();
                 let u_col: Vec<ComputeStorage> = (0..k).map(|m| u.get(m, k)).collect();
-                compute_sub_dot(pa.get(i, k), &l_row, &u_col)
+                compute_sub_dot(pa.get(i, k), &l_row, &u_col)?
             };
             l.set(i, k, compute_divide(numerator, pivot)?);
         }
     }
 
-    Ok(ComputeLU { l, u, perm })
+    Ok(ComputeLU { l, u, perm, num_swaps })
 }
 
 impl ComputeLU {
+    /// The unit lower factor, at the compute tier.
+    pub fn l(&self) -> &ComputeMatrix { &self.l }
+
+    /// The upper factor, at the compute tier.
+    pub fn u(&self) -> &ComputeMatrix { &self.u }
+
+    /// Row `i` of PA is row `perm[i]` of A.
+    pub fn perm(&self) -> &[usize] { &self.perm }
+
+    /// Row swaps made while pivoting (the determinant's sign).
+    pub fn num_swaps(&self) -> usize { self.num_swaps }
+
+    /// `det A` at the compute tier: the product of U's diagonal, signed by
+    /// the swap parity.
+    pub fn determinant(&self) -> ComputeStorage {
+        let n = self.u.rows();
+        let mut acc = compute_one();
+        for i in 0..n {
+            acc = compute_multiply(acc, self.u.get(i, i));
+        }
+        if self.num_swaps % 2 == 1 { compute_negate(acc) } else { acc }
+    }
+
     /// Solve Ax = b at compute tier. Returns compute-tier solution vector.
     pub fn solve(&self, b: &[ComputeStorage]) -> Result<Vec<ComputeStorage>, OverflowDetected> {
         let n = self.l.rows();
@@ -309,7 +334,7 @@ impl ComputeLU {
             } else {
                 let l_row: Vec<ComputeStorage> = (0..i).map(|j| self.l.get(i, j)).collect();
                 let y_prev: Vec<ComputeStorage> = y[0..i].to_vec();
-                y[i] = compute_sub_dot(pb[i], &l_row, &y_prev);
+                y[i] = compute_sub_dot(pb[i], &l_row, &y_prev)?;
             }
         }
 
@@ -325,7 +350,7 @@ impl ComputeLU {
             } else {
                 let u_row: Vec<ComputeStorage> = (i + 1..n).map(|j| self.u.get(i, j)).collect();
                 let x_tail: Vec<ComputeStorage> = x[i + 1..n].to_vec();
-                let numerator = compute_sub_dot(y[i], &u_row, &x_tail);
+                let numerator = compute_sub_dot(y[i], &u_row, &x_tail)?;
                 x[i] = compute_divide(numerator, diag)?;
             }
         }

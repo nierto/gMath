@@ -97,10 +97,15 @@ it REPAIRS the path-independence contract for plain arithmetic.
 These round below the storage ulp and are erased by the single downscale;
 listed for completeness, no change:
 
-- `compute_divide`: truncating (all profile arms)
+- `compute_divide`: truncating (all profile arms). **0.6.4: nearest, ties
+  toward +infinity**, like every storage result (`compute_div_count` too).
 - `mul_to_*` wide-product downscales in i512.rs/i1024.rs: ties-up round-bit
-- Transcendental engine internals (exp/ln table+Taylor steps, decimal exp
-  4-stage, `sincos` reductions): various, validated end-to-end at 0 ULP
+- Transcendental engine internals (exp/ln table+Taylor steps, `sincos`
+  reductions): various, validated end-to-end at 0 ULP. **0.6.4:** the decimal
+  exp (4-stage compute-dp tables, wrong at large arguments) was replaced by a
+  reduction `x = n ln2 + r` at a wider working precision with one half-to-even
+  rounding to the compute dp; decimal `sin`/`cos` reduce at that precision
+  too. Decimal rounding is half to even wherever it occurs.
 - `compute.rs` 18 round-bit sites: the ties-up downscale family
 
 ## Blast-radius summary for 0c implementation

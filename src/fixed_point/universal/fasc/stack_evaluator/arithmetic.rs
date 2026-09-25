@@ -5,7 +5,7 @@
 
 #[allow(unused_imports)]
 use super::{BinaryStorage, ComputeStorage, StackValue, StackEvaluator, DECIMAL_DP_PROMOTION_THRESHOLD};
-use super::compute::{upscale_to_compute, compute_add, compute_subtract, compute_multiply, compute_divide, compute_negate};
+use super::compute::{upscale_to_compute, compute_checked_add, compute_checked_subtract, compute_checked_multiply, compute_divide, compute_checked_negate};
 use super::domain::{
     binary_from_storage, binary_to_storage,
     decimal_from_storage, decimal_to_storage,
@@ -25,11 +25,11 @@ impl StackEvaluator {
     pub(crate) fn negate_value(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, ref shadow) => {
-                Ok(StackValue::BinaryCompute(tier, compute_negate(val), shadow_negate(shadow)))
+                Ok(StackValue::BinaryCompute(tier, compute_checked_negate(val)?, shadow_negate(shadow)))
             }
             StackValue::DecimalCompute(tier, val, ref shadow) => {
-                use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_compute_neg;
-                Ok(StackValue::DecimalCompute(tier, decimal_compute_neg(val), shadow_negate(shadow)))
+                use crate::fixed_point::domains::decimal_fixed::transcendental::try_decimal_compute_neg;
+                Ok(StackValue::DecimalCompute(tier, try_decimal_compute_neg(val)?, shadow_negate(shadow)))
             }
             StackValue::Binary(tier, val, ref shadow) => {
                 // Full-precision binary negation with UGOD tier promotion
@@ -42,7 +42,7 @@ impl StackEvaluator {
                 // Full-precision decimal negation with UGOD tier promotion
                 let decimal = decimal_from_storage(dec, &val)?;
                 let result = decimal.negate()?;
-                let (new_dec, storage) = decimal_to_storage(&result);
+                let (new_dec, storage) = decimal_to_storage(&result)?;
                 Ok(StackValue::Decimal(new_dec, storage, shadow_negate(shadow)))
             }
             StackValue::Ternary(tier, val, ref shadow) => {
@@ -63,39 +63,39 @@ impl StackEvaluator {
     pub(crate) fn add_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
         // Handle DecimalCompute: if both operands are decimal-domain, stay at decimal compute tier
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
-            decimal_compute_add, decimal_upscale_to_compute,
+            try_decimal_compute_add, decimal_upscale_to_compute,
         };
         match (&left, &right) {
             (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_add(*v1, *v2), shadow_add(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t1, try_decimal_compute_add(*v1, *v2)?, shadow_add(s1, s2)));
             }
             (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
                 let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
-                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_add(*v1, v2), shadow_add(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t1, try_decimal_compute_add(*v1, v2)?, shadow_add(s1, s2)));
             }
             (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
                 let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
-                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_add(v1, *v2), shadow_add(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t2, try_decimal_compute_add(v1, *v2)?, shadow_add(s1, s2)));
             }
             _ => {}
         }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_add(*v1, *v2), shadow_add(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_add(*v1, *v2)?, shadow_add(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
                 let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_add(*v1, v2_compute), shadow_add(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_add(*v1, v2_compute)?, shadow_add(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
                 let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_add(v1_compute, *v2), shadow_add(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t2, compute_checked_add(v1_compute, *v2)?, shadow_add(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) | (other, StackValue::BinaryCompute(t1, v1, s1)) => {
                 // BinaryCompute + non-binary: convert other directly to compute tier (full precision)
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_add(*v1, other_compute), shadow_add(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_add(*v1, other_compute)?, shadow_add(s1, &other.shadow())));
             }
             _ => {}
         }
@@ -128,11 +128,8 @@ impl StackEvaluator {
                     // On overflow, fall through to rational for exact result
                     match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
-                            match decimal_a.add(&decimal_b) {
-                                Ok(result) => {
-                                    let (dec, storage) = decimal_to_storage(&result);
-                                    Ok(StackValue::Decimal(dec, storage, shadow_add(s1, s2)))
-                                }
+                            match decimal_a.add(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                                Ok((dec, storage)) => Ok(StackValue::Decimal(dec, storage, shadow_add(s1, s2))),
                                 Err(_) => self.add_via_rational(left, right),
                             }
                         }
@@ -169,42 +166,42 @@ impl StackEvaluator {
     pub(crate) fn subtract_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
         // DecimalCompute propagation
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
-            decimal_compute_sub, decimal_upscale_to_compute,
+            try_decimal_compute_sub, decimal_upscale_to_compute,
         };
         match (&left, &right) {
             (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_sub(*v1, *v2), shadow_subtract(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t1, try_decimal_compute_sub(*v1, *v2)?, shadow_subtract(s1, s2)));
             }
             (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
                 let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
-                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_sub(*v1, v2), shadow_subtract(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t1, try_decimal_compute_sub(*v1, v2)?, shadow_subtract(s1, s2)));
             }
             (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
                 let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
-                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_sub(v1, *v2), shadow_subtract(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t2, try_decimal_compute_sub(v1, *v2)?, shadow_subtract(s1, s2)));
             }
             _ => {}
         }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_subtract(*v1, *v2), shadow_subtract(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_subtract(*v1, *v2)?, shadow_subtract(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
                 let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_subtract(*v1, v2_compute), shadow_subtract(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_subtract(*v1, v2_compute)?, shadow_subtract(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
                 let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_subtract(v1_compute, *v2), shadow_subtract(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t2, compute_checked_subtract(v1_compute, *v2)?, shadow_subtract(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_subtract(*v1, other_compute), shadow_subtract(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_subtract(*v1, other_compute)?, shadow_subtract(s1, &other.shadow())));
             }
             (other, StackValue::BinaryCompute(t2, v2, s2)) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t2, compute_subtract(other_compute, *v2), shadow_subtract(&other.shadow(), s2)));
+                return Ok(StackValue::BinaryCompute(*t2, compute_checked_subtract(other_compute, *v2)?, shadow_subtract(&other.shadow(), s2)));
             }
             _ => {}
         }
@@ -233,11 +230,8 @@ impl StackEvaluator {
                     // On overflow, fall through to rational for exact result
                     match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
-                            match decimal_a.subtract(&decimal_b) {
-                                Ok(result) => {
-                                    let (dec, storage) = decimal_to_storage(&result);
-                                    Ok(StackValue::Decimal(dec, storage, shadow_subtract(s1, s2)))
-                                }
+                            match decimal_a.subtract(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                                Ok((dec, storage)) => Ok(StackValue::Decimal(dec, storage, shadow_subtract(s1, s2))),
                                 Err(_) => self.subtract_via_rational(left, right),
                             }
                         }
@@ -270,42 +264,42 @@ impl StackEvaluator {
     pub(crate) fn multiply_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
         // DecimalCompute propagation
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
-            decimal_compute_mul, decimal_upscale_to_compute,
+            try_decimal_compute_mul, decimal_upscale_to_compute,
         };
         match (&left, &right) {
             (StackValue::DecimalCompute(t1, v1, s1), StackValue::DecimalCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_mul(*v1, *v2), shadow_multiply(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t1, try_decimal_compute_mul(*v1, *v2)?, shadow_multiply(s1, s2)));
             }
             (StackValue::DecimalCompute(t1, v1, s1), StackValue::Decimal(dp, scaled, s2)) => {
                 let v2 = decimal_upscale_to_compute(*scaled, *dp)?;
-                return Ok(StackValue::DecimalCompute(*t1, decimal_compute_mul(*v1, v2), shadow_multiply(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t1, try_decimal_compute_mul(*v1, v2)?, shadow_multiply(s1, s2)));
             }
             (StackValue::Decimal(dp, scaled, s1), StackValue::DecimalCompute(t2, v2, s2)) => {
                 let v1 = decimal_upscale_to_compute(*scaled, *dp)?;
-                return Ok(StackValue::DecimalCompute(*t2, decimal_compute_mul(v1, *v2), shadow_multiply(s1, s2)));
+                return Ok(StackValue::DecimalCompute(*t2, try_decimal_compute_mul(v1, *v2)?, shadow_multiply(s1, s2)));
             }
             _ => {}
         }
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_multiply(*v1, *v2), shadow_multiply(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_multiply(*v1, *v2)?, shadow_multiply(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
                 let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_multiply(*v1, v2_compute), shadow_multiply(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_multiply(*v1, v2_compute)?, shadow_multiply(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
                 let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_multiply(v1_compute, *v2), shadow_multiply(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t2, compute_checked_multiply(v1_compute, *v2)?, shadow_multiply(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_multiply(*v1, other_compute), shadow_multiply(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, compute_checked_multiply(*v1, other_compute)?, shadow_multiply(s1, &other.shadow())));
             }
             (other, StackValue::BinaryCompute(t2, v2, s2)) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t2, compute_multiply(other_compute, *v2), shadow_multiply(&other.shadow(), s2)));
+                return Ok(StackValue::BinaryCompute(*t2, compute_checked_multiply(other_compute, *v2)?, shadow_multiply(&other.shadow(), s2)));
             }
             _ => {}
         }
@@ -343,11 +337,8 @@ impl StackEvaluator {
                     // On overflow (storage or arithmetic), fall through to rational
                     match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
-                            match decimal_a.multiply(&decimal_b) {
-                                Ok(result) => {
-                                    let (dp, storage) = decimal_to_storage(&result);
-                                    Ok(StackValue::Decimal(dp, storage, shadow_multiply(s1, s2)))
-                                }
+                            match decimal_a.multiply(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                                Ok((dp, storage)) => Ok(StackValue::Decimal(dp, storage, shadow_multiply(s1, s2))),
                                 Err(_) => self.multiply_via_rational(left, right),
                             }
                         }
@@ -445,11 +436,8 @@ impl StackEvaluator {
                 // On overflow or inexact result, fall through to rational for exact answer
                 match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
                     (Ok(decimal_a), Ok(decimal_b)) => {
-                        match decimal_a.divide(&decimal_b) {
-                            Ok(result) => {
-                                let (dp, storage) = decimal_to_storage(&result);
-                                Ok(StackValue::Decimal(dp, storage, shadow_divide(s1, s2)))
-                            }
+                        match decimal_a.divide(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                            Ok((dp, storage)) => Ok(StackValue::Decimal(dp, storage, shadow_divide(s1, s2))),
                             Err(_) => self.divide_via_rational(left, right),
                         }
                     }
@@ -503,7 +491,7 @@ impl StackEvaluator {
                 let tier = self.profile_max_binary_tier();
                 let l_compute = self.to_compute_storage(&left)?;
                 let r_compute = self.to_compute_storage(&right)?;
-                Ok(StackValue::BinaryCompute(tier, compute_multiply(l_compute, r_compute), CompactShadow::None))
+                Ok(StackValue::BinaryCompute(tier, compute_checked_multiply(l_compute, r_compute)?, CompactShadow::None))
             }
             Err(e) => Err(e),
         }

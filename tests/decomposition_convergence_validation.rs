@@ -50,20 +50,54 @@ fn reference(s: &str) -> FixedPoint {
         None => (false, s),
     };
     let (int_part, frac_part) = body.split_once('.').unwrap_or((body, ""));
-    let group_scale = FixedPoint::from_int(10_000);
+    // two-digit groups where 10^4 exceeds the storage range (realtime with
+    // more than 17 fraction bits); the argument is the same
+    let digits = if FixedPoint::try_from_int(10_000).is_ok() { 4 } else { 2 };
+    let group_scale = FixedPoint::from_int(10i32.pow(digits as u32));
     let mut acc = FixedPoint::ZERO;
-    for group in frac_part.as_bytes().chunks(4).rev() {
+    for group in frac_part.as_bytes().chunks(digits).rev() {
         let mut value = 0i32;
-        for k in 0..4 {
+        for k in 0..digits {
             value = value * 10 + group.get(k).map_or(0, |d| (d - b'0') as i32);
         }
         acc = (FixedPoint::from_int(value) + acc) / group_scale;
     }
-    let magnitude = FixedPoint::from_int(int_part.parse::<i32>().expect("integer part")) + acc;
+    // divided by 2^extra_shift(): the integer part's low bits enter one
+    // halving at a time, lowest first, so each rounding is halved by the next
+    // and the value stays below one (within one ulp in all)
+    let int_value = int_part.parse::<i32>().expect("integer part");
+    let two = FixedPoint::from_int(2);
+    for bit in 0..extra_shift() {
+        acc = (FixedPoint::from_int((int_value >> bit) & 1) + acc) / two;
+    }
+    let magnitude = FixedPoint::from_int(int_value >> extra_shift()) + acc;
     if negative { -magnitude } else { magnitude }
 }
 
+/// The corpus fits Q16.16 (range 32768). On realtime splits with more than 16
+/// fraction bits the range is 2^(F-16) times smaller, so every case and every
+/// reference is divided by 2^(F-16): the stored raws are then exactly those
+/// of Q16.16, the same problem scaled by a power of two. Zero elsewhere.
+fn extra_shift() -> u32 {
+    #[cfg(table_format = "q16_16")]
+    {
+        (g_math::fixed_point::frac_config::FRAC_BITS as u32).saturating_sub(16)
+    }
+    #[cfg(not(table_format = "q16_16"))]
+    {
+        0
+    }
+}
+
 fn build(case: &Case) -> FixedMatrix {
+    #[cfg(table_format = "q16_16")]
+    if extra_shift() > 0 {
+        // entry / 2^(shift + F - 16) has the raw entry * 2^(16 - shift); the
+        // entry itself may exceed the split's range, so build the raw
+        return FixedMatrix::from_fn(case.rows, case.cols, |i, j| {
+            FixedPoint::from_raw(case.entries[i * case.cols + j] << (16 - case.shift))
+        });
+    }
     let divisor = FixedPoint::from_int(1 << case.shift);
     FixedMatrix::from_fn(case.rows, case.cols, |i, j| {
         FixedPoint::from_int(case.entries[i * case.cols + j]) / divisor
@@ -84,16 +118,14 @@ fn diagonal(rows: usize, cols: usize, values: &FixedVector) -> FixedMatrix {
     FixedMatrix::from_fn(rows, cols, |r, c| if r == c { values[r] } else { FixedPoint::ZERO })
 }
 
-/// A power of two at half the storage maximum.
+/// A power of two at half the storage maximum (the operators panic on
+/// overflow, so the doubling stops at the last sum that fits).
 fn half_max() -> FixedPoint {
     let mut x = FixedPoint::one();
-    loop {
-        let doubled = x + x;
-        if doubled <= x {
-            return x;
-        }
+    while let Ok(doubled) = x.try_add(x) {
         x = doubled;
     }
+    x
 }
 
 /// Largest spectrum, reconstruction and orthogonality errors of one case, in
@@ -108,6 +140,8 @@ struct Measured {
     orthogonality: i128,
 }
 
+/// The scale is that of the unscaled case: with `extra_shift()` the raws are
+/// those of Q16.16, so errors per unit of scale compare across splits.
 fn scale_of(case: &Case) -> i128 {
     let largest = case.entries.iter().map(|v| (*v as i128).abs()).max().unwrap_or(0);
     let unit = 1i128 << case.shift;
@@ -327,18 +361,60 @@ struct ProfileBounds {
 // eigenvalue errors follow the relative deflation bound (2^-(2F/3) of the
 // neighbouring magnitudes) and grow with the profile; spectrum errors of the
 // symmetric problems stay at a few ulp. realtime covers GMATH_FRAC_BITS 16
-// and 10 (the configuration the SVD failure was reported on).
+// and 10 (the configuration the SVD failure was reported on) in one set of
+// bounds (12 passes them too), and has its own below 10 and above 16.
 
 // Measured, Q16.16 / Q22.10: SVD 17/10, 14035/4694, 7/8; EIGEN 212/5,
 // 41673/3046, 5/5; SCHUR 888/288, 169/108, 5/17; large entries 1/777;
 // consumer 0.343/26.143 per mille.
 #[cfg(table_format = "q16_16")]
-const BOUNDS: ProfileBounds = ProfileBounds {
+const BOUNDS: ProfileBounds = if FRAC_BITS < 10 {
+    BOUNDS_BELOW_10
+} else if FRAC_BITS > 16 {
+    BOUNDS_ABOVE_16
+} else {
+    BOUNDS_10_TO_16
+};
+
+#[cfg(table_format = "q16_16")]
+use g_math::fixed_point::frac_config::FRAC_BITS;
+
+#[cfg(table_format = "q16_16")]
+const BOUNDS_10_TO_16: ProfileBounds = ProfileBounds {
     svd: Bounds { spectrum: 34, reconstruction: 28_070, orthogonality: 16 },
     eigen: Bounds { spectrum: 424, reconstruction: 83_346, orthogonality: 10 },
     schur: Bounds { spectrum: 1_776, reconstruction: 338, orthogonality: 34 },
     large_entries: 1_554,
     consumer_per_mille: Some(53),
+};
+
+// Measured, Q24.8: SVD 25, 11861, 18; EIGEN 17, 4434, 5; SCHUR 130, 86, 12;
+// large entries 11905 (the SVD; eigen 2607, schur 10195: relative 2^-13.5 on
+// entries of 2^27 raw, inside the realtime deflation bound magnitude >> 10);
+// consumer 33.65 per mille.
+#[cfg(table_format = "q16_16")]
+const BOUNDS_BELOW_10: ProfileBounds = ProfileBounds {
+    svd: Bounds { spectrum: 50, reconstruction: 23_722, orthogonality: 36 },
+    eigen: Bounds { spectrum: 34, reconstruction: 8_868, orthogonality: 10 },
+    schur: Bounds { spectrum: 260, reconstruction: 172, orthogonality: 24 },
+    large_entries: 23_810,
+    consumer_per_mille: Some(68),
+};
+
+// Measured, Q12.20 / Q8.24 (cases scaled by 2^-(F-16), see `extra_shift`):
+// SVD 17/2, 13009/282, 8/5; EIGEN 213/213, 43484/43259, 5/7; SCHUR 939/48,
+// 187/164, 5/4; large entries 1/1; consumer 0.032 per mille at Q12.20. At
+// Q8.24 seven SVD and three Schur cases return TierOverflow (a library defect
+// in `linalg::reflect`, whose factor 2 (v.w) / (v.v) leaves the i64 compute
+// tier, range 2^15 there, for a Householder vector of a few units), so their
+// Q8.24 measurements are missing and those cases fail the gate.
+#[cfg(table_format = "q16_16")]
+const BOUNDS_ABOVE_16: ProfileBounds = ProfileBounds {
+    svd: Bounds { spectrum: 34, reconstruction: 26_018, orthogonality: 16 },
+    eigen: Bounds { spectrum: 426, reconstruction: 86_968, orthogonality: 14 },
+    schur: Bounds { spectrum: 1_878, reconstruction: 374, orthogonality: 10 },
+    large_entries: 4,
+    consumer_per_mille: Some(1),
 };
 
 // Measured: SVD 3, 38131, 7; EIGEN 4, 382866, 5; SCHUR 105716, 5689, 6;
@@ -456,20 +532,19 @@ fn consumer_matvec_through_the_svd() {
         sv[j] = svd.sigma[j] * v[j];
     }
     let y = svd.u.mul_vector(&sv);
-    let thousand = FixedPoint::from_int(1000);
-    let mut worst_per_mille = FixedPoint::ZERO;
+    // relative error as a plain ratio: 1000 is not a storage value past 21
+    // fraction bits, so the per-mille bound becomes the literal bound / 1000
+    let mut worst = FixedPoint::ZERO;
     for i in 0..8 {
-        worst_per_mille = worst_per_mille.max((y[i] - direct[i]).abs() * thousand / direct[i].abs());
+        worst = worst.max((y[i] - direct[i]).abs() / direct[i].abs());
     }
-    println!("consumer matvec: worst relative error {worst_per_mille} per mille");
+    println!("consumer matvec: worst relative error {worst}");
     if calibrating() {
         return;
     }
     if let Some(bound) = BOUNDS.consumer_per_mille {
-        assert!(
-            worst_per_mille <= FixedPoint::from_int(bound),
-            "consumer matvec relative error {worst_per_mille} per mille > {bound}"
-        );
+        let limit = FixedPoint::from_str(&format!("{}.{:03}", bound / 1000, bound % 1000));
+        assert!(worst <= limit, "consumer matvec relative error {worst} > {bound} per mille");
     }
 }
 
@@ -554,16 +629,45 @@ struct CorpusBounds {
 
 // Bounds are four times the largest value over calibration corpora drawn from
 // seeds 910001 to 910008 (512 cases per decomposition each, as many seeds as
-// noted per profile; realtime at both GMATH_FRAC_BITS 16 and 10), at least 8. Spectrum and reconstruction are per
+// noted per profile; realtime at both GMATH_FRAC_BITS 16 and 10, and apart
+// at 8 and at 20 and 24), at least 8. Spectrum and reconstruction are per
 // unit of scale. Across seeds, a single 512-case corpus reached at most 2.5
 // times the largest value of all the others, except where a case deflates at
 // the looser sqrt(quantum) bound (Schur on embedded and wider, entries of k/64:
 // 7.2 times), so those two Schur bounds carry sixteen times instead.
 
+#[cfg(table_format = "q16_16")]
+const RANDOM_BOUNDS: CorpusBounds = if FRAC_BITS < 10 {
+    RANDOM_BOUNDS_BELOW_10
+} else if FRAC_BITS > 16 {
+    RANDOM_BOUNDS_ABOVE_16
+} else {
+    RANDOM_BOUNDS_10_TO_16
+};
+
+// Measured (8 seeds, Q24.8): SVD 5, 43, 44; EIGEN 7, 23, 12; SCHUR 63, 72, 152.
+#[cfg(table_format = "q16_16")]
+const RANDOM_BOUNDS_BELOW_10: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 20, reconstruction: 172, orthogonality: 176 },
+    eigen: Bounds { spectrum: 28, reconstruction: 92, orthogonality: 48 },
+    schur: Bounds { spectrum: 252, reconstruction: 288, orthogonality: 608 },
+};
+
+// Measured (8 seeds x Q12.20 and Q8.24, cases scaled by 2^-(F-16)): SVD 15,
+// 137, 11; EIGEN 8, 246, 13; SCHUR 539, 81, 18. At Q8.24 77 to 112 of each
+// 512-case SVD and Schur corpus return TierOverflow (the `linalg::reflect`
+// defect noted at BOUNDS_ABOVE_16) and are not in these numbers.
+#[cfg(table_format = "q16_16")]
+const RANDOM_BOUNDS_ABOVE_16: CorpusBounds = CorpusBounds {
+    svd: Bounds { spectrum: 60, reconstruction: 548, orthogonality: 44 },
+    eigen: Bounds { spectrum: 32, reconstruction: 984, orthogonality: 52 },
+    schur: Bounds { spectrum: 2_156, reconstruction: 324, orthogonality: 72 },
+};
+
 // Measured (8 seeds x 2 splits): SVD 15, 137, 14; EIGEN 8, 245, 12;
 // SCHUR 552, 82, 81.
 #[cfg(table_format = "q16_16")]
-const RANDOM_BOUNDS: CorpusBounds = CorpusBounds {
+const RANDOM_BOUNDS_10_TO_16: CorpusBounds = CorpusBounds {
     svd: Bounds { spectrum: 60, reconstruction: 548, orthogonality: 56 },
     eigen: Bounds { spectrum: 32, reconstruction: 980, orthogonality: 48 },
     schur: Bounds { spectrum: 2_208, reconstruction: 328, orthogonality: 324 },

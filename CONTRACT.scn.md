@@ -90,6 +90,11 @@ Code wins over docs.
   any tier, any domain, coercions + literal parsing included (out-of-range
   literals on narrow profiles parse into exact symbolic). Gate:
   tests/ugod_promotion_validation.rs per profile.
+@OVERFLOW_IMPERATIVE(0.6.4): FixedPoint|DecimalFixed operators (+ - * / neg),
+  from_int|to_int|from_integer|from_parts, every internal narrowing = in-range
+  result OR panic; try_ twin → Err(TierOverflow|DivisionByZero). NEVER wrap,
+  NEVER saturate. No promotion (fixed width): canonical layer for UGOD. Gates:
+  tests/operator_overflow_validation.rs, tests/narrowing_defects_validation.rs.
 ```
 
 ---

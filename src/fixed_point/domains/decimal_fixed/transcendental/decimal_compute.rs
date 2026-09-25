@@ -113,7 +113,7 @@ pub fn decimal_compute_one() -> ComputeStorage {
 pub fn decimal_compute_from_int(n: i64) -> ComputeStorage {
     let one = decimal_compute_one();
     #[cfg(table_format = "q16_16")]
-    { one.saturating_mul(n) }
+    { one.checked_mul(n).expect("decimal_compute_from_int: integer outside the compute range") }
     #[cfg(table_format = "q32_32")]
     { one * (n as i128) }
     #[cfg(table_format = "q64_64")]
@@ -212,18 +212,20 @@ fn widen(v: ComputeStorage) -> WideCompute {
     { I2048::from_i1024(v) }
 }
 
+/// Narrow a wide value to the compute tier, `Err(TierOverflow)` when it does
+/// not fit (an unchecked cast before 0.6.4, which wrapped silently).
 #[inline]
-fn narrow(w: WideCompute) -> ComputeStorage {
+fn narrow(w: WideCompute) -> Result<ComputeStorage, OverflowDetected> {
     #[cfg(table_format = "q16_16")]
-    { w as i64 }
+    { i64::try_from(w).map_err(|_| OverflowDetected::TierOverflow) }
     #[cfg(table_format = "q32_32")]
-    { w.as_i128() }
+    { if w.fits_in_i128() { Ok(w.as_i128()) } else { Err(OverflowDetected::TierOverflow) } }
     #[cfg(table_format = "q64_64")]
-    { w.as_i256() }
+    { if w.fits_in_i256() { Ok(w.as_i256()) } else { Err(OverflowDetected::TierOverflow) } }
     #[cfg(table_format = "q128_128")]
-    { w.as_i512() }
+    { if w.fits_in_i512() { Ok(w.as_i512()) } else { Err(OverflowDetected::TierOverflow) } }
     #[cfg(table_format = "q256_256")]
-    { w.as_i1024() }
+    { if w.fits_in_i1024() { Ok(w.as_i1024()) } else { Err(OverflowDetected::TierOverflow) } }
 }
 
 /// Widening multiply: ComputeStorage × ComputeStorage → WideCompute (no overflow).
@@ -245,8 +247,9 @@ fn wide_mul(a: ComputeStorage, b: ComputeStorage) -> WideCompute {
         let a_neg = a < 0;
         let b_neg = b < 0;
         let result_neg = a_neg ^ b_neg;
-        let abs_a = if a_neg { I256::from_i128(-a) } else { I256::from_i128(a) };
-        let abs_b = if b_neg { I256::from_i128(-b) } else { I256::from_i128(b) };
+        // negate after widening: i128::MIN has no i128 negation (it panicked)
+        let abs_a = if a_neg { I256::zero() - I256::from_i128(a) } else { I256::from_i128(a) };
+        let abs_b = if b_neg { I256::zero() - I256::from_i128(b) } else { I256::from_i128(b) };
         // Use I256 unsigned-word multiply: both operands non-negative now
         let abs_product = abs_a * abs_b;
         if result_neg { I256::zero() - abs_product } else { abs_product }
@@ -290,6 +293,37 @@ fn wide_div(a: WideCompute, b: WideCompute) -> WideCompute {
     { i2048_div(a, b) }
     #[cfg(not(table_format = "q256_256"))]
     { a / b }
+}
+
+/// `w / 10^DECIMAL_COMPUTE_DP` truncated toward zero: bit-identical to
+/// `wide_div(w, wide_scale())`. On balanced and scientific the wide integers
+/// divide bit by bit (2048 steps for I2048, about 69 us a call in release),
+/// once per decimal multiply, which made FASC decimal transcendentals about
+/// 570x slower than the binary engine there. Dividing the magnitude by 10^19
+/// limb by limb, ceil(DP / 19) times, is O(words) per pass:
+/// floor(floor(x / a) / b) = floor(x / (a b)) for x >= 0.
+#[inline]
+fn wide_div_scale(w: WideCompute) -> WideCompute {
+    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+    {
+        let negative = wide_is_negative(&w);
+        let mut m = if negative { -w } else { w };
+        let mut left = DECIMAL_COMPUTE_DP as u32;
+        while left > 0 {
+            let k = left.min(19);
+            let d = 10u128.pow(k);
+            let mut rem: u128 = 0;
+            for word in m.words.iter_mut().rev() {
+                let cur = (rem << 64) | *word as u128;
+                *word = (cur / d) as u64;
+                rem = cur % d;
+            }
+            left -= k;
+        }
+        if negative { -m } else { m }
+    }
+    #[cfg(not(any(table_format = "q128_128", table_format = "q256_256")))]
+    { wide_div(w, wide_scale()) }
 }
 
 /// `w >> 1` at wide tier (halve). Used for rounding.
@@ -360,28 +394,43 @@ fn wide_neg(w: WideCompute) -> WideCompute {
 /// Add two compute-tier decimal values.
 #[inline]
 pub fn decimal_compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    a + b
+    try_decimal_compute_add(a, b).expect("decimal compute tier: addition overflow")
+}
+
+/// `a + b` of compute-tier decimal values, `Err(TierOverflow)` when the sum
+/// leaves the compute tier (0.6.3 wrapped).
+#[inline]
+pub fn try_decimal_compute_add(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    a.checked_add(b).ok_or(OverflowDetected::TierOverflow)
 }
 
 /// Subtract two compute-tier decimal values.
 #[inline]
 pub fn decimal_compute_sub(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    a - b
+    try_decimal_compute_sub(a, b).expect("decimal compute tier: subtraction overflow")
+}
+
+/// `a - b` of compute-tier decimal values, `Err(TierOverflow)` when the
+/// difference leaves the compute tier (0.6.3 wrapped).
+#[inline]
+pub fn try_decimal_compute_sub(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    a.checked_add(try_decimal_compute_neg(b)?).ok_or(OverflowDetected::TierOverflow)
+}
+
+/// `-a` of a compute-tier decimal value, `Err(TierOverflow)` for the tier's
+/// minimum.
+#[inline]
+pub fn try_decimal_compute_neg(a: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(not(table_format = "q256_256"))]
+    { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
+    #[cfg(table_format = "q256_256")]
+    { if a == I1024::min_value() { Err(OverflowDetected::TierOverflow) } else { Ok(I1024::zero() - a) } }
 }
 
 /// Negate a compute-tier decimal value.
 #[inline]
 pub fn decimal_compute_neg(a: ComputeStorage) -> ComputeStorage {
-    #[cfg(table_format = "q16_16")]
-    { -a }
-    #[cfg(table_format = "q32_32")]
-    { -a }
-    #[cfg(table_format = "q64_64")]
-    { I256::zero() - a }
-    #[cfg(table_format = "q128_128")]
-    { I512::zero() - a }
-    #[cfg(table_format = "q256_256")]
-    { I1024::zero() - a }
+    try_decimal_compute_neg(a).expect("decimal compute tier: negation overflow")
 }
 
 /// Divide compute-tier value by 2 (exact for even values, rounds toward -∞ for odd).
@@ -439,12 +488,22 @@ pub fn decimal_compute_cmp(a: &ComputeStorage, b: &ComputeStorage) -> std::cmp::
 
 /// Multiply two compute-tier decimal values, rescaling back to compute dp.
 ///
+/// Panics when the product leaves the compute tier (it wrapped silently
+/// before 0.6.4); see [`try_decimal_compute_mul`].
+#[inline]
+pub fn decimal_compute_mul(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    try_decimal_compute_mul(a, b).expect("decimal_compute_mul: product outside the decimal compute tier")
+}
+
+/// Multiply two compute-tier decimal values, rescaling back to compute dp,
+/// `Err(TierOverflow)` when the product does not fit the compute tier.
+///
 /// Algorithm:
 /// 1. Widening multiply: `product = a × b` in the wide type (no overflow).
 /// 2. Divide by `10^DECIMAL_COMPUTE_DP` with round-half-away-from-zero.
-/// 3. Narrow back to ComputeStorage.
+/// 3. Narrow back to ComputeStorage (checked).
 #[inline]
-pub fn decimal_compute_mul(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+pub fn try_decimal_compute_mul(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
     let product = wide_mul(a, b);
     let scale = wide_scale();
     let half_scale = wide_halve(scale);
@@ -456,7 +515,7 @@ pub fn decimal_compute_mul(a: ComputeStorage, b: ComputeStorage) -> ComputeStora
         product + half_scale
     };
 
-    narrow(wide_div(rounded, scale))
+    narrow(wide_div_scale(rounded))
 }
 
 // ============================================================================
@@ -466,6 +525,7 @@ pub fn decimal_compute_mul(a: ComputeStorage, b: ComputeStorage) -> ComputeStora
 /// Divide two compute-tier decimal values: `a / b`, result at compute dp.
 ///
 /// Formula: `result = round((a × 10^dp) / b)`. Uses wide type for the numerator.
+/// `Err(TierOverflow)` when the quotient does not fit the compute tier.
 #[inline]
 pub fn decimal_compute_div(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
     if decimal_compute_is_zero(&b) {
@@ -487,7 +547,7 @@ pub fn decimal_compute_div(a: ComputeStorage, b: ComputeStorage) -> Result<Compu
 
     let final_quot = if result_neg { wide_neg(quotient) } else { quotient };
 
-    Ok(narrow(final_quot))
+    narrow(final_quot)
 }
 
 /// Divide compute-tier value by a small positive integer, with round-half-away-from-zero.
@@ -554,17 +614,49 @@ pub fn decimal_upscale_to_compute(scaled: BinaryStorage, storage_dp: u8) -> Resu
         return Ok(widened * factor);
     }
 
-    // storage_dp > compute_dp: divide with round-half-away-from-zero.
+    // storage_dp > compute_dp: divide, rounding half to even (the decimal rule).
     let diff = storage_dp - DECIMAL_COMPUTE_DP;
     let divisor = pow10_compute_ct(diff);
     let widened = binary_storage_to_compute_widen(scaled);
-    let half_div = divisor >> 1;
-    let rounded = if decimal_compute_is_negative(&widened) {
-        widened - half_div
-    } else {
-        widened + half_div
+    Ok(div_round_half_even(widened, divisor))
+}
+
+/// `value / divisor` rounded to nearest, ties to even (banker's, the decimal
+/// domain's rule wherever rounding occurs), for an even `divisor > 0` such
+/// as a power of ten. One division; the remainder comes from `q * divisor`.
+#[inline]
+fn div_round_half_even(value: ComputeStorage, divisor: ComputeStorage) -> ComputeStorage {
+    let q = value / divisor;
+    let r = value - q * divisor; // sign of value, |r| < divisor
+    let r_abs = decimal_compute_abs(r);
+    // compare |r| with divisor - |r| (no doubling, so nothing can overflow)
+    let bump = match r_abs.cmp(&(divisor - r_abs)) {
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => decimal_compute_halve(q) + decimal_compute_halve(q) != q,
     };
-    Ok(rounded / divisor)
+    if !bump {
+        q
+    } else if decimal_compute_is_negative(&value) {
+        q - decimal_compute_unit()
+    } else {
+        q + decimal_compute_unit()
+    }
+}
+
+/// The raw integer 1 (one unit at the compute dp, not the value 1.0).
+#[inline]
+fn decimal_compute_unit() -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { 1i64 }
+    #[cfg(table_format = "q32_32")]
+    { 1i128 }
+    #[cfg(table_format = "q64_64")]
+    { I256::from_i128(1) }
+    #[cfg(table_format = "q128_128")]
+    { I512::from_i128(1) }
+    #[cfg(table_format = "q256_256")]
+    { I1024::from_i128(1) }
 }
 
 /// Widen a BinaryStorage-typed scaled decimal value to ComputeStorage (no rescale).
@@ -585,7 +677,7 @@ fn binary_storage_to_compute_widen(scaled: BinaryStorage) -> ComputeStorage {
 /// Downscale compute-tier decimal value to storage-tier (BinaryStorage, dp).
 ///
 /// The caller provides `target_dp`: the number of decimal places the result should have.
-/// Rounding is round-half-away-from-zero.
+/// Rounding is half to even (banker's); it was half away from zero before 0.6.4.
 ///
 /// Returns `Err(TierOverflow)` if the result doesn't fit in BinaryStorage.
 #[inline]
@@ -606,17 +698,10 @@ pub fn decimal_downscale_to_storage(compute_val: ComputeStorage, target_dp: u8) 
         return narrow_compute_to_storage(compute_val);
     }
 
-    // target_dp < compute_dp: divide with round-half-away-from-zero
+    // target_dp < compute_dp: divide, rounding half to even
     let diff = DECIMAL_COMPUTE_DP - target_dp;
     let divisor = pow10_compute_ct(diff);
-    let half_div = divisor >> 1;
-    let rounded = if decimal_compute_is_negative(&compute_val) {
-        compute_val - half_div
-    } else {
-        compute_val + half_div
-    };
-    let downscaled = rounded / divisor;
-    narrow_compute_to_storage(downscaled)
+    narrow_compute_to_storage(div_round_half_even(compute_val, divisor))
 }
 
 /// Narrow ComputeStorage to BinaryStorage with overflow check.
@@ -664,10 +749,13 @@ fn narrow_compute_to_storage(v: ComputeStorage) -> Result<BinaryStorage, Overflo
 // ============================================================================
 
 /// Widen an i128 value to ComputeStorage (no rescale, just type widening).
+///
+/// Panics on realtime when `value` does not fit the i64 compute tier (the
+/// cast truncated it silently before 0.6.4).
 #[inline]
 pub fn i128_to_compute(value: i128) -> ComputeStorage {
     #[cfg(table_format = "q16_16")]
-    { value as i64 }
+    { i64::try_from(value).expect("i128_to_compute: value outside the realtime compute tier") }
     #[cfg(table_format = "q32_32")]
     { value }
     #[cfg(table_format = "q64_64")]
@@ -681,50 +769,96 @@ pub fn i128_to_compute(value: i128) -> ComputeStorage {
 /// Upscale an i128 decimal value at `dp` decimal places to ComputeStorage at DECIMAL_COMPUTE_DP.
 ///
 /// For DecimalFixed<DECIMALS>: value is `real × 10^dp`. Result is `real × 10^DECIMAL_COMPUTE_DP`.
+/// Panics when the value does not fit the decimal compute tier; see
+/// [`try_i128_upscale_to_compute`].
 pub fn i128_upscale_to_compute(value: i128, dp: u8) -> ComputeStorage {
-    let widened = i128_to_compute(value);
-    if dp < DECIMAL_COMPUTE_DP {
-        let factor = pow10_compute_ct(DECIMAL_COMPUTE_DP - dp);
-        widened * factor
-    } else if dp > DECIMAL_COMPUTE_DP {
-        let divisor = pow10_compute_ct(dp - DECIMAL_COMPUTE_DP);
-        widened / divisor
-    } else {
-        widened
+    try_i128_upscale_to_compute(value, dp)
+        .expect("DecimalFixed: value outside the decimal compute range")
+}
+
+/// Upscale an i128 decimal value at `dp` decimal places to the compute dp,
+/// `Err(TierOverflow)` when it does not fit the compute tier (realtime and
+/// compact only: every i128 fits the wider tiers at every dp).
+///
+/// A `dp` beyond the compute dp rounds half to even (the decimal rule), in
+/// i128 before the value is narrowed. Before 0.6.4 realtime cast the i128 to
+/// i64 first (silently dropping the high bits), the upscale multiply was
+/// unchecked, and the division truncated.
+pub fn try_i128_upscale_to_compute(value: i128, dp: u8) -> Result<ComputeStorage, OverflowDetected> {
+    if dp > DECIMAL_COMPUTE_DP {
+        let diff = (dp - DECIMAL_COMPUTE_DP) as u32;
+        // |value| < 2^127 < 10^39 / 2, so any diff >= 39 rounds to zero
+        let q = if diff > 38 {
+            0
+        } else {
+            let d = pow10_i128(diff);
+            super::super::banker_round_decimal_i128(value / d, value % d, d)
+        };
+        return try_i128_to_compute(q);
     }
+    let widened = try_i128_to_compute(value)?;
+    if dp == DECIMAL_COMPUTE_DP {
+        return Ok(widened);
+    }
+    let factor = pow10_compute_ct(DECIMAL_COMPUTE_DP - dp);
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    { widened.checked_mul(factor).ok_or(OverflowDetected::TierOverflow) }
+    // |value| * 10^DECIMAL_COMPUTE_DP < 2^127 * 10^38 < 2^254 (embedded),
+    // < 2^383 (balanced), < 2^639 (scientific): always inside the tier
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    { Ok(widened * factor) }
+}
+
+#[inline]
+fn try_i128_to_compute(value: i128) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(table_format = "q16_16")]
+    { i64::try_from(value).map_err(|_| OverflowDetected::TierOverflow) }
+    #[cfg(not(table_format = "q16_16"))]
+    { Ok(i128_to_compute(value)) }
 }
 
 /// Downscale ComputeStorage at DECIMAL_COMPUTE_DP to i128 at target `dp` decimal places.
 ///
-/// Uses round-half-away-from-zero for the division.
+/// Rounds half to even (banker's, the `DecimalFixed` rule; half away from
+/// zero before 0.6.4). Panics when the result does not fit i128; see
+/// [`try_decimal_compute_to_i128`].
 pub fn decimal_compute_to_i128(value: ComputeStorage, dp: u8) -> i128 {
+    try_decimal_compute_to_i128(value, dp)
+        .expect("DecimalFixed: result outside the i128 storage range")
+}
+
+/// Downscale ComputeStorage at DECIMAL_COMPUTE_DP to i128 at `dp` decimal
+/// places, half to even, `Err(TierOverflow)` when the result does not fit
+/// i128. Before 0.6.4 the wide profiles narrowed with an unchecked cast, so
+/// e.g. `DecimalFixed::<19>::exp(50)` on embedded returned a wrapped value.
+pub fn try_decimal_compute_to_i128(value: ComputeStorage, dp: u8) -> Result<i128, OverflowDetected> {
+    if dp > DECIMAL_COMPUTE_DP {
+        // realtime and compact only (the wider compute dps exceed every i128 scale)
+        let factor = pow10_i128((dp - DECIMAL_COMPUTE_DP) as u32);
+        return compute_to_i128(value)?.checked_mul(factor).ok_or(OverflowDetected::TierOverflow);
+    }
     let result = if dp < DECIMAL_COMPUTE_DP {
-        let diff = DECIMAL_COMPUTE_DP - dp;
-        let divisor = pow10_compute_ct(diff);
-        let half = divisor >> 1;
-        let rounded = if decimal_compute_is_negative(&value) {
-            value - half
-        } else {
-            value + half
-        };
-        rounded / divisor
-    } else if dp > DECIMAL_COMPUTE_DP {
-        let factor = pow10_compute_ct(dp - DECIMAL_COMPUTE_DP);
-        value * factor
+        div_round_half_even(value, pow10_compute_ct(DECIMAL_COMPUTE_DP - dp))
     } else {
         value
     };
-    // Extract to i128
+    compute_to_i128(result)
+}
+
+/// A compute-tier value as i128, `Err(TierOverflow)` if it does not fit.
+#[inline]
+fn compute_to_i128(v: ComputeStorage) -> Result<i128, OverflowDetected> {
     #[cfg(table_format = "q16_16")]
-    { result as i128 }
+    { Ok(v as i128) }
     #[cfg(table_format = "q32_32")]
-    { result }
-    #[cfg(table_format = "q64_64")]
-    { result.as_i128() }
-    #[cfg(table_format = "q128_128")]
-    { result.as_i128() }
-    #[cfg(table_format = "q256_256")]
-    { result.as_i128() }
+    { Ok(v) }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    {
+        if !v.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(v.as_i128())
+    }
 }
 
 #[cfg(all(test, table_format = "q64_64"))]
@@ -805,10 +939,42 @@ mod tests {
 
     #[test]
     fn downscale_rounding() {
-        // 0.125 at compute tier → dp=2 should give 13 (round half up: 12.5 → 13)
+        // 0.125 at compute tier → dp=2 gives 12 (half to even: 12.5 → 12),
+        // 0.135 gives 14, -0.125 gives -12 (13 before 0.6.4, half away)
         // 0.125 × 10^38 = 125 × 10^35
         let val = I256::from_i128(125) * pow10_compute_ct(35);
-        let result = decimal_downscale_to_storage(val, 2).unwrap();
-        assert_eq!(result, 13i128);
+        assert_eq!(decimal_downscale_to_storage(val, 2).unwrap(), 12i128);
+        let val = I256::from_i128(135) * pow10_compute_ct(35);
+        assert_eq!(decimal_downscale_to_storage(val, 2).unwrap(), 14i128);
+        let val = I256::from_i128(-125) * pow10_compute_ct(35);
+        assert_eq!(decimal_downscale_to_storage(val, 2).unwrap(), -12i128);
+    }
+}
+
+#[cfg(all(test, any(table_format = "q128_128", table_format = "q256_256")))]
+mod wide_div_scale_tests {
+    use super::*;
+
+    /// The limb-wise division by 10^DP is bit-identical to the general one.
+    #[test]
+    fn matches_the_general_division() {
+        let mut state: u64 = 0x1234_5678_9ABC_DEF1;
+        let scale = wide_scale();
+        for case in 0..400 {
+            let mut w = wide_scale();
+            // random magnitudes from below 10^DP up to the product range
+            let mut words = w.words;
+            let used = case % words.len() + 1;
+            for (i, word) in words.iter_mut().enumerate() {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *word = if i < used { state } else { 0 };
+            }
+            let last = words.len() - 1;
+            words[last] &= 0x3FFF_FFFF_FFFF_FFFF;
+            w.words = words;
+            for v in [w, -w, w >> 1, -(w >> 3)] {
+                assert_eq!(wide_div_scale(v), wide_div(v, scale), "case {case}");
+            }
+        }
     }
 }

@@ -98,3 +98,53 @@ fn symbolic_ladder_reaches_wide_tiers() {
     // (1e20/3)·3e20 = 1e40 exactly.
     assert_eq!(int_part(&got), format!("1{}", "0".repeat(40)));
 }
+
+// ============================================================================
+// 0.6.4: canonical literals and decimal results never narrow by wrapping
+// ============================================================================
+
+fn is_zero(e: &LazyExpr) -> bool {
+    disp(e).trim_start_matches('-').chars().all(|c| c == '0' || c == '.')
+}
+
+#[test]
+fn decimal_literals_beyond_the_decimal_storage_keep_their_value() {
+    // Realtime keeps value * 10^4 in i32 decimal storage. 0.6.3 wrapped it:
+    // at Q22.10 "467295.6470" was 37798.9 and "214748.3648" was -214748.3648.
+    assert!(is_zero(&(gmath("467295.6470") - gmath("467295.647"))), "{}", disp(&gmath("467295.6470")));
+    assert!(is_zero(&(gmath("214748.3648") - gmath("2147483648/10000"))), "{}", disp(&gmath("214748.3648")));
+    assert!(is_zero(&(gmath("-214748.3649") + gmath("2147483649/10000"))), "{}", disp(&gmath("-214748.3649")));
+    assert!(disp(&gmath("3000000.0001")).starts_with("3000000.0001"), "{}", disp(&gmath("3000000.0001")));
+}
+
+#[test]
+fn decimal_results_beyond_the_decimal_storage_are_exact() {
+    // 0.6.3 narrowed every decimal UGOD result back to storage with a
+    // truncating cast: at Q22.10, 214748.3647 + 1 = -214747.3649.
+    assert!(is_zero(&(gmath("214748.3647") + gmath("1") - gmath("2147493647/10000"))),
+        "{}", disp(&(gmath("214748.3647") + gmath("1"))));
+    assert!(is_zero(&(gmath("214748.3647") + gmath("0.0001") - gmath("2147483648/10000"))));
+    assert!(is_zero(&(gmath("-214748.3647") - gmath("0.0002") + gmath("2147483649/10000"))));
+    assert!(is_zero(&(gmath("107374.1824") * gmath("2.0000") - gmath("2147483648/10000"))));
+}
+
+#[test]
+fn hex_and_binary_literals_denote_their_integer() {
+    // 0.6.3 stored the digits as raw storage bits at tier 1 while the shadow
+    // said 255/1: "0xFF" alone, "0xFF" + 1 and the shadow disagreed, and
+    // "0x1FFFFFFFF" wrapped to 0 on realtime.
+    assert!(is_zero(&(gmath("0xFF") - gmath("255"))), "{}", disp(&gmath("0xFF")));
+    assert!(is_zero(&(gmath("0xFF") + gmath("1") - gmath("256"))));
+    assert!(is_zero(&(gmath("0b101") - gmath("5"))));
+    assert!(is_zero(&(gmath("0x1FFFFFFFF") - gmath("8589934591"))), "{}", disp(&gmath("0x1FFFFFFFF")));
+}
+
+#[test]
+fn canonical_literal_grammar_is_unchanged() {
+    // The exact converter behind the 0.6.4 fixes reads exponent notation;
+    // the canonical grammar must not (FixedPoint::from_str does).
+    use g_math::canonical::gmath_parse;
+    for s in ["1e5", "1.5e3", "2E-3", " 1.5", "1.5 "] {
+        assert!(gmath_parse(s).is_err(), "{s:?} parsed");
+    }
+}

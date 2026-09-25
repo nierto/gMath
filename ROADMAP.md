@@ -47,7 +47,8 @@ Dedicated inference module with AVX2 SIMD, rayon row-parallel dispatch, batch ma
 - Cross-domain coercion in arithmetic: `gmath("0.1") + gmath("255")` routes to Decimal (was Symbolic fallback)
 - Tree walker: `route_expression(&LazyExpr) -> OperandClass`, O(N) bottom-up
 
-**Decimal 4-stage exp tables:**
+**Decimal 4-stage exp tables** (replaced in 0.6.4: the table entries lost
+accuracy at large arguments and wrapped on realtime past e^22):
 - `exp(x) = exp(k) * exp(d1/10) * exp(d2/100) * exp(d3/1000) * exp(r)`: 71 cached entries
 - Cached-table decimal exp path; narrows the binary/decimal gap
 
@@ -368,8 +369,9 @@ tight at Q22.10; and both stagnation fallbacks fired during normal convergence
 bound where the tight one was reachable. Schur now repeats its exceptional
 shifts every 10 iterations.
 
-Follow-up, measured and not in 0.6.2: `schur_decompose` still applies its
-Francis steps to H at storage precision. On embedded, a random 10×10 with
+Follow-up, measured and not in 0.6.2 (done in 0.6.4, which carries H at the
+compute tier): `schur_decompose` still applies its Francis steps to H at
+storage precision. On embedded, a random 10×10 with
 entries `k/64` stops improving above the tight bound and deflates at the
 looser sqrt(quantum) bound after 64 iterations (backward error 2.8e7 ulp);
 divided by a further 64 or 4096 it takes 210 to 220 iterations, and
@@ -396,6 +398,81 @@ In-range `from_f64` / `from_f32` stay bit-identical to 0.6.2 (compared on
 0.6.2 `to_f64` exactly for replays. Gate `tests/float_boundary_validation.rs`
 (exact-rational references, `scripts/generate_float_boundary_refs.py`), CI
 `float-boundary` on every profile plus Q22.10.
+
+### v0.6.4: Wide tier, exact literal parser, compute-tier state, loud operators
+
+**Release 2026-09-25.** A float-free downstream consumer (realtime Q22.10) reported four places it had
+to route around the library. All four confirmed. `rms_norm_factor` added its
+epsilon at the storage tier, where transformer epsilons (`1e-5`, `1e-6`) are
+zero at Q22.10: new `rms_norm_factor_eps_wide` takes a Q64.64 epsilon and adds
+it at the compute tier. `from_str` had no exponent notation and panicked on
+`"1e-06"`: decimal literals now convert exactly with integer arithmetic,
+bit-identical to the old path on every literal it handled, and
+`try_from_str` never panics. The Q64.64 `exp`/`ln` engines were reachable only
+through the hidden `domains` path with a "~10-13 digits" note: the new
+`g_math::wide` module exposes them with sin/cos, π constants and a measured
+contract, the same results on every profile. `sincos_wide_q64` removes the
+caller-side Q32.32 truncation. Found on the way and fixed in the same cycle:
+the canonical layer narrowed with unchecked casts in four places (decimal
+literals into i32/i64 decimal storage, decimal UGOD results back to storage on
+every profile, decimal-to-binary coercion, hex/binary literals), and rounded
+toward zero in two (literals past 38 digits, decimal compute results to
+binary). At Q22.10 `gmath("214748.3648")` was -214748.3648 and
+`214748.3647 + 1` was -214747.3649. Hex/binary literals now denote their
+integer.
+
+The whole suite then ran at other realtime splits (the owner: `GMATH_FRAC_BITS`
+is a choice, 20.12 as much as 22.10). Library defects found that way, all
+fixed: fraction bits hardcoded to 16 (rational conversion, curvature
+differences), silent narrowing (`from_int`, `make_compute_int`,
+`compute_divide`, symbolic/decimal to compute tier, compute-tier sums), RK4
+and Dormand-Prince stages rounded to storage (Dormand-Prince also missed its
+b*7 term), constants and counts forced into the storage range (Rodrigues
+series, vector lengths, n!), a Rodrigues threshold of zero at 8 bits. On the
+owner's decision, intermediates rounded to storage were then reworked to the
+compute tier (norms, dot, QR, Minkowski product, tensor means, the shared
+Householder update) and `matrix_exp` / `matrix_log` / `matrix_sqrt` were made
+accurate on the wide profiles (21 units on Q64.64 and about 2^31 on Q128.128
+and wider before). The suite gates realtime 8 to 24 fraction bits in full
+(`realtime-splits` CI) and runs correctness gates at 2 to 6 and 26 to 30; a new
+mpmath gate (`one_rounding_validation`) holds the reworked operations within
+one unit of the correctly rounded result.
+
+Then, on the owner's direction that every computation of several steps carries
+its state at the compute tier and that operators never wrap: QR, LU, Cholesky
+(with their solves), Jacobi, the SVD and Schur (with thresholds at the compute
+scale, `2^-(3F/2)`), the ODE integrators, geodesics and transports, curvature,
+the manifold and Lie-group maps, fiber bundles, projective maps and the tensor
+decompositions now carry their state at the compute tier and round once. Six
+mpmath gates hold them within one unit on every profile and split, except the
+SE(3) log round trip near pi (3 units: the exp result it starts from is
+rounded) and CP-ALS reconstruction (2: four independently rounded outputs).
+Before: up to 114 units in an LU solve, past `2^30` units in SVD vectors and
+Schur eigenvalues on the wide profiles, 1536 in parallel transport, 10^25 in
+Riemann curvature on scientific. The same work found wrong results: the
+sectional curvature contraction was identically zero, `StiefelManifold`'s
+distance was the square root of the distance, the Grassmannian log paired the
+wrong angles, SO(3)/SE(3) exp failed for small angles on realtime,
+`FixedPoint::atan2` panicked on every realtime split. The `FixedPoint` and
+`DecimalFixed` operators, `to_int`, `from_int` and the compute-tier helpers now
+panic instead of wrapping or saturating, with `try_` twins (owner decision:
+panic plus `try_` twins; UGOD stays in the canonical layer, since a
+fixed-width type cannot promote). Checked `*` costs 0.24 to 0.44 ns on
+realtime and compact, 15% on balanced; `+ - /` are unchanged.
+
+The matrix functions then moved to a Q64.64 path on realtime (they ran at the
+compute tier's `2F` bits: `expm` of a norm-7 matrix was 8 units off at 8
+fraction bits) and are correctly rounded on every profile and split, and
+`DecimalFixed` gained `try_` twins for its 18 transcendentals (never panic,
+bit-identical where the infallible form returns; the sweep behind that found
+six more panics on extreme inputs, fixed).
+
+Follow-ups, measured and not done: `sin_q64`/`cos_q64` lose accuracy linearly
+in `|x|` (0.34 units of `2^-64` per radian) because range reduction uses the
+single truncated `PI_HALF_Q64`; a two-part Cody-Waite constant would remove
+it, but changes results the realtime and compact compute tiers depend on. On
+realtime, `rms_norm_factor_eps_wide` is limited by the compute tier's
+`2 x FRAC_BITS` bits (at Q22.10, 2.4% high on an all-zero input with `1e-5`).
 
 ---
 

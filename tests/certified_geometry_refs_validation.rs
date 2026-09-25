@@ -45,6 +45,17 @@ fn fp_le(b: &[u8]) -> FixedPoint { FixedPoint::from_raw(g_math::fixed_point::I25
 #[cfg(table_format = "q256_256")]
 fn fp_le(b: &[u8]) -> FixedPoint { FixedPoint::from_raw(g_math::fixed_point::I512::from_bytes_le(b)) }
 
+/// Bit length of the magnitude of little-endian two's-complement bytes.
+fn magnitude_bits(b: &[u8]) -> u32 {
+    let negative = b[b.len() - 1] & 0x80 != 0;
+    // one's complement of a negative is |x| - 1: bit length within one of |x|
+    let mag: Vec<u8> = b.iter().map(|x| if negative { !x } else { *x }).collect();
+    for (i, byte) in mag.iter().enumerate().rev() {
+        if *byte != 0 { return i as u32 * 8 + (8 - byte.leading_zeros()); }
+    }
+    0
+}
+
 fn sign_of(s: i8) -> Sign {
     match s {
         -1 => Sign::Negative,
@@ -54,16 +65,13 @@ fn sign_of(s: i8) -> Sign {
     }
 }
 
-/// The references assume the profile's default fractional split.
+/// The references match the build's split: the sqrt(1) = 1 entry decodes to
+/// exactly 1.0 only when the table's FRAC_BITS is the build's (every profile,
+/// and every realtime GMATH_FRAC_BITS from 2 to 30, has a table).
 fn assert_default_split() {
-    let one = Interval::point(FixedPoint::one());
-    let two = one + one;
-    // 2 * 2^F = 1 << (F + 1) in raw units: compare via the reference for x = 4
-    let four = two * two;
-    assert!(four.is_point());
-    let expected_four = refs::SQRT.iter().find(|(_, f, c)| f == c && fp_le(f) == fp_le(c) && fp_le(f) == FixedPoint::from_int(2))
-        .map(|(x, _, _)| fp_le(x));
-    assert_eq!(expected_four, Some(four.lo()), "references were generated for FRAC_BITS = {}", refs::FRAC_BITS);
+    let one = FixedPoint::one();
+    let found = refs::SQRT.iter().any(|(x, f, c)| fp_le(x) == one && fp_le(f) == one && fp_le(c) == one);
+    assert!(found, "references were generated for FRAC_BITS = {}", refs::FRAC_BITS);
 }
 
 #[test]
@@ -84,17 +92,19 @@ fn sqrt_endpoints_match_independent_references() {
             fp_le(x), scalar, iv.lo(), iv.hi()
         );
     }
-    assert!(refs::SQRT.len() >= 12);
+    assert!(refs::SQRT.len() >= 9);
 }
 
 #[test]
 fn product_and_quotient_endpoints_match_independent_references() {
+    assert_default_split();
     let mut near_max = 0usize;
     for (a, b, f, c) in refs::MUL {
         let iv = Interval::point(fp_le(a)) * Interval::point(fp_le(b));
         assert_eq!(iv.lo(), fp_le(f), "mul floor");
         assert_eq!(iv.hi(), fp_le(c), "mul ceil");
-        if fp_le(a) > FixedPoint::from_int(1 << 20) || fp_le(a) < -FixedPoint::from_int(1 << 20) { near_max += 1; }
+        // the generator's near-maximum operands: at least W - 2 bits of magnitude
+        if magnitude_bits(a) >= refs::STORAGE_BITS - 2 { near_max += 1; }
     }
     for (a, b, f, c) in refs::DIV {
         let iv = Interval::point(fp_le(a)) / Interval::point(fp_le(b));
@@ -112,6 +122,7 @@ fn product_and_quotient_endpoints_match_independent_references() {
 /// matrices, and operands near the storage maximum.
 #[test]
 fn quadratic_form_endpoints_and_nearest_match_independent_references() {
+    assert_default_split();
     let mut near_max = 0usize;
     let mut rounded_up = 0usize;
     for (n, v, m, f, c, near) in refs::QF {
@@ -123,9 +134,10 @@ fn quadratic_form_endpoints_and_nearest_match_independent_references() {
         let scalar = fused::quadratic_form(&fv, &fm);
         assert_eq!(scalar, fp_le(near), "fused quadratic form nearest, n = {n}");
         assert!(iv.contains(scalar));
-        // |raw| >= 2^(W/2): the upper half of the little-endian bytes is not sign fill
-        let fill = if v[0][v[0].len() - 1] & 0x80 != 0 { 0xFFu8 } else { 0u8 };
-        if v[0][v[0].len() / 2..].iter().any(|b| *b != fill) { near_max += 1; }
+        // the generator's near-maximum operands are about 2^k with
+        // k = (W - 1 + 2F) / 3 - 2 (the largest whose form still fits storage)
+        let k = (refs::STORAGE_BITS - 1 + 2 * refs::FRAC_BITS) / 3 - 2;
+        if magnitude_bits(v[0]) >= k { near_max += 1; }
         if fp_le(near) == fp_le(c) && fp_le(c) != fp_le(f) { rounded_up += 1; }
     }
     assert!(near_max >= 4, "references must exercise operands near the storage maximum");
@@ -171,10 +183,21 @@ fn dyadic_spd(rng: &mut Rng, n: usize) -> FixedMatrix {
 
 #[test]
 fn interval_cholesky_encloses_the_exact_rational_pivot() {
+    assert_default_split();
     let mut rng = Rng(0x1D7);
     for (n, f, c) in refs::PIVOT {
         let m = dyadic_spd(&mut rng, *n);
-        assert_eq!(pd_verdict(&m).unwrap(), PdVerdict::PositiveDefinite);
+        // Below 16 fraction bits the factor can be too wide to prove PD (at
+        // 10 bits the n = 50 pivot 35 straddles zero): a sound Inconclusive,
+        // see pd_verdict_validation, past which the last pivot cannot be
+        // formed. The verdict must still never be wrong.
+        let verdict = pd_verdict(&m).unwrap();
+        if refs::FRAC_BITS < 16 {
+            assert!(matches!(verdict, PdVerdict::Inconclusive { .. } | PdVerdict::PositiveDefinite), "{verdict:?}");
+            if verdict != PdVerdict::PositiveDefinite { continue; }
+        } else {
+            assert_eq!(verdict, PdVerdict::PositiveDefinite);
+        }
         let zero = Interval::point(FixedPoint::ZERO);
         let mut l = vec![vec![zero; *n]; *n];
         let mut last = zero;
@@ -192,7 +215,10 @@ fn interval_cholesky_encloses_the_exact_rational_pivot() {
         assert!(last.lo() <= exact_floor, "n = {n}: interval lower endpoint above the exact pivot");
         assert!(exact_ceil <= last.hi(), "n = {n}: interval upper endpoint below the exact pivot");
     }
-    assert_eq!(refs::PIVOT.len(), 2);
+    // the dyadic k/16 family needs 4 <= F and entries up to 13.5 in range
+    let f = refs::FRAC_BITS;
+    let expected = if refs::STORAGE_BITS == 32 && !(4..=27).contains(&f) { 0 } else { 2 };
+    assert_eq!(refs::PIVOT.len(), expected);
 }
 
 fn pt2(p: &[&[u8]]) -> [FixedPoint; 2] { [fp_le(p[0]), fp_le(p[1])] }
@@ -200,6 +226,7 @@ fn pt3(p: &[&[u8]]) -> [FixedPoint; 3] { [fp_le(p[0]), fp_le(p[1]), fp_le(p[2])]
 
 #[test]
 fn predicates_match_independent_references_near_the_storage_maximum() {
+    assert_default_split();
     let mut zeros = 0usize;
     for (pts, s) in refs::ORIENT2D {
         let got = orient2d(pt2(pts[0]), pt2(pts[1]), pt2(pts[2]));

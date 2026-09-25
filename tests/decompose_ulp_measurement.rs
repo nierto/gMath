@@ -262,20 +262,28 @@ fn test_ulp_measurement_report() {
         let h = FixedMatrix::from_fn(4, 4, |i, j| {
             FixedPoint::one() / FixedPoint::from_int((i + j + 1) as i32)
         });
-        let b = FixedVector::from_slice(&[fp("1"), fp("1"), fp("1"), fp("1")]);
+        // x = [-4, 60, -180, 140] for b = 1. Where 180 exceeds the storage
+        // range (realtime with more than 23 fraction bits: +-128 at 24) the
+        // right-hand side is halved, which halves x exactly: the same system.
+        let (b_entry, x_ref): (&str, [&str; 4]) = if FixedPoint::try_from_str("180").is_ok() {
+            ("1", ["-4", "60", "-180", "140"])
+        } else {
+            ("0.5", ["-2", "30", "-90", "70"])
+        };
+        let b = FixedVector::from_slice(&[fp(b_entry), fp(b_entry), fp(b_entry), fp(b_entry)]);
         let lu = lu_decompose(&h).unwrap();
         let x = lu.solve(&b).unwrap();
-        let _ulp = report_vec_ulp("Hilbert LU solve (raw)", &x, &["-4", "60", "-180", "140"]);
+        let _ulp = report_vec_ulp("Hilbert LU solve (raw)", &x, &x_ref);
         // Don't include raw Hilbert in max — it's condition-number dominated
 
         // Iterative refinement: one step should recover nearly all precision
         let x_refined = lu.refine(&h, &b, &x).unwrap();
-        let ulp_refined = report_vec_ulp("Hilbert REFINED (1 step)", &x_refined, &["-4", "60", "-180", "140"]);
+        let ulp_refined = report_vec_ulp("Hilbert REFINED (1 step)", &x_refined, &x_ref);
         max_ulp_overall = max_ulp_overall.max(ulp_refined);
 
         // Second refinement step
         let x_refined2 = lu.refine(&h, &b, &x_refined).unwrap();
-        let ulp_refined2 = report_vec_ulp("Hilbert REFINED (2 steps)", &x_refined2, &["-4", "60", "-180", "140"]);
+        let ulp_refined2 = report_vec_ulp("Hilbert REFINED (2 steps)", &x_refined2, &x_ref);
         max_ulp_overall = max_ulp_overall.max(ulp_refined2);
 
         // Round-trip after refinement

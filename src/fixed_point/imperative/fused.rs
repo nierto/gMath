@@ -15,8 +15,8 @@ use super::{FixedMatrix, FixedPoint, FixedVector};
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
 use super::wide_acc::{narrow_triple_nearest, quadratic_form_exact};
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_add, compute_checked_add, compute_subtract, compute_multiply, compute_divide,
-    compute_negate, compute_is_zero, make_compute_int,
+    compute_checked_add, compute_subtract, compute_multiply, compute_divide,
+    compute_negate, compute_is_zero, make_compute_int, compute_div_count, downscale_to_storage,
     sqrt_at_compute_tier, exp_at_compute_tier,
 };
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -24,6 +24,14 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 // ============================================================================
 // Compute-tier helpers
 // ============================================================================
+
+/// Checked compute-tier sum for the infallible fused operations: a sum
+/// beyond the compute tier panics instead of wrapping (plain additions
+/// wrapped silently in release builds before 0.6.4).
+#[inline]
+fn sum_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    compute_checked_add(a, b).expect("fused: sum exceeds the compute tier")
+}
 
 #[inline]
 fn compute_zero() -> ComputeStorage {
@@ -50,7 +58,7 @@ pub fn sqrt_sum_sq(values: &[FixedPoint]) -> FixedPoint {
     let mut acc = compute_zero();
     for v in values {
         let vc = upscale_to_compute(v.raw());
-        acc = compute_add(acc, compute_multiply(vc, vc));
+        acc = sum_add(acc, compute_multiply(vc, vc));
     }
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
 }
@@ -69,7 +77,7 @@ pub fn inv_sqrt_sum_sq(values: &[FixedPoint]) -> FixedPoint {
     let mut acc = compute_zero();
     for v in values {
         let vc = upscale_to_compute(v.raw());
-        acc = compute_add(acc, compute_multiply(vc, vc));
+        acc = sum_add(acc, compute_multiply(vc, vc));
     }
     let s = sqrt_at_compute_tier(acc);
     let inv = compute_divide(make_compute_int(1), s)
@@ -90,7 +98,7 @@ pub fn euclidean_distance(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
         let da = upscale_to_compute(a[i].raw());
         let db = upscale_to_compute(b[i].raw());
         let diff = compute_subtract(da, db);
-        acc = compute_add(acc, compute_multiply(diff, diff));
+        acc = sum_add(acc, compute_multiply(diff, diff));
     }
     FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(acc)))
 }
@@ -112,7 +120,7 @@ pub fn euclidean_distance_squared(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPo
         let da = upscale_to_compute(a[i].raw());
         let db = upscale_to_compute(b[i].raw());
         let diff = compute_subtract(da, db);
-        acc = compute_add(acc, compute_multiply(diff, diff));
+        acc = sum_add(acc, compute_multiply(diff, diff));
     }
     FixedPoint::from_raw(round_to_storage(acc))
 }
@@ -131,7 +139,7 @@ pub fn dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     for i in 0..a.len() {
         let da = upscale_to_compute(a[i].raw());
         let db = upscale_to_compute(b[i].raw());
-        acc = compute_add(acc, compute_multiply(da, db));
+        acc = sum_add(acc, compute_multiply(da, db));
     }
     FixedPoint::from_raw(round_to_storage(acc))
 }
@@ -181,14 +189,14 @@ pub fn mobius_denominator_sq(p: &[FixedPoint], q: &[FixedPoint]) -> FixedPoint {
     for i in 0..p.len() {
         let dp = upscale_to_compute(p[i].raw());
         let dq = upscale_to_compute(q[i].raw());
-        dot_acc = compute_add(dot_acc, compute_multiply(dp, dq));
-        p_sq = compute_add(p_sq, compute_multiply(dp, dp));
-        q_sq = compute_add(q_sq, compute_multiply(dq, dq));
+        dot_acc = sum_add(dot_acc, compute_multiply(dp, dq));
+        p_sq = sum_add(p_sq, compute_multiply(dp, dp));
+        q_sq = sum_add(q_sq, compute_multiply(dq, dq));
     }
     let one = compute_one();
-    let two_dot = compute_add(dot_acc, dot_acc);
+    let two_dot = sum_add(dot_acc, dot_acc);
     // 1 − 2⟨p,q⟩ + |p|²·|q|², all at tier N+1, one downscale.
-    let result = compute_add(
+    let result = sum_add(
         compute_subtract(one, two_dot),
         compute_multiply(p_sq, q_sq),
     );
@@ -222,7 +230,7 @@ pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetecte
         let s_compute = upscale_to_compute(s.raw());
         let shifted = compute_subtract(s_compute, max_compute);
         let e = exp_at_compute_tier(shifted);
-        sum = compute_add(sum, e);
+        sum = compute_checked_add(sum, e)?;
         exp_values.push(e);
     }
 
@@ -234,7 +242,7 @@ pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetecte
     let mut result = Vec::with_capacity(scores.len());
     for e in &exp_values {
         let normalized = compute_divide(*e, sum)?;
-        result.push(FixedPoint::from_raw(round_to_storage(normalized)));
+        result.push(FixedPoint::from_raw(downscale_to_storage(normalized)?));
     }
     Ok(result)
 }
@@ -244,8 +252,60 @@ pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetecte
 /// Computes sum of squares, divides by n, adds epsilon, takes sqrt,
 /// then reciprocal: all at tier N+1. Single downscale.
 ///
+/// `eps` is a storage-tier value, so any epsilon below the storage
+/// resolution `2^-FRAC_BITS` is zero before it is added (on the realtime
+/// profile at Q22.10 both `1e-5` and `1e-6` are zero). Use
+/// [`rms_norm_factor_eps_wide`] to apply a small epsilon at the compute tier.
+///
 /// **Use case**: RMSNorm: called once per layer per token in transformer inference.
 pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
+    rms_norm_factor_at_compute(values, upscale_to_compute(eps.raw()))
+}
+
+/// Fused 1/sqrt(mean(x²) + eps) with `eps` given in Q64.64 (`eps * 2^64`).
+///
+/// Identical to [`rms_norm_factor`] except that epsilon enters at the
+/// compute tier (`2 × FRAC_BITS` fractional bits) instead of the storage
+/// tier. The Q64.64 value is rounded to the compute tier once, to nearest
+/// with ties toward +infinity; it is exact on profiles whose compute tier
+/// has at least 64 fractional bits (compact and wider). On the realtime
+/// profile the compute tier holds `2 × FRAC_BITS` bits (20 at Q22.10,
+/// 32 at Q16.16), so an epsilon below `2^-(2 × FRAC_BITS + 1)` still rounds
+/// to zero there, and a small epsilon carries the compute tier's resolution
+/// (at Q22.10, `1e-5` becomes `10 / 2^20`).
+///
+/// `Err(TierOverflow)` if `eps` does not fit the compute tier (realtime
+/// only); `Err(DivisionByZero)` if `values` is empty or `mean + eps` is zero
+/// at the compute tier.
+///
+/// `g_math::wide::try_from_str("1e-5", 64)` produces the Q64.64 epsilon
+/// from a config literal without floats.
+pub fn rms_norm_factor_eps_wide(values: &[FixedPoint], eps_q64: i128) -> Result<FixedPoint, OverflowDetected> {
+    rms_norm_factor_at_compute(values, q64_to_compute(eps_q64)?)
+}
+
+/// A Q64.64 value at the compute tier: nearest, ties toward +infinity, when
+/// the compute tier has fewer than 64 fractional bits; exact otherwise.
+fn q64_to_compute(x: i128) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(table_format = "q16_16")]
+    {
+        use crate::fixed_point::frac_config::COMPUTE_FRAC_BITS;
+        // COMPUTE_FRAC_BITS = 2 x FRAC_BITS <= 60, so the shift is >= 4.
+        let shift = 64 - COMPUTE_FRAC_BITS;
+        let rounded = (x >> shift) + ((x >> (shift - 1)) & 1);
+        i64::try_from(rounded).map_err(|_| OverflowDetected::TierOverflow)
+    }
+    #[cfg(table_format = "q32_32")]
+    { Ok(x) }
+    #[cfg(table_format = "q64_64")]
+    { Ok(crate::fixed_point::I256::from_i128(x) << 64usize) }
+    #[cfg(table_format = "q128_128")]
+    { Ok(crate::fixed_point::I512::from_i128(x) << 192usize) }
+    #[cfg(table_format = "q256_256")]
+    { Ok(crate::fixed_point::I1024::from_i128(x) << 448usize) }
+}
+
+fn rms_norm_factor_at_compute(values: &[FixedPoint], eps_compute: ComputeStorage) -> Result<FixedPoint, OverflowDetected> {
     if values.is_empty() {
         return Err(OverflowDetected::DivisionByZero);
     }
@@ -254,16 +314,17 @@ pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPo
     let mut sum_sq = compute_zero();
     for v in values {
         let vc = upscale_to_compute(v.raw());
-        sum_sq = compute_add(sum_sq, compute_multiply(vc, vc));
+        sum_sq = compute_checked_add(sum_sq, compute_multiply(vc, vc))?;
     }
 
     // mean = sum_sq / n
-    let n_compute = upscale_to_compute(FixedPoint::from_int(values.len() as i32).raw());
-    let mean = compute_divide(sum_sq, n_compute)?;
+    // mean = sum_sq / n, truncated as the compute-tier division truncates
+    // (bit-identical to dividing by from_int(n)); the count is never a
+    // storage value, so a realtime length past 2^(31 - F) no longer wraps
+    let mean = compute_div_count(sum_sq, values.len())?;
 
     // mean + eps
-    let eps_compute = upscale_to_compute(eps.raw());
-    let mean_eps = compute_add(mean, eps_compute);
+    let mean_eps = compute_checked_add(mean, eps_compute)?;
 
     // 1 / sqrt(mean + eps)
     let root = sqrt_at_compute_tier(mean_eps);
@@ -272,7 +333,9 @@ pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPo
     }
     let inv = compute_divide(compute_one(), root)?;
 
-    Ok(FixedPoint::from_raw(round_to_storage(inv)))
+    // Err(TierOverflow), not a panic, when 1/sqrt(mean + eps) exceeds storage
+    // (1/sqrt(1e-6) = 1000 is beyond the realtime range past 23 fraction bits)
+    Ok(FixedPoint::from_raw(downscale_to_storage(inv)?))
 }
 
 /// Fused SiLU activation: x / (1 + exp(-x)) entirely at compute tier.
@@ -386,13 +449,13 @@ pub fn softmax_mix(
     // Phase 4: single downscale per output element
     let mut out = Vec::with_capacity(dim);
     for n in &num {
-        out.push(FixedPoint::from_raw(round_to_storage(compute_divide(*n, sum)?)));
+        out.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*n, sum)?)?));
     }
 
     // Phase 5: observer weights (storage-quantized, NOT used by the mix)
     let mut weights = Vec::with_capacity(scores.len());
     for e in &exp_values {
-        weights.push(FixedPoint::from_raw(round_to_storage(compute_divide(*e, sum)?)));
+        weights.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*e, sum)?)?));
     }
 
     Ok((out, weights))
@@ -411,10 +474,22 @@ mod tests {
         else { FixedPoint::from_str(s) }
     }
 
+    /// `t`, raised to one storage unit where the build's split cannot
+    /// represent it (0.001 is 0 raw at GMATH_FRAC_BITS=8, so `diff < t`
+    /// could never hold). Unchanged wherever `t` is already >= 1 unit.
+    fn at_least_one_unit(t: FixedPoint) -> FixedPoint {
+        let mut u = FixedPoint::one();
+        for _ in 0..crate::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+        if u > t { u } else { t }
+    }
+
+    /// The 0.001 tolerance of the approximate checks, at least 1 unit.
+    fn loose() -> FixedPoint { at_least_one_unit(fp("0.001")) }
+
     /// Profile-appropriate tight tolerance: at least 1 ULP representable.
     fn tight() -> FixedPoint {
         #[cfg(table_format = "q16_16")]
-        { fp("0.001") }
+        { at_least_one_unit(fp("0.001")) }
         #[cfg(table_format = "q32_32")]
         { fp("0.000000001") }
         #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
@@ -541,7 +616,7 @@ mod tests {
         let expected = fp("0.25");
         for (i, w) in result.iter().enumerate() {
             let diff = (*w - expected).abs();
-            assert!(diff < fp("0.001"), "softmax[{}] = {}, expected 0.25", i, w);
+            assert!(diff < loose(), "softmax[{}] = {}, expected 0.25", i, w);
         }
     }
 
@@ -572,7 +647,7 @@ mod tests {
         let factor = rms_norm_factor(&vals, eps).unwrap();
         // Expected: 1/sqrt(4 + 0.000001) ≈ 1/2 = 0.5
         let diff = (factor - fp("0.5")).abs();
-        assert!(diff < fp("0.001"), "rms_norm_factor = {}, expected ~0.5", factor);
+        assert!(diff < loose(), "rms_norm_factor = {}, expected ~0.5", factor);
     }
 
     #[test]
@@ -601,14 +676,14 @@ mod tests {
         let x = fp("10");
         let result = silu(x);
         let diff = (result - x).abs();
-        assert!(diff < fp("0.001"), "silu(10) = {}, expected ~10", result);
+        assert!(diff < loose(), "silu(10) = {}, expected ~10", result);
     }
 
     #[test]
     fn test_silu_negative() {
         // SiLU(x) ≈ 0 for large negative x (sigmoid ≈ 0)
         let result = silu(fp("-10"));
-        assert!(result.abs() < fp("0.001"), "silu(-10) = {}, expected ~0", result);
+        assert!(result.abs() < loose(), "silu(-10) = {}, expected ~0", result);
     }
 
     #[test]

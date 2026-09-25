@@ -120,9 +120,17 @@ fn test_compact_one() {
     let one = FixedPoint::one();
     let compact = one.to_compact_bytes();
     let full = one.to_bytes();
-    // Compact should be smaller than full (one has many leading zero bytes in abs)
-    assert!(compact.len() <= full.len(),
-        "Compact {} bytes should be <= full {} bytes", compact.len(), full.len());
+    // one = 2^F raw has F/8 + 1 significant bytes; the compact form adds a
+    // tag and a length byte, the full form a profile tag.
+    let f = g_math::fixed_point::frac_config::FRAC_BITS as usize;
+    assert_eq!(compact.len(), 2 + f / 8 + 1, "compact one = tag + len + significant bytes");
+    // Compact should be no larger than full while one has at least two
+    // leading zero bytes in abs. At GMATH_FRAC_BITS >= 24 on realtime it has
+    // only one (0x01000000), so compact is 6 bytes vs full 5 by construction.
+    if 2 + f / 8 + 1 <= full.len() {
+        assert!(compact.len() <= full.len(),
+            "Compact {} bytes should be <= full {} bytes", compact.len(), full.len());
+    }
 
     let (decoded, _) = FixedPoint::from_compact_bytes(&compact).unwrap();
     assert_fp(decoded, one, tight(), "compact one roundtrip");

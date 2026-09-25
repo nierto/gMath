@@ -11,6 +11,17 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
 fn tol() -> FixedPoint {
     #[cfg(table_format = "q16_16")]
     { fp("0.1") }  // multi-step algorithms (Padé, Denman-Beavers) accumulate heavily at 16-bit
@@ -74,15 +85,22 @@ fn test_solve_wrapper() {
     let a = FixedMatrix::from_slice(2, 2, &[fp("2"), fp("1"), fp("5"), fp("3")]);
     let b = FixedVector::from_slice(&[fp("4"), fp("7")]);
     let x = solve(&a, &b).unwrap();
-    assert_fp(x[0], fp("5"), tight(), "solve[0]");
-    assert_fp(x[1], fp("-6"), tight(), "solve[1]");
+    // the multiplier 0.4 is inexact, kappa = 56: 0.6.3 stored the factors at
+    // storage precision (30 and 50 units off at 16 and 10 fraction bits); the
+    // factors and substitution are now at the compute tier, rounded once: exact
+    // (assert_fp is strict, so ulps(1) admits only 0)
+    assert_fp(x[0], fp("5"), ulps(1), "solve[0]");
+    assert_fp(x[1], fp("-6"), ulps(1), "solve[1]");
 }
 
 #[test]
 fn test_determinant_wrapper() {
     let a = FixedMatrix::from_slice(2, 2, &[fp("1"), fp("2"), fp("3"), fp("4")]);
     let d = determinant(&a).unwrap();
-    assert_fp(d, fp("-2"), tight(), "det");
+    // pivot 3: the multiplier 1/3 and U22 are compute-tier values, off by
+    // about 2^-2F, and the product of the pivots is rounded once: exact (0.6.3
+    // stored the multiplier at storage precision, up to 6 units off)
+    assert_fp(d, fp("-2"), ulps(1), "det");
 }
 
 #[test]

@@ -850,15 +850,9 @@ fn mul_u128_to_u256(a: u128, b: u128) -> [u64; 4] {
 /// PRECISION: Binary domain - optimized for binary fractions and transcendental functions
 /// DOMAIN: Pure binary domain - never mixed with decimal
 pub fn divmod_i256_by_i256(dividend: I256, divisor: I256) -> (I256, I256) {
-    // Handle division by zero with saturation
-    if divisor.is_zero() {
-        let saturated_quotient = if dividend.is_negative() {
-            I256 { words: [0, 0, 0, 0x8000_0000_0000_0000] } // i256::MIN
-        } else {
-            I256 { words: [u64::MAX, u64::MAX, u64::MAX, 0x7FFF_FFFF_FFFF_FFFF] } // i256::MAX
-        };
-        return (saturated_quotient, I256::zero());
-    }
+    // like integer division: a zero divisor panics (before 0.6.4 it returned
+    // a saturated quotient, a plausible value)
+    assert!(!divisor.is_zero(), "I256: division by zero");
 
     // Optimize for cases where both fit in i128
     if dividend.fits_in_i128() && divisor.fits_in_i128() {
@@ -995,10 +989,45 @@ pub type i256 = I256;
 /// Display trait implementation for I256
 impl std::fmt::Display for I256 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Decimal representation via i128 truncation
-        // Values exceeding i128 range are displayed truncated
-        let as_i128 = self.as_i128();
-        write!(f, "{}", as_i128)
+        // exact at every width (0.6.3 printed the value truncated to i128)
+        f.pad_integral(!self.is_negative(), "", &twos_complement_words_to_decimal(&self.words))
+    }
+}
+
+/// The decimal digits of `|v|` for a little-endian two's complement word
+/// array (the minimum's magnitude included), without a sign.
+pub(crate) fn twos_complement_words_to_decimal(words: &[u64]) -> String {
+    let negative = (words[words.len() - 1] as i64) < 0;
+    let mut mag: Vec<u64> = words.to_vec();
+    if negative {
+        // two's complement negation; the minimum's pattern reads as 2^(W-1)
+        let mut carry = 1u64;
+        for w in mag.iter_mut() {
+            let (v, c) = (!*w).overflowing_add(carry);
+            *w = v;
+            carry = c as u64;
+        }
+    }
+    const CHUNK: u64 = 10_000_000_000_000_000_000; // 10^19 < 2^64
+    let mut chunks: Vec<u64> = Vec::new();
+    while mag.iter().any(|&w| w != 0) {
+        let mut rem: u128 = 0;
+        for w in mag.iter_mut().rev() {
+            let cur = (rem << 64) | *w as u128;
+            *w = (cur / CHUNK as u128) as u64;
+            rem = cur % CHUNK as u128;
+        }
+        chunks.push(rem as u64);
+    }
+    match chunks.split_last() {
+        None => "0".to_string(),
+        Some((top, rest)) => {
+            let mut out = top.to_string();
+            for c in rest.iter().rev() {
+                out.push_str(&format!("{:019}", c));
+            }
+            out
+        }
     }
 }
 
@@ -1026,6 +1055,22 @@ impl Neg for I256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Display is exact at the full width (it printed the i128 truncation).
+    #[test]
+    fn display_is_exact_beyond_i128() {
+        assert_eq!((I256::from_i128(1) << 200usize).to_string(),
+            "1606938044258990275541962092341162602522202993782792835301376");
+        assert_eq!(I256::min_value().to_string(),
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819968");
+        assert_eq!(I256::from_i128(10_000_000_000_000_000_000).to_string(), "10000000000000000000");
+        assert_eq!(I256::from_i128(-1).to_string(), "-1");
+        assert_eq!(I256::zero().to_string(), "0");
+        assert_eq!(format!("{:>5}", I256::from_i128(-42)), "  -42");
+        let max512 = crate::fixed_point::I512::from_words([u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, i64::MAX as u64]);
+        assert_eq!(max512.to_string(),
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047");
+    }
     
     #[test]
     fn test_i256_multiplication() {

@@ -5,7 +5,10 @@
 //! ARCHITECTURE: Scaled integer arithmetic with deterministic rounding
 
 // Import domain-specific decimal integer types
-use super::{divmod_d256_by_i128, banker_round_decimal_i128, mul_i128_to_d256};
+use super::{banker_round_decimal_i128, mul_i128_to_d256, negate_d256, D256};
+use super::d256::divmod_d256_by_d256;
+use crate::fixed_point::core_types::errors::OverflowDetected;
+use super::transcendental::decimal_compute::ComputeStorage;
 use std::fmt;
 use std::str::FromStr;
 
@@ -76,14 +79,36 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     }
     
     /// Create from integer value (no decimal part)
+    ///
+    /// Panics when `int_val * 10^DECIMALS` leaves i128 (only possible for
+    /// `DECIMALS >= 20`); the product wrapped silently in release builds
+    /// before 0.6.4. [`try_from_integer`](Self::try_from_integer) returns
+    /// `Err(TierOverflow)` instead.
     #[inline(always)]
     pub const fn from_integer(int_val: i64) -> Self {
-        Self {
-            value: (int_val as i128) * Self::SCALE,
+        match Self::try_from_integer(int_val) {
+            Ok(v) => v,
+            Err(_) => panic!("DecimalFixed::from_integer: value outside the i128 range"),
+        }
+    }
+
+    /// Create from integer value, `Err(TierOverflow)` when `int_val * 10^DECIMALS`
+    /// leaves i128.
+    #[inline(always)]
+    pub const fn try_from_integer(int_val: i64) -> Result<Self, OverflowDetected> {
+        match (int_val as i128).checked_mul(Self::SCALE) {
+            Some(value) => Ok(Self { value }),
+            None => Err(OverflowDetected::TierOverflow),
         }
     }
     
     /// Create from parts: integer and fractional parts
+    ///
+    /// The fraction takes the sign of `integer` (so the parts cannot express
+    /// a value in (-1, 0); negate the result instead). Panics when
+    /// `fractional >= 10^DECIMALS` or the value leaves i128: before 0.6.4 an
+    /// oversized fraction was clamped to `10^DECIMALS - 1` (`from_parts(1, 100)`
+    /// at two decimals gave 1.99) and the arithmetic wrapped in release builds.
     /// 
     /// # Examples
     /// ```
@@ -92,22 +117,22 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// ```
     #[inline(always)]
     pub const fn from_parts(integer: i64, fractional: u64) -> Self {
-        let int_part = (integer as i128) * Self::SCALE;
         let frac_part = fractional as i128;
-        
-        // Ensure fractional part doesn't exceed scale
-        let bounded_frac = if frac_part >= Self::SCALE {
-            Self::SCALE - 1
-        } else {
-            frac_part
+        if frac_part >= Self::SCALE {
+            panic!("DecimalFixed::from_parts: fractional part must be below 10^DECIMALS");
+        }
+        let int_part = match (integer as i128).checked_mul(Self::SCALE) {
+            Some(v) => v,
+            None => panic!("DecimalFixed::from_parts: value outside the i128 range"),
         };
-        
-        Self {
-            value: if integer >= 0 {
-                int_part + bounded_frac
-            } else {
-                int_part - bounded_frac
-            }
+        let value = if integer >= 0 {
+            int_part.checked_add(frac_part)
+        } else {
+            int_part.checked_sub(frac_part)
+        };
+        match value {
+            Some(value) => Self { value },
+            None => panic!("DecimalFixed::from_parts: value outside the i128 range"),
         }
     }
     
@@ -125,69 +150,83 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         if s.is_empty() {
             return Err(ParseError::EmptyString);
         }
-        
+
+        // One optional sign, then digits with at most one '.'. The value is
+        // assembled in i128 with checked arithmetic. Before 0.6.4 the integer
+        // part parsed as i64 (larger integers were InvalidFormat even where
+        // the value fits), the fraction as u64 (no fraction of 20 or more
+        // digits parsed), a second sign was accepted ("--5" gave 5, "1.+5"
+        // gave 1.50), and a fraction past i128::MAX wrapped.
         let s = s.trim();
-        let negative = s.starts_with('-');
-        let s = if negative { &s[1..] } else { s };
-        
+        let (negative, s) = match s.as_bytes().first() {
+            Some(b'-') => (true, &s[1..]),
+            Some(b'+') => (false, &s[1..]),
+            _ => (false, s),
+        };
+
         // Split on decimal point
         let parts: Vec<&str> = s.split('.').collect();
         if parts.len() > 2 {
             return Err(ParseError::InvalidFormat);
         }
-        
-        // Parse integer part
         let integer_str = parts[0];
-        let integer_part: i64 = integer_str.parse()
-            .map_err(|_| ParseError::InvalidFormat)?;
-        
-        // Parse fractional part
-        let fractional_part = if parts.len() == 2 {
-            let frac_str = parts[1];
-            
-            // Check if too many decimal places
-            if frac_str.len() > DECIMALS as usize {
-                return Err(ParseError::TooManyDecimals);
-            }
-            
-            // Pad or truncate to exactly DECIMALS places
-            let mut padded = frac_str.to_string();
-            while padded.len() < DECIMALS as usize {
-                padded.push('0');
-            }
-            
-            let frac_value: u64 = padded.parse()
-                .map_err(|_| ParseError::InvalidFormat)?;
-            
-            frac_value
-        } else {
-            0
-        };
-        
-        // Check for overflow
-        if i128::from(integer_part.abs()) > Self::MAX_VALUE {
-            return Err(ParseError::Overflow);
+        let frac_str = if parts.len() == 2 { parts[1] } else { "" };
+        if integer_str.is_empty() || !integer_str.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ParseError::InvalidFormat);
         }
-        
-        let mut result = Self::from_parts(integer_part, fractional_part);
-        
-        if negative {
-            result = -result;
+        // Check if too many decimal places
+        if frac_str.len() > DECIMALS as usize {
+            return Err(ParseError::TooManyDecimals);
         }
-        
-        Ok(result)
+        if !frac_str.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ParseError::InvalidFormat);
+        }
+
+        let mut integer: i128 = 0;
+        for b in integer_str.bytes() {
+            integer = integer
+                .checked_mul(10)
+                .and_then(|v| v.checked_add((b - b'0') as i128))
+                .ok_or(ParseError::Overflow)?;
+        }
+        // Pad to exactly DECIMALS places (at most 38 digits: fits i128)
+        let mut fraction: i128 = 0;
+        for b in frac_str.bytes() {
+            fraction = fraction * 10 + (b - b'0') as i128;
+        }
+        fraction *= compile_time_power_of_10(DECIMALS - frac_str.len() as u8);
+
+        let magnitude = integer
+            .checked_mul(Self::SCALE)
+            .and_then(|v| v.checked_add(fraction))
+            .ok_or(ParseError::Overflow)?;
+        Ok(Self { value: if negative { -magnitude } else { magnitude } })
     }
     
-    /// Extract integer part
+    /// Extract integer part (truncated toward zero)
+    ///
+    /// Panics when the integer part does not fit i64 (possible for
+    /// `DECIMALS < 19`); the cast wrapped silently before 0.6.4.
     #[inline(always)]
     pub const fn integer_part(self) -> i64 {
-        (self.value / Self::SCALE) as i64
+        let q = self.value / Self::SCALE;
+        if q > i64::MAX as i128 || q < i64::MIN as i128 {
+            panic!("DecimalFixed::integer_part: integer part outside the i64 range");
+        }
+        q as i64
     }
     
     /// Extract fractional part as integer (e.g., 0.123 → 123 for DECIMALS=3)
+    ///
+    /// Panics when the fractional digits do not fit u64 (possible for
+    /// `DECIMALS >= 20`); the cast wrapped silently before 0.6.4.
     #[inline(always)]
     pub const fn fractional_part(self) -> u64 {
-        (self.value % Self::SCALE).abs() as u64
+        let r = (self.value % Self::SCALE).unsigned_abs();
+        if r > u64::MAX as u128 {
+            panic!("DecimalFixed::fractional_part: fractional digits outside the u64 range");
+        }
+        r as u64
     }
     
     /// Get raw scaled value
@@ -215,10 +254,14 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     }
     
     /// Absolute value
+    ///
+    /// Panics for the raw minimum `i128::MIN` (no positive twin); it
+    /// overflowed (wrapping in release builds) before 0.6.4.
     #[inline(always)]
     pub const fn abs(self) -> Self {
-        Self {
-            value: self.value.abs()
+        match self.value.checked_abs() {
+            Some(value) => Self { value },
+            None => panic!("DecimalFixed::abs: overflow at the raw minimum"),
         }
     }
     
@@ -249,85 +292,44 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// ALGORITHM: Multiply with extended precision, then scale back with banker's rounding
     /// PRECISION: Exact for all results that fit in the target format
     /// DOMAIN: Uses decimal D256 arithmetic - pure decimal domain separation
+    ///
+    /// Panics when the product leaves i128 (it saturated before 0.6.4); see
+    /// [`try_mul`](Self::try_mul).
     pub fn multiply_exact_decimal(self, other: Self) -> Self {
-        // UGOD-shaped: try the narrow i128 tier first; on overflow widen the
-        // intermediate to 256 bits (128x128 product can't exceed 256 bits — no
-        // I1024 needed). Banker's rounding throughout. Saturates on genuine
-        // result overflow, never panics. i128 storage is identical on every
-        // profile, so this is correct across all five.
-        if let Some(product) = self.value.checked_mul(other.value) {
-            let rounded = banker_round_decimal_i128(product / Self::SCALE, product % Self::SCALE, Self::SCALE);
-            return Self { value: rounded };
-        }
-        let product = mul_i128_to_d256(self.value, other.value);
-        let (quotient, remainder) = divmod_d256_by_i128(product, Self::SCALE);
-        Self { value: banker_round_decimal_i128(quotient, remainder, Self::SCALE) }
+        self.try_mul(other).expect("DecimalFixed: multiplication overflow")
     }
     
     /// Pure decimal addition using optimized scaled integer arithmetic
     /// 
-    /// ALGORITHM: checked scaled-integer addition; saturating on overflow
+    /// ALGORITHM: checked scaled-integer addition; panics on overflow
     /// PRECISION: Exact for all representable results
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
     /// DETERMINISM: Bit-identical results across all platforms
     pub fn pure_decimal_add_decimal(self, other: Self) -> Self {
-        match self.value.checked_add(other.value) {
-            Some(result) => Self { value: result },
-            None => {
-                // Overflow handling with saturation
-                if (self.value > 0) == (other.value > 0) {
-                    // Same signs - saturate to appropriate extreme
-                    Self { value: if self.value > 0 { i128::MAX } else { i128::MIN } }
-                } else {
-                    // Different signs - mathematically impossible for overflow
-                    // This branch should never execute but included for completeness
-                    Self { value: self.value.wrapping_add(other.value) }
-                }
-            }
-        }
+        self.try_add(other).expect("DecimalFixed: addition overflow")
     }
     
     /// Pure decimal subtraction using optimized scaled integer arithmetic
     /// 
-    /// ALGORITHM: checked scaled-integer subtraction; saturating on overflow
+    /// ALGORITHM: checked scaled-integer subtraction; panics on overflow
     /// PRECISION: Exact for all representable results
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
     /// DETERMINISM: Bit-identical results across all platforms
     pub fn pure_decimal_subtract_decimal(self, other: Self) -> Self {
-        match self.value.checked_sub(other.value) {
-            Some(result) => Self { value: result },
-            None => {
-                // Overflow handling with saturation
-                if (self.value > 0) != (other.value > 0) {
-                    // Different signs - saturate to appropriate extreme
-                    Self { value: if self.value > 0 { i128::MAX } else { i128::MIN } }
-                } else {
-                    // Same signs - mathematically impossible for overflow
-                    // This branch should never execute but included for completeness
-                    Self { value: self.value.wrapping_sub(other.value) }
-                }
-            }
-        }
+        self.try_sub(other).expect("DecimalFixed: subtraction overflow")
     }
     
     /// Pure decimal negation using optimized scaled integer arithmetic
     /// 
-    /// ALGORITHM: Direct scaled integer negation with overflow handling
+    /// ALGORITHM: Direct scaled integer negation; panics at `i128::MIN`
     /// PRECISION: Exact for all representable results except i128::MIN
     /// PERFORMANCE: Single CPU instruction for optimal throughput
     /// PURITY: True decimal arithmetic on scaled representations
     /// DETERMINISM: Bit-identical results across all platforms
     pub fn pure_decimal_negate_decimal(self) -> Self {
-        match self.value.checked_neg() {
-            Some(result) => Self { value: result },
-            None => {
-                // Only i128::MIN cannot be negated
-                // Saturate to i128::MAX as closest representable value
-                Self { value: i128::MAX }
-            }
-        }
+        self.try_neg().expect("DecimalFixed: negation overflow")
     }
     
     /// Pure decimal division using base-10 arithmetic (eliminates binary contamination)
@@ -335,40 +337,77 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// ALGORITHM: Extract decimal digits, perform traditional long division, reassemble
     /// PRECISION: Exact decimal arithmetic with banker's rounding
     /// PURITY: 100% base-10 operations - no binary I256 contamination
+    ///
+    /// Panics on division by zero and when the quotient leaves i128 (both
+    /// saturated to `i128::MAX` / `i128::MIN` before 0.6.4); see
+    /// [`try_div`](Self::try_div).
     pub fn pure_decimal_divide_decimal(self, other: Self) -> Self {
-        // Handle zero divisor
+        match self.try_div(other) {
+            Ok(v) => v,
+            Err(OverflowDetected::DivisionByZero) => panic!("DecimalFixed: division by zero"),
+            Err(_) => panic!("DecimalFixed: division overflow"),
+        }
+    }
+
+    /// `self + other`, `Err(TierOverflow)` when the sum leaves i128.
+    #[inline]
+    pub fn try_add(self, other: Self) -> Result<Self, OverflowDetected> {
+        self.value.checked_add(other.value).map(|value| Self { value }).ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// `self - other`, `Err(TierOverflow)` when the difference leaves i128.
+    #[inline]
+    pub fn try_sub(self, other: Self) -> Result<Self, OverflowDetected> {
+        self.value.checked_sub(other.value).map(|value| Self { value }).ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// `-self`, `Err(TierOverflow)` for the raw minimum (no positive twin).
+    #[inline]
+    pub fn try_neg(self) -> Result<Self, OverflowDetected> {
+        self.value.checked_neg().map(|value| Self { value }).ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// `self * other` rounded half to even from the exact product,
+    /// `Err(TierOverflow)` when it leaves i128.
+    pub fn try_mul(self, other: Self) -> Result<Self, OverflowDetected> {
+        // UGOD-shaped: try the narrow i128 tier first; on overflow widen the
+        // intermediate to 256 bits (a 128x128 product cannot exceed 256 bits).
+        // i128 storage is identical on every profile. In the narrow tier
+        // |product / SCALE| <= i128::MAX / SCALE, so the rounding step fits.
+        if let Some(product) = self.value.checked_mul(other.value) {
+            let rounded = banker_round_decimal_i128(product / Self::SCALE, product % Self::SCALE, Self::SCALE);
+            return Ok(Self { value: rounded });
+        }
+        let product = mul_i128_to_d256(self.value, other.value);
+        let negative = product.is_negative();
+        round_half_even_d256(product.abs(), D256::from_i128(Self::SCALE), negative).map(|value| Self { value })
+    }
+
+    /// `self / other` rounded half to even from the exact quotient,
+    /// `Err(DivisionByZero)` or `Err(TierOverflow)` (quotient beyond i128).
+    pub fn try_div(self, other: Self) -> Result<Self, OverflowDetected> {
         if other.value == 0 {
-            return if self.value >= 0 { 
-                Self { value: i128::MAX } 
-            } else { 
-                Self { value: i128::MIN } 
-            };
+            return Err(OverflowDetected::DivisionByZero);
         }
-        
-        // Handle zero dividend
         if self.value == 0 {
-            return Self::ZERO;
+            return Ok(Self::ZERO);
         }
-        
-        // The result is round(dividend * SCALE / divisor) with banker's rounding.
-        // UGOD-shaped: try the narrow i128 tier (`dividend_abs * SCALE` fits);
-        // on overflow widen the scaled dividend to 256 bits. Work on absolute
-        // values so the divisor passed to banker's rounding stays positive, then
-        // reapply the sign. Saturates on genuine overflow, never panics.
+        // The result is round(dividend * SCALE / divisor), banker's rounding.
+        // UGOD-shaped: the narrow i128 tier when `|dividend| * SCALE` fits,
+        // else 256 bits. Magnitudes throughout, then the sign; the raw
+        // minimum has no i128 magnitude and takes the wide path.
         let result_negative = (self.value < 0) != (other.value < 0);
-        let dividend_abs = self.value.abs();
-        let divisor_abs = other.value.abs();
-        let rounded = match dividend_abs.checked_mul(Self::SCALE) {
-            Some(scaled) => {
-                banker_round_decimal_i128(scaled / divisor_abs, scaled % divisor_abs, divisor_abs)
+        if let (Some(dividend_abs), Some(divisor_abs)) = (self.value.checked_abs(), other.value.checked_abs()) {
+            if let Some(scaled) = dividend_abs.checked_mul(Self::SCALE) {
+                // divisor_abs >= 2 whenever the remainder is nonzero, so the
+                // rounded quotient stays below `scaled` and fits
+                let rounded = banker_round_decimal_i128(scaled / divisor_abs, scaled % divisor_abs, divisor_abs);
+                return Ok(Self { value: if result_negative { -rounded } else { rounded } });
             }
-            None => {
-                let scaled = mul_i128_to_d256(dividend_abs, Self::SCALE);
-                let (quotient, remainder) = divmod_d256_by_i128(scaled, divisor_abs);
-                banker_round_decimal_i128(quotient, remainder, divisor_abs)
-            }
-        };
-        Self { value: if result_negative { -rounded } else { rounded } }
+        }
+        let scaled = mul_i128_to_d256(self.value, Self::SCALE).abs();
+        let divisor = D256::from_i128(other.value).abs();
+        round_half_even_d256(scaled, divisor, result_negative).map(|value| Self { value })
     }
     
     /// High-performance multiplication for batch operations
@@ -420,6 +459,8 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     }
     
     /// Force conversion to different decimal precision with rounding
+    ///
+    /// Panics when raising the precision leaves i128.
     pub fn convert_with_rounding<const NEW_DECIMALS: u8>(self) -> DecimalFixed<NEW_DECIMALS> {
         if NEW_DECIMALS == DECIMALS {
             return DecimalFixed::<NEW_DECIMALS> { value: self.value };
@@ -430,7 +471,9 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         if NEW_DECIMALS > DECIMALS {
             // Increasing precision - multiply by scale ratio
             let scale_ratio = new_scale / Self::SCALE;
-            let new_value = self.value.saturating_mul(scale_ratio);
+            // loud, not saturated (it saturated silently before 0.6.4)
+            let new_value = self.value.checked_mul(scale_ratio)
+                .expect("DecimalFixed::convert_with_rounding: value outside the i128 range");
             DecimalFixed::<NEW_DECIMALS> { value: new_value }
         } else {
             // Decreasing precision - divide by scale ratio with rounding
@@ -477,11 +520,13 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         //            = (self.value << 256) / 10^DECIMALS
 
         let is_negative = self.value < 0;
-        let abs_value = self.value.abs();
 
         // Use I1024 for intermediate to prevent overflow:
-        // (i128 << 256) requires more than 512 bits for large values
-        let abs_i1024 = I1024::from_i128(abs_value);
+        // (i128 << 256) requires more than 512 bits for large values.
+        // The magnitude is taken at I1024 so i128::MIN has one (`abs`
+        // overflowed there before 0.6.4).
+        let value_i1024 = I1024::from_i128(self.value);
+        let abs_i1024 = if is_negative { -value_i1024 } else { value_i1024 };
         let shifted = abs_i1024 << 256;
 
         // Build 10^DECIMALS as I1024
@@ -513,13 +558,15 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// **ALGORITHM**: Pure integer arithmetic conversion
     /// - Input: value * 2^256 (Q256.256 representation)
     /// - Output: value * 10^DECIMALS (DecimalFixed representation)
-    /// - Formula: (q256_value * 10^DECIMALS) >> 256
+    /// - Formula: (q256_value * 10^DECIMALS) / 2^256, rounded half to even
     ///
     /// **PRECISION**: Maximum precision conversion using I1024 intermediate
     /// **FLOAT-FREE**: 100% integer arithmetic, NO float contamination
     ///
-    /// **NOTE**: May overflow for very large Q256.256 values. Use `try_from_binary_q256`
-    /// for fallible conversion.
+    /// Panics when the result leaves i128; [`try_from_binary_q256`](Self::try_from_binary_q256)
+    /// returns `Err(TierOverflow)` instead. Before 0.6.4 the result was cast
+    /// to i128 unchecked (a silent wrap), ties rounded away from zero, and
+    /// `I512::MIN` had its sign lost.
     ///
     /// # Example
     /// ```rust,ignore
@@ -527,24 +574,25 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// let decimal = DecimalFixed::<77>::from_binary_q256(binary_result);
     /// ```
     pub fn from_binary_q256(q256: crate::fixed_point::I512) -> Self {
+        Self::try_from_binary_q256(q256)
+            .expect("DecimalFixed::from_binary_q256: value outside the i128 range")
+    }
+
+    /// Create DecimalFixed from Q256.256 binary format (I512), rounded half to
+    /// even (the decimal rule), `Err(TierOverflow)` when the result leaves i128.
+    pub fn try_from_binary_q256(q256: crate::fixed_point::I512) -> Result<Self, OverflowDetected> {
         use crate::fixed_point::{I512, I1024};
 
         // Handle zero case
         if q256 == I512::zero() {
-            return Self::ZERO;
+            return Ok(Self::ZERO);
         }
 
-        // Convert Q256.256 to DecimalFixed:
-        // q256_value = actual_value * 2^256
-        // decimal_value = actual_value * 10^DECIMALS
-        //               = (q256_value * 10^DECIMALS) / 2^256
-        //               = (q256_value * 10^DECIMALS) >> 256
-
+        // decimal_value = (q256_value * 10^DECIMALS) / 2^256, on the magnitude
+        // at I1024 (where I512::MIN has one)
         let is_negative = q256 < I512::zero();
-        let abs_q256 = if is_negative { -q256 } else { q256 };
-
-        // Use I1024 for intermediate to prevent overflow
-        let abs_i1024 = I1024::from_i512(abs_q256);
+        let wide = I1024::from_i512(q256);
+        let abs_i1024 = if is_negative { -wide } else { wide };
 
         // Build 10^DECIMALS as I1024
         let scale = if DECIMALS <= 38 {
@@ -557,23 +605,21 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
             scale
         };
 
-        // Multiply and shift: (q256 * 10^DECIMALS + 2^255) >> 256
+        // |q256| * 10^DECIMALS < 2^511 * 2^127 fits I1024
         let multiplied = abs_i1024 * scale;
+        let mut quotient = multiplied >> 256;
+        let remainder = multiplied - (quotient << 256);
+        let half = I1024::from_i128(1) << 255;
+        let odd = (quotient & I1024::from_i128(1)) != I1024::zero();
+        if remainder > half || (remainder == half && odd) {
+            quotient = quotient + I1024::from_i128(1);
+        }
 
-        // Add rounding: 2^255 for round-half-up
-        let rounding = I1024::from_i128(1) << 255;
-        let rounded = multiplied + rounding;
-
-        // Shift right by 256 bits
-        let result_i1024 = rounded >> 256;
-
-        // Extract as i128 (may truncate for very large values)
-        let result_i128 = result_i1024.as_i128();
-
-        // Apply sign
-        let value = if is_negative { -result_i128 } else { result_i128 };
-
-        Self { value }
+        let signed = if is_negative { -quotient } else { quotient };
+        if !signed.fits_in_i128() {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        Ok(Self { value: signed.as_i128() })
     }
 
     // =========================================================================
@@ -609,80 +655,209 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
 
     /// Upscale self.value at 10^DECIMALS to ComputeStorage at 10^DECIMAL_COMPUTE_DP.
     #[inline]
-    fn to_decimal_compute(&self) -> super::transcendental::decimal_compute::ComputeStorage {
+    fn to_decimal_compute(&self) -> ComputeStorage {
         super::transcendental::i128_upscale_to_compute(self.value, DECIMALS)
+    }
+
+    /// Upscale self.value to the compute dp, `Err(TierOverflow)` when it does
+    /// not fit the compute tier.
+    #[inline]
+    fn try_to_decimal_compute(&self) -> Result<ComputeStorage, OverflowDetected> {
+        super::transcendental::decimal_compute::try_i128_upscale_to_compute(self.value, DECIMALS)
     }
 
     /// Downscale ComputeStorage at 10^DECIMAL_COMPUTE_DP to i128 at 10^DECIMALS.
     #[inline]
-    fn from_decimal_compute(val: super::transcendental::decimal_compute::ComputeStorage) -> Self {
+    fn from_decimal_compute(val: ComputeStorage) -> Self {
         Self { value: super::transcendental::decimal_compute_to_i128(val, DECIMALS) }
+    }
+
+    /// Downscale a compute-dp value to storage, `Err(TierOverflow)` when it
+    /// does not fit i128.
+    #[inline]
+    fn try_from_decimal_compute(val: ComputeStorage) -> Result<Self, OverflowDetected> {
+        Ok(Self { value: super::transcendental::decimal_compute::try_decimal_compute_to_i128(val, DECIMALS)? })
+    }
+
+    /// The infallible boundary of the transcendentals: upscale (panicking
+    /// outside the compute tier), run the compute-tier `core` (panicking with
+    /// `msg` on its error), downscale (panicking outside i128). The `try_`
+    /// twins run the same `core` through [`Self::try_apply`], so the two
+    /// cannot drift.
+    #[inline]
+    fn apply(
+        &self,
+        core: impl FnOnce(ComputeStorage) -> Result<ComputeStorage, OverflowDetected>,
+        msg: &str,
+    ) -> Self {
+        let r = core(self.to_decimal_compute()).unwrap_or_else(|e| panic!("{msg}: {e:?}"));
+        Self::from_decimal_compute(r)
+    }
+
+    /// The fallible boundary: every step of [`Self::apply`] returns its error.
+    #[inline]
+    fn try_apply(
+        &self,
+        core: impl FnOnce(ComputeStorage) -> Result<ComputeStorage, OverflowDetected>,
+    ) -> Result<Self, OverflowDetected> {
+        Self::try_from_decimal_compute(core(self.try_to_decimal_compute()?)?)
+    }
+
+    /// [`Self::apply`] for a function returning a pair.
+    #[inline]
+    fn apply_pair(
+        &self,
+        core: impl FnOnce(ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected>,
+        msg: &str,
+    ) -> (Self, Self) {
+        let (a, b) = core(self.to_decimal_compute()).unwrap_or_else(|e| panic!("{msg}: {e:?}"));
+        (Self::from_decimal_compute(a), Self::from_decimal_compute(b))
+    }
+
+    /// [`Self::try_apply`] for a function returning a pair.
+    #[inline]
+    fn try_apply_pair(
+        &self,
+        core: impl FnOnce(ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected>,
+    ) -> Result<(Self, Self), OverflowDetected> {
+        let (a, b) = core(self.try_to_decimal_compute()?)?;
+        Ok((Self::try_from_decimal_compute(a)?, Self::try_from_decimal_compute(b)?))
+    }
+
+    /// An engine `DomainError` on an argument already checked in-domain at
+    /// storage: the argument reached the boundary only because the compute
+    /// dp is coarser than `DECIMALS` (realtime D > 9, compact D > 19), so it
+    /// is reported as `PrecisionLimit`.
+    #[inline]
+    fn collapsed(e: OverflowDetected) -> OverflowDetected {
+        if e == OverflowDetected::DomainError { OverflowDetected::PrecisionLimit } else { e }
     }
 
     /// `exp(x)`: native decimal exponential at full compute-tier precision.
     pub fn exp(&self) -> Self {
-        use super::transcendental::decimal_exp;
-        let compute = self.to_decimal_compute();
-        let result = decimal_exp(compute).expect("decimal exp overflow");
-        Self::from_decimal_compute(result)
+        self.apply(super::transcendental::decimal_exp, "decimal exp overflow")
+    }
+
+    /// Fallible `exp(x)`, `Err(TierOverflow)` when the argument or the result is out of range.
+    ///
+    /// Bit-identical to [`Self::exp`] whenever that returns.
+    pub fn try_exp(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(super::transcendental::decimal_exp)
     }
 
     /// `ln(x)`: native decimal natural logarithm. Requires x > 0.
     pub fn ln(&self) -> Self {
-        use super::transcendental::decimal_ln;
-        let compute = self.to_decimal_compute();
-        let result = decimal_ln(compute).expect("decimal ln: domain error (x <= 0)");
-        Self::from_decimal_compute(result)
+        self.apply(super::transcendental::decimal_ln, "decimal ln: domain error (x <= 0)")
+    }
+
+    /// Fallible `ln(x)`, `Err(DomainError)` for x <= 0.
+    ///
+    /// `Err(TierOverflow)` when the argument or the result is out of range,
+    /// `Err(PrecisionLimit)` when a positive argument rounds to 0 at the
+    /// compute dp (only when `DECIMALS` exceeds it). Bit-identical to
+    /// [`Self::ln`] whenever that returns.
+    pub fn try_ln(&self) -> Result<Self, OverflowDetected> {
+        if self.value <= 0 {
+            return Err(OverflowDetected::DomainError);
+        }
+        self.try_apply(super::transcendental::decimal_ln).map_err(Self::collapsed)
     }
 
     /// `sqrt(x)`: native decimal square root. Requires x >= 0.
+    ///
+    /// The sign is checked at storage: before 0.6.4 a negative x that rounds
+    /// to 0 at the compute dp (D above it) returned 0.
     pub fn sqrt(&self) -> Self {
-        use super::transcendental::decimal_sqrt;
-        let compute = self.to_decimal_compute();
-        let result = decimal_sqrt(compute).expect("decimal sqrt: domain error (x < 0)");
-        Self::from_decimal_compute(result)
+        if self.value < 0 {
+            panic!("decimal sqrt: domain error (x < 0): {:?}", OverflowDetected::DomainError);
+        }
+        self.apply(super::transcendental::decimal_sqrt, "decimal sqrt: domain error (x < 0)")
+    }
+
+    /// Fallible `sqrt(x)`, `Err(DomainError)` for x < 0.
+    ///
+    /// `Err(TierOverflow)` when the argument is outside the compute tier.
+    /// Bit-identical to [`Self::sqrt`] whenever that returns.
+    pub fn try_sqrt(&self) -> Result<Self, OverflowDetected> {
+        if self.value < 0 {
+            return Err(OverflowDetected::DomainError);
+        }
+        self.try_apply(super::transcendental::decimal_sqrt)
     }
 
     /// `sin(x)`: native decimal sine.
     pub fn sin(&self) -> Self {
-        use super::transcendental::decimal_sin;
-        let compute = self.to_decimal_compute();
-        let result = decimal_sin(compute).expect("decimal sin overflow");
-        Self::from_decimal_compute(result)
+        self.apply(super::transcendental::decimal_sin, "decimal sin overflow")
+    }
+
+    /// Fallible `sin(x)`, `Err(TierOverflow)` when the argument is outside the compute tier.
+    ///
+    /// Bit-identical to [`Self::sin`] whenever that returns.
+    pub fn try_sin(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(super::transcendental::decimal_sin)
     }
 
     /// `cos(x)`: native decimal cosine.
     pub fn cos(&self) -> Self {
-        use super::transcendental::decimal_cos;
-        let compute = self.to_decimal_compute();
-        let result = decimal_cos(compute).expect("decimal cos overflow");
-        Self::from_decimal_compute(result)
+        self.apply(super::transcendental::decimal_cos, "decimal cos overflow")
+    }
+
+    /// Fallible `cos(x)`, `Err(TierOverflow)` when the argument is outside the compute tier.
+    ///
+    /// Bit-identical to [`Self::cos`] whenever that returns.
+    pub fn try_cos(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(super::transcendental::decimal_cos)
     }
 
     /// `sincos(x)`: fused sine and cosine with single range reduction.
     pub fn sincos(&self) -> (Self, Self) {
+        self.apply_pair(super::transcendental::decimal_sincos, "decimal sincos overflow")
+    }
+
+    /// Fallible `sincos(x)`, `Err(TierOverflow)` when the argument is outside the compute tier.
+    ///
+    /// Bit-identical to [`Self::sincos`] whenever that returns.
+    pub fn try_sincos(&self) -> Result<(Self, Self), OverflowDetected> {
+        self.try_apply_pair(super::transcendental::decimal_sincos)
+    }
+
+    /// sin(x)/cos(x) at the compute tier; `DomainError` when cos x is 0 there.
+    fn tan_core(xc: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
         use super::transcendental::decimal_sincos;
-        let compute = self.to_decimal_compute();
-        let (s, c) = decimal_sincos(compute).expect("decimal sincos overflow");
-        (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
+        use super::transcendental::decimal_compute::decimal_compute_div;
+        let (s, c) = decimal_sincos(xc)?;
+        decimal_compute_div(s, c)
     }
 
     /// `tan(x)` = sin(x)/cos(x), composed entirely at the compute tier.
     pub fn tan(&self) -> Self {
-        use super::transcendental::decimal_sincos;
-        use super::transcendental::decimal_compute::{decimal_compute_div, decimal_compute_to_i128};
-        let xc = self.to_decimal_compute();
-        let (s, c) = decimal_sincos(xc).expect("decimal tan: range-reduction overflow");
-        let q = decimal_compute_div(s, c).expect("decimal tan: undefined (cos x = 0 at a pole)");
-        Self { value: decimal_compute_to_i128(q, DECIMALS) }
+        match Self::tan_core(self.to_decimal_compute()) {
+            Ok(q) => Self::from_decimal_compute(q),
+            Err(OverflowDetected::DomainError) => {
+                panic!("decimal tan: undefined (cos x = 0 at a pole): DomainError")
+            }
+            Err(e) => panic!("decimal tan: overflow: {e:?}"),
+        }
+    }
+
+    /// Fallible `tan(x)`, `Err(DomainError)` when cos(x) is exactly 0 at the compute tier.
+    ///
+    /// `Err(TierOverflow)` when the argument or the result is out of range.
+    /// Bit-identical to [`Self::tan`] whenever that returns.
+    pub fn try_tan(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(Self::tan_core)
     }
 
     /// `atan(x)`: native decimal arctangent.
     pub fn atan(&self) -> Self {
-        use super::transcendental::decimal_atan;
-        let compute = self.to_decimal_compute();
-        let result = decimal_atan(compute).expect("decimal atan overflow");
-        Self::from_decimal_compute(result)
+        self.apply(super::transcendental::decimal_atan, "decimal atan overflow")
+    }
+
+    /// Fallible `atan(x)`, `Err(TierOverflow)` when the argument is outside the compute tier.
+    ///
+    /// Bit-identical to [`Self::atan`] whenever that returns.
+    pub fn try_atan(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(super::transcendental::decimal_atan)
     }
 
     /// `atan2(y, x)`: native decimal two-argument arctangent.
@@ -694,63 +869,115 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self::from_decimal_compute(result)
     }
 
-    /// `asin(x)` at the compute tier (not yet downscaled). Domain |x| <= 1;
-    /// the boundaries x = ±1 return ±pi/2 exactly. Shared by `asin` and `acos`
-    /// so `acos` composes entirely at the compute tier (single downscale).
-    fn asin_compute(&self) -> super::transcendental::decimal_compute::ComputeStorage {
+    /// Fallible `atan2(y, x)` with `self` as y, `Err(DomainError)` for atan2(0, 0).
+    ///
+    /// `Err(TierOverflow)` when an argument is outside the compute tier,
+    /// `Err(PrecisionLimit)` when both nonzero arguments round to 0 at the
+    /// compute dp (only when `DECIMALS` exceeds it). Bit-identical to
+    /// [`Self::atan2`] whenever that returns.
+    pub fn try_atan2(&self, x: Self) -> Result<Self, OverflowDetected> {
+        use super::transcendental::decimal_atan2;
+        if self.value == 0 && x.value == 0 {
+            return Err(OverflowDetected::DomainError);
+        }
+        let y_compute = self.try_to_decimal_compute()?;
+        let x_compute = x.try_to_decimal_compute()?;
+        Self::try_from_decimal_compute(decimal_atan2(y_compute, x_compute).map_err(Self::collapsed)?)
+    }
+
+    /// `asin(x)` at the compute tier (not yet downscaled): `DomainError` for
+    /// |x| > 1; the boundaries x = ±1 return ±pi/2 exactly. Shared by `asin`
+    /// and `acos` so `acos` composes entirely at the compute tier (single
+    /// downscale).
+    fn asin_core(&self) -> Result<ComputeStorage, OverflowDetected> {
         use super::transcendental::{decimal_atan, decimal_sqrt, pi_at_decimal_compute};
         use super::transcendental::decimal_compute::{
-            decimal_compute_one, decimal_compute_mul, decimal_compute_sub,
-            decimal_compute_div, decimal_compute_halve, decimal_compute_neg,
+            decimal_compute_one, try_decimal_compute_mul, try_decimal_compute_sub,
+            decimal_compute_div, decimal_compute_halve, try_decimal_compute_neg,
         };
-        assert!(self.value.abs() <= Self::SCALE, "asin: domain error (|x| > 1)");
+        if self.value.unsigned_abs() > Self::SCALE as u128 {
+            return Err(OverflowDetected::DomainError);
+        }
         if self.value == Self::SCALE {
-            return decimal_compute_halve(pi_at_decimal_compute().expect("pi"));
+            return Ok(decimal_compute_halve(pi_at_decimal_compute()?));
         }
         if self.value == -Self::SCALE {
-            return decimal_compute_neg(decimal_compute_halve(pi_at_decimal_compute().expect("pi")));
+            return try_decimal_compute_neg(decimal_compute_halve(pi_at_decimal_compute()?));
         }
-        let xc = self.to_decimal_compute();
-        let x2 = decimal_compute_mul(xc, xc);
-        let one_minus_x2 = decimal_compute_sub(decimal_compute_one(), x2);
-        let denom = decimal_sqrt(one_minus_x2).expect("asin: sqrt domain");
-        let ratio = decimal_compute_div(xc, denom).expect("asin: division");
-        decimal_atan(ratio).expect("asin: atan")
+        let xc = self.try_to_decimal_compute()?;
+        let x2 = try_decimal_compute_mul(xc, xc)?;
+        let one_minus_x2 = try_decimal_compute_sub(decimal_compute_one(), x2)?;
+        let denom = decimal_sqrt(one_minus_x2)?;
+        // denom is 0 only when |x| < 1 rounded onto 1 at the compute dp
+        let ratio = decimal_compute_div(xc, denom).map_err(Self::collapsed)?;
+        decimal_atan(ratio)
     }
 
     /// `asin(x)` = atan(x / sqrt(1 - x^2)), composed at the compute tier.
     pub fn asin(&self) -> Self {
-        use super::transcendental::decimal_compute::decimal_compute_to_i128;
-        Self { value: decimal_compute_to_i128(self.asin_compute(), DECIMALS) }
+        assert!(self.value.unsigned_abs() <= Self::SCALE as u128, "asin: domain error (|x| > 1)");
+        Self::from_decimal_compute(self.asin_core().unwrap_or_else(|e| panic!("asin: {e:?}")))
+    }
+
+    /// Fallible `asin(x)`, `Err(DomainError)` for |x| > 1.
+    ///
+    /// asin(±1) = ±pi/2 exactly as in [`Self::asin`]. `Err(PrecisionLimit)`
+    /// when |x| < 1 rounds onto 1 at the compute dp (only when `DECIMALS`
+    /// exceeds it). Bit-identical to [`Self::asin`] whenever that returns.
+    pub fn try_asin(&self) -> Result<Self, OverflowDetected> {
+        Self::try_from_decimal_compute(self.asin_core()?)
+    }
+
+    /// pi/2 - asin(x) at the compute tier; `DomainError` for |x| > 1.
+    fn acos_core(&self) -> Result<ComputeStorage, OverflowDetected> {
+        use super::transcendental::pi_at_decimal_compute;
+        use super::transcendental::decimal_compute::{decimal_compute_halve, try_decimal_compute_sub};
+        let pi_half = decimal_compute_halve(pi_at_decimal_compute()?);
+        try_decimal_compute_sub(pi_half, self.asin_core()?)
     }
 
     /// `acos(x)` = pi/2 - asin(x), composed at the compute tier (single
     /// downscale, so no storage-tier cancellation). Domain |x| <= 1.
     pub fn acos(&self) -> Self {
-        use super::transcendental::pi_at_decimal_compute;
-        use super::transcendental::decimal_compute::{
-            decimal_compute_halve, decimal_compute_sub, decimal_compute_to_i128,
-        };
-        assert!(self.value.abs() <= Self::SCALE, "acos: domain error (|x| > 1)");
-        let pi_half = decimal_compute_halve(pi_at_decimal_compute().expect("pi"));
-        let result = decimal_compute_sub(pi_half, self.asin_compute());
-        Self { value: decimal_compute_to_i128(result, DECIMALS) }
+        assert!(self.value.unsigned_abs() <= Self::SCALE as u128, "acos: domain error (|x| > 1)");
+        Self::from_decimal_compute(self.acos_core().unwrap_or_else(|e| panic!("acos: {e:?}")))
+    }
+
+    /// Fallible `acos(x)`, `Err(DomainError)` for |x| > 1.
+    ///
+    /// acos(1) = 0 exactly. `Err(PrecisionLimit)` when |x| < 1 rounds onto 1
+    /// at the compute dp (only when `DECIMALS` exceeds it). Bit-identical to
+    /// [`Self::acos`] whenever that returns.
+    pub fn try_acos(&self) -> Result<Self, OverflowDetected> {
+        Self::try_from_decimal_compute(self.acos_core()?)
     }
 
     /// `sinh(x)`: fused (exp(x) - exp(-x)) / 2 at the compute tier.
     pub fn sinh(&self) -> Self {
         use super::transcendental::decimal_sinhcosh;
-        use super::transcendental::decimal_compute::decimal_compute_to_i128;
-        let (s, _) = decimal_sinhcosh(self.to_decimal_compute()).expect("decimal sinh: overflow");
-        Self { value: decimal_compute_to_i128(s, DECIMALS) }
+        self.apply(|c| decimal_sinhcosh(c).map(|(s, _)| s), "decimal sinh: overflow")
+    }
+
+    /// Fallible `sinh(x)`, `Err(TierOverflow)` when the argument or the result is out of range.
+    ///
+    /// Bit-identical to [`Self::sinh`] whenever that returns.
+    pub fn try_sinh(&self) -> Result<Self, OverflowDetected> {
+        use super::transcendental::decimal_sinhcosh;
+        self.try_apply(|c| decimal_sinhcosh(c).map(|(s, _)| s))
     }
 
     /// `cosh(x)`: fused (exp(x) + exp(-x)) / 2 at the compute tier.
     pub fn cosh(&self) -> Self {
         use super::transcendental::decimal_sinhcosh;
-        use super::transcendental::decimal_compute::decimal_compute_to_i128;
-        let (_, c) = decimal_sinhcosh(self.to_decimal_compute()).expect("decimal cosh: overflow");
-        Self { value: decimal_compute_to_i128(c, DECIMALS) }
+        self.apply(|c| decimal_sinhcosh(c).map(|(_, h)| h), "decimal cosh: overflow")
+    }
+
+    /// Fallible `cosh(x)`, `Err(TierOverflow)` when the argument or the result is out of range.
+    ///
+    /// Bit-identical to [`Self::cosh`] whenever that returns.
+    pub fn try_cosh(&self) -> Result<Self, OverflowDetected> {
+        use super::transcendental::decimal_sinhcosh;
+        self.try_apply(|c| decimal_sinhcosh(c).map(|(_, h)| h))
     }
 
     /// `sinhcosh(x)`: fused hyperbolic pair sharing one exp-pair evaluation at
@@ -761,85 +988,162 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// rounding bias is correlated: important for expressions of the form
     /// `cosh(θ)·p + (sinh(θ)/θ)·v`.
     pub fn sinhcosh(&self) -> (Self, Self) {
-        use super::transcendental::decimal_sinhcosh;
-        let compute = self.to_decimal_compute();
-        let (s, c) = decimal_sinhcosh(compute).expect("decimal sinhcosh overflow");
-        (Self::from_decimal_compute(s), Self::from_decimal_compute(c))
+        self.apply_pair(super::transcendental::decimal_sinhcosh, "decimal sinhcosh overflow")
     }
 
-    /// `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to
-    /// ±1 when exp(2x) overflows (|tanh| is then 1 to full storage precision).
-    pub fn tanh(&self) -> Self {
+    /// Fallible `sinhcosh(x)`, `Err(TierOverflow)` when the argument or either result is out of range.
+    ///
+    /// Bit-identical to [`Self::sinhcosh`] whenever that returns.
+    pub fn try_sinhcosh(&self) -> Result<(Self, Self), OverflowDetected> {
+        self.try_apply_pair(super::transcendental::decimal_sinhcosh)
+    }
+
+    /// (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, exactly ±1 beyond
+    /// |x| > 2 * compute dp or where exp(2x) leaves the tier.
+    fn tanh_core(xc: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
         use super::transcendental::decimal_exp;
         use super::transcendental::decimal_compute::{
-            decimal_compute_one, decimal_compute_add, decimal_compute_sub,
-            decimal_compute_div, decimal_compute_is_negative, decimal_compute_to_i128,
+            decimal_compute_one, try_decimal_compute_add, try_decimal_compute_sub,
+            decimal_compute_div, decimal_compute_is_negative, decimal_compute_cmp,
+            decimal_compute_neg, decimal_compute_from_int, DECIMAL_COMPUTE_DP,
         };
-        let xc = self.to_decimal_compute();
-        let two_x = decimal_compute_add(xc, xc);
-        match decimal_exp(two_x) {
-            Ok(e2x) => {
-                let one = decimal_compute_one();
-                let num = decimal_compute_sub(e2x, one);
-                let den = decimal_compute_add(e2x, one);
-                let q = decimal_compute_div(num, den).expect("tanh: division");
-                Self { value: decimal_compute_to_i128(q, DECIMALS) }
-            }
+        use std::cmp::Ordering;
+        let one = decimal_compute_one();
+        let saturate = if decimal_compute_is_negative(&xc) { decimal_compute_neg(one) } else { one };
+        // |x| > bound without forming |x| (the compute minimum has no negation)
+        let bound = decimal_compute_from_int(2 * DECIMAL_COMPUTE_DP as i64);
+        if decimal_compute_cmp(&xc, &bound) == Ordering::Greater
+            || decimal_compute_cmp(&xc, &decimal_compute_neg(bound)) == Ordering::Less
+        {
+            return Ok(saturate);
+        }
+        match decimal_exp(try_decimal_compute_add(xc, xc)?) {
+            Ok(e2x) => decimal_compute_div(try_decimal_compute_sub(e2x, one)?, try_decimal_compute_add(e2x, one)?),
+            Err(_) => Ok(saturate),
+        }
+    }
+
+    /// `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, exactly ±1
+    /// for |x| > 2 * compute dp (where 1 - |tanh x| < e^(-4 dp) is below half a
+    /// unit at the compute dp). Before 0.6.4 the 2x was formed first and
+    /// wrapped the realtime compute tier for |x| > 4.6e9 (tanh(9e9) gave -1).
+    pub fn tanh(&self) -> Self {
+        self.apply(Self::tanh_core, "tanh: division")
+    }
+
+    /// Fallible `tanh(x)`, `Err(TierOverflow)` only when the argument is outside the compute tier.
+    ///
+    /// The result itself never overflows (|tanh x| <= 1). Bit-identical to
+    /// [`Self::tanh`] whenever that returns.
+    pub fn try_tanh(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(Self::tanh_core)
+    }
+
+    /// `ln(|x| + sqrt(x^2 ± 1))` at the compute tier, the shared
+    /// body of `asinh` (`+`) and `acosh` (`-`). When x^2 leaves the compute
+    /// tier it uses `ln(|x|) + ln(1 + sqrt(1 ± 1/x^2))` instead: before 0.6.4
+    /// the square wrapped silently (embedded `asinh(1e30)` died in sqrt with a
+    /// negative argument; other sizes returned plausible wrong values).
+    /// `Err(TierOverflow)` for the compute tier's minimum (no |x| there).
+    fn ln_x_plus_root(xc: ComputeStorage, plus: bool) -> Result<ComputeStorage, OverflowDetected> {
+        use super::transcendental::{decimal_ln, decimal_sqrt};
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, try_decimal_compute_mul, try_decimal_compute_add,
+            try_decimal_compute_sub, try_decimal_compute_neg, decimal_compute_div,
+            decimal_compute_is_negative,
+        };
+        let one = decimal_compute_one();
+        let a = if decimal_compute_is_negative(&xc) { try_decimal_compute_neg(xc)? } else { xc };
+        let pm = |u, v| if plus { try_decimal_compute_add(u, v) } else { try_decimal_compute_sub(u, v) };
+        match try_decimal_compute_mul(a, a) {
+            Ok(x2) => decimal_ln(try_decimal_compute_add(a, decimal_sqrt(pm(x2, one)?)?)?),
             Err(_) => {
-                if decimal_compute_is_negative(&xc) { -Self::ONE } else { Self::ONE }
+                // |x| > 1 here (its square left the tier)
+                let r = decimal_compute_div(one, a)?;
+                let tail = try_decimal_compute_add(one, decimal_sqrt(pm(one, try_decimal_compute_mul(r, r)?)?)?)?;
+                try_decimal_compute_add(decimal_ln(a)?, decimal_ln(tail)?)
             }
         }
     }
 
-    /// `asinh(x)` = ln(x + sqrt(x^2 + 1)), composed at the compute tier.
+    /// sign(x) ln(|x| + sqrt(x^2 + 1)) at the compute tier.
+    fn asinh_core(xc: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+        use super::transcendental::decimal_compute::{decimal_compute_is_negative, try_decimal_compute_neg};
+        let r = Self::ln_x_plus_root(xc, true)?;
+        if decimal_compute_is_negative(&xc) { try_decimal_compute_neg(r) } else { Ok(r) }
+    }
+
+    /// `asinh(x)` = sign(x) ln(|x| + sqrt(x^2 + 1)), composed at the compute
+    /// tier. Odd by construction: before 0.6.4 negative arguments used
+    /// ln(x + sqrt(x^2 + 1)) directly, which cancels.
     pub fn asinh(&self) -> Self {
-        use super::transcendental::{decimal_ln, decimal_sqrt};
-        use super::transcendental::decimal_compute::{
-            decimal_compute_one, decimal_compute_mul, decimal_compute_add, decimal_compute_to_i128,
-        };
-        let xc = self.to_decimal_compute();
-        let x2 = decimal_compute_mul(xc, xc);
-        let inner = decimal_compute_add(x2, decimal_compute_one());
-        let root = decimal_sqrt(inner).expect("asinh: sqrt");
-        let arg = decimal_compute_add(xc, root);
-        let result = decimal_ln(arg).expect("asinh: ln");
-        Self { value: decimal_compute_to_i128(result, DECIMALS) }
+        self.apply(Self::asinh_core, "asinh")
+    }
+
+    /// Fallible `asinh(x)`, `Err(TierOverflow)` when the argument is outside the compute tier.
+    ///
+    /// Also `Err(TierOverflow)` for the compute tier's minimum (realtime
+    /// `DECIMALS >= 9`, compact `DECIMALS >= 19` at the i128 raw extremes),
+    /// whose magnitude the tier cannot hold. Bit-identical to [`Self::asinh`]
+    /// whenever that returns.
+    pub fn try_asinh(&self) -> Result<Self, OverflowDetected> {
+        self.try_apply(Self::asinh_core)
     }
 
     /// `acosh(x)` = ln(x + sqrt(x^2 - 1)), composed at the compute tier.
     /// Domain x >= 1; acosh(1) = 0.
     pub fn acosh(&self) -> Self {
-        use super::transcendental::{decimal_ln, decimal_sqrt};
-        use super::transcendental::decimal_compute::{
-            decimal_compute_one, decimal_compute_mul, decimal_compute_sub,
-            decimal_compute_add, decimal_compute_to_i128,
-        };
         assert!(self.value >= Self::SCALE, "acosh: domain error (x < 1)");
-        let xc = self.to_decimal_compute();
-        let x2 = decimal_compute_mul(xc, xc);
-        let inner = decimal_compute_sub(x2, decimal_compute_one());
-        let root = decimal_sqrt(inner).expect("acosh: sqrt");
-        let arg = decimal_compute_add(xc, root);
-        let result = decimal_ln(arg).expect("acosh: ln");
-        Self { value: decimal_compute_to_i128(result, DECIMALS) }
+        self.apply(|c| Self::ln_x_plus_root(c, false), "acosh")
+    }
+
+    /// Fallible `acosh(x)`, `Err(DomainError)` for x < 1.
+    ///
+    /// acosh(1) = 0 exactly; `Err(TierOverflow)` when the argument is outside
+    /// the compute tier. Bit-identical to [`Self::acosh`] whenever that
+    /// returns.
+    pub fn try_acosh(&self) -> Result<Self, OverflowDetected> {
+        if self.value < Self::SCALE {
+            return Err(OverflowDetected::DomainError);
+        }
+        self.try_apply(|c| Self::ln_x_plus_root(c, false))
+    }
+
+    /// ln((1+x)/(1-x)) / 2 at the compute tier, for |x| < 1 at storage.
+    fn atanh_core(xc: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+        use super::transcendental::decimal_ln;
+        use super::transcendental::decimal_compute::{
+            decimal_compute_one, try_decimal_compute_add, try_decimal_compute_sub,
+            decimal_compute_div, decimal_compute_halve,
+        };
+        let one = decimal_compute_one();
+        let num = try_decimal_compute_add(one, xc)?; // 1 + x
+        let den = try_decimal_compute_sub(one, xc)?; // 1 - x
+        // den (or num, through ln) is 0 only when |x| < 1 rounded onto 1 at
+        // the compute dp
+        let ratio = decimal_compute_div(num, den).map_err(Self::collapsed)?;
+        Ok(decimal_compute_halve(decimal_ln(ratio).map_err(Self::collapsed)?))
     }
 
     /// `atanh(x)` = ln((1+x)/(1-x)) / 2, composed at the compute tier.
     /// Domain |x| < 1.
     pub fn atanh(&self) -> Self {
-        use super::transcendental::decimal_ln;
-        use super::transcendental::decimal_compute::{
-            decimal_compute_one, decimal_compute_add, decimal_compute_sub,
-            decimal_compute_div, decimal_compute_halve, decimal_compute_to_i128,
-        };
-        assert!(self.value.abs() < Self::SCALE, "atanh: domain error (|x| >= 1)");
-        let xc = self.to_decimal_compute();
-        let one = decimal_compute_one();
-        let num = decimal_compute_add(one, xc); // 1 + x
-        let den = decimal_compute_sub(one, xc); // 1 - x
-        let ratio = decimal_compute_div(num, den).expect("atanh: division");
-        let ln_ratio = decimal_ln(ratio).expect("atanh: ln");
-        Self { value: decimal_compute_to_i128(decimal_compute_halve(ln_ratio), DECIMALS) }
+        assert!(self.value.unsigned_abs() < Self::SCALE as u128, "atanh: domain error (|x| >= 1)");
+        self.apply(Self::atanh_core, "atanh")
+    }
+
+    /// Fallible `atanh(x)`, `Err(DomainError)` for |x| >= 1.
+    ///
+    /// atanh(0) = 0 exactly. `Err(TierOverflow)` when (1+x)/(1-x) leaves the
+    /// compute tier (compact `DECIMALS >= 19` within 1e-19 of ±1),
+    /// `Err(PrecisionLimit)` when |x| < 1 rounds onto 1 at the compute dp
+    /// (only when `DECIMALS` exceeds it). Bit-identical to [`Self::atanh`]
+    /// whenever that returns.
+    pub fn try_atanh(&self) -> Result<Self, OverflowDetected> {
+        if self.value.unsigned_abs() >= Self::SCALE as u128 {
+            return Err(OverflowDetected::DomainError);
+        }
+        self.try_apply(Self::atanh_core)
     }
 }
 
@@ -905,17 +1209,22 @@ impl<const DECIMALS: u8> Ord for DecimalFixed<DECIMALS> {
 }
 
 // Display formatting
+// Sign and magnitude at full i128 width. Before 0.6.4 the integer part went
+// through an i64 cast and the fraction through a u64 cast (both wrapped for
+// large values or DECIMALS >= 20), and a value in (-1, 0) printed without its
+// sign ("-0.5" displayed as "0.5").
 impl<const DECIMALS: u8> fmt::Display for DecimalFixed<DECIMALS> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let int_part = self.integer_part();
-        let frac_part = self.fractional_part();
+        let magnitude = self.value.unsigned_abs();
+        let scale = Self::SCALE as u128;
+        let sign = if self.value < 0 { "-" } else { "" };
         
         if DECIMALS == 0 {
-            write!(f, "{}", int_part)
+            write!(f, "{}{}", sign, magnitude)
         } else {
             // Format fractional part with leading zeros
-            let frac_str = format!("{:0width$}", frac_part, width = DECIMALS as usize);
-            write!(f, "{}.{}", int_part, frac_str)
+            let frac_str = format!("{:0width$}", magnitude % scale, width = DECIMALS as usize);
+            write!(f, "{}{}.{}", sign, magnitude / scale, frac_str)
         }
     }
 }
@@ -938,6 +1247,24 @@ pub const fn compile_time_power_of_10(exp: u8) -> i128 {
         i += 1;
     }
     result
+}
+
+/// `n / d` for `n >= 0`, `d > 0` at 256 bits, rounded half to even, with the
+/// sign applied; `Err(TierOverflow)` when the result leaves i128.
+fn round_half_even_d256(n: D256, d: D256, negative: bool) -> Result<i128, OverflowDetected> {
+    let (q, r) = divmod_d256_by_d256(n, d);
+    let rest = d - r; // compare r with d - r: no doubling, nothing overflows
+    let bump = match r.cmp(&rest) {
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => q.words[0] & 1 == 1,
+    };
+    let q = if bump { q + D256::from_i128(1) } else { q };
+    let signed = if negative { negate_d256(q) } else { q };
+    if !signed.fits_in_i128() {
+        return Err(OverflowDetected::TierOverflow);
+    }
+    Ok(signed.as_i128())
 }
 
 // NOTE: super::banker_round_decimal_i128 moved to decimal_fixed/mod.rs as banker_round_decimal_i128
@@ -1097,27 +1424,20 @@ mod tests {
     
     #[test]
     fn test_decimal_arithmetic_overflow_handling() {
-        // Test addition overflow
+        // Overflow is loud since 0.6.4 (it saturated to i128::MAX / MIN before).
         let max_val = DecimalFixed::<2>::from_raw(i128::MAX - 100);
         let large_val = DecimalFixed::<2>::from_raw(200);
-        
-        let overflow_result = max_val.pure_decimal_add_decimal(large_val);
-        assert_eq!(overflow_result.raw_value(), i128::MAX);
-        println!("✅ OVERFLOW ADD: MAX + large = MAX (saturated)");
-        
-        // Test subtraction overflow
+        assert_eq!(max_val.try_add(large_val), Err(OverflowDetected::TierOverflow));
+        assert_eq!(max_val.try_add(DecimalFixed::from_raw(100)).unwrap().raw_value(), i128::MAX);
+
         let min_val = DecimalFixed::<2>::from_raw(i128::MIN + 100);
-        let large_val = DecimalFixed::<2>::from_raw(200);
-        
-        let underflow_result = min_val.pure_decimal_subtract_decimal(large_val);
-        assert_eq!(underflow_result.raw_value(), i128::MIN);
-        println!("✅ UNDERFLOW SUB: MIN - large = MIN (saturated)");
-        
-        // Test negation overflow (only i128::MIN case)
+        assert_eq!(min_val.try_sub(large_val), Err(OverflowDetected::TierOverflow));
+        assert_eq!(min_val.try_sub(DecimalFixed::from_raw(100)).unwrap().raw_value(), i128::MIN);
+
         let min_val = DecimalFixed::<2>::from_raw(i128::MIN);
-        let neg_result = min_val.pure_decimal_negate_decimal();
-        assert_eq!(neg_result.raw_value(), i128::MAX);
-        println!("✅ NEGATION OVERFLOW: -(MIN) = MAX (saturated)");
+        assert_eq!(min_val.try_neg(), Err(OverflowDetected::TierOverflow));
+        assert!(std::panic::catch_unwind(|| max_val + large_val).is_err());
+        assert!(std::panic::catch_unwind(|| -min_val).is_err());
     }
     
     #[test]

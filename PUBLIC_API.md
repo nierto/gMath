@@ -2,7 +2,7 @@
 
 Generated from source by `scripts/gen-public-api.rs`. Do not edit by hand. Regenerate with: `rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /tmp/gen-public-api`
 
-This is a **pragmatic source scan** of a curated set of surface files, not a compiler-verified export list. It lists `pub` free items and impl methods with the first line of their doc comment. `pub use` re-exports, `#[cfg(test)]` items, and `#[doc(hidden)]` items are omitted, as are impls of std/derive traits. See the header of `scripts/gen-public-api.rs` for exact scope and limitations.
+This is a **pragmatic source scan** of a curated set of surface files, not a compiler-verified export list. It lists `pub` free items and impl methods with the first sentence of their doc comment. `pub use` re-exports, `#[cfg(test)]` items, and `#[doc(hidden)]` items are omitted, as are impls of std/derive traits. See the header of `scripts/gen-public-api.rs` for exact scope and limitations.
 
 ## Canonical (g_math::canonical)
 
@@ -10,7 +10,7 @@ Modules: g_math::canonical
 
 | Item | Kind | Summary |
 | --- | --- | --- |
-| `set_gmath_mode` | fn | Set compute:output mode. Examples: "binary:ternary", "auto:auto", "decimal:binary" |
+| `set_gmath_mode` | fn | Set compute:output mode. |
 | `reset_gmath_mode` | fn | Reset to default Auto:Auto mode |
 
 **Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
@@ -54,7 +54,9 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `from_raw` | Create from raw Q-format storage. |
 | `raw` | Access the raw Q-format storage. |
 | `from_int` | Create from an integer value. |
+| `try_from_int` | Create from an integer value, `Err(TierOverflow)` outside the range. |
 | `to_int` | Extract the integer part (floor toward negative infinity). |
+| `try_to_int` | The integer part (floor toward negative infinity), `Err(TierOverflow)` when it is outside the i32 range. |
 | `abs` | Absolute value. |
 | `is_negative` | Check if negative. |
 | `is_zero` | Check if zero. |
@@ -64,7 +66,8 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_from_f64` | Create from an f64 value like `from_f64`, returning an error instead of panicking. |
 | `to_f32` | Convert to f32: exact when the raw value fits 24 bits, else nearest-even. |
 | `to_f64` | Convert to f64: exact when the raw value fits 53 bits, else nearest-even. |
-| `from_str` | Parse from a decimal string (e.g., "3.14159"). |
+| `from_str` | Parse from a decimal string (e.g., "3.14159", "1e-06"). |
+| `try_from_str` | Parse from a string without panicking. |
 | `exp` | e^x |
 | `ln` | ln(x), x > 0 |
 | `sqrt` | sqrt(x), x >= 0 |
@@ -87,25 +90,31 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_exp` | Fallible e^x: returns `Err(TierOverflow)` if result exceeds storage tier. |
 | `try_ln` | Fallible ln(x): returns `Err(DomainError)` if x <= 0. |
 | `inv_sqrt` | 1/√x computed at compute tier without materializing √x at storage. |
-| `try_inv_sqrt` | Fallible 1/√x: `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if |
+| `try_inv_sqrt` | Fallible 1/√x: `Err(DomainError)` if x <= 0, `Err(TierOverflow)` if the result does not fit the storage tier. |
 | `try_sqrt` | Fallible sqrt(x): returns `Err(DomainError)` if x < 0. |
 | `try_sin` | Fallible sin(x). |
 | `try_cos` | Fallible cos(x). |
 | `try_sincos` | Fused sin+cos: single shared range reduction at compute tier. |
 | `try_sinhcosh` | Fallible fused sinh+cosh: single shared exp-pair at compute tier. |
 | `sincos_wide` | Fused sin+cos for wide-range angles that exceed storage-tier integer range. |
-| `try_tan` | Fallible tan(x) = sin(x)/cos(x): `Err(DomainError)` if cos(x) is zero |
+| `sincos_wide_q64` | Fused sin+cos of a Q64.64 angle (`radians * 2^64`), rounded to storage. |
+| `try_tan` | Fallible tan(x) = sin(x)/cos(x): `Err(DomainError)` if cos(x) is zero at the compute tier. |
 | `try_atan` | Fallible atan(x). |
 | `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)): `Err(DomainError)` if \|x\| > 1. |
 | `try_acos` | Fallible acos(x) = π/2 - asin(x): `Err(DomainError)` if \|x\| > 1. |
-| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2: `Err(TierOverflow)` when |
-| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when |
-| `try_tanh` | Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Saturates to exactly |
+| `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2: `Err(TierOverflow)` when the result exceeds the storage tier (a ceiling exp means it already has, and the ceiling value would downscale to a plausible-wrong max). |
+| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when the result exceeds the storage tier (a ceiling exp means cosh already has; the checked add alone cannot see it on wide profiles). |
+| `try_tanh` | Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). |
 | `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
 | `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1. |
 | `try_atanh` | Fallible atanh(x) = ln((1+x)/(1-x)) / 2: `Err(DomainError)` if \|x\| >= 1. |
 | `try_pow` | Fallible x^y = exp(y * ln(x)). |
 | `try_atan2` | Fallible atan2(self=y, x). |
+| `try_add` | `self + rhs`, `Err(TierOverflow)` when the sum leaves storage. |
+| `try_sub` | `self - rhs`, `Err(TierOverflow)` when the difference leaves storage. |
+| `try_neg` | `-self`, `Err(TierOverflow)` for the storage minimum (no positive twin). |
+| `try_mul` | `self * rhs`, rounded to nearest (ties toward +infinity) from the exact product; `Err(TierOverflow)` when it leaves storage. |
+| `try_div` | `self / rhs`, rounded to nearest (ties toward +infinity) from the exact quotient; `Err(DivisionByZero)` or `Err(TierOverflow)`. |
 
 ## FixedVector
 
@@ -125,9 +134,9 @@ A dynamically-sized vector of fixed-point values.
 | `is_empty` | Whether the vector is empty. |
 | `dot` | Dot product of two vectors at compute tier (tier N+1). |
 | `length_squared` | Squared length (self . self). |
-| `length` | Length (Euclidean norm). |
+| `length` | Length (Euclidean norm): the sum of squares and the root at the compute tier, one rounding (was `length_squared().sqrt()`: two roundings, and an overflow once the squared length left storage). |
 | `length_fused` | Fused length: sqrt(Σ x_i²) entirely at compute tier. |
-| `distance_to` | Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²) |
+| `distance_to` | Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²) entirely at compute tier. |
 | `normalize` | Normalize in place (divide each component by length). |
 | `normalized` | Return a normalized copy. |
 | `map` | Apply a function to each component, returning a new vector. |
@@ -167,7 +176,7 @@ A row-major matrix of fixed-point values.
 | `submatrix` | Extract a submatrix starting at (row, col) with given dimensions. |
 | `set_submatrix` | Insert a submatrix at position (row, col). |
 | `kronecker` | Kronecker product: A ⊗ B. |
-| `swap_rows` | Swap rows `i` and `j` in place. O(cols) time, zero allocation. |
+| `swap_rows` | Swap rows `i` and `j` in place. |
 
 ## DecimalFixed
 
@@ -198,9 +207,10 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `from_raw` | Create from raw scaled value (internal use) |
 | `from_raw_checked` | Create from raw scaled value with overflow check |
 | `from_integer` | Create from integer value (no decimal part) |
+| `try_from_integer` | Create from integer value, `Err(TierOverflow)` when `int_val * 10^DECIMALS` leaves i128. |
 | `from_parts` | Create from parts: integer and fractional parts |
 | `from_decimal_str_decimal` | Parse decimal string without float conversion |
-| `integer_part` | Extract integer part |
+| `integer_part` | Extract integer part (truncated toward zero) |
 | `fractional_part` | Extract fractional part as integer (e.g., 0.123 → 123 for DECIMALS=3) |
 | `raw_value` | Get raw scaled value |
 | `is_zero` | Check if value is zero |
@@ -214,30 +224,54 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `pure_decimal_subtract_decimal` | Pure decimal subtraction using optimized scaled integer arithmetic |
 | `pure_decimal_negate_decimal` | Pure decimal negation using optimized scaled integer arithmetic |
 | `pure_decimal_divide_decimal` | Pure decimal division using base-10 arithmetic (eliminates binary contamination) |
+| `try_add` | `self + other`, `Err(TierOverflow)` when the sum leaves i128. |
+| `try_sub` | `self - other`, `Err(TierOverflow)` when the difference leaves i128. |
+| `try_neg` | `-self`, `Err(TierOverflow)` for the raw minimum (no positive twin). |
+| `try_mul` | `self * other` rounded half to even from the exact product, `Err(TierOverflow)` when it leaves i128. |
+| `try_div` | `self / other` rounded half to even from the exact quotient, `Err(DivisionByZero)` or `Err(TierOverflow)` (quotient beyond i128). |
 | `multiply_batch_decimal` | High-performance multiplication for batch operations |
 | `to_f64_lossy` | Convert to f64 (lossy conversion for display/debugging) |
 | `try_convert` | Convert to different decimal precision |
 | `convert_with_rounding` | Force conversion to different decimal precision with rounding |
 | `to_binary_q256` | Convert DecimalFixed to Q256.256 binary format (I512) |
 | `from_binary_q256` | Create DecimalFixed from Q256.256 binary format (I512) |
+| `try_from_binary_q256` | Create DecimalFixed from Q256.256 binary format (I512), rounded half to even (the decimal rule), `Err(TierOverflow)` when the result leaves i128. |
 | `exp` | `exp(x)`: native decimal exponential at full compute-tier precision. |
-| `ln` | `ln(x)`: native decimal natural logarithm. Requires x > 0. |
-| `sqrt` | `sqrt(x)`: native decimal square root. Requires x >= 0. |
+| `try_exp` | Fallible `exp(x)`, `Err(TierOverflow)` when the argument or the result is out of range. |
+| `ln` | `ln(x)`: native decimal natural logarithm. |
+| `try_ln` | Fallible `ln(x)`, `Err(DomainError)` for x <= 0. |
+| `sqrt` | `sqrt(x)`: native decimal square root. |
+| `try_sqrt` | Fallible `sqrt(x)`, `Err(DomainError)` for x < 0. |
 | `sin` | `sin(x)`: native decimal sine. |
+| `try_sin` | Fallible `sin(x)`, `Err(TierOverflow)` when the argument is outside the compute tier. |
 | `cos` | `cos(x)`: native decimal cosine. |
+| `try_cos` | Fallible `cos(x)`, `Err(TierOverflow)` when the argument is outside the compute tier. |
 | `sincos` | `sincos(x)`: fused sine and cosine with single range reduction. |
+| `try_sincos` | Fallible `sincos(x)`, `Err(TierOverflow)` when the argument is outside the compute tier. |
 | `tan` | `tan(x)` = sin(x)/cos(x), composed entirely at the compute tier. |
+| `try_tan` | Fallible `tan(x)`, `Err(DomainError)` when cos(x) is exactly 0 at the compute tier. |
 | `atan` | `atan(x)`: native decimal arctangent. |
+| `try_atan` | Fallible `atan(x)`, `Err(TierOverflow)` when the argument is outside the compute tier. |
 | `atan2` | `atan2(y, x)`: native decimal two-argument arctangent. |
+| `try_atan2` | Fallible `atan2(y, x)` with `self` as y, `Err(DomainError)` for atan2(0, 0). |
 | `asin` | `asin(x)` = atan(x / sqrt(1 - x^2)), composed at the compute tier. |
-| `acos` | `acos(x)` = pi/2 - asin(x), composed at the compute tier (single |
+| `try_asin` | Fallible `asin(x)`, `Err(DomainError)` for \|x\| > 1. |
+| `acos` | `acos(x)` = pi/2 - asin(x), composed at the compute tier (single downscale, so no storage-tier cancellation). |
+| `try_acos` | Fallible `acos(x)`, `Err(DomainError)` for \|x\| > 1. |
 | `sinh` | `sinh(x)`: fused (exp(x) - exp(-x)) / 2 at the compute tier. |
+| `try_sinh` | Fallible `sinh(x)`, `Err(TierOverflow)` when the argument or the result is out of range. |
 | `cosh` | `cosh(x)`: fused (exp(x) + exp(-x)) / 2 at the compute tier. |
-| `sinhcosh` | `sinhcosh(x)`: fused hyperbolic pair sharing one exp-pair evaluation at |
-| `tanh` | `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, saturating to |
-| `asinh` | `asinh(x)` = ln(x + sqrt(x^2 + 1)), composed at the compute tier. |
+| `try_cosh` | Fallible `cosh(x)`, `Err(TierOverflow)` when the argument or the result is out of range. |
+| `sinhcosh` | `sinhcosh(x)`: fused hyperbolic pair sharing one exp-pair evaluation at decimal compute tier. |
+| `try_sinhcosh` | Fallible `sinhcosh(x)`, `Err(TierOverflow)` when the argument or either result is out of range. |
+| `tanh` | `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, exactly ±1 for \|x\| > 2 * compute dp (where 1 - \|tanh x\| < e^(-4 dp) is below half a unit at the compute dp). |
+| `try_tanh` | Fallible `tanh(x)`, `Err(TierOverflow)` only when the argument is outside the compute tier. |
+| `asinh` | `asinh(x)` = sign(x) ln(\|x\| + sqrt(x^2 + 1)), composed at the compute tier. |
+| `try_asinh` | Fallible `asinh(x)`, `Err(TierOverflow)` when the argument is outside the compute tier. |
 | `acosh` | `acosh(x)` = ln(x + sqrt(x^2 - 1)), composed at the compute tier. |
+| `try_acosh` | Fallible `acosh(x)`, `Err(DomainError)` for x < 1. |
 | `atanh` | `atanh(x)` = ln((1+x)/(1-x)) / 2, composed at the compute tier. |
+| `try_atanh` | Fallible `atanh(x)`, `Err(DomainError)` for \|x\| >= 1. |
 
 ## Fused operations
 
@@ -255,6 +289,7 @@ Modules: g_math::fixed_point::imperative::fused
 | `mobius_denominator_sq` | fn | Fused squared Möbius denominator `\|1 − p̄q\|² = 1 − 2⟨p,q⟩ + \|p\|²·\|q\|²` (U1). |
 | `softmax` | fn | Stable softmax entirely at compute tier. |
 | `rms_norm_factor` | fn | Fused 1/sqrt(mean(x²) + eps): RMSNorm scaling factor at compute tier. |
+| `rms_norm_factor_eps_wide` | fn | Fused 1/sqrt(mean(x²) + eps) with `eps` given in Q64.64 (`eps * 2^64`). |
 | `silu` | fn | Fused SiLU activation: x / (1 + exp(-x)) entirely at compute tier. |
 | `softmax_mix` | fn | Fused softmax + weighted value mix, entirely at compute tier: |
 
@@ -269,22 +304,22 @@ A certified enclosure `[lo, hi]` of a real value, `lo <= hi`.
 | Method | Summary |
 | --- | --- |
 | `point` | The degenerate interval `[x, x]`. |
-| `new` | `[lo, hi]`. Panics if `lo > hi`. |
+| `new` | `[lo, hi]`. |
 | `try_new` | `[lo, hi]`, or `Err(InvalidInput)` if `lo > hi`. |
 | `lo` | Lower endpoint. |
 | `hi` | Upper endpoint. |
-| `width` | `hi - lo`. Panics if the width itself does not fit the storage tier. |
+| `width` | `hi - lo`. |
 | `is_point` | `lo == hi`. |
 | `contains` | `lo <= x <= hi`. |
 | `contains_zero` | `lo <= 0 <= hi`. |
 | `is_certainly_positive` | `lo > 0`: every value in the interval is positive. |
 | `is_certainly_negative` | `hi < 0`: every value in the interval is negative. |
-| `try_add` | `[a.lo + b.lo, a.hi + b.hi]`. Storage addition is exact when it fits. |
+| `try_add` | `[a.lo + b.lo, a.hi + b.hi]`. |
 | `try_sub` | `[a.lo - b.hi, a.hi - b.lo]`. |
 | `try_neg` | `[-hi, -lo]`. |
 | `try_mul` | Product: exact corner products at the compute tier, narrowed once. |
 | `try_div` | Quotient; `Err(DivisionByZero)` if the divisor interval contains zero. |
-| `try_sqrt` | Certified square root. `Err(DomainError)` if `lo < 0`. |
+| `try_sqrt` | Certified square root. |
 | `try_dot` | Certified dot product of two point vectors, with one narrowing. |
 | `try_dot_intervals` | Certified dot product of two interval vectors, with one narrowing. |
 | `try_quadratic_form` | Certified quadratic form `v^T M v` for point inputs, with one narrowing. |
@@ -295,27 +330,27 @@ A certified enclosure `[lo, hi]` of a real value, `lo <= hi`.
 
 ### DecimalInterval
 
-A certified enclosure `[lo, hi]` of a real value in the decimal domain,
+A certified enclosure `[lo, hi]` of a real value in the decimal domain, `lo <= hi`.
 
 | Method | Summary |
 | --- | --- |
 | `point` | The degenerate interval `[x, x]`. |
-| `new` | `[lo, hi]`. Panics if `lo > hi`. |
+| `new` | `[lo, hi]`. |
 | `try_new` | `[lo, hi]`, or `Err(InvalidInput)` if `lo > hi`. |
 | `lo` | Lower endpoint. |
 | `hi` | Upper endpoint. |
-| `width` | `hi - lo`. Panics if the width itself does not fit i128. |
+| `width` | `hi - lo`. |
 | `is_point` | `lo == hi`. |
 | `contains` | `lo <= x <= hi`. |
 | `contains_zero` | `lo <= 0 <= hi`. |
 | `is_certainly_positive` | `lo > 0`: every value in the interval is positive. |
 | `is_certainly_negative` | `hi < 0`: every value in the interval is negative. |
-| `try_add` | `[a.lo + b.lo, a.hi + b.hi]`. Storage addition is exact when it fits. |
+| `try_add` | `[a.lo + b.lo, a.hi + b.hi]`. |
 | `try_sub` | `[a.lo - b.hi, a.hi - b.lo]`. |
 | `try_neg` | `[-hi, -lo]`. |
 | `try_mul` | Product: exact corner products at `2 * DECIMALS` places, narrowed once. |
 | `try_div` | Quotient; `Err(DivisionByZero)` if the divisor interval contains zero. |
-| `try_sqrt` | Certified square root. `Err(DomainError)` if `lo < 0`. |
+| `try_sqrt` | Certified square root. |
 | `try_dot` | Certified dot product of two point vectors, with one narrowing. |
 | `sqrt` | Certified square root; panics on a negative lower endpoint or overflow. |
 | `dot` | Certified dot product; panics on overflow. |
@@ -326,10 +361,10 @@ Modules: g_math::fixed_point::imperative::predicates
 
 | Item | Kind | Summary |
 | --- | --- | --- |
-| `orient2d` | fn | Orientation of the triangle `a b c`: `Positive` if counterclockwise, |
-| `orient3d` | fn | Orientation of the tetrahedron `a b c d`: `Positive` if `d` lies below the |
-| `incircle` | fn | Whether `d` lies inside the circle through `a b c`: `Positive` if inside |
-| `insphere` | fn | Whether `e` lies inside the sphere through `a b c d`: `Positive` if inside |
+| `orient2d` | fn | Orientation of the triangle `a b c`: `Positive` if counterclockwise, `Negative` if clockwise, `Zero` if the three points are exactly collinear. |
+| `orient3d` | fn | Orientation of the tetrahedron `a b c d`: `Positive` if `d` lies below the plane of `a b c` (the triangle seen counterclockwise from above), `Negative` if above, `Zero` if the four points are exactly coplanar. |
+| `incircle` | fn | Whether `d` lies inside the circle through `a b c`: `Positive` if inside when `a b c` are counterclockwise (the sign flips with their orientation), `Negative` if outside, `Zero` if exactly on the circle. |
+| `insphere` | fn | Whether `e` lies inside the sphere through `a b c d`: `Positive` if inside when `orient3d(a, b, c, d)` is `Positive` (the sign flips with their orientation), `Negative` if outside, `Zero` if exactly on the sphere. |
 | `pd_verdict` | fn | Certified positive-definiteness verdict via interval Cholesky. |
 
 ### Sign
@@ -379,8 +414,8 @@ Modules: g_math::fixed_point::imperative::decompose, g_math::fixed_point::impera
 | `condition_number_2` | fn | 2-norm condition number: κ₂(A) = σ_max / σ_min. |
 | `nullspace` | fn | Nullspace basis: columns of V corresponding to near-zero singular values. |
 | `matrix_exp` | fn | Matrix exponential: exp(A) via Padé [6/6] with scaling-and-squaring. |
-| `matrix_sqrt` | fn | Matrix square root: A^{1/2} via Denman-Beavers iteration at compute tier. |
-| `matrix_log` | fn | Matrix logarithm: log(A) via inverse scaling-and-squaring at compute tier. |
+| `matrix_sqrt` | fn | Matrix square root: A^{1/2} via Denman-Beavers iteration. |
+| `matrix_log` | fn | Matrix logarithm: log(A) via inverse scaling-and-squaring. |
 | `matrix_pow` | fn | Matrix power: A^p = exp(p * log(A)) for real scalar p. |
 
 ### LUDecomposition
@@ -389,10 +424,10 @@ Result of LU decomposition with partial pivoting: PA = LU.
 
 | Method | Summary |
 | --- | --- |
-| `solve` | Solve Ax = b using forward then back substitution. |
-| `determinant` | Determinant: det(A) = (-1)^num_swaps * product(U diagonal). |
-| `refine` | Iterative refinement: improve solution accuracy by computing residual |
-| `inverse` | Compute A^{-1} by solving AX = I column by column. |
+| `solve` | Solve Ax = b: forward then back substitution on the compute-tier factors, every sum exact, the solution rounded once. |
+| `determinant` | Determinant: det(A) = (-1)^num_swaps * product(U diagonal), formed at the compute tier from the compute-tier factor and rounded once. |
+| `refine` | Iterative refinement: the residual `b - Ax` exact at the compute tier, the correction solved at the compute tier, `x + dx` rounded once. |
+| `inverse` | Compute A^{-1} by solving AX = I column by column at the compute tier, every entry rounded once. |
 
 ### QRDecomposition
 
@@ -400,7 +435,7 @@ Result of QR decomposition via Householder reflections: A = QR.
 
 | Method | Summary |
 | --- | --- |
-| `solve` | Solve Ax = b via R^{-1} Q^T b (back substitution). |
+| `solve` | Solve Ax = b via R^{-1} Q^T b on the compute-tier factors: `Q^T b` exact sums, back substitution at the compute tier, the solution rounded once (before 0.6.4 on the storage factors: up to 27 units on well-conditioned 4 x 4 systems). |
 
 ### CholeskyDecomposition
 
@@ -408,8 +443,48 @@ Result of Cholesky decomposition: A = LL^T.
 
 | Method | Summary |
 | --- | --- |
-| `solve` | Solve Ax = b: forward (Ly = b), then back (L^T x = y). |
-| `determinant` | Determinant: det(A) = product(L[i][i])^2. |
+| `solve` | Solve Ax = b: forward (Ly = b), then back (L^T x = y), on the compute-tier factor with exact sums; the solution rounded once. |
+| `determinant` | Determinant: det(A) = product(L[i][i])^2, formed at the compute tier and rounded once (before 0.6.4 a chain of storage products). |
+
+### ComputeMatrix
+
+| Method | Summary |
+| --- | --- |
+| `identity` |  |
+| `dim` |  |
+| `copy` |  |
+| `add` |  |
+| `sub` |  |
+| `halve` |  |
+| `mat_mul` |  |
+| `scalar_mul` |  |
+| `fraction` |  |
+| `is_zero` |  |
+| `norm_1` |  |
+| `frobenius_below` |  |
+| `step_below` |  |
+| `solve` |  |
+| `inverse` |  |
+
+### WideMatrix
+
+| Method | Summary |
+| --- | --- |
+| `identity` |  |
+| `dim` |  |
+| `copy` |  |
+| `add` |  |
+| `sub` |  |
+| `halve` |  |
+| `mat_mul` |  |
+| `scalar_mul` |  |
+| `fraction` |  |
+| `is_zero` |  |
+| `norm_1` |  |
+| `frobenius_below` |  |
+| `step_below` |  |
+| `solve` |  |
+| `inverse` |  |
 
 ## Geometry
 
@@ -420,7 +495,7 @@ Modules: g_math::fixed_point::imperative::manifold, g_math::fixed_point::imperat
 | `Manifold` | trait | A Riemannian manifold with fixed-point arithmetic. |
 | `LieGroup` | trait | A Lie group with fixed-point arithmetic. |
 | `differentiation_step` | fn | Optimal step size for central differences: h = 2^(-FRAC_BITS/3). |
-| `MetricProvider` | trait | A metric function: given a point (as FixedVector of coordinates), returns |
+| `MetricProvider` | trait | A metric function: given a point (as FixedVector of coordinates), returns the metric tensor g_ij as an n×n FixedMatrix. |
 | `christoffel` | fn | Compute Christoffel symbols Γ^k_{ij} at point p. |
 | `riemann_curvature` | fn | Compute Riemann curvature tensor R^l_{ijk} at point p. |
 | `ricci_tensor` | fn | Compute Ricci tensor Rᵢⱼ = R^k_{ikj} at point p. |
@@ -442,7 +517,7 @@ Modules: g_math::fixed_point::imperative::manifold, g_math::fixed_point::imperat
 | `stereo_unproject` | fn | Inverse stereographic projection from R^n to S^n. |
 | `FiberBundle` | trait | A fiber bundle π: E → B with fiber F. |
 | `BundleConnection` | trait | A connection on a fiber bundle: specifies how fibers relate along the base. |
-| `apply_representation` | fn | Apply a transition function (group element) to a fiber element via |
+| `apply_representation` | fn | Apply a transition function (group element) to a fiber element via matrix-vector multiplication (the fundamental representation). |
 | `change_chart` | fn | Change of chart for a section: ξ_β = g_{αβ} · ξ_α. |
 | `vector_bundle_curvature` | fn | Compute the curvature 2-form of a vector bundle connection at a point. |
 
@@ -454,6 +529,7 @@ Flat Euclidean space R^n.
 | --- | --- |
 | `dimension` |  |
 | `inner_product` |  |
+| `norm` | \|\|v\|\|: exact sum of squares and root at the compute tier, one rounding. |
 | `exp_map` |  |
 | `log_map` |  |
 | `distance` |  |
@@ -467,10 +543,11 @@ The n-sphere S^n embedded as unit vectors in R^{n+1}.
 | --- | --- |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
-| `parallel_transport` |  |
+| `norm` | \|\|v\|\|: exact sum of squares and root at the compute tier, one rounding. |
+| `exp_map` | `cos(theta) p + sin(theta) v / theta` with `theta = \|v\|`: the root, sin and cos, the quotient and the sum at the compute tier, one rounding per component. |
+| `log_map` | `theta w / \|w\|` from [`Sphere::geodesic`]: angle, direction and scaling at the compute tier, one rounding per component. |
+| `distance` | `atan2(\|p x q\|, p.q)` at the compute tier, one rounding. |
+| `parallel_transport` | `v - <v, p+q> / (1 + <p,q>) (p + q)`: the products exact, the coefficient and each component formed at the compute tier with one rounding to storage. |
 
 ### HyperbolicSpace
 
@@ -481,10 +558,10 @@ Hyperbolic space H^n in the hyperboloid model.
 | `dimension` |  |
 | `inner_product` |  |
 | `norm` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
-| `parallel_transport` |  |
+| `exp_map` | `cosh(theta) p + sinh(theta) v / theta` with `theta = \|v\|_L`: the root, the shared exp pair, the quotient and the sum at the compute tier, one rounding per component. |
+| `log_map` | `d w / \|w\|_L` from [`HyperbolicSpace::geodesic`]: distance, direction and scaling at the compute tier, one rounding per component. |
+| `distance` | `acosh(-<p,q> / sqrt(<p,p> <q,q>))` at the compute tier, one rounding. |
+| `parallel_transport` | `v + <v,u>_L (sinh(d) p + (cosh(d) - 1) u)` with `u = w / \|w\|_L` the unit direction and `d` the distance of [`HyperbolicSpace::geodesic`]: everything at the compute tier, one rounding per component. |
 
 ### SPDManifold
 
@@ -493,11 +570,12 @@ The manifold of n×n symmetric positive-definite matrices.
 | Method | Summary |
 | --- | --- |
 | `dimension` |  |
-| `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
-| `parallel_transport` |  |
+| `inner_product` | `tr(P⁻¹ U P⁻¹ V)`: the inverse and both products at the compute tier, the trace exact, one rounding. |
+| `norm` | `sqrt(tr((P⁻¹ V)^2))` at the compute tier, one rounding. |
+| `exp_map` | `P^1/2 expm(P^-1/2 V P^-1/2) P^1/2`: square root, inverse, products and exponential all at the compute tier, one rounding per entry. |
+| `log_map` | `P^1/2 logm(P^-1/2 Q P^-1/2) P^1/2`, all at the compute tier, one rounding per entry. |
+| `distance` | `\|\|logm(P^-1/2 Q P^-1/2)\|\|_F` (= `\|\|log_P(Q)\|\|_P`): the matrix log at the compute tier, its sum of squares exact, the root at the compute tier, one rounding. |
+| `parallel_transport` | `E V Eᵀ` with `E = (Q P⁻¹)^1/2`: inverse, product, square root and transport at the compute tier, one rounding per entry. |
 
 ### Grassmannian
 
@@ -507,10 +585,11 @@ The Grassmann manifold Gr(k, n): k-dimensional subspaces of R^n.
 | --- | --- |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
-| `parallel_transport` |  |
+| `norm` | \|\|V\|\|_F: exact sum of squares and root at the compute tier, one rounding. |
+| `exp_map` | `Q V cos(Σ) Vᵀ + Δ V sinc(Σ) Vᵀ` for the thin SVD `Δ = U Σ Vᵀ`, with `Δ V` (= `U Σ`) and `σ_i = \|(Δ V)_i\|` formed at the compute tier from the exact tangent, sin and cos at the compute tier, and one rounding per entry. |
+| `log_map` | `U diag(theta) Aᵀ` from [`Grassmannian::log_parts`], one rounding per entry. |
+| `distance` | `sqrt(sum theta_i^2)` of the principal angles of [`Grassmannian::log_parts`]: sum exact, root at the compute tier, one rounding. |
+| `parallel_transport` | Transport along the geodesic with `log_Q1(Q2) = U Θ Aᵀ`: `PT(Δ) = Δ - Q1 A sin(Θ) Uᵀ Δ + U (cos(Θ) - I) Uᵀ Δ`, the factors from [`Grassmannian::log_parts`] and the products at the compute tier, one rounding per entry. |
 
 ### StiefelManifold
 
@@ -520,9 +599,10 @@ The Stiefel manifold St(k, n): orthonormal k-frames in R^n.
 | --- | --- |
 | `dimension` |  |
 | `inner_product` |  |
+| `norm` | \|\|V\|\|_F: exact sum of squares and root at the compute tier, one rounding. |
 | `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
+| `log_map` | First-order log `Δ - Q sym(QᵀΔ)` with `Δ = Q' - Q`, at the compute tier, one rounding per entry. |
+| `distance` | `\|\|log_Q(Q')\|\|_F`: the log at the compute tier, its sum of squares exact, the root at the compute tier, one rounding. |
 | `parallel_transport` |  |
 
 ### ProductManifold
@@ -534,6 +614,7 @@ Product manifold M₁ × M₂: the Cartesian product of two manifolds.
 | `new` | Create a product manifold M₁ × M₂. |
 | `dimension` |  |
 | `inner_product` |  |
+| `norm` | `sqrt(\|\|v1\|\|^2 + \|\|v2\|\|^2)` of the component norms: squares exact, sum and root at the compute tier, one rounding. |
 | `exp_map` |  |
 | `log_map` |  |
 | `distance` |  |
@@ -551,10 +632,10 @@ SO(3): Special orthogonal group of 3D rotations.
 | `rodrigues_log` | Rodrigues logarithm: rotation matrix R → axis-angle ω. |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
-| `parallel_transport` |  |
+| `exp_map` | log(exp(base) exp(tangent)) with both exps, the product and the log at the compute tier; each component rounded once. |
+| `log_map` | log(exp(base)ᵀ exp(target)) entirely at the compute tier, rounded once. |
+| `distance` | \|log_map\| from the compute-tier log, one rounding. |
+| `parallel_transport` | vee(R_half [v]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2), the whole chain at the compute tier and each component rounded once. |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
 | `identity_element` |  |
@@ -565,7 +646,7 @@ SO(3): Special orthogonal group of 3D rotations.
 | `hat` |  |
 | `vee` |  |
 | `adjoint` |  |
-| `bracket` |  |
+| `bracket` | [ω₁, ω₂] = ω₁ × ω₂, each component one rounding of its exact value. |
 | `act` |  |
 
 ### SE3
@@ -583,21 +664,21 @@ SE(3): Special Euclidean group of 3D rigid body motions.
 | `se3_log` | SE(3) logarithm: [[R, t], [0, 1]] → [ω, v]. |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
+| `exp_map` | log(exp(base) exp(tangent)) entirely at the compute tier, rounded once. |
+| `log_map` | log(exp(base)⁻¹ exp(target)) entirely at the compute tier (the inverse [[Rᵀ, -Rᵀt], [0, 1]] included), rounded once. |
+| `distance` | \|log_map\| from the compute-tier log, one rounding. |
 | `parallel_transport` |  |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
 | `identity_element` |  |
 | `compose` |  |
-| `group_inverse` |  |
+| `group_inverse` | [[Rᵀ, -Rᵀt], [0, 1]]: each translation entry one rounding of the exact negated sum. |
 | `lie_exp` |  |
 | `lie_log` |  |
 | `hat` |  |
 | `vee` |  |
-| `adjoint` |  |
-| `bracket` |  |
+| `adjoint` | Ad_g(ω, v) = (Rω, Rv + t × Rω): Rω and Rv exact at the compute tier, t × Rω exact at 3F, each component rounded once. |
+| `bracket` | [(ω₁, v₁), (ω₂, v₂)] = (ω₁ × ω₂, ω₁ × v₂ - ω₂ × v₁), each component one rounding of its exact value. |
 | `act` |  |
 
 ### SOn
@@ -610,9 +691,9 @@ SO(n): General special orthogonal group.
 | `vee_son` | vee: skew-symmetric n×n matrix → vector. |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
+| `exp_map` | log(exp(base) exp(tangent)): both matrix exps, the product, the matrix log and its skew part at the compute tier, rounded once. |
+| `log_map` | log(exp(base)ᵀ exp(target)) at the compute tier, rounded once. |
+| `distance` | \|log_map\| from the compute-tier log, one rounding. |
 | `parallel_transport` |  |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
@@ -620,11 +701,11 @@ SO(n): General special orthogonal group.
 | `compose` |  |
 | `group_inverse` |  |
 | `lie_exp` |  |
-| `lie_log` |  |
+| `lie_log` | vee((log g - (log g)ᵀ) / 2) with the matrix log and the skew part at the compute tier, each component rounded once. |
 | `hat` |  |
 | `vee` |  |
-| `adjoint` |  |
-| `bracket` |  |
+| `adjoint` | vee(g ξ^ gᵀ), each component one rounding of its exact value. |
+| `bracket` | vee(AB - BA), each component one rounding of its exact value. |
 | `act` |  |
 
 ### GLn
@@ -637,21 +718,21 @@ GL(n): General linear group of invertible n×n matrices.
 | `vee_gln` | vee: n×n matrix → n²-vector (row-major). |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
+| `exp_map` | log(exp(base) exp(tangent)) with the exps, the product and the log at the compute tier, rounded once. |
+| `log_map` | log(exp(base)⁻¹ exp(target)) with a compute-tier LU inverse (the storage LU inverse carried O(κ) units into the log before 0.6.4), rounded once. |
+| `distance` | \|log_map\| from the compute-tier log, one rounding. |
 | `parallel_transport` |  |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
 | `identity_element` |  |
 | `compose` |  |
-| `group_inverse` |  |
+| `group_inverse` | g⁻¹ from a compute-tier LU, each entry rounded once. |
 | `lie_exp` |  |
 | `lie_log` |  |
 | `hat` |  |
 | `vee` |  |
-| `adjoint` |  |
-| `bracket` |  |
+| `adjoint` | vee(g ξ^ g⁻¹) with the inverse and both products at the compute tier, each component rounded once. |
+| `bracket` | vee(AB - BA), each component one rounding of its exact value. |
 | `act` |  |
 
 ### On
@@ -690,21 +771,21 @@ SL(n): Special linear group: n×n matrices with det = 1.
 | `project_traceless` | Project matrix onto sl(n) by removing trace: A - (tr(A)/n)·I. |
 | `dimension` |  |
 | `inner_product` |  |
-| `exp_map` |  |
-| `log_map` |  |
-| `distance` |  |
+| `exp_map` | log(exp(base) exp(tangent)), projected traceless, at the compute tier; rounded once. |
+| `log_map` | log(exp(base)⁻¹ exp(target)) with a compute-tier LU inverse, projected traceless at the compute tier; rounded once. |
+| `distance` | \|log_map\| from the compute-tier log, one rounding. |
 | `parallel_transport` |  |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
 | `identity_element` |  |
 | `compose` |  |
-| `group_inverse` |  |
+| `group_inverse` | g⁻¹ from a compute-tier LU, each entry rounded once. |
 | `lie_exp` |  |
-| `lie_log` |  |
+| `lie_log` | vee(project_traceless(log g)) with the matrix log and the projection at the compute tier, each component rounded once. |
 | `hat` |  |
 | `vee` |  |
-| `adjoint` |  |
-| `bracket` |  |
+| `adjoint` | vee(project_traceless(g ξ^ g⁻¹)) with the inverse, both products and the projection at the compute tier, each component rounded once. |
+| `bracket` | vee(AB - BA), each component one rounding of its exact value. |
 | `act` |  |
 
 ### EuclideanMetric
@@ -724,9 +805,9 @@ Sphere S^n metric in spherical coordinates.
 | Method | Summary |
 | --- | --- |
 | `dimension` |  |
-| `metric` |  |
+| `metric` | g = r² [[1, 0], [0, sin²θ]], each entry formed at the compute tier and rounded once (r² sin²θ was three storage roundings before 0.6.4). |
 | `christoffel_closed_form` | Exact Christoffel symbols for S² in (θ, φ) coordinates. |
-| `scalar_curvature_closed_form` | Exact scalar curvature for S²: R = 2/r². |
+| `scalar_curvature_closed_form` | Exact scalar curvature for S²: R = 2/r², one rounding. |
 
 ### HyperbolicMetric
 
@@ -735,7 +816,7 @@ Hyperbolic space H^2 metric in the upper half-plane model.
 | Method | Summary |
 | --- | --- |
 | `dimension` |  |
-| `metric` |  |
+| `metric` | g = (1/y²) I, 1/y² formed at the compute tier and rounded once. |
 | `christoffel_closed_form` | Exact Christoffel symbols for H² upper half-plane. |
 | `scalar_curvature_closed_form` | Exact scalar curvature for H²: R = -2. |
 
@@ -758,12 +839,12 @@ A Möbius transformation on the complex plane: z ↦ (az+b)/(cz+d).
 | `apply` | Apply the transformation to a real value: (ax+b)/(cx+d). |
 | `compose` | Compose two Möbius transformations: (self ∘ other)(z) = self(other(z)). |
 | `inverse` | Inverse transformation: z ↦ (dz-b)/(-cz+a). |
-| `determinant` | Determinant: ad - bc. Non-zero for valid Möbius transformation. |
+| `determinant` | Determinant: ad - bc. |
 | `to_matrix` | Convert to the corresponding 2×2 projective matrix [[a,b],[c,d]]. |
 
 ### MoebiusComplex
 
-A Möbius transformation with complex coefficients: z ↦ (az+b)/(cz+d)
+A Möbius transformation with complex coefficients: z ↦ (az+b)/(cz+d) where a,b,c,d,z are complex numbers represented as (real, imag) pairs.
 
 | Method | Summary |
 | --- | --- |
@@ -911,7 +992,7 @@ Tucker decomposition: T ≈ G ×₁ U₁ ×₂ U₂ ×₃ U₃ ...
 
 ### CPDecomposition
 
-CP (Canonical Polyadic) decomposition: T ≈ Σ_r λ_r a₁_r ∘ a₂_r ∘ ... ∘ a_N_r
+CP (Canonical Polyadic) decomposition: T ≈ Σ_r λ_r a₁_r ∘ a₂_r ∘ ...
 
 | Method | Summary |
 | --- | --- |
@@ -986,7 +1067,7 @@ A balanced ternary digit: -1, 0, or +1
 
 | Method | Summary |
 | --- | --- |
-| `from_i8` | Convert from i8. Returns Err if not in {-1, 0, 1}. |
+| `from_i8` | Convert from i8. |
 | `as_i8` | Convert to i8 |
 
 ## TQ1.9 inference
@@ -1013,7 +1094,7 @@ Modules: g_math::tq19 _(feature: inference)_
 | `tq19_matvec_q2f_batch_par` | fn | Row-parallel wide-output batch TQ1.9 matvec with tiled accumulation. |
 | `tq19_matvec_batch_par` | fn | Row-parallel batch TQ1.9 matvec with tiled accumulation. |
 | `NUM_PLANES` | const | Number of balanced-ternary digit planes in a TQ1.9 value. |
-| `POW3` | const | Powers of three, 3^0 .. 3^9. |
+| `POW3` | const | Powers of three, 3^0 .. |
 | `SPARSE_DENSITY_PERCENT` | const | Density below which a plane is stored sparse (CSR) instead of dense packed. |
 | `HYBRID_LOW_TRITS` | const | Number of low balanced-ternary digits fused into the 12-bit field. |
 | `LOW_MOD` | const | 3^7: modulus of the low part. |
@@ -1041,11 +1122,11 @@ Row-major TQ1.9 weight matrix.
 | `matvec` | Matrix-vector product: `result[i] = sum_j(W[i][j] * x[j]) / SCALE` |
 | `matvec_batch` | Batch matrix-vector: same weights applied to multiple activation vectors. |
 | `matvec_fp` | Convenience: matvec returning `FixedPoint` values. |
-| `matvec_par` | Row-parallel matvec. Each row computed independently via rayon. |
+| `matvec_par` | Row-parallel matvec. |
 | `matvec_batch_par` | Row-parallel batch matvec. |
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS fractional precision with exactly one rounding. |
-| `matvec_q2f_par` | Row-parallel wide-output matvec. See [`TQ19Matrix::matvec_q2f`]. |
-| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`TQ19Matrix::matvec_q2f`]. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
 
 ### PlaneData
 
@@ -1069,12 +1150,12 @@ A TQ1.9 weight matrix decomposed into 10 balanced-ternary trit planes.
 | `from_parts` | Construct from raw parts (for deserialization by consumers). |
 | `size_bytes` | Total heap bytes of plane storage. |
 | `matvec` | Matrix-vector product: `result[i] = sum_j(W[i][j] * x[j]) / SCALE`. |
-| `matvec_par` | Row-parallel matvec (rayon). One reconstruction buffer per worker. |
+| `matvec_par` | Row-parallel matvec (rayon). |
 | `matvec_batch` | Batch matvec: same weights applied to multiple activation vectors. |
-| `matvec_batch_par` | Row-parallel batch matvec: rows in parallel, reconstruction amortized |
+| `matvec_batch_par` | Row-parallel batch matvec: rows in parallel, reconstruction amortized across the batch within each row. |
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding. |
-| `matvec_q2f_par` | Row-parallel wide-output matvec. See [`PlanarTQ19::matvec_q2f`]. |
-| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`PlanarTQ19::matvec_q2f`]. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
 
 ### HybridTQ19
 
@@ -1088,15 +1169,15 @@ A TQ1.9 weight matrix in hybrid 12-bit + sparse-correction form.
 | `cols` | Number of columns. |
 | `size_bytes` | Total heap bytes (packed low parts + CSR high corrections). |
 | `num_high_corrections` | Number of nonzero high corrections (diagnostics). |
-| `parts` | Raw parts accessor for consumer serialization: |
-| `from_parts` | Construct from raw parts (consumer deserialization). The parts must |
+| `parts` | Raw parts accessor for consumer serialization: `(packed, hi_row_ptr, hi_cols, hi_vals)`. |
+| `from_parts` | Construct from raw parts (consumer deserialization). |
 | `matvec` | Matrix-vector product, bit-identical to [`TQ19Matrix::matvec`]. |
-| `matvec_par` | Row-parallel matvec (rayon). One reconstruction buffer per worker. |
+| `matvec_par` | Row-parallel matvec (rayon). |
 | `matvec_batch` | Batch matvec: each row reconstructed once, dotted per batch vector. |
 | `matvec_batch_par` | Row-parallel batch matvec. |
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding. |
-| `matvec_q2f_par` | Row-parallel wide-output matvec. See [`HybridTQ19::matvec_q2f`]. |
-| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. See [`HybridTQ19::matvec_q2f`]. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
 
 ## Compute-tier transcendentals
 
@@ -1106,7 +1187,7 @@ Modules: g_math::compute_tier _(feature: inference)_
 | --- | --- | --- |
 | `one` | fn | The value `1.0` at compute-tier scale (`1 << COMPUTE_FRAC_BITS`). |
 | `ceiling` | fn | The compute tier's maximum value: the saturation ceiling for [`exp`]. |
-| `from_fixed` | fn | Promote a `FixedPoint` (storage tier) to the compute tier. Exact. |
+| `from_fixed` | fn | Promote a `FixedPoint` (storage tier) to the compute tier. |
 | `to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint` (single rounding). |
 | `try_to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint`, or `None` on storage overflow. |
 | `exp` | fn | `e^x` at the compute tier. |
@@ -1124,6 +1205,25 @@ Modules: g_math::compute_tier _(feature: inference)_
 | `ComputeStorage` | `crate::fixed_point::universal::fasc::stack_evaluator` |
 | `FRAC_BITS` | `crate::fixed_point::frac_config` |
 | `COMPUTE_FRAC_BITS` | `crate::fixed_point::frac_config` |
+
+## Wide tier (Q64.64)
+
+Modules: g_math::wide
+
+| Item | Kind | Summary |
+| --- | --- | --- |
+| `ONE_Q64` | const | `1.0` in Q64.64. |
+| `PI_Q64` | const | `floor(π * 2^64)`. |
+| `TWO_PI_Q64` | const | `floor(2π * 2^64)`. |
+| `PI_HALF_Q64` | const | `floor(π/2 * 2^64)`. |
+| `PI_Q32` | const | `floor(π * 2^32)`, the Q32.32 angle format of `FixedPoint::sincos_wide`. |
+| `TWO_PI_Q32` | const | `floor(2π * 2^32)`. |
+| `exp_q64` | fn | `e^x` for `x` in Q64.64. |
+| `ln_q64` | fn | `ln(x)` for `x` in Q64.64; `None` when `x <= 0`. |
+| `sin_q64` | fn | `sin(x)` for an angle `x` in radians, Q64.64. |
+| `cos_q64` | fn | `cos(x)` for an angle `x` in radians, Q64.64. |
+| `sincos_q64` | fn | `(sin(x), cos(x))` with one shared range reduction. |
+| `try_from_str` | fn | Parse a decimal literal to a raw `i128` with `frac_bits` fractional bits. |
 
 ## Serialization
 

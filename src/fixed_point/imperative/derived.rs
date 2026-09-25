@@ -20,8 +20,8 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 pub fn frobenius_norm(a: &FixedMatrix) -> FixedPoint {
     let data = a.data_slice();
     let raw: Vec<BinaryStorage> = data.iter().map(|fp| fp.raw()).collect();
-    let sum_sq = FixedPoint::from_raw(compute_tier_dot_raw(&raw, &raw));
-    sum_sq.sqrt()
+    // sum and root at the compute tier, one rounding
+    FixedPoint::from_raw(super::linalg::compute_tier_sqrt_dot(&raw, &raw).expect("frobenius_norm exceeds storage"))
 }
 
 /// 1-norm: max absolute column sum, accumulated at compute tier.
@@ -94,10 +94,31 @@ pub fn inverse_spd(a: &FixedMatrix) -> Result<FixedMatrix, OverflowDetected> {
 ///
 /// Uses LU-based inverse. This gives the exact 1-norm condition number,
 /// not an estimate. The 2-norm condition number (σ_max / σ_min) requires SVD.
+///
+/// The inverse, both column sums and their product stay at the compute tier
+/// (the inverse's entries are never rounded to storage); the result is
+/// rounded once. `Err(TierOverflow)` if it leaves storage.
 pub fn condition_number_1(a: &FixedMatrix) -> Result<FixedPoint, OverflowDetected> {
-    let lu = lu_decompose(a)?;
-    let inv = lu.inverse()?;
-    Ok(norm_1(a) * norm_1(&inv))
+    use super::compute_matrix::{compute_lu_decompose, ComputeMatrix};
+    use super::linalg::{compute_abs, compute_product, downscale_to_storage};
+    use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_checked_add, make_compute_int};
+    assert!(a.is_square(), "condition_number_1: matrix must be square");
+    let ac = ComputeMatrix::from_fixed_matrix(a);
+    let inv = compute_lu_decompose(&ac)?.inverse()?;
+    // max absolute column sum at the compute tier
+    let norm_1_compute = |m: &ComputeMatrix| -> Result<_, OverflowDetected> {
+        let mut max_sum = make_compute_int(0);
+        for j in 0..m.cols() {
+            let mut sum = make_compute_int(0);
+            for i in 0..m.rows() {
+                sum = compute_checked_add(sum, compute_abs(m.get(i, j)))?;
+            }
+            if sum > max_sum { max_sum = sum; }
+        }
+        Ok(max_sum)
+    };
+    let kappa = compute_product(norm_1_compute(&ac)?, norm_1_compute(&inv)?)?;
+    Ok(FixedPoint::from_raw(downscale_to_storage(kappa)?))
 }
 
 // ============================================================================
@@ -151,8 +172,7 @@ fn default_sv_threshold(sigma: &FixedVector, m: usize, n: usize) -> FixedPoint {
     // Using convergence_threshold gives us σ_max >> (FRAC_BITS/2), then multiply by max(m,n)
     use super::linalg::convergence_threshold;
     let base = convergence_threshold(sigma_max);
-    let factor = FixedPoint::from_int(m.max(n) as i32);
-    factor * base
+    base.mul_count(m.max(n))
 }
 
 /// Moore-Penrose pseudoinverse: A⁺ = V Σ⁺ Uᵀ.
@@ -160,7 +180,9 @@ fn default_sv_threshold(sigma: &FixedVector, m: usize, n: usize) -> FixedPoint {
 /// Singular values below the default threshold (based on matrix dimensions
 /// and storage precision) are treated as zero.
 ///
-/// Works for any m×n matrix, not just square or full-rank.
+/// Works for any m×n matrix, not just square or full-rank. Each entry
+/// `sum_i V[r,i] U[c,i] / σ_i` is summed at the compute tier from the SVD
+/// factors and rounded once; the SVD's own error is not reduced.
 pub fn pseudoinverse(a: &FixedMatrix) -> Result<FixedMatrix, OverflowDetected> {
     let svd = svd_decompose(a)?;
     let (m, n) = (a.rows(), a.cols());
@@ -169,29 +191,54 @@ pub fn pseudoinverse(a: &FixedMatrix) -> Result<FixedMatrix, OverflowDetected> {
 
     // A⁺ = V Σ⁺ Uᵀ = Vᵀᵀ Σ⁺ Uᵀ
     // Σ⁺ is n×m diagonal with 1/σ_i for non-negligible σ_i
-    let mut result = FixedMatrix::new(n, m);
-    for i in 0..k {
-        if svd.sigma[i] <= thresh {
-            break; // remaining are smaller (sorted descending)
-        }
-        let inv_sigma = FixedPoint::one() / svd.sigma[i];
-        // Rank-1 update: result += (1/σ_i) * V[:,i] * U[:,i]ᵀ
-        // V[:,i] = Vᵀ[i,:] transposed, U[:,i] from U
+    // (sorted descending: the kept values are a prefix)
+    let kept = (0..k).take_while(|&i| svd.sigma[i] > thresh).count();
+    pseudoinverse_sum(&svd.u, &svd.sigma, &svd.vt, kept, n, m)
+}
+
+/// `A⁺[r][c] = sum_{i < kept} V[r,i] U[c,i] / σ_i` with one rounding per
+/// entry: `V[r,i] / σ_i` at the compute tier (nearest), each product with
+/// `U[c,i]` exact above it, the sum exact, narrowed to storage once. Before
+/// 0.6.4 `1/σ_i` was rounded to storage, both products rounded, and the sum
+/// kept in storage. `Err(TierOverflow)` if an entry leaves storage.
+fn pseudoinverse_sum(
+    u: &FixedMatrix,
+    sigma: &FixedVector,
+    vt: &FixedMatrix,
+    kept: usize,
+    n: usize,
+    m: usize,
+) -> Result<FixedMatrix, OverflowDetected> {
+    use super::linalg::upscale_to_compute;
+    use super::wide_acc::{divide_to_compute_nearest, narrow_triple_nearest, widen_product, widen_storage, Wide};
+    use crate::fixed_point::universal::fasc::stack_evaluator::compute::make_compute_int;
+    let one = make_compute_int(1);
+    // V[r,i] / σ_i at the compute tier: (v at 4F) / (σ at 2F)
+    let mut scaled = Vec::with_capacity(kept * n);
+    for i in 0..kept {
+        let s = upscale_to_compute(sigma[i].raw());
         for r in 0..n {
-            for c in 0..m {
-                let v_ri = svd.vt.get(i, r); // V = Vᵀ transposed: V[r,i] = Vᵀ[i,r]
-                let u_ci = svd.u.get(c, i);
-                result.set(r, c, result.get(r, c) + inv_sigma * v_ri * u_ci);
-            }
+            scaled.push(divide_to_compute_nearest(widen_product(upscale_to_compute(vt.get(i, r).raw()), one), s)?);
         }
     }
-
+    let mut result = FixedMatrix::new(n, m);
+    for r in 0..n {
+        for c in 0..m {
+            let mut sum = <super::wide_acc::acc::Orient as Wide>::zero();
+            for i in 0..kept {
+                // (V[r,i] / σ_i) at 2F times U[c,i] at F: exact at 3F
+                sum = sum.add_exact(widen_product(scaled[i * n + r], widen_storage(u.get(c, i).raw())))?;
+            }
+            result.set(r, c, FixedPoint::from_raw(narrow_triple_nearest(sum)?));
+        }
+    }
     Ok(result)
 }
 
 /// Pseudoinverse with a user-specified threshold.
 ///
-/// Singular values σ_i with σ_i < threshold are treated as zero.
+/// Singular values σ_i with σ_i < threshold are treated as zero. Each entry
+/// is summed at the compute tier and rounded once, as in [`pseudoinverse`].
 pub fn pseudoinverse_with_threshold(
     a: &FixedMatrix,
     threshold: FixedPoint,
@@ -200,22 +247,8 @@ pub fn pseudoinverse_with_threshold(
     let (m, n) = (a.rows(), a.cols());
     let k = svd.sigma.len();
 
-    let mut result = FixedMatrix::new(n, m);
-    for i in 0..k {
-        if svd.sigma[i] <= threshold {
-            break;
-        }
-        let inv_sigma = FixedPoint::one() / svd.sigma[i];
-        for r in 0..n {
-            for c in 0..m {
-                let v_ri = svd.vt.get(i, r);
-                let u_ci = svd.u.get(c, i);
-                result.set(r, c, result.get(r, c) + inv_sigma * v_ri * u_ci);
-            }
-        }
-    }
-
-    Ok(result)
+    let kept = (0..k).take_while(|&i| svd.sigma[i] > threshold).count();
+    pseudoinverse_sum(&svd.u, &svd.sigma, &svd.vt, kept, n, m)
 }
 
 /// Numerical rank: count of singular values above threshold.

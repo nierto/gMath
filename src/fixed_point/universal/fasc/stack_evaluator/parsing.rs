@@ -4,7 +4,7 @@
 //! Mode routing integration for compute_mode override.
 
 use super::{StackValue, StackEvaluator};
-use super::conversion::to_binary_storage;
+use super::conversion::try_to_binary_storage;
 use super::domain::ternary_to_storage;
 #[cfg(table_format = "q16_16")]
 use crate::fixed_point::frac_config;
@@ -141,6 +141,12 @@ impl StackEvaluator {
             let sym_frac_full = fractional_str.trim_end_matches('0');
             let int_digits = integer_str.trim_start_matches('0').len();
             let budget = 38usize.saturating_sub(int_digits);
+            // Digits past the budget cannot be dropped: far below one ulp,
+            // they still decide ties (a negative literal just past a tie
+            // rounded toward +infinity as if exactly on it).
+            if sym_frac_full.len() > budget {
+                return self.parse_decimal_as_binary(s);
+            }
             let sym_len = sym_frac_full.len().min(budget);
             if sym_len > max_frac {
                 let sym_frac = &sym_frac_full[..sym_len];
@@ -159,137 +165,73 @@ impl StackEvaluator {
             }
         }
 
-        // Truncate to what the profile can represent
+        // Beyond max_frac the Decimal domain cannot hold the literal. On the
+        // wide profiles convert it exactly to binary instead of truncating it
+        // (before 0.6.4 the extra digits were dropped: on balanced, where one
+        // ulp is 2.9e-39, "0." + 38 zeros + "999" = 3.4 ulp parsed to 0).
+        #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+        if frac_len > max_frac {
+            return self.parse_decimal_as_binary(s);
+        }
+
+        // Truncate to what the profile can represent (the narrow profiles
+        // only reach this with trailing zeros past max_frac, see above)
         let effective_frac_len = frac_len.min(max_frac);
         let effective_frac_str = &fractional_str[..effective_frac_len];
+        if effective_frac_len > 38 {
+            return self.parse_decimal_as_binary(s);
+        }
 
-        // For ≤38 digits: single i128 path (with I256 fallback for overflow)
-        if effective_frac_len <= 38 {
-            let integer_part = integer_str.parse::<i128>()
-                .map_err(|_| OverflowDetected::ParseError)?;
-            let integer_part = if is_negative { -integer_part } else { integer_part };
-            let decimals = effective_frac_len as u8;
-            let fractional_part = effective_frac_str.parse::<i128>()
-                .map_err(|_| OverflowDetected::ParseError)?;
-            let scale = 10_i128.pow(decimals as u32);
-            let scaled_opt = integer_part
-                .checked_mul(scale)
-                .and_then(|v| v.checked_add(if is_negative { -fractional_part } else { fractional_part }));
-            if let Some(scaled) = scaled_opt {
+        // An integer part beyond i128, or a scaled value beyond i128: the
+        // Decimal domain cannot hold it, the exact binary conversion can
+        // (before 0.6.4: ParseError, or a truncating I256 fallback that
+        // missed the nearest rule by one unit).
+        let (Ok(integer_part), Ok(fractional_part)) =
+            (integer_str.parse::<i128>(), effective_frac_str.parse::<i128>())
+        else {
+            return self.parse_decimal_as_binary(s);
+        };
+        let integer_part = if is_negative { -integer_part } else { integer_part };
+        let decimals = effective_frac_len as u8;
+        let scale = 10_i128.pow(decimals as u32);
+        let Some(scaled) = integer_part
+            .checked_mul(scale)
+            .and_then(|v| v.checked_add(if is_negative { -fractional_part } else { fractional_part }))
+        else {
+            return self.parse_decimal_as_binary(s);
+        };
+        match try_to_binary_storage(scaled) {
+            Ok(storage) => {
                 let shadow = CompactShadow::from_rational(scaled, scale as u128);
-                Ok(StackValue::Decimal(decimals, to_binary_storage(scaled), shadow))
-            } else {
-                // i128 overflow: integer * 10^dp too large. Promote to I256 path.
-                // This happens on q128_128+ when dp=38 and integer >= 2.
-                // q16_16/q32_32: max_frac is 4/9, so scale ≤ 10^9 which never
-                // overflows i128 for any valid integer. Unreachable in practice.
-                #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-                { return Err(OverflowDetected::Overflow); }
-                #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-                let scale_256 = I256::from_i128(scale);
-                #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-                let scaled_256 = I256::from_i128(integer_part) * scale_256
-                    + I256::from_i128(if is_negative { -fractional_part } else { fractional_part });
-                // Convert directly to binary Q-format (Decimal domain can't hold this)
-                #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-                let tier = self.profile_max_binary_tier();
-                #[cfg(table_format = "q256_256")]
-                {
-                    let num = I512::from_i256(scaled_256) << 256;
-                    let den = I512::from_i256(scale_256);
-                    let raw = (num / den).as_i512();
-                    let shadow = CompactShadow::None;
-                    return Ok(StackValue::Binary(tier, raw, shadow));
-                }
-                #[cfg(table_format = "q128_128")]
-                {
-                    let num = I512::from_i256(scaled_256) << 128;
-                    let den = I512::from_i256(scale_256);
-                    let raw = (num / den).as_i256();
-                    let shadow = CompactShadow::None;
-                    return Ok(StackValue::Binary(tier, raw, shadow));
-                }
-                #[cfg(table_format = "q64_64")]
-                {
-                    // scaled_256 holds integer*10^dp + frac. Convert to Q64.64:
-                    // raw = (scaled_256 << 64) / scale_256
-                    // Max: ~10^18 * 10^38 = 10^56 ≈ 2^186, <<64 → 2^250. Fits I256.
-                    let num = scaled_256 << 64usize;
-                    let raw = (num / scale_256).as_i128();
-                    let shadow = CompactShadow::None;
-                    return Ok(StackValue::Binary(tier, raw, shadow));
-                }
-                // q32_32 and q16_16 already returned above
+                Ok(StackValue::Decimal(decimals, storage, shadow))
             }
-        } else {
-            // >38 fractional digits (scientific profile Q256.256).
-            // Split into two 38-digit halves, parse each into i128,
-            // then combine at I512 width for BinaryStorage.
-            //
-            // Strategy: parse "7.HHHH...LLLL..." as
-            //   value = integer + high/10^38 + low/10^76
-            // Each piece fits in i128. Combine via I512 arithmetic,
-            // then convert to Q-format via I1024 shift-and-divide.
-            let high_len = 38usize.min(effective_frac_len);
-            let low_len = effective_frac_len - high_len;
-            let high_frac = &effective_frac_str[..high_len];
-            let low_frac = &effective_frac_str[high_len..];
+            // realtime / compact: the decimal storage is i32 / i64. Beyond it
+            // keep the exact rational (before 0.6.4 this wrapped: at Q22.10
+            // "467295.6470" evaluated to 37798.9, "214748.3648" to -214748.3648).
+            Err(_) => Ok(StackValue::Symbolic(RationalNumber::new(scaled, scale as u128))),
+        }
+    }
 
-            let integer_part = integer_str.parse::<i128>()
-                .map_err(|_| OverflowDetected::ParseError)?;
-            let high_part = high_frac.parse::<i128>()
-                .map_err(|_| OverflowDetected::ParseError)?;
-            let low_part = if low_len > 0 {
-                low_frac.parse::<i128>().map_err(|_| OverflowDetected::ParseError)?
-            } else { 0i128 };
-
-            #[cfg(table_format = "q256_256")]
-            {
-                use crate::fixed_point::i1024::I1024;
-
-                // Build the numerator at I512 width:
-                // numerator = integer * 10^N + high * 10^low_len + low
-                // where N = high_len + low_len = effective_frac_len
-                let scale_high = {
-                    // 10^low_len (≤ 10^38, fits in i128)
-                    let mut s = I512::from_i128(1);
-                    for _ in 0..low_len { s = s * I512::from_i128(10); }
-                    s
-                };
-                let scale_total = {
-                    // 10^N = 10^(high_len + low_len) ≤ 10^76
-                    let mut s = I512::from_i128(1);
-                    for _ in 0..effective_frac_len { s = s * I512::from_i128(10); }
-                    s
-                };
-
-                let numerator = I512::from_i128(integer_part) * scale_total
-                    + I512::from_i128(high_part) * scale_high
-                    + I512::from_i128(low_part);
-                let numerator = if is_negative { -numerator } else { numerator };
-
-                // Convert to Q256.256: raw = numerator * 2^256 / 10^N
-                let num_wide = I1024::from_i512(numerator) << 256usize;
-                let den_wide = I1024::from_i512(scale_total);
-                // Add rounding: (num_wide + den_wide/2) / den_wide
-                let half_den = den_wide >> 1usize;
-                let rounded = if is_negative {
-                    num_wide - half_den
-                } else {
-                    num_wide + half_den
-                };
-                let q_value = (rounded / den_wide).as_i512();
-
-                let shadow = CompactShadow::None;
-                let tier = self.profile_max_binary_tier();
-                Ok(StackValue::Binary(tier, q_value, shadow))
-            }
-
-            #[cfg(not(table_format = "q256_256"))]
-            {
-                let _ = (integer_part, high_part, low_part, high_len, low_len);
-                Err(OverflowDetected::Overflow)
-            }
+    /// A decimal literal the Decimal domain cannot hold, converted exactly to
+    /// binary storage: nearest, ties toward +infinity, any digit count;
+    /// `TierOverflow` beyond the storage range.
+    fn parse_decimal_as_binary(&self, s: &str) -> Result<StackValue, OverflowDetected> {
+        use crate::fixed_point::frac_config::{FRAC_BITS, STORAGE_BITS};
+        use crate::fixed_point::imperative::decimal_literal;
+        // The canonical grammar only: digits, one '.', a leading '-'. The
+        // converter also reads exponent notation, which here would land in
+        // binary where "0.00001" is an exact decimal.
+        if !s.strip_prefix('-').unwrap_or(s).bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+            return Err(OverflowDetected::ParseError);
+        }
+        match decimal_literal::parse(s, FRAC_BITS, STORAGE_BITS) {
+            Some(Ok(c)) => Ok(StackValue::Binary(
+                self.profile_max_binary_tier(),
+                decimal_literal::to_storage(&c),
+                CompactShadow::None,
+            )),
+            Some(Err(e)) => Err(e),
+            None => Err(OverflowDetected::ParseError),
         }
     }
 
@@ -341,22 +283,23 @@ impl StackEvaluator {
         Ok(StackValue::Symbolic(rational))
     }
 
-    /// Parse hex literal to binary domain
+    /// Parse hex literal to binary domain: the integer it denotes (`0xFF` is
+    /// 255). Before 0.6.4 the digits were stored as raw storage bits at tier 1
+    /// while the shadow said 255/1, so `0xFF` alone, `0xFF + 1` and the shadow
+    /// disagreed, and values beyond the storage width wrapped.
     pub(crate) fn parse_binary_hex(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
         let hex_str = s.trim_start_matches("0x").trim_start_matches("0X");
         let value = i128::from_str_radix(hex_str, 16)
             .map_err(|_| OverflowDetected::ParseError)?;
-        let shadow = CompactShadow::from_rational(value, 1);
-        Ok(StackValue::Binary(1, to_binary_storage(value), shadow))
+        self.integer_value(value)
     }
 
-    /// Parse binary literal
+    /// Parse binary literal: the integer it denotes (`0b101` is 5), as hex.
     pub(crate) fn parse_binary_bin(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
         let bin_str = s.trim_start_matches("0b").trim_start_matches("0B");
         let value = i128::from_str_radix(bin_str, 2)
             .map_err(|_| OverflowDetected::ParseError)?;
-        let shadow = CompactShadow::from_rational(value, 1);
-        Ok(StackValue::Binary(1, to_binary_storage(value), shadow))
+        self.integer_value(value)
     }
 
     /// Parse fraction to symbolic domain
@@ -388,9 +331,17 @@ impl StackEvaluator {
     /// - Q128.128: value << 128
     /// - Q256.256: value << 256
     pub(crate) fn parse_integer(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
-        let value = s.parse::<i128>()
-            .map_err(|_| OverflowDetected::ParseError)?;
+        match s.parse::<i128>() {
+            Ok(value) => self.integer_value(value),
+            // Beyond i128: the scientific range (2^255) still holds it; before
+            // 0.6.4 this was a ParseError. Exact conversion or TierOverflow.
+            Err(_) => self.parse_decimal_as_binary(s),
+        }
+    }
 
+    /// An integer literal's value: binary storage when it fits the profile's
+    /// integer range, the exact rational otherwise.
+    fn integer_value(&self, value: i128) -> Result<StackValue, OverflowDetected> {
         // Create shadow: exact rational = value/1
         let shadow = CompactShadow::from_rational(value, 1);
 

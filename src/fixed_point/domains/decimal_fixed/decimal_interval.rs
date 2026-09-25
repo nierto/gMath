@@ -21,10 +21,9 @@
 //! the reason given in the binary module: measured accuracy at test points is
 //! not a proven bound.
 //!
-//! Endpoint arithmetic never wraps and never saturates. The scalar
-//! `DecimalFixed` operators saturate on overflow and on division by zero;
-//! this type returns a typed `TierOverflow` or `DivisionByZero` instead,
-//! because an enclosure that saturates is not an enclosure.
+//! Endpoint arithmetic never wraps and never saturates: it returns a typed
+//! `TierOverflow` or `DivisionByZero`, as the scalar `DecimalFixed` `try_`
+//! methods do (its operators panic on the same inputs).
 //!
 //! No `quadratic_form` here: there is no decimal matrix type to take it over.
 //! `dot` covers the sums of products that decimal consumers compute.
@@ -116,8 +115,8 @@ fn narrow<const DECIMALS: u8>(p: D256) -> Result<(i128, i128), OverflowDetected>
 /// `(floor, ceil)` of `a / b` at `DECIMALS` places: `a * 10^DECIMALS` is
 /// formed exactly in `D256`, divided with remainder, and the direction is
 /// decided by the sign of the exact quotient and whether the remainder is
-/// zero. `divmod_d256_by_i128` saturates when the quotient leaves i128, so
-/// the 256-bit divide is used and the fit is checked here.
+/// zero. `divmod_d256_by_i128` panics when the quotient leaves i128, so the
+/// 256-bit divide is used and the fit is checked here as a typed error.
 #[inline]
 fn directed_divide<const DECIMALS: u8>(a: i128, b: i128) -> Result<(i128, i128), OverflowDetected> {
     if b == 0 {

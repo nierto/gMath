@@ -11,7 +11,8 @@
 use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
-use super::linalg::compute_tier_dot_raw;
+use super::linalg::{compute_tier_dot_acc, compute_tier_dot_raw, round_to_storage};
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_mul_div_int;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 // ============================================================================
@@ -481,7 +482,6 @@ pub fn symmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
 
     let mut result = Tensor::new(&t.shape);
     let n_perms = factorial(indices.len());
-    let inv_n = FixedPoint::one() / FixedPoint::from_int(n_perms as i32);
 
     // Generate all permutations of the indices
     let perms = permutations(indices.len());
@@ -507,10 +507,11 @@ pub fn symmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
             }
             terms.push(t.get(&permuted_idx).raw());
         }
-        // Compute-tier sum: dot(terms, ones) = sum of terms
-        let sum = FixedPoint::from_raw(compute_tier_dot_raw(&terms, &ones));
-
-        result.data[flat] = sum * inv_n;
+        // Mean at the compute tier: the exact sum divided by n!, one rounding
+        // (the sum was rounded to storage and then multiplied by a
+        // storage-rounded 1/n!: two roundings, and an overflow once the SUM
+        // left storage although the mean fits; before 0.6.4)
+        result.data[flat] = mean_of(&terms, &ones, n_perms);
     }
 
     result
@@ -531,7 +532,6 @@ pub fn antisymmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
 
     let mut result = Tensor::new(&t.shape);
     let n_perms = factorial(indices.len());
-    let inv_n = FixedPoint::one() / FixedPoint::from_int(n_perms as i32);
 
     let perms = permutations(indices.len());
     let signs = perm_signs(indices.len());
@@ -548,23 +548,18 @@ pub fn antisymmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
 
         // Collect sign-adjusted values for compute-tier accumulation
         let mut signed_values: Vec<BinaryStorage> = Vec::with_capacity(perms.len());
-        let ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); perms.len()];
+        let mut ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); perms.len()];
         for (pi, perm) in perms.iter().enumerate() {
             let mut permuted_idx = idx.clone();
             for (qi, &p) in perm.iter().enumerate() {
                 permuted_idx[indices[qi]] = idx[indices[p]];
             }
-            let val = t.get(&permuted_idx);
-            if signs[pi] {
-                signed_values.push(val.raw());
-            } else {
-                signed_values.push((-val).raw());
-            }
+            signed_values.push(t.get(&permuted_idx).raw());
+            // the sign goes on the coefficient: negating the value wraps at the minimum
+            if !signs[pi] { ones[pi] = (-FixedPoint::one()).raw(); }
         }
-        // Compute-tier sum: dot(signed_values, ones) = signed sum
-        let sum = FixedPoint::from_raw(compute_tier_dot_raw(&signed_values, &ones));
-
-        result.data[flat] = sum * inv_n;
+        // Signed mean at the compute tier, one rounding (see symmetrize)
+        result.data[flat] = mean_of(&signed_values, &ones, n_perms);
     }
 
     result
@@ -614,4 +609,11 @@ fn perm_signs(n: usize) -> Vec<bool> {
         }
         inv % 2 == 0
     }).collect()
+}
+
+/// sum_i values_i * coeffs_i / n at the compute tier, rounded to storage once.
+fn mean_of(values: &[BinaryStorage], coeffs: &[BinaryStorage], n: usize) -> FixedPoint {
+    let acc = compute_tier_dot_acc(values, coeffs);
+    let mean = compute_mul_div_int(acc, 1, n as i64).expect("tensor mean: n > 0");
+    FixedPoint::from_raw(round_to_storage(mean))
 }

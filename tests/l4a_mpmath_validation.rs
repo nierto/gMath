@@ -8,6 +8,17 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
 fn tol() -> FixedPoint {
     #[cfg(table_format = "q16_16")]
     { fp("0.01") }
@@ -124,9 +135,11 @@ fn test_mpmath_se3_exp_general() {
     assert_fp(g.get(2, 2), fp("0.975290308953045730"), tol(), "SE3 R[2][2]");
 
     // Translation part — mpmath says t ≈ [1, 2, 3] (very close)
-    assert_fp(g.get(0, 3), fp("1"), fp("0.001"), "SE3 t[0]");
-    assert_fp(g.get(1, 3), fp("2"), fp("0.001"), "SE3 t[1]");
-    assert_fp(g.get(2, 3), fp("3"), fp("0.001"), "SE3 t[2]");
+    // [1, 2, 3] assumes omega = (0.1, 0.2, 0.3) exactly; at Q22.10 the stored
+    // omega is (102, 205, 307)/1024, and the exact t for it is within a unit
+    assert_fp(g.get(0, 3), fp("1"), at_least(fp("0.001"), 2), "SE3 t[0]");
+    assert_fp(g.get(1, 3), fp("2"), at_least(fp("0.001"), 2), "SE3 t[1]");
+    assert_fp(g.get(2, 3), fp("3"), at_least(fp("0.001"), 2), "SE3 t[2]");
 
     println!("\n── SE(3) exp ULP ──");
     let r_refs = [
@@ -149,6 +162,6 @@ fn test_mpmath_se3_exp_log_roundtrip() {
     for i in 0..6 {
         let ulp = ulp_diff(xi_back[i], xi[i]);
         println!("  xi[{}]: {} ULP (got {}, ref {})", i, ulp, xi_back[i], xi[i]);
-        assert_fp(xi_back[i], xi[i], fp("0.0001"), &format!("SE3 roundtrip[{}]", i));
+        assert_fp(xi_back[i], xi[i], at_least(fp("0.0001"), 2), &format!("SE3 roundtrip[{}]", i));
     }
 }

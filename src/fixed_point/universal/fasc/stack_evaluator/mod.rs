@@ -32,7 +32,7 @@ use core::fmt::{self, Display};
 
 // Re-export sub-module functions used by sibling modules and tests
 #[allow(unused_imports)]
-pub(crate) use conversion::to_binary_storage;
+pub(crate) use conversion::try_to_binary_storage;
 #[allow(unused_imports)]
 pub(crate) use compute::{
     downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier, exp_at_compute_tier,
@@ -120,12 +120,17 @@ const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 76;
 /// Convert a Decimal (dp, scaled) to the profile's BinaryStorage type via
 /// `(scaled << frac_bits) / 10^dp` with round-to-nearest.
 ///
+/// `Err(TierOverflow)` when the result does not fit storage. Before 0.6.4
+/// every arm narrowed with a truncating cast, so an out-of-range decimal
+/// wrapped (realtime Q22.10: "-3745932.2" became 448372.2).
+///
 /// Mirrors `StackEvaluator::to_binary_storage` but is callable without `&mut self`.
 pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result<BinaryStorage, OverflowDetected> {
     #[cfg(not(table_format = "q256_256"))]
     use formatting::pow10_i256;
     #[cfg(table_format = "q256_256")]
     use formatting::pow10_i512;
+    let overflow = OverflowDetected::TierOverflow;
 
     // 0.5.0 rounding unification: the RESULT domain is binary, so this
     // coercion rounds nearest, ties toward +∞ on every profile (was:
@@ -143,6 +148,7 @@ pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result
         if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
             q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
         }
+        if !q.fits_in_i512() { return Err(overflow); }
         Ok(q.as_i512())
     }
     #[cfg(table_format = "q128_128")]
@@ -158,12 +164,19 @@ pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result
         if if positive { rem2 >= den } else { rem2 > den } {
             q = if positive { q + I512::from_i128(1) } else { q - I512::from_i128(1) };
         }
+        if !q.fits_in_i256() { return Err(overflow); }
         Ok(q.as_i256())
     }
-    #[cfg(table_format = "q64_64")]
+    #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
     {
+        #[cfg(table_format = "q64_64")]
+        let frac_bits = 64usize;
+        #[cfg(table_format = "q32_32")]
+        let frac_bits = 32usize;
+        #[cfg(table_format = "q16_16")]
+        let frac_bits = crate::fixed_point::frac_config::FRAC_BITS as usize;
         let ten_pow = pow10_i256(dp);
-        let num = I256::from_i128(scaled) << 64;
+        let num = I256::from_i128(scaled as i128) << frac_bits;
         let (mut q, rem) =
             crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, ten_pow);
         let rem_abs = if rem.is_negative() { -rem } else { rem };
@@ -172,36 +185,8 @@ pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result
         if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
             q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
         }
-        Ok(q.as_i128())
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        let ten_pow = pow10_i256(dp);
-        let num = I256::from_i128(scaled as i128) << 32;
-        let (mut q, rem) =
-            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, ten_pow);
-        let rem_abs = if rem.is_negative() { -rem } else { rem };
-        let positive = !num.is_negative();
-        let rem2 = rem_abs + rem_abs;
-        if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
-            q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
-        }
-        Ok(q.as_i128() as i64)
-    }
-    #[cfg(table_format = "q16_16")]
-    {
-        use crate::fixed_point::frac_config;
-        let ten_pow = pow10_i256(dp);
-        let num = I256::from_i128(scaled as i128) << (frac_config::FRAC_BITS as usize);
-        let (mut q, rem) =
-            crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, ten_pow);
-        let rem_abs = if rem.is_negative() { -rem } else { rem };
-        let positive = !num.is_negative();
-        let rem2 = rem_abs + rem_abs;
-        if if positive { rem2 >= ten_pow } else { rem2 > ten_pow } {
-            q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
-        }
-        Ok(q.as_i128() as i32)
+        if !q.fits_in_i128() { return Err(overflow); }
+        conversion::try_to_binary_storage(q.as_i128())
     }
 }
 
@@ -216,6 +201,15 @@ pub(crate) fn decimal_compute_to_binary_storage_pub(val: ComputeStorage) -> Resu
 /// This is lossless (within rounding) because we do one big-integer division.
 fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
     use crate::fixed_point::domains::decimal_fixed::transcendental::DECIMAL_COMPUTE_DP;
+    let overflow = OverflowDetected::TierOverflow;
+
+    // Nearest, ties toward +infinity (the binary rule): before 0.6.4 this
+    // divided with truncation toward zero, up to one ulp off.
+    // `bump` = whether the truncated quotient moves one unit away from zero.
+    #[inline(always)]
+    fn bump(positive: bool, at_least_half: bool, above_half: bool) -> bool {
+        if positive { at_least_half } else { above_half }
+    }
 
     #[cfg(table_format = "q64_64")]
     {
@@ -225,11 +219,14 @@ fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorag
         let mut den = I512::from_i128(1);
         let ten = I512::from_i128(10);
         for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
-        let quot = num / den;
-        if !quot.fits_in_i128() {
-            return Err(OverflowDetected::TierOverflow);
+        let (mut q, rem) = crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(num, den);
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let positive = !num.is_negative();
+        if bump(positive, rem_abs + rem_abs >= den, rem_abs + rem_abs > den) {
+            q = if positive { q + I512::from_i128(1) } else { q - I512::from_i128(1) };
         }
-        Ok(quot.as_i128())
+        if !q.fits_in_i128() { return Err(overflow); }
+        Ok(q.as_i128())
     }
     #[cfg(table_format = "q128_128")]
     {
@@ -239,35 +236,37 @@ fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorag
         let mut den = I1024::from_i128(1);
         let ten = I1024::from_i128(10);
         for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
-        let quot = num / den;
-        if !quot.fits_in_i256() {
-            return Err(OverflowDetected::TierOverflow);
+        let mut q = num / den;
+        let rem = num % den;
+        let rem_abs = if (rem.words[15] as i64) < 0 { -rem } else { rem };
+        let positive = (num.words[15] as i64) >= 0;
+        if bump(positive, rem_abs + rem_abs >= den, rem_abs + rem_abs > den) {
+            q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
         }
-        Ok(quot.as_i256())
+        if !q.fits_in_i256() { return Err(overflow); }
+        Ok(q.as_i256())
     }
     #[cfg(table_format = "q256_256")]
     {
         // val is I1024 at dp=154. Target: Q256.256 I512.
         // Use I2048 intermediate.
         use crate::fixed_point::I2048;
-        use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
+        use crate::fixed_point::domains::binary_fixed::i2048::i2048_divmod;
         let num = I2048::from_i1024(val) << 256usize;
         let mut pow = I1024::from_i128(1);
         let ten = I1024::from_i128(10);
         for _ in 0..DECIMAL_COMPUTE_DP { pow = pow * ten; }
         let den = I2048::from_i1024(pow);
-        let quot = i2048_div(num, den);
-        // Check fit in I512: upper words (8-31) must be sign extension of word[7]
-        let sign = (quot.words[7] as i64) < 0;
-        let expected = if sign { u64::MAX } else { 0 };
-        for i in 8..32 {
-            if quot.words[i] != expected {
-                return Err(OverflowDetected::TierOverflow);
-            }
+        let (mut q, rem) = i2048_divmod(num, den);
+        let positive = (num.words[31] as i64) >= 0;
+        let rem_abs = if (rem.words[31] as i64) < 0 { -rem } else { rem };
+        if bump(positive, rem_abs + rem_abs >= den, rem_abs + rem_abs > den) {
+            q = if positive { q + I2048::one() } else { q - I2048::one() };
         }
+        if !q.fits_in_i512() { return Err(overflow); }
         Ok(I512::from_words([
-            quot.words[0], quot.words[1], quot.words[2], quot.words[3],
-            quot.words[4], quot.words[5], quot.words[6], quot.words[7],
+            q.words[0], q.words[1], q.words[2], q.words[3],
+            q.words[4], q.words[5], q.words[6], q.words[7],
         ]))
     }
     #[cfg(table_format = "q32_32")]
@@ -278,12 +277,14 @@ fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorag
         let mut den = I256::from_i128(1);
         let ten = I256::from_i128(10);
         for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
-        let quot = num / den;
-        let q_i128 = quot.as_i128();
-        if q_i128 > i64::MAX as i128 || q_i128 < i64::MIN as i128 {
-            return Err(OverflowDetected::TierOverflow);
+        let (mut q, rem) = crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(num, den);
+        let rem_abs = if rem.is_negative() { -rem } else { rem };
+        let positive = !num.is_negative();
+        if bump(positive, rem_abs + rem_abs >= den, rem_abs + rem_abs > den) {
+            q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
         }
-        Ok(q_i128 as i64)
+        if !q.fits_in_i128() { return Err(overflow); }
+        i64::try_from(q.as_i128()).map_err(|_| overflow)
     }
     #[cfg(table_format = "q16_16")]
     {
@@ -292,11 +293,11 @@ fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorag
         let num = (val as i128) << (frac_config::FRAC_BITS as usize);
         let mut den: i128 = 1;
         for _ in 0..DECIMAL_COMPUTE_DP { den *= 10; }
-        let quot = num / den;
-        if quot > i32::MAX as i128 || quot < i32::MIN as i128 {
-            return Err(OverflowDetected::TierOverflow);
+        let (mut q, rem) = (num / den, num % den);
+        if bump(num >= 0, 2 * rem.abs() >= den, 2 * rem.abs() > den) {
+            q = if num >= 0 { q + 1 } else { q - 1 };
         }
-        Ok(quot as i32)
+        i32::try_from(q).map_err(|_| overflow)
     }
 }
 
@@ -425,9 +426,12 @@ impl StackValue {
                 // Tier mapping depends on profile — the storage tier IS the profile's max tier.
                 let frac_bits: u32 = match tier {
                     1 => {
-                        // Tier 1: Q16.16 on Realtime, raw integer on others
+                        // Tier 1: the realtime storage tier, raw integer on others.
+                        // It follows GMATH_FRAC_BITS; a fixed 16 read every
+                        // shadowless realtime value 64x too small at Q22.10
+                        // (before 0.6.4: -1000 + 1/1 became -999/64).
                         #[cfg(table_format = "q16_16")]
-                        { 16 }
+                        { crate::fixed_point::frac_config::FRAC_BITS }
                         #[cfg(not(table_format = "q16_16"))]
                         { 0 }
                     }

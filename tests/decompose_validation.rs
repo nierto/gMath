@@ -56,6 +56,17 @@ fn permute_matrix(a: &FixedMatrix, perm: &[usize]) -> FixedMatrix {
 
 // Profile-aware tolerance for reconstruction tests.
 // Q16.16 has 4 decimal digits — tighter tolerances round to zero.
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
 fn tol() -> FixedPoint {
     #[cfg(table_format = "q16_16")]
     { fp("0.01") }
@@ -123,8 +134,16 @@ fn test_lu_solve() {
     let b = FixedVector::from_slice(&[fp("4"), fp("7")]);
     let lu = lu_decompose(&a).unwrap();
     let x = lu.solve(&b).unwrap();
-    assert!(vectors_approx_eq(&x, &FixedVector::from_slice(&[fp("5"), fp("-6")]), tol()),
+    let exact = FixedVector::from_slice(&[fp("5"), fp("-6")]);
+    // The multiplier 0.4 is inexact in binary (kappa = 56). 0.6.3 stored the
+    // factors at storage precision and was 30 and 50 units off at 16 and 10
+    // fraction bits; the factors and the substitution are now at the compute
+    // tier and the solution is rounded once.
+    assert!(vectors_approx_eq(&x, &exact, ulps(1)),
         "LU solve incorrect: got {:?}", x);
+    let refined = lu.refine(&a, &b, &x).unwrap();
+    assert!(vectors_approx_eq(&refined, &exact, at_least(ulps(1), 1)),
+        "refined LU solve incorrect: got {:?}", refined);
 }
 
 #[test]
@@ -138,8 +157,15 @@ fn test_lu_solve_roundtrip() {
     let b = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
     let lu = lu_decompose(&a).unwrap();
     let x = lu.solve(&b).unwrap();
+    // the exact solution is (-1/3, 2/3, 0); the solve is at the compute tier,
+    // rounded once
+    let third = FixedPoint::one() / FixedPoint::from_int(3);
+    let exact = FixedVector::from_slice(&[-third, third + third, FixedPoint::ZERO]);
+    assert!(vectors_approx_eq(&x, &exact, ulps(1)), "LU solve: got {:?}", x);
+    // even the nearest representable x leaves a residual A (x - x*): up to
+    // ||A||_inf = 25 times half a unit, plus the rounding of A x
     let ax = a.mul_vector(&x);
-    assert!(vectors_approx_eq(&ax, &b, tol()),
+    assert!(vectors_approx_eq(&ax, &b, at_least(tol(), 14)),
         "A*x != b: Ax={:?}, b={:?}", ax, b);
 }
 
@@ -149,7 +175,10 @@ fn test_lu_determinant() {
     let a = FixedMatrix::from_slice(2, 2, &[fp("1"), fp("2"), fp("3"), fp("4")]);
     let lu = lu_decompose(&a).unwrap();
     let det = lu.determinant();
-    assert!((det - fp("-2")).abs() < tol(), "det should be -2, got {}", det);
+    // pivot 3: the stored multiplier is 1/3 + d with |d| <= 1/2 unit, U22 =
+    // 2 - 4(1/3 + d) and 3 U22 are exact, so det = -2 + 12 d: at most 6 units
+    // (4 measured at 8 fraction bits, where 0.01 is 2.56 units)
+    assert!((det - fp("-2")).abs() < at_least(tol(), 7), "det should be -2, got {}", det);
 }
 
 #[test]
@@ -172,7 +201,9 @@ fn test_lu_inverse_3x3() {
     let lu = lu_decompose(&a).unwrap();
     let inv = lu.inverse().unwrap();
     let product = &a * &inv;
-    assert!(matrices_approx_eq(&product, &FixedMatrix::identity(3), tol()),
+    // inexact multipliers 0.2 and 0.8 with kappa = 517: worst entry 25 units
+    // at both 16 and 10 fraction bits
+    assert!(matrices_approx_eq(&product, &FixedMatrix::identity(3), at_least(tol(), 48)),
         "A * A^-1 != I for 3x3");
 }
 

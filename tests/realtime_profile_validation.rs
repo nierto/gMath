@@ -28,7 +28,9 @@ mod realtime_tests {
         let mut max_ulp = 0i64;
         let mut failures = Vec::new();
 
-        for &(input_str, _input_raw, expected_raw, func_name) in Q16_REFS {
+        assert_eq!(REALTIME_REFS_FRAC_BITS, g_math::fixed_point::frac_config::FRAC_BITS,
+            "no references for this GMATH_FRAC_BITS: add it to scripts/generate_realtime_ulp_refs.py");
+        for &(input_str, _input_raw, expected_raw, func_name) in REALTIME_REFS {
             let expr = match func_name {
                 "exp" => gmath_safe(input_str).exp(),
                 "ln" => gmath_safe(input_str).ln(),

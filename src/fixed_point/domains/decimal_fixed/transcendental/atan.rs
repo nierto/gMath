@@ -85,21 +85,23 @@ pub fn decimal_atan(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetecte
     }
 
     let negative = decimal_compute_is_negative(&x);
-    let abs_x = decimal_compute_abs(x);
 
-    // Compare |x| against 1
+    // Compare |x| against 1 without forming |x|: the compute tier's minimum
+    // has no negation (decimal_compute_abs panicked there)
     let one = decimal_compute_one();
-    let cmp_one = decimal_compute_cmp(&abs_x, &one);
+    let beyond_one = decimal_compute_cmp(&x, &one) == std::cmp::Ordering::Greater
+        || decimal_compute_cmp(&x, &decimal_compute_neg(one)) == std::cmp::Ordering::Less;
 
-    let result = if cmp_one == std::cmp::Ordering::Greater {
-        // |x| > 1: atan(x) = π/2 - atan(1/x)
-        let reciprocal = decimal_compute_div(one, abs_x)?;
+    let result = if beyond_one {
+        // |x| > 1: atan(|x|) = π/2 - atan(1/|x|); the quotient rounds half
+        // away from zero, so |1/x| equals 1/|x| bit for bit
+        let reciprocal = decimal_compute_abs(decimal_compute_div(one, x)?);
         let atan_recip = atan_reduced(reciprocal)?;
         let pi_half = decimal_compute_halve(pi_at_decimal_compute()?);
         decimal_compute_sub(pi_half, atan_recip)
     } else {
         // |x| ≤ 1
-        atan_reduced(abs_x)?
+        atan_reduced(decimal_compute_abs(x))?
     };
 
     if negative {
@@ -189,7 +191,16 @@ pub fn decimal_atan2(y: ComputeStorage, x: ComputeStorage) -> Result<ComputeStor
         };
     }
 
-    let ratio = decimal_compute_div(y, x)?;
+    let ratio = match decimal_compute_div(y, x) {
+        Ok(r) => r,
+        // |y/x| beyond the compute tier: atan2(y, x) = sign(y) π/2 - atan(x/y)
+        // (y != 0 here), where x/y is tiny. Before 0.6.4 this was an error.
+        Err(OverflowDetected::TierOverflow) => {
+            let signed_half = if decimal_compute_is_negative(&y) { decimal_compute_neg(pi_half) } else { pi_half };
+            return Ok(decimal_compute_sub(signed_half, decimal_atan(decimal_compute_div(x, y)?)?));
+        }
+        Err(e) => return Err(e),
+    };
     let atan_val = decimal_atan(ratio)?;
 
     if !decimal_compute_is_negative(&x) {

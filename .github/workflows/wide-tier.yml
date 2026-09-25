@@ -1,0 +1,49 @@
+# The Q64.64 wide tier (g_math::wide), the exact decimal-literal parser
+# (FixedPoint::try_from_str, wide::try_from_str) and the compute-tier epsilon of
+# fused::rms_norm_factor_eps_wide on every deployment profile. References in
+# tests/data/wide_q64_refs.rs come from mpmath at 120 digits and exact rationals
+# (scripts/generate_wide_refs.py); the parser is also checked bit for bit
+# against the canonical parser, whose literal and decimal-result narrowing is
+# gated by ugod_promotion_validation, and the one-rounding mpmath gate
+# (one_rounding_validation). realtime also runs at GMATH_FRAC_BITS=10.
+name: wide-tier
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [realtime, compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Wide tier gate
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --no-fail-fast --test wide_q64_validation --test ugod_promotion_validation --test one_rounding_validation --test operator_overflow_validation && cargo test --lib literal_parser_tests
+
+  realtime-q22-10:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Wide tier gate at Q22.10
+        env:
+          GMATH_PROFILE: realtime
+          GMATH_FRAC_BITS: "10"
+        run: cargo test --no-fail-fast --test wide_q64_validation --test ugod_promotion_validation --test one_rounding_validation --test operator_overflow_validation && cargo test --lib literal_parser_tests

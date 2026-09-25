@@ -2,456 +2,211 @@
 //!
 //! # Algorithm
 //!
-//! Uses **ln(2)-based range reduction**: rewrite `exp(x) = 2^k × exp(r)` where
-//! `k = round(x / ln(2))` and `r = x - k × ln(2)` ensures `|r| ≤ ln(2)/2 ≈ 0.347`.
+//! A result near the top of the compute tier (about 10^9 on realtime, 10^19
+//! on compact, far more on the wider profiles) needs as many significant
+//! digits as the tier holds, so the engine works at a wider decimal precision
+//! `HP_DP` in the next integer tier, on values below 2 only:
 //!
-//! 1. **Range reduction**: compute integer `k` and small remainder `r`.
-//! 2. **Taylor series** for `exp(r)` with `|r| ≤ 0.347`: converges in ~25 terms at dp=38.
-//!    Iterative: `term_0 = 1, term_n = term_{n-1} × r / n`.
-//! 3. **Multiply by 2^k**: bit shift the compute-tier result. For positive `k`,
-//!    shift left (exact); for negative `k`, shift right with rounding.
+//! 1. **Reduction**: `x = n ln2 + r` with integer `n` and `0 <= r < ln2`.
+//!    `ln2` is held to `2 HP_DP` digits (a split constant), so `n ln2` is
+//!    exact to half a unit at `HP_DP` for every `n`.
+//! 2. **Digits**: `r = d1/10 + d2/100 + d3/1000 + d4/10^4 + s` with
+//!    `0 <= s < 10^-4`; `exp(r)` is four table entries times a short Taylor
+//!    series for `exp(s)`.
+//! 3. **Scale**: `exp(x) = exp(r) 2^n`, rounded once (half to even) to the
+//!    compute dp. The power of two is exact.
 //!
-//! # Precision advantage over scaling-and-squaring
+//! The relative error before that rounding is a few units at `HP_DP`
+//! whatever the size of `x`. `HP_DP` exceeds (digits of the largest
+//! representable result) + (storage dp) by at least 8 on every profile, so
+//! the compute-dp result is the correctly rounded value. Before 0.6.4 the
+//! engine built `exp(k) = e^k` by `k` successive multiplications at the
+//! compute dp: up to 267 units off at 19 decimals on embedded (x near 44),
+//! and on realtime the entries past `e^22` wrapped the i64 compute tier.
 //!
-//! Each squaring iteration of `exp(y)^2` doubles relative error. For `exp(20)` with
-//! the halve-and-square method, 14 squarings amplify error by 16384×.
-//!
-//! With ln(2)-based reduction, there is **no squaring**: only Taylor convergence
-//! error and bit-shift truncation. Total error stays bounded by ~Taylor truncation,
-//! which is well below 1 ULP at the compute dp.
+//! Past the compute tier the result is `Err(TierOverflow)`; below
+//! `-COMPUTE_BITS` it rounds to 0.
 
 use super::decimal_compute::{
     ComputeStorage, DECIMAL_COMPUTE_DP,
-    decimal_compute_zero, decimal_compute_one,
-    decimal_compute_add, decimal_compute_sub, decimal_compute_mul, decimal_compute_div,
-    decimal_compute_div_int, decimal_compute_halve,
+    decimal_compute_zero, decimal_compute_one, decimal_compute_from_int,
     decimal_compute_is_zero, decimal_compute_is_negative, decimal_compute_cmp,
-    decimal_compute_neg, pow10_compute_ct,
+    decimal_compute_neg, try_decimal_compute_neg,
 };
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 use std::cell::RefCell;
 
-thread_local! {
-    /// Cached `ln(2)` at compute dp. Computed once via `2 * atanh(1/3)`.
-    static LN2_FOR_EXP: RefCell<Option<ComputeStorage>> = const { RefCell::new(None) };
-}
-
-/// Compute `ln(2)` at decimal compute dp via `2 × atanh(1/3)`.
-///
-/// We can't depend on `ln.rs` because that would create a cycle when `pow` calls
-/// both `ln` and `exp`. Inline the atanh series here (it's a small function).
-fn ln2_at_compute() -> Result<ComputeStorage, OverflowDetected> {
-    let cached: Option<ComputeStorage> = LN2_FOR_EXP.with(|c| c.borrow().clone());
-    if let Some(v) = cached {
-        return Ok(v);
-    }
-
-    let one = decimal_compute_one();
-    let three = super::decimal_compute::decimal_compute_from_int(3);
-    let s = decimal_compute_div(one, three)?;
-
-    // atanh(s) = s + s³/3 + s⁵/5 + ... for |s| < 1
-    let s_sq = decimal_compute_mul(s, s);
-    let mut term = s;
-    let mut sum = s;
-    let max_terms = (DECIMAL_COMPUTE_DP as u32) + 20;
-    for k in 1..=max_terms {
-        term = decimal_compute_mul(term, s_sq);
-        if decimal_compute_is_zero(&term) { break; }
-        let divisor = (2 * k as u64) + 1;
-        let contribution = decimal_compute_div_int(term, divisor);
-        if decimal_compute_is_zero(&contribution) { break; }
-        sum = decimal_compute_add(sum, contribution);
-    }
-    let ln2 = decimal_compute_add(sum, sum); // 2 × atanh(1/3)
-
-    LN2_FOR_EXP.with(|c: &RefCell<Option<ComputeStorage>>| *c.borrow_mut() = Some(ln2));
-    Ok(ln2)
-}
-
-/// Maximum Taylor terms for exp series with |r| ≤ ln(2)/2 ≈ 0.347.
-///
-/// Term k is bounded by `0.347^k / k!`. This falls below `10^-DECIMAL_COMPUTE_DP`
-/// at about `k ≈ DECIMAL_COMPUTE_DP / 1.46 + 5` terms (Stirling estimate).
-const fn max_taylor_terms() -> u32 {
-    (DECIMAL_COMPUTE_DP as u32) + 20
-}
-
-/// Round a compute-tier value to the nearest integer (returned as i64).
-fn round_to_int(v: ComputeStorage) -> Result<i64, OverflowDetected> {
-    let half = decimal_compute_halve(decimal_compute_one());
-    let rounded = if decimal_compute_is_negative(&v) {
-        decimal_compute_sub(v, half)
-    } else {
-        decimal_compute_add(v, half)
-    };
-    let scale = decimal_compute_one();
-
-    #[cfg(table_format = "q16_16")]
-    { Ok(rounded / scale) }
-    #[cfg(table_format = "q32_32")]
-    { Ok((rounded / scale) as i64) }
-    #[cfg(table_format = "q64_64")]
-    {
-        let q = rounded / scale;
-        if !q.fits_in_i128() { return Err(OverflowDetected::Overflow); }
-        let q_i128 = q.as_i128();
-        if q_i128 > i64::MAX as i128 || q_i128 < i64::MIN as i128 {
-            return Err(OverflowDetected::Overflow);
-        }
-        Ok(q_i128 as i64)
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        let q = rounded / scale;
-        let q_i128 = q.as_i128();
-        if q_i128 > i64::MAX as i128 || q_i128 < i64::MIN as i128 {
-            return Err(OverflowDetected::Overflow);
-        }
-        Ok(q_i128 as i64)
-    }
-    #[cfg(table_format = "q256_256")]
-    {
-        let q = rounded / scale;
-        let q_i128 = q.as_i128();
-        if q_i128 > i64::MAX as i128 || q_i128 < i64::MIN as i128 {
-            return Err(OverflowDetected::Overflow);
-        }
-        Ok(q_i128 as i64)
-    }
-}
-
-/// Multiply a compute-tier value by `2^k`, where `k` may be negative (shift right with rounding).
-///
-/// **Shift type note**: I256 shifts take `u32`, while i64/i128/I512/I1024 take `usize`.
-fn mul_by_pow2(v: ComputeStorage, k: i64) -> Result<ComputeStorage, OverflowDetected> {
-    if k == 0 {
-        return Ok(v);
-    }
-    if k > 0 {
-        if k > 200 {
-            return Err(OverflowDetected::Overflow);
-        }
-        // I256 Shl takes usize; I512/I1024 Shl take usize; primitive ints take u32 or usize.
-        #[cfg(table_format = "q16_16")]
-        { Ok(v << (k as u32)) }
-        #[cfg(table_format = "q32_32")]
-        { Ok(v << (k as u32)) }
-        #[cfg(table_format = "q64_64")]
-        { Ok(v << (k as usize)) }
-        #[cfg(table_format = "q128_128")]
-        { Ok(v << (k as usize)) }
-        #[cfg(table_format = "q256_256")]
-        { Ok(v << (k as usize)) }
-    } else {
-        let abs_k = (-k) as u64;
-        if abs_k >= 250 {
-            return Ok(decimal_compute_zero());
-        }
-        let one_compute = {
-            #[cfg(table_format = "q16_16")]
-            { 1i64 }
-            #[cfg(table_format = "q32_32")]
-            { 1i128 }
-            #[cfg(table_format = "q64_64")]
-            { crate::fixed_point::i256::I256::from_i128(1) }
-            #[cfg(table_format = "q128_128")]
-            { crate::fixed_point::i512::I512::from_i128(1) }
-            #[cfg(table_format = "q256_256")]
-            { crate::fixed_point::I1024::from_i128(1) }
-        };
-        // I256 Shl: usize; I256 Shr: u32 (asymmetric in i256.rs).
-        // I512: both usize. I1024: both usize. Primitives: u32.
-        let round_bit = {
-            #[cfg(table_format = "q16_16")]
-            { one_compute << ((abs_k - 1) as u32) }
-            #[cfg(table_format = "q32_32")]
-            { one_compute << ((abs_k - 1) as u32) }
-            #[cfg(table_format = "q64_64")]
-            { one_compute << ((abs_k - 1) as usize) }
-            #[cfg(table_format = "q128_128")]
-            { one_compute << ((abs_k - 1) as usize) }
-            #[cfg(table_format = "q256_256")]
-            { one_compute << ((abs_k - 1) as usize) }
-        };
-        let rounded = if decimal_compute_is_negative(&v) {
-            v - round_bit
-        } else {
-            v + round_bit
-        };
-        #[cfg(table_format = "q16_16")]
-        { Ok(rounded >> (abs_k as u32)) }
-        #[cfg(table_format = "q32_32")]
-        { Ok(rounded >> (abs_k as u32)) }
-        #[cfg(table_format = "q64_64")]
-        { Ok(rounded >> (abs_k as u32)) }
-        #[cfg(table_format = "q128_128")]
-        { Ok(rounded >> (abs_k as usize)) }
-        #[cfg(table_format = "q256_256")]
-        { Ok(rounded >> (abs_k as usize)) }
-    }
-}
+use super::hp::*;
 
 // ============================================================================
-// 4-STAGE TABLE CACHE FOR FAST EXP
+// CONSTANTS AND TABLES AT HP_DP (built once per thread)
 // ============================================================================
 
-/// Cached exp tables for 4-stage decimal digit decomposition.
-///
-/// `exp(x) = exp(k) × exp(d1/10) × exp(d2/100) × exp(d3/1000) × exp(d4/10000) × exp(r)`
-/// where `|r| < 10^-4` and Taylor converges in ~8 terms at dp=38.
-///
-/// Tables are computed once per thread on first use, then reused.
-/// Total: 31 + 4×10 = 71 entries × sizeof(ComputeStorage).
-struct ExpTables {
-    /// exp(k) for k = 0..=30
-    exp_int: [ComputeStorage; 31],
-    /// exp(d × 0.1) for d = 0..=9
-    exp_tenths: [ComputeStorage; 10],
-    /// exp(d × 0.01) for d = 0..=9
-    exp_hundredths: [ComputeStorage; 10],
-    /// exp(d × 0.001) for d = 0..=9
-    exp_thousandths: [ComputeStorage; 10],
-}
-
-impl Clone for ExpTables {
-    fn clone(&self) -> Self {
-        Self {
-            exp_int: self.exp_int,
-            exp_tenths: self.exp_tenths,
-            exp_hundredths: self.exp_hundredths,
-            exp_thousandths: self.exp_thousandths,
-        }
-    }
+struct HpConsts {
+    /// `10^HP_DP` (the value 1) and half of it.
+    one: Hp,
+    half: Hp,
+    /// ln2 to `2 HP_DP` digits, split: `ln2 = (hi + lo / 10^HP_DP) / 10^HP_DP`.
+    ln2_hi: Hp,
+    ln2_lo: Hp,
+    /// ln2 at `HP_DP` (rounded) and at 15 digits (truncated, for estimating n).
+    ln2: Hp,
+    ln2_15: i128,
+    /// `exp(d / 10^(s+1))` for `s = 0..4`, `d = 0..10`.
+    table: [[Hp; 10]; 4],
 }
 
 thread_local! {
-    static EXP_TABLES: RefCell<Option<ExpTables>> = const { RefCell::new(None) };
+    static HP_CONSTS: RefCell<Option<std::rc::Rc<HpConsts>>> = const { RefCell::new(None) };
 }
 
-/// Pure Taylor series for exp(x) = 1 + x + x²/2! + x³/3! + ...
-/// No range reduction: works for any x but converges faster for small |x|.
-/// Early-exits when terms underflow to zero.
-fn exp_taylor_raw(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    let one = decimal_compute_one();
+fn hp_consts() -> std::rc::Rc<HpConsts> {
+    if let Some(c) = HP_CONSTS.with(|c| c.borrow().clone()) {
+        return c;
+    }
+    let c = std::rc::Rc::new(build_hp_consts());
+    HP_CONSTS.with(|slot| *slot.borrow_mut() = Some(c.clone()));
+    c
+}
+
+/// `exp(y)` at `HP_DP` for `0 <= y <= 0.1` by Taylor series.
+fn hp_exp_taylor(y: Hp, one: Hp, half: Hp) -> Hp {
     let mut term = one;
     let mut sum = one;
-    let max_terms = max_taylor_terms();
-    for n in 1..=max_terms {
-        term = decimal_compute_mul(term, x);
-        term = decimal_compute_div_int(term, n as u64);
-        if decimal_compute_is_zero(&term) { break; }
-        sum = decimal_compute_add(sum, term);
-    }
-    Ok(sum)
-}
-
-/// Extract a small integer from ComputeStorage (must fit in i64).
-fn compute_as_i64(v: ComputeStorage) -> i64 {
-    #[cfg(table_format = "q16_16")]
-    { v }
-    #[cfg(table_format = "q32_32")]
-    { v as i64 }
-    #[cfg(table_format = "q64_64")]
-    { v.as_i128() as i64 }
-    #[cfg(table_format = "q128_128")]
-    { v.as_i128() as i64 }
-    #[cfg(table_format = "q256_256")]
-    { v.as_i128() as i64 }
-}
-
-/// Build exp tables (one-time per thread). Uses raw Taylor series.
-fn build_exp_tables() -> Result<ExpTables, OverflowDetected> {
-    let one = decimal_compute_one();
-    let zero = decimal_compute_zero();
-
-    // exp(1) via Taylor (converges in ~35 terms at dp=38)
-    let e1 = exp_taylor_raw(one)?;
-
-    // exp(k) = exp(1)^k via successive multiplication
-    let mut exp_int = [zero; 31];
-    exp_int[0] = one;
-    exp_int[1] = e1;
-    for k in 2..=30usize {
-        exp_int[k] = decimal_compute_mul(exp_int[k - 1], e1);
-    }
-
-    // exp(d × 0.1) for d = 0..9
-    let mut exp_tenths = [zero; 10];
-    exp_tenths[0] = one;
-    let pt1 = pow10_compute_ct(DECIMAL_COMPUTE_DP - 1); // 0.1 at compute dp
-    let e_pt1 = exp_taylor_raw(pt1)?;
-    exp_tenths[1] = e_pt1;
-    for d in 2..=9usize {
-        exp_tenths[d] = decimal_compute_mul(exp_tenths[d - 1], e_pt1);
-    }
-
-    // exp(d × 0.01)
-    let mut exp_hundredths = [zero; 10];
-    exp_hundredths[0] = one;
-    let pt01 = pow10_compute_ct(DECIMAL_COMPUTE_DP - 2);
-    let e_pt01 = exp_taylor_raw(pt01)?;
-    exp_hundredths[1] = e_pt01;
-    for d in 2..=9usize {
-        exp_hundredths[d] = decimal_compute_mul(exp_hundredths[d - 1], e_pt01);
-    }
-
-    // exp(d × 0.001)
-    let mut exp_thousandths = [zero; 10];
-    exp_thousandths[0] = one;
-    let pt001 = pow10_compute_ct(DECIMAL_COMPUTE_DP - 3);
-    let e_pt001 = exp_taylor_raw(pt001)?;
-    exp_thousandths[1] = e_pt001;
-    for d in 2..=9usize {
-        exp_thousandths[d] = decimal_compute_mul(exp_thousandths[d - 1], e_pt001);
-    }
-
-    Ok(ExpTables { exp_int, exp_tenths, exp_hundredths, exp_thousandths })
-}
-
-/// 4-stage table-based exp for |x| ≤ 30.
-///
-/// Decomposes |x| = k + d1/10 + d2/100 + d3/1000 + r where:
-/// - k ∈ [0, 30]: integer part
-/// - d1, d2, d3 ∈ [0, 9]: fractional decimal digits
-/// - |r| < 10^-3: tiny remainder for short Taylor (~8-12 terms)
-///
-/// Result = exp(k) × exp(d1/10) × exp(d2/100) × exp(d3/1000) × exp(r)
-/// All factors except exp(r) are table lookups. 4 widening multiplies + short Taylor.
-fn decimal_exp_table_path(abs_x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    let one = decimal_compute_one();
-    let s1 = pow10_compute_ct(DECIMAL_COMPUTE_DP - 1);
-    let s2 = pow10_compute_ct(DECIMAL_COMPUTE_DP - 2);
-    let s3 = pow10_compute_ct(DECIMAL_COMPUTE_DP - 3);
-
-    // Extract integer part and 3 fractional digits
-    let k_compute = abs_x / one;
-    let k = compute_as_i64(k_compute);
-    let frac = decimal_compute_sub(abs_x, mul_compute_by_int(one, k));
-
-    let d1_compute = frac / s1;
-    let d1 = compute_as_i64(d1_compute);
-    let frac2 = decimal_compute_sub(frac, mul_compute_by_int(s1, d1));
-
-    let d2_compute = frac2 / s2;
-    let d2 = compute_as_i64(d2_compute);
-    let frac3 = decimal_compute_sub(frac2, mul_compute_by_int(s2, d2));
-
-    let d3_compute = frac3 / s3;
-    let d3 = compute_as_i64(d3_compute);
-    let remainder = decimal_compute_sub(frac3, mul_compute_by_int(s3, d3));
-
-    // Bounds check — k must be in table range
-    if k < 0 || k > 30 || d1 < 0 || d1 > 9 || d2 < 0 || d2 > 9 || d3 < 0 || d3 > 9 {
-        // Fallback to ln(2) reduction for out-of-range
-        return decimal_exp_ln2_reduction(abs_x);
-    }
-
-    // Table lookup + multiply
-    EXP_TABLES.with(|c| {
-        // Ensure tables are built
-        {
-            let cached = c.borrow();
-            if cached.is_none() {
-                drop(cached);
-                let tables = build_exp_tables()?;
-                *c.borrow_mut() = Some(tables);
-            }
+    for k in 1..=(HP_DP as u64 + 10) {
+        term = hp_div_small_round(hp_mul(term, y, half), k);
+        if hp_is_zero(&term) {
+            break;
         }
-        let tables = c.borrow();
-        let t = tables.as_ref().unwrap();
+        sum = sum + term;
+    }
+    sum
+}
 
-        let mut result = t.exp_int[k as usize];
-        result = decimal_compute_mul(result, t.exp_tenths[d1 as usize]);
-        result = decimal_compute_mul(result, t.exp_hundredths[d2 as usize]);
-        result = decimal_compute_mul(result, t.exp_thousandths[d3 as usize]);
+fn build_hp_consts() -> HpConsts {
+    let one = hp_pow10(HP_DP);
+    let half = hp_divmod_small(one, 2).0;
 
-        // Short Taylor for remainder (|r| < 10^-3)
-        if !decimal_compute_is_zero(&remainder) {
-            let exp_r = exp_taylor_raw(remainder)?;
-            result = decimal_compute_mul(result, exp_r);
+    // ln2 = 2 atanh(1/3) = sum over k of 2 / ((2k+1) 3^(2k+1)), at 2 HP_DP
+    // digits: divisions by small integers only (10^(2 HP_DP) fits Hp), each
+    // term truncated, so the sum is low by at most a few hundred units at
+    // 2 HP_DP digits.
+    let mut p = hp_divmod_small(hp_mul_small(hp_pow10(2 * HP_DP), 2), 3).0;
+    let mut sum = p;
+    let mut k: u64 = 1;
+    loop {
+        p = hp_divmod_small(p, 9).0;
+        if hp_is_zero(&p) {
+            break;
         }
+        sum = sum + hp_divmod_small(p, 2 * k + 1).0;
+        k += 1;
+    }
+    let ln2_hi = hp_div_pow10(sum, HP_DP);
+    let ln2_lo = sum - hp_mul_pow10(ln2_hi, HP_DP);
+    let ln2 = ln2_hi + hp_div_pow10(ln2_lo + half, HP_DP);
+    let ln2_15 = hp_to_i128(&hp_div_pow10(ln2_hi, HP_DP - 15));
 
-        Ok(result)
-    })
+    let mut table = [[one; 10]; 4];
+    for (s, row) in table.iter_mut().enumerate() {
+        let base = hp_exp_taylor(hp_pow10(HP_DP - 1 - s as u32), one, half);
+        for d in 1..10 {
+            row[d] = hp_mul(row[d - 1], base, half);
+        }
+    }
+    HpConsts { one, half, ln2_hi, ln2_lo, ln2, ln2_15, table }
 }
 
-/// ln(2)-based range reduction fallback for large |x| > 30.
-fn decimal_exp_ln2_reduction(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    let ln2 = ln2_at_compute()?;
-    let x_over_ln2 = decimal_compute_div(x, ln2)?;
-    let k = round_to_int(x_over_ln2)?;
-    let k_times_ln2 = mul_compute_by_int(ln2, k);
-    let r = decimal_compute_sub(x, k_times_ln2);
-
-    let exp_r = exp_taylor_raw(r)?;
-    mul_by_pow2(exp_r, k)
+/// `n ln2` at `HP_DP`, within half a unit.
+fn n_ln2(c: &HpConsts, n: i64) -> Hp {
+    let m = n.unsigned_abs();
+    let v = hp_mul_small(c.ln2_hi, m) + hp_div_pow10(hp_mul_small(c.ln2_lo, m) + c.half, HP_DP);
+    if n < 0 { -v } else { v }
 }
 
-/// Compute `exp(x)` for x at compute dp.
-///
-/// # Algorithm
-///
-/// For |x| ≤ 30: **4-stage table decomposition**: decomposes x into decimal digits,
-/// looks up precomputed exp values per digit, multiplies, then short Taylor for the
-/// tiny remainder. ~4 widening multiplies + ~8-12 Taylor terms.
-///
-/// For |x| > 30: **ln(2)-based range reduction**: `exp(x) = 2^k × exp(r)` where
-/// `k = round(x/ln(2))` and `|r| ≤ ln(2)/2`.
-///
-/// The table path is ~2-3× faster than the ln(2) path for common inputs.
+/// `exp(x) = m 2^n` with `m` at `HP_DP` in `[1, 2)` up to rounding, or
+/// `None` when the result rounds to 0 at the compute dp. `Err(TierOverflow)`
+/// when `x > COMPUTE_BITS` (the result exceeds every compute value).
+fn exp_hp(x: ComputeStorage) -> Result<Option<(Hp, i64)>, OverflowDetected> {
+    let bound = decimal_compute_from_int(COMPUTE_BITS);
+    if decimal_compute_cmp(&x, &bound) == std::cmp::Ordering::Greater {
+        return Err(OverflowDetected::TierOverflow);
+    }
+    if decimal_compute_cmp(&x, &decimal_compute_neg(bound)) == std::cmp::Ordering::Less {
+        return Ok(None);
+    }
+    let c = hp_consts();
+    let negative = decimal_compute_is_negative(&x);
+    let magnitude = hp_mul_pow10(
+        compute_to_hp(if negative { decimal_compute_neg(x) } else { x }),
+        HP_DP - DECIMAL_COMPUTE_DP as u32,
+    );
+    let xh = if negative { -magnitude } else { magnitude };
+
+    // n from 15-digit values (|x| <= COMPUTE_BITS keeps them inside i128),
+    // then corrected (a step at most) so that 0 <= r < ln2
+    let x15 = hp_to_i128(&hp_div_pow10(magnitude, HP_DP - 15));
+    let est = (x15 / c.ln2_15) as i64;
+    let mut n = if negative { -est - 1 } else { est };
+    let mut stepped_down = false;
+    let r = loop {
+        let r = xh - n_ln2(&c, n);
+        if hp_is_negative(&r) {
+            n -= 1;
+            stepped_down = true;
+        } else if r >= c.ln2 && !stepped_down {
+            n += 1;
+        } else {
+            break r;
+        }
+    };
+
+    // exp(r): four decimal digits from the tables, Taylor for the rest
+    let q = hp_to_i128(&hp_div_pow10(r, HP_DP - 4)) as usize;
+    let s = r - hp_mul_pow10(hp_small(q as u64), HP_DP - 4);
+    let digits = [q / 1000, (q / 100) % 10, (q / 10) % 10, q % 10];
+    let mut m = c.one;
+    for (stage, &d) in digits.iter().enumerate() {
+        if d != 0 {
+            m = hp_mul(m, c.table[stage][d], c.half);
+        }
+    }
+    if !hp_is_zero(&s) {
+        m = hp_mul(m, hp_exp_taylor(s, c.one, c.half), c.half);
+    }
+    Ok(Some((m, n)))
+}
+
+/// `m 2^n` at `HP_DP` rounded half to even to the compute dp,
+/// `Err(TierOverflow)` when it does not fit the compute tier.
+fn hp_scaled_to_compute(m: Hp, n: i64) -> Result<ComputeStorage, OverflowDetected> {
+    let e = HP_DP - DECIMAL_COMPUTE_DP as u32;
+    let q = if n >= 0 {
+        if hp_bit_length(&m) as i64 + n > HP_BITS as i64 - 2 {
+            return Err(OverflowDetected::TierOverflow);
+        }
+        hp_div_round_half_even(hp_shl(m, n as u32), e, 0)
+    } else {
+        // 10^e 2^k beyond the tier means m / (10^e 2^k) < 2^(4 - HP_BITS) 10^HP_DP < 1/2
+        let k = n.unsigned_abs();
+        if hp_bit_length(&hp_pow10(e)) as u64 + k > HP_BITS as u64 - 2 {
+            return Ok(decimal_compute_zero());
+        }
+        hp_div_round_half_even(m, e, k as u32)
+    };
+    hp_to_compute(&q)
+}
+
+/// Compute `exp(x)` for x at compute dp, correctly rounded (half to even) to
+/// the compute dp; `Err(TierOverflow)` when the result is outside the
+/// compute tier. See the module docs for the algorithm.
 pub fn decimal_exp(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
     if decimal_compute_is_zero(&x) {
         return Ok(decimal_compute_one());
     }
-
-    let is_neg = decimal_compute_is_negative(&x);
-    let abs_x = if is_neg { decimal_compute_neg(x) } else { x };
-
-    // Check if |x| ≤ 30 (table path range)
-    let one = decimal_compute_one();
-    let thirty = mul_compute_by_int(one, 30);
-    let use_table = decimal_compute_cmp(&abs_x, &thirty) != std::cmp::Ordering::Greater;
-
-    let result = if use_table {
-        decimal_exp_table_path(abs_x)?
-    } else {
-        // Large argument: ln(2) reduction on the original (signed) value
-        return decimal_exp_ln2_reduction(x);
-    };
-
-    if is_neg {
-        // exp(-|x|) = 1/exp(|x|)
-        decimal_compute_div(one, result)
-    } else {
-        Ok(result)
-    }
-}
-
-/// Multiply a compute-tier value by an integer (positive or negative).
-fn mul_compute_by_int(v: ComputeStorage, n: i64) -> ComputeStorage {
-    if n == 0 {
-        return decimal_compute_zero();
-    }
-    let negative = n < 0;
-    let n_abs = n.unsigned_abs();
-    let n_compute: ComputeStorage = {
-        #[cfg(table_format = "q16_16")]
-        { n_abs as i64 }
-        #[cfg(table_format = "q32_32")]
-        { n_abs as i128 }
-        #[cfg(table_format = "q64_64")]
-        { crate::fixed_point::i256::I256::from_i128(n_abs as i128) }
-        #[cfg(table_format = "q128_128")]
-        { crate::fixed_point::i512::I512::from_i128(n_abs as i128) }
-        #[cfg(table_format = "q256_256")]
-        { crate::fixed_point::I1024::from_i128(n_abs as i128) }
-    };
-    let result = v * n_compute;
-    if negative {
-        decimal_compute_neg(result)
-    } else {
-        result
+    match exp_hp(x)? {
+        None => Ok(decimal_compute_zero()),
+        Some((m, n)) => hp_scaled_to_compute(m, n),
     }
 }
 
@@ -463,21 +218,38 @@ pub fn decimal_exp_neg(x: ComputeStorage) -> Result<ComputeStorage, OverflowDete
 
 /// Fused `(sinh(x), cosh(x))` at decimal compute tier: shares one exp-pair evaluation.
 ///
-/// Computes `exp(x)` and `exp(-x)` once, then derives
-/// `sinh(x) = (exp(x) - exp(-x)) / 2` and `cosh(x) = (exp(x) + exp(-x)) / 2`.
+/// `exp(|x|)` and `exp(-|x|)` are combined at `HP_DP` and each result is
+/// rounded once (half to even) to the compute dp, so both are correctly
+/// rounded, including `sinh` of small arguments (no cancellation at the
+/// compute dp) and `sinh`/`cosh` values beyond `exp`'s own range (e^x/2
+/// fits where e^x does not). `Err(TierOverflow)` when a result is outside
+/// the compute tier.
 ///
-/// sinh and cosh are derived from the **same** `(ep, en)` pair at compute tier,
-/// so their rounding bias is correlated: critical for expressions like
+/// sinh and cosh are derived from the **same** `(ep, en)` pair, so their
+/// rounding bias is correlated: critical for expressions like
 /// `cosh(θ)·p + (sinh(θ)/θ)·v` where the two errors cancel.
 pub fn decimal_sinhcosh(x: ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
     if decimal_compute_is_zero(&x) {
         return Ok((decimal_compute_zero(), decimal_compute_one()));
     }
-    let ep = decimal_exp(x)?;
-    let en = decimal_exp(decimal_compute_neg(x))?;
-    let sinh_c = decimal_compute_halve(decimal_compute_sub(ep, en));
-    let cosh_c = decimal_compute_halve(decimal_compute_add(ep, en));
-    Ok((sinh_c, cosh_c))
+    let negative = decimal_compute_is_negative(&x);
+    // the compute tier's minimum has no negation there (and its sinh/cosh
+    // are far outside the tier anyway)
+    let a = if negative { try_decimal_compute_neg(x)? } else { x };
+    let (m1, n1) = exp_hp(a)?.ok_or(OverflowDetected::TierOverflow)?;
+    if hp_bit_length(&m1) as i64 + n1 > HP_BITS as i64 - 2 {
+        return Err(OverflowDetected::TierOverflow);
+    }
+    let ep = hp_shl(m1, n1 as u32);
+    let en = match exp_hp(decimal_compute_neg(a))? {
+        None => hp_small(0),
+        Some((m2, n2)) if n2.unsigned_abs() < HP_BITS as u64 => hp_shr(m2, n2.unsigned_abs() as u32),
+        Some(_) => hp_small(0),
+    };
+    let e = HP_DP - DECIMAL_COMPUTE_DP as u32;
+    let sinh = hp_to_compute(&hp_div_round_half_even(ep - en, e, 1))?;
+    let cosh = hp_to_compute(&hp_div_round_half_even(ep + en, e, 1))?;
+    Ok((if negative { decimal_compute_neg(sinh) } else { sinh }, cosh))
 }
 
 #[cfg(all(test, table_format = "q64_64"))]
@@ -576,3 +348,4 @@ mod tests {
             "exp(-1) at storage tier should match mpmath to 13+ digits, got: {}", s);
     }
 }
+

@@ -38,11 +38,13 @@ mod realtime_tests {
     /// FixedPoint::sinhcosh must match the mpmath references for sinh and cosh.
     #[test]
     fn binary_sinhcosh_matches_mpmath() {
+        assert_eq!(REALTIME_REFS_FRAC_BITS, g_math::fixed_point::frac_config::FRAC_BITS,
+            "no references for this GMATH_FRAC_BITS: add it to scripts/generate_realtime_ulp_refs.py");
         let mut failures = Vec::new();
         let mut sinh_map: Vec<(i32, i32)> = Vec::new();
         let mut cosh_map: Vec<(i32, i32)> = Vec::new();
 
-        for &(_input_str, input_raw, expected_raw, func_name) in Q16_REFS {
+        for &(_input_str, input_raw, expected_raw, func_name) in REALTIME_REFS {
             match func_name {
                 "sinh" => sinh_map.push((input_raw, expected_raw)),
                 "cosh" => cosh_map.push((input_raw, expected_raw)),
@@ -86,7 +88,7 @@ mod realtime_tests {
     /// (They share the same compute-tier exp pair; downstream rounding is the same.)
     #[test]
     fn binary_sinhcosh_matches_separate_calls() {
-        for &(_input_str, input_raw, _expected_raw, func_name) in Q16_REFS {
+        for &(_input_str, input_raw, _expected_raw, func_name) in REALTIME_REFS {
             if func_name != "sinh" { continue; }
             let x = FixedPoint::from_raw(input_raw);
             let (fused_s, fused_c) = x.sinhcosh();
@@ -102,13 +104,14 @@ mod realtime_tests {
     /// Identity: cosh²(x) - sinh²(x) = 1. Use relative tightness vs sep calls.
     #[test]
     fn binary_sinhcosh_identity_tight() {
-        for &(_input_str, input_raw, _expected, func_name) in Q16_REFS {
+        for &(_input_str, input_raw, _expected, func_name) in REALTIME_REFS {
             if func_name != "sinh" { continue; }
             let x = FixedPoint::from_raw(input_raw);
             let (s, c) = x.sinhcosh();
             let one = FixedPoint::from_int(1);
             let diff = (c * c) - (s * s) - one;
-            // Q16.16 ULP tolerance for the identity: 8 ULP absolute at storage tier.
+            // Realtime tolerance for the identity: 8 ULP absolute at storage tier
+            // (measured <= 5 at Q22.10).
             // (cosh amplifies input ULP, so identity residual scales with cosh²).
             assert!(diff.raw().abs() <= 8,
                 "identity cosh²-sinh²=1 residual too large for raw={}: diff={}",
@@ -119,16 +122,17 @@ mod realtime_tests {
     /// try_sinhcosh must return Err on inputs large enough that cosh overflows storage.
     #[test]
     fn binary_try_sinhcosh_overflow_gate() {
-        // Q16.16 storage max ~32768. cosh(12) ≈ 81377, already overflows.
-        let big = FixedPoint::from_int(15);
+        // cosh(22) ~ 1.8e9 exceeds every realtime split's range (Q16.16:
+        // 32768, Q22.10: 2^21) while 22 itself fits all of them.
+        let big = FixedPoint::from_int(22);
         let res = big.try_sinhcosh();
-        assert!(res.is_err(), "try_sinhcosh(15) should overflow Q16.16 storage");
+        assert!(res.is_err(), "try_sinhcosh(22) should overflow realtime storage");
     }
 
     /// FASC evaluate_sinhcosh via gmath("...").sinhcosh() must match imperative path.
     #[test]
     fn fasc_evaluate_sinhcosh_matches_imperative() {
-        for &(input_str, input_raw, _exp, func_name) in Q16_REFS {
+        for &(input_str, input_raw, _exp, func_name) in REALTIME_REFS {
             if func_name != "sinh" { continue; }
             let (fasc_s, fasc_c) = evaluate_sinhcosh(&gmath_safe(input_str))
                 .expect("FASC sinhcosh eval");

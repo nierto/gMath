@@ -8,6 +8,8 @@ mod fixed_vector;
 mod fixed_matrix;
 pub(crate) mod linalg;
 pub(crate) mod compute_matrix;
+#[cfg(table_format = "q16_16")]
+pub(crate) mod wide_matrix;
 pub mod fused;
 pub mod decompose;
 pub mod derived;
@@ -23,6 +25,7 @@ pub mod fiber_bundle;
 pub mod interval;
 pub mod predicates;
 mod wide_acc;
+pub(crate) mod decimal_literal;
 mod serialization;
 
 pub use fixed_point::FixedPoint;

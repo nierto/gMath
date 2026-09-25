@@ -398,6 +398,132 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
     }
 }
 
+/// `num / den` rounded to nearest, ties toward positive infinity, narrowed
+/// to storage (checked): `num` an exact wide value, `den` a nonzero compute
+/// raw. With `num` at `3F` fractional bits and `den` at `2F` the quotient is
+/// at the storage scale. Lets a caller divide an exact product by a compute
+/// value without forming a quotient that may exceed the compute tier.
+pub(crate) fn divide_to_storage_nearest(num: acc::Orient, den: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    narrow_orient_to_storage(divide_nearest(num, den)?).ok_or(OverflowDetected::TierOverflow)
+}
+
+/// `num / den` rounded to nearest, ties toward positive infinity, narrowed to
+/// the compute tier (checked): with `num` at `4F` fractional bits and `den`
+/// at `2F` the quotient is a compute raw. The compute-tier twin of
+/// [`divide_to_storage_nearest`], for algorithms that keep their state at the
+/// compute tier between steps.
+pub(crate) fn divide_to_compute_nearest(num: acc::Orient, den: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    narrow_orient_to_compute(divide_nearest(num, den)?).ok_or(OverflowDetected::TierOverflow)
+}
+
+/// Exact `sum a_i b_i` of compute raws at `4F` fractional bits (checked).
+pub(crate) fn exact_dot_compute(a: &[ComputeStorage], b: &[ComputeStorage]) -> Result<acc::Orient, OverflowDetected> {
+    assert_eq!(a.len(), b.len(), "exact_dot_compute: length mismatch");
+    let mut sum = <acc::Orient as Wide>::zero();
+    for (x, y) in a.iter().zip(b) {
+        sum = sum.add_exact(widen_product(*x, *y))?;
+    }
+    Ok(sum)
+}
+
+/// `init - sum a_i b_i` of compute raws: the sum exact at `4F`, `init`
+/// widened exactly, one rounding to the compute tier (nearest, ties toward
+/// +infinity, checked). The substitution and elimination kernel of the
+/// compute-tier factorizations.
+pub(crate) fn exact_sub_dot_compute(
+    init: ComputeStorage, a: &[ComputeStorage], b: &[ComputeStorage],
+) -> Result<ComputeStorage, OverflowDetected> {
+    let one = crate::fixed_point::universal::fasc::stack_evaluator::compute::make_compute_int(1);
+    let dot = exact_dot_compute(a, b)?;
+    narrow_product_to_compute(widen_product(init, one).add_exact(-dot)?)
+}
+
+/// `num / den` in the accumulator type, nearest with ties toward +infinity.
+fn divide_nearest(num: acc::Orient, den: ComputeStorage) -> Result<acc::Orient, OverflowDetected> {
+    #[cfg(table_format = "q16_16")]
+    let (q, r, d) = {
+        let d = den as i128;
+        if d == 0 { return Err(OverflowDetected::DivisionByZero); }
+        (num / d, num % d, d)
+    };
+    #[cfg(table_format = "q32_32")]
+    let (q, r, d) = {
+        let d = I256::from_i128(den);
+        if d == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
+        (num / d, num % d, d)
+    };
+    #[cfg(table_format = "q64_64")]
+    let (q, r, d) = {
+        let d = I512::from_i256(den);
+        if d == I512::zero() { return Err(OverflowDetected::DivisionByZero); }
+        (num / d, num % d, d)
+    };
+    #[cfg(table_format = "q128_128")]
+    let (q, r, d) = {
+        let d = I1024::from_i512(den);
+        if d == I1024::zero() { return Err(OverflowDetected::DivisionByZero); }
+        (num / d, num % d, d)
+    };
+    #[cfg(table_format = "q256_256")]
+    let (q, r, d) = {
+        let d = I2048::from_i1024(den);
+        if d == I2048::zero() { return Err(OverflowDetected::DivisionByZero); }
+        let (q, r) = crate::fixed_point::domains::binary_fixed::i2048::i2048_divmod(num, d);
+        (q, r, d)
+    };
+    // truncated quotient; move one unit away from zero past the half (at the
+    // half only for a positive quotient: ties toward +infinity)
+    let positive = num.is_negative() == d.is_negative();
+    let r_abs = if r.is_negative() { -r } else { r };
+    let d_abs = if d.is_negative() { -d } else { d };
+    let twice = r_abs + r_abs;
+    let bump = if positive { twice >= d_abs } else { twice > d_abs };
+    let q = if bump { if positive { q + unit_orient() } else { q - unit_orient() } } else { q };
+    Ok(q)
+}
+
+#[inline]
+fn unit_orient() -> acc::Orient {
+    #[cfg(table_format = "q16_16")]
+    { 1i128 }
+    #[cfg(table_format = "q32_32")]
+    { I256::from_i128(1) }
+    #[cfg(table_format = "q64_64")]
+    { I512::from_i128(1) }
+    #[cfg(table_format = "q128_128")]
+    { I1024::from_i128(1) }
+    #[cfg(table_format = "q256_256")]
+    { I2048::from_i128(1) }
+}
+
+/// An `Orient` value as a compute raw, `None` if it does not fit.
+fn narrow_orient_to_compute(q: acc::Orient) -> Option<ComputeStorage> {
+    #[cfg(table_format = "q16_16")]
+    { i64::try_from(q).ok() }
+    #[cfg(table_format = "q32_32")]
+    { if q.fits_in_i128() { Some(q.as_i128()) } else { None } }
+    #[cfg(table_format = "q64_64")]
+    { if q.fits_in_i256() { Some(q.as_i256()) } else { None } }
+    #[cfg(table_format = "q128_128")]
+    { if q.fits_in_i512() { Some(q.as_i512()) } else { None } }
+    #[cfg(table_format = "q256_256")]
+    { if q.fits_in_i1024() { Some(q.as_i1024()) } else { None } }
+}
+
+/// An `Orient` value as storage, `None` if it does not fit.
+fn narrow_orient_to_storage(q: acc::Orient) -> Option<BinaryStorage> {
+    #[cfg(table_format = "q16_16")]
+    { i32::try_from(q).ok() }
+    #[cfg(table_format = "q32_32")]
+    { if q.fits_in_i128() { i64::try_from(q.as_i128()).ok() } else { None } }
+    #[cfg(table_format = "q64_64")]
+    { if q.fits_in_i128() { Some(q.as_i128()) } else { None } }
+    #[cfg(table_format = "q128_128")]
+    { if q.fits_in_i256() { Some(q.as_i256()) } else { None } }
+    #[cfg(table_format = "q256_256")]
+    { if q.fits_in_i512() { Some(crate::fixed_point::I512::from_words([q.words[0], q.words[1], q.words[2], q.words[3], q.words[4], q.words[5], q.words[6], q.words[7]])) } else { None } }
+}
+
 /// Narrow an exact product of two compute raws (`4F` fractional bits, from
 /// [`widen_product`]) to the compute scale (`2F`), rounding to nearest with
 /// ties toward positive infinity. The result is fits-checked against the
@@ -505,6 +631,32 @@ mod tests {
         assert_eq!(narrow_triple_floor(a).unwrap(), -storage_one());
         assert_eq!(narrow_triple_ceil(a).unwrap(), zero);
         assert_eq!(narrow_triple_nearest(a).unwrap(), zero);
+    }
+
+    /// Dividing by the compute-tier one (2^(2F)) is narrowing by 2^(2F): the
+    /// quotient rounding must equal narrow_triple_nearest, ties included
+    /// (both signs).
+    #[test]
+    fn divide_by_compute_one_matches_the_nearest_narrowing() {
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::make_compute_int;
+        let one_c = make_compute_int(1);
+        let half = FixedPoint::one() / FixedPoint::from_int(2);
+        let mut state: u64 = 0x5DEE_CE66_D1CE_4E5B;
+        let mut cases = 0;
+        // multipliers below 128: storage integers up to 24 fraction bits
+        for k in -30i32..=30 {
+            for tweak in [0i32, 1, 2, 3] {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let ulps = (state >> 40) as i32 % 16 + k * 3 + tweak;
+                let v = FixedVector::from_slice(&[half]);
+                let mut m = FixedMatrix::new(1, 1);
+                m.set(0, 0, FixedPoint::from_raw(storage_one()) * FixedPoint::from_int(ulps));
+                let a = quadratic_form_exact(&v, &m).unwrap();
+                assert_eq!(divide_to_storage_nearest(a, one_c), narrow_triple_nearest(a), "{ulps}");
+                cases += 1;
+            }
+        }
+        assert!(cases > 200);
     }
 
     /// The pairing `(m_ij + m_ji) v_i v_j` must not assume symmetry: an

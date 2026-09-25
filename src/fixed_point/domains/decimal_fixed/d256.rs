@@ -382,9 +382,9 @@ pub fn negate_d256(value: D256) -> D256 {
 /// ALGORITHM: Full 256-bit long division with exact remainder calculation for decimal scaling
 /// PRECISION: Maintains exact arithmetic for decimal scaling operations
 pub fn divmod_d256_by_i128(dividend: D256, divisor: i128) -> (i128, i128) {
-    if divisor == 0 {
-        return (if dividend.words[3] as i64 >= 0 { i128::MAX } else { i128::MIN }, 0);
-    }
+    // like integer division: a zero divisor or a quotient beyond i128 panics
+    // (before 0.6.4 both returned a saturated quotient, a plausible value)
+    assert!(divisor != 0, "divmod_d256_by_i128: division by zero");
     
     // Handle simple case where result fits in i128
     if dividend.fits_in_i128() {
@@ -401,15 +401,9 @@ pub fn divmod_d256_by_i128(dividend: D256, divisor: i128) -> (i128, i128) {
     // dropping bits and corrupting the quotient. Delegate to the bit-by-bit
     // 256/256 division, whose remainder lives in a full D256 and cannot overflow.
     let (q, r) = divmod_d256_by_d256(dividend, D256::from_i128(divisor));
-    let quotient = if q.fits_in_i128() {
-        q.as_i128()
-    } else if q.is_negative() {
-        i128::MIN
-    } else {
-        i128::MAX
-    };
-    let remainder = if r.fits_in_i128() { r.as_i128() } else { 0 };
-    (quotient, remainder)
+    assert!(q.fits_in_i128(), "divmod_d256_by_i128: quotient beyond i128");
+    // |r| < |divisor| <= 2^127: the remainder always fits
+    (q.as_i128(), r.as_i128())
 }
 
 /// Division with remainder for D256 by D256 (decimal-specific)
@@ -418,15 +412,9 @@ pub fn divmod_d256_by_i128(dividend: D256, divisor: i128) -> (i128, i128) {
 /// PRECISION: Maintains exact arithmetic for decimal scaling operations
 /// DOMAIN: Pure decimal domain - optimized for base-10 operations
 pub fn divmod_d256_by_d256(dividend: D256, divisor: D256) -> (D256, D256) {
-    // Handle division by zero with saturation
-    if divisor.is_zero() {
-        let saturated_quotient = if dividend.is_negative() {
-            D256::from_i128(i128::MIN)
-        } else {
-            D256::from_i128(i128::MAX)
-        };
-        return (saturated_quotient, D256::zero());
-    }
+    // like integer division: a zero divisor panics (before 0.6.4 it returned
+    // a saturated quotient, a plausible value)
+    assert!(!divisor.is_zero(), "divmod_d256_by_d256: division by zero");
 
     // Optimize for cases where both fit in i128
     if dividend.fits_in_i128() && divisor.fits_in_i128() {

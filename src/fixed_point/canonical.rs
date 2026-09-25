@@ -107,10 +107,17 @@ pub fn reset_gmath_mode() {
 /// at compile time by the proc-macro. ~60 ns faster than `gmath("0.1")`.
 #[doc(hidden)]
 pub fn __pre_decimal(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -> LazyExpr {
-    use super::universal::fasc::stack_evaluator::conversion::to_binary_storage;
-    let storage = to_binary_storage(scaled);
+    use super::universal::fasc::stack_evaluator::conversion::try_to_binary_storage;
+    use super::domains::symbolic::rational::RationalNumber;
     let shadow = CompactShadow::from_rational(shadow_num, shadow_den);
-    LazyExpr::Value(Box::new(StackValue::Decimal(dp, storage, shadow)))
+    match try_to_binary_storage(scaled) {
+        Ok(storage) => LazyExpr::Value(Box::new(StackValue::Decimal(dp, storage, shadow))),
+        // beyond the realtime / compact decimal storage: the exact rational,
+        // as the runtime parser does (this narrowed with a wrapping cast)
+        Err(_) => LazyExpr::Value(Box::new(StackValue::Symbolic(
+            RationalNumber::new(scaled, 10u128.pow(dp as u32)),
+        ))),
+    }
 }
 
 /// Construct a pre-parsed Binary integer LazyExpr. Called by `gmath!("255")` expansion.

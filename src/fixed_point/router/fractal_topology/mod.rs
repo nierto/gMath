@@ -414,8 +414,9 @@ fn shadow_to_decimal(num: i128, den: u128, shadow: CompactShadow) -> Option<Stac
         scaled = scaled.checked_mul(5)?;
     }
 
-    use crate::fixed_point::universal::fasc::stack_evaluator::conversion::to_binary_storage;
-    let storage = to_binary_storage(scaled);
+    use crate::fixed_point::universal::fasc::stack_evaluator::conversion::try_to_binary_storage;
+    // beyond the realtime / compact decimal storage: not decimal-coercible
+    let storage = try_to_binary_storage(scaled).ok()?;
     Some(StackValue::Decimal(dp as u8, storage, shadow))
 }
 

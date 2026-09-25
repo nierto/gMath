@@ -34,6 +34,22 @@ fn tight() -> FixedPoint {
     { fp("0.000000001") }
 }
 
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-8 at Q24.8, 256x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
+/// A difference in storage units (its raw value), for printing measured
+/// errors. Doubling the value instead would leave the range at 24 fraction
+/// bits, where the scalar operators wrap.
+fn in_ulps(d: FixedPoint) -> String { format!("{:?}", d.raw()) }
+
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
     assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
@@ -72,7 +88,8 @@ fn test_homogeneous_scaled() {
 fn test_homogeneous_at_infinity() {
     let h = FixedVector::from_slice(&[fp("1"), fp("2"), fp("0")]);
     assert!(from_homogeneous(&h).is_err(), "Point at infinity should error");
-    assert!(is_at_infinity(&h, fp("0.001")));
+    // 0.001 rounds to 0 below 10 fraction bits, and |w| = 0 < 0 cannot hold
+    assert!(is_at_infinity(&h, at_least(fp("0.001"), 1)));
 }
 
 // ============================================================================
@@ -159,8 +176,12 @@ fn test_cross_ratio_projective_invariance() {
     let td = m.apply(d).unwrap();
 
     let cr_after = cross_ratio_1d(ta, tb, tc, td).unwrap();
+    println!("cross-ratio invariance error: {} ulp", in_ulps((cr_before - cr_after).abs()));
 
-    assert_fp(cr_before, cr_after, tol(), "Cross-ratio projective invariance");
+    // the four images 1/3, 3/4, 1, 7/6 are rounded before the ratio: measured
+    // 1-4 units on every build (4 at 8 and 20 bits and on compact); 0.01 is
+    // 2.56 units at 8 bits
+    assert_fp(cr_before, cr_after, at_least(tol(), 6), "Cross-ratio projective invariance");
 }
 
 #[test]
@@ -212,8 +233,11 @@ fn test_stereo_unproject_roundtrip() {
 
     // Now project back
     let x_back = stereo_project(&p).unwrap();
-    assert_fp(x_back[0], x[0], tol(), "stereo back [0]");
-    assert_fp(x_back[1], x[1], tol(), "stereo back [1]");
+    println!("stereo back errors: {} / {} ulp", in_ulps((x_back[0] - x[0]).abs()), in_ulps((x_back[1] - x[1]).abs()));
+    // measured: 0 and 3 units on every build (p = (1/3, 2/3, 2/3) rounded,
+    // then x_1 = p_1 / (1 - p_2) divides by 1/3); 0.01 is 2.56 units at 8 bits
+    assert_fp(x_back[0], x[0], at_least(tol(), 4), "stereo back [0]");
+    assert_fp(x_back[1], x[1], at_least(tol(), 4), "stereo back [1]");
 }
 
 #[test]

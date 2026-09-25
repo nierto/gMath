@@ -9,14 +9,15 @@
 use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
-use super::interval::exact_product;
+use super::compute_matrix::{compute_lu_decompose, ComputeLU, ComputeMatrix};
 use super::linalg::{
-    compute_tier_dot_raw, compute_tier_sub_dot_raw, compute_tier_sub_dot_compute,
-    upscale_to_compute, round_to_storage, compute_abs, compute_product, deflation_threshold, exact_dot,
-    householder_vector, noise_floor, reflect, scale_by, stagnation_threshold, ComputeStorage,
+    compute_tier_sub_dot_compute, upscale_to_compute, round_to_storage, compute_abs, compute_product,
+    householder_vector_compute, reflect_compute, ComputeStorage,
+    compute_deflation_threshold, compute_noise_floor, compute_stagnation_threshold,
+    compute_scale_up, downscale_shifted_to_storage, scale_up_exponent,
     Rotation, STAGNATION_SWEEPS,
 };
-use super::wide_acc::widen_storage;
+use super::wide_acc::{exact_dot_compute, exact_sub_dot_compute, narrow_product_to_compute};
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     sqrt_at_compute_tier, compute_divide, downscale_to_storage,
     compute_multiply, compute_add, compute_negate,
@@ -36,12 +37,17 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// - `u` is upper triangular
 /// - `perm` is the permutation vector: row `i` of PA came from row `perm[i]` of A
 /// - `num_swaps` tracks parity for determinant sign
+///
+/// `l` and `u` are the compute-tier factors rounded once to storage, for
+/// inspection. `solve`, `inverse`, `refine` and `determinant` use the
+/// compute-tier factors themselves, kept alongside.
 #[derive(Clone, Debug)]
 pub struct LUDecomposition {
     pub l: FixedMatrix,
     pub u: FixedMatrix,
     pub perm: Vec<usize>,
     pub num_swaps: usize,
+    compute: ComputeLU,
 }
 
 /// LU decomposition with partial pivoting (Doolittle, compute-tier).
@@ -49,199 +55,81 @@ pub struct LUDecomposition {
 /// For an n×n matrix A, computes PA = LU where P is a permutation,
 /// L is unit lower triangular, and U is upper triangular.
 ///
-/// **Precision strategy:** Uses Doolittle direct formulas where each entry is
-/// computed via `compute_tier_sub_dot_raw`: the entire inner sum accumulates
-/// at tier N+1, rounding once. This gives 1 ULP per entry regardless of matrix
-/// size, instead of the O(n) ULP that incremental elimination produces.
+/// **Precision strategy:** the factorization runs at the compute tier
+/// throughout: every entry is an exact sum of products rounded once to the
+/// compute tier, and later entries are formed from those compute-tier
+/// entries, never from storage-rounded ones. The factors are rounded to
+/// storage once, for the public `l` and `u`. Before 0.6.4 every entry was
+/// rounded to storage and reused (up to 5 units in L and U, 114 units in
+/// `solve`, 70 in `determinant` on well-conditioned 4 x 4 systems).
 ///
 /// Returns `Err(DivisionByZero)` if the matrix is singular.
 pub fn lu_decompose(a: &FixedMatrix) -> Result<LUDecomposition, OverflowDetected> {
     assert!(a.is_square(), "lu_decompose: matrix must be square");
-    let n = a.rows();
-
-    // Work on permuted copy of A
-    let mut pa = a.clone();
-    let mut l = FixedMatrix::new(n, n);
-    let mut u = FixedMatrix::new(n, n);
-    let mut perm: Vec<usize> = (0..n).collect();
-    let mut num_swaps: usize = 0;
-
-    for k in 0..n {
-        // ── Partial pivoting ──
-        // Compute candidate U[k][k] for each remaining row to find best pivot.
-        // U[k][k] = PA[k][k] - SUM(L[k][m] * U[m][k], m=0..k-1)
-        let mut max_abs = FixedPoint::ZERO;
-        let mut max_row = k;
-        for i in k..n {
-            let candidate = if k == 0 {
-                pa.get(i, k)
-            } else {
-                let l_row = l.row_raw_range(i, 0, k);
-                let u_col = u.col_raw_range(k, 0, k);
-                FixedPoint::from_raw(compute_tier_sub_dot_raw(pa.get(i, k).raw(), &l_row, &u_col))
-            };
-            if candidate.abs() > max_abs {
-                max_abs = candidate.abs();
-                max_row = i;
-            }
-        }
-
-        if max_abs.is_zero() {
-            return Err(OverflowDetected::DivisionByZero);
-        }
-
-        // Row swap in PA and L (already-computed columns)
-        if max_row != k {
-            pa.swap_rows(k, max_row);
-            perm.swap(k, max_row);
-            num_swaps += 1;
-            for j in 0..k {
-                let tmp = l.get(k, j);
-                l.set(k, j, l.get(max_row, j));
-                l.set(max_row, j, tmp);
-            }
-        }
-
-        // ── U row k: U[k][j] = PA[k][j] - SUM(L[k][m] * U[m][j], m=0..k-1) ──
-        // Each entry computed via compute_tier_sub_dot_raw → 1 ULP
-        for j in k..n {
-            if k == 0 {
-                u.set(k, j, pa.get(k, j));
-            } else {
-                let l_row = l.row_raw_range(k, 0, k);
-                let u_col = u.col_raw_range(j, 0, k);
-                u.set(k, j, FixedPoint::from_raw(
-                    compute_tier_sub_dot_raw(pa.get(k, j).raw(), &l_row, &u_col)
-                ));
-            }
-        }
-
-        // ── L column k: L[i][k] = (PA[i][k] - SUM(L[i][m] * U[m][k], m=0..k-1)) / U[k][k] ──
-        // Each entry: compute_tier_sub_dot_raw (1 ULP) + division (1 ULP) = 2 ULP max
-        let pivot = u.get(k, k);
-        l.set(k, k, FixedPoint::one()); // Unit diagonal
-        for i in (k + 1)..n {
-            let numerator = if k == 0 {
-                pa.get(i, k)
-            } else {
-                let l_row = l.row_raw_range(i, 0, k);
-                let u_col = u.col_raw_range(k, 0, k);
-                FixedPoint::from_raw(compute_tier_sub_dot_raw(pa.get(i, k).raw(), &l_row, &u_col))
-            };
-            l.set(i, k, numerator / pivot);
-        }
-    }
-
-    Ok(LUDecomposition { l, u, perm, num_swaps })
+    let compute = compute_lu_decompose(&ComputeMatrix::from_fixed_matrix(a))?;
+    Ok(LUDecomposition {
+        l: narrow_matrix(compute.l())?,
+        u: narrow_matrix(compute.u())?,
+        perm: compute.perm().to_vec(),
+        num_swaps: compute.num_swaps(),
+        compute,
+    })
 }
 
 impl LUDecomposition {
-    /// Solve Ax = b using forward then back substitution.
-    ///
-    /// Inner sums use compute-tier accumulation for maximum precision.
+    /// Solve Ax = b: forward then back substitution on the compute-tier
+    /// factors, every sum exact, the solution rounded once.
     pub fn solve(&self, b: &FixedVector) -> Result<FixedVector, OverflowDetected> {
         let n = self.l.rows();
         assert_eq!(b.len(), n, "LU solve: dimension mismatch");
-
-        // Apply permutation
-        let mut pb = FixedVector::new(n);
-        for i in 0..n {
-            pb[i] = b[self.perm[i]];
-        }
-
-        // Forward substitution: Ly = pb (L is unit lower triangular)
-        let mut y = FixedVector::new(n);
-        for i in 0..n {
-            if i == 0 {
-                y[0] = pb[0];
-            } else {
-                let l_row = self.l.row_raw_range(i, 0, i);
-                let y_raw: Vec<BinaryStorage> = (0..i).map(|j| y[j].raw()).collect();
-                y[i] = FixedPoint::from_raw(
-                    compute_tier_sub_dot_raw(pb[i].raw(), &l_row, &y_raw)
-                );
-            }
-        }
-
-        // Back substitution: Ux = y
-        let mut x = FixedVector::new(n);
-        for i in (0..n).rev() {
-            let diag = self.u.get(i, i);
-            if diag.is_zero() {
-                return Err(OverflowDetected::DivisionByZero);
-            }
-            if i == n - 1 {
-                x[n - 1] = y[n - 1] / diag;
-            } else {
-                let u_row = self.u.row_raw_range(i, i + 1, n);
-                let x_raw: Vec<BinaryStorage> = (i + 1..n).map(|j| x[j].raw()).collect();
-                let numerator = FixedPoint::from_raw(
-                    compute_tier_sub_dot_raw(y[i].raw(), &u_row, &x_raw)
-                );
-                x[i] = numerator / diag;
-            }
-        }
-
-        Ok(x)
+        let bc: Vec<ComputeStorage> = (0..n).map(|i| upscale_to_compute(b[i].raw())).collect();
+        narrow_vector(&self.compute.solve(&bc)?)
     }
 
-    /// Determinant: det(A) = (-1)^num_swaps * product(U diagonal).
-    ///
-    /// Product accumulated at compute tier: single downscale at the end.
+    /// Determinant: det(A) = (-1)^num_swaps * product(U diagonal), formed at
+    /// the compute tier from the compute-tier factor and rounded once.
     pub fn determinant(&self) -> FixedPoint {
-        let n = self.u.rows();
-        // Multiply all diagonal values at compute tier, downscale once
-        use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_multiply;
-        let mut acc = upscale_to_compute(self.u.get(0, 0).raw());
-        for i in 1..n {
-            acc = compute_multiply(acc, upscale_to_compute(self.u.get(i, i).raw()));
-        }
-        let det_raw = round_to_storage(acc);
-        let det = FixedPoint::from_raw(det_raw);
-        if self.num_swaps % 2 == 1 { -det } else { det }
+        FixedPoint::from_raw(round_to_storage(self.compute.determinant()))
     }
 
-    /// Iterative refinement: improve solution accuracy by computing residual
-    /// at compute tier and correcting.
-    ///
-    /// One step typically reduces error from O(κ) ULP to O(1) ULP.
-    /// For ill-conditioned systems (Hilbert etc.), this is the difference
-    /// between millions of ULP and single-digit ULP.
+    /// Iterative refinement: the residual `b - Ax` exact at the compute tier,
+    /// the correction solved at the compute tier, `x + dx` rounded once.
     pub fn refine(&self, a: &FixedMatrix, b: &FixedVector, x: &FixedVector) -> Result<FixedVector, OverflowDetected> {
         let n = a.rows();
-        // Compute residual r = b - Ax at compute tier (high precision)
-        let mut r = FixedVector::new(n);
-        for i in 0..n {
-            let a_row = a.row_raw_range(i, 0, n);
-            let x_raw: Vec<BinaryStorage> = (0..n).map(|j| x[j].raw()).collect();
-            r[i] = FixedPoint::from_raw(
-                compute_tier_sub_dot_raw(b[i].raw(), &a_row, &x_raw)
-            );
-        }
-        // Solve A*dx = r using existing factorization
-        let dx = self.solve(&r)?;
-        // x_refined = x + dx
-        let mut x_refined = FixedVector::new(n);
-        for i in 0..n {
-            x_refined[i] = x[i] + dx[i];
-        }
-        Ok(x_refined)
+        let x_raw: Vec<BinaryStorage> = (0..n).map(|j| x[j].raw()).collect();
+        let r: Vec<ComputeStorage> = (0..n)
+            .map(|i| compute_tier_sub_dot_compute(b[i].raw(), &a.row_raw_range(i, 0, n), &x_raw))
+            .collect();
+        let dx = self.compute.solve(&r)?;
+        let refined: Result<Vec<ComputeStorage>, OverflowDetected> = (0..n)
+            .map(|i| compute_checked_add(upscale_to_compute(x[i].raw()), dx[i]))
+            .collect();
+        narrow_vector(&refined?)
     }
 
-    /// Compute A^{-1} by solving AX = I column by column.
+    /// Compute A^{-1} by solving AX = I column by column at the compute tier,
+    /// every entry rounded once.
     pub fn inverse(&self) -> Result<FixedMatrix, OverflowDetected> {
-        let n = self.l.rows();
-        let mut inv = FixedMatrix::new(n, n);
-        for j in 0..n {
-            let mut e_j = FixedVector::new(n);
-            e_j[j] = FixedPoint::one();
-            let col = self.solve(&e_j)?;
-            for i in 0..n {
-                inv.set(i, j, col[i]);
-            }
-        }
-        Ok(inv)
+        narrow_matrix(&self.compute.inverse()?)
     }
+}
+
+/// A compute-tier matrix rounded to storage, entry by entry (checked).
+fn narrow_matrix(c: &ComputeMatrix) -> Result<FixedMatrix, OverflowDetected> {
+    let mut out = FixedMatrix::new(c.rows(), c.cols());
+    for i in 0..c.rows() {
+        for j in 0..c.cols() {
+            out.set(i, j, FixedPoint::from_raw(downscale_to_storage(c.get(i, j))?));
+        }
+    }
+    Ok(out)
+}
+
+/// A compute-tier vector rounded to storage (checked).
+fn narrow_vector(c: &[ComputeStorage]) -> Result<FixedVector, OverflowDetected> {
+    let values: Result<Vec<FixedPoint>, OverflowDetected> =
+        c.iter().map(|v| downscale_to_storage(*v).map(FixedPoint::from_raw)).collect();
+    Ok(FixedVector::from_slice(&values?))
 }
 
 // ============================================================================
@@ -249,10 +137,15 @@ impl LUDecomposition {
 // ============================================================================
 
 /// Result of QR decomposition via Householder reflections: A = QR.
+///
+/// `q` and `r` are the compute-tier factors rounded once to storage;
+/// `solve` uses the compute-tier factors, kept alongside.
 #[derive(Clone, Debug)]
 pub struct QRDecomposition {
     pub q: FixedMatrix,
     pub r: FixedMatrix,
+    compute_q: ComputeMatrix,
+    compute_r: ComputeMatrix,
 }
 
 /// QR decomposition via Householder reflections.
@@ -266,102 +159,72 @@ pub fn qr_decompose(a: &FixedMatrix) -> Result<QRDecomposition, OverflowDetected
     let n = a.cols();
     assert!(m >= n, "qr_decompose: requires m >= n");
 
-    let mut r = a.clone();
-    let mut q = FixedMatrix::identity(m);
-    let two = FixedPoint::from_int(2);
+    // R and Q stay at the compute tier through every reflection and are
+    // rounded to storage once at the end: exact sums, each update one exact
+    // quotient (compute-tier Householder kernels). Before 0.6.4 R and Q were
+    // rounded to storage after every reflection, so an entry touched by k
+    // reflections carried k roundings (4 units on a 3 x 3 at Q16.16).
+    let mut r = ComputeMatrix::from_fixed_matrix(a);
+    let mut q = ComputeMatrix::identity(m);
 
     for k in 0..n {
-        let col_len = m - k;
+        let x: Vec<ComputeStorage> = (k..m).map(|i| r.get(i, k)).collect();
+        let Some((v, vv)) = householder_vector_compute(&x)? else { continue };
 
-        // Extract column x = R[k..m, k] as raw storage
-        let x_raw: Vec<BinaryStorage> = (k..m).map(|i| r.get(i, k).raw()).collect();
-
-        // ||x||^2 via compute-tier dot
-        let norm_sq = FixedPoint::from_raw(compute_tier_dot_raw(&x_raw, &x_raw));
-        if norm_sq.is_zero() {
-            continue;
-        }
-        let norm_x = norm_sq.try_sqrt()?;
-
-        // Sign choice: alpha = -sign(x_0) * ||x|| (avoids cancellation in v[0])
-        let x_0 = r.get(k, k);
-        let alpha = if x_0.is_negative() { norm_x } else { -norm_x };
-
-        // Householder vector: v = x - alpha*e_1 → v[0] = x_0 - alpha, v[i] = x[i]
-        let mut v = Vec::<FixedPoint>::with_capacity(col_len);
-        v.push(x_0 - alpha);
-        for i in 1..col_len {
-            v.push(FixedPoint::from_raw(x_raw[i]));
-        }
-        let v_raw: Vec<BinaryStorage> = v.iter().map(|fp| fp.raw()).collect();
-
-        // v^T v via compute-tier
-        let vtv = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &v_raw));
-        if vtv.is_zero() {
-            continue;
-        }
-
-        // Apply H to R: R[k..m, k..n] -= 2 * v * (v^T * R[k..m, j]) / vtv
+        // R <- H R, column by column
         for j in k..n {
-            let col_j_raw: Vec<BinaryStorage> = (k..m).map(|i| r.get(i, j).raw()).collect();
-            let vt_rj = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &col_j_raw));
-            let scale = two * vt_rj / vtv;
-            for i in k..m {
-                let r_ij = r.get(i, j);
-                r.set(i, j, r_ij - scale * v[i - k]);
+            let mut col: Vec<ComputeStorage> = (k..m).map(|i| r.get(i, j)).collect();
+            reflect_compute(&mut col, &v, vv)?;
+            for (i, c) in (k..m).zip(col) {
+                r.set(i, j, c);
             }
         }
+        // the reflected column is (alpha, 0, ..., 0) exactly
+        for i in (k + 1)..m {
+            r.set(i, k, make_compute_int(0));
+        }
 
-        // Apply H to Q: Q[:, k..m] *= H → Q[i, j] -= scale_i * v[j-k]
+        // Q <- Q H, row by row
         for i in 0..m {
-            let q_row_raw: Vec<BinaryStorage> = (k..m).map(|j| q.get(i, j).raw()).collect();
-            let qi_dot_v = FixedPoint::from_raw(compute_tier_dot_raw(&q_row_raw, &v_raw));
-            let scale = two * qi_dot_v / vtv;
-            for j in k..m {
-                let q_ij = q.get(i, j);
-                q.set(i, j, q_ij - scale * v[j - k]);
+            let mut row: Vec<ComputeStorage> = (k..m).map(|j| q.get(i, j)).collect();
+            reflect_compute(&mut row, &v, vv)?;
+            for (j, c) in (k..m).zip(row) {
+                q.set(i, j, c);
             }
         }
     }
 
-    Ok(QRDecomposition { q, r })
+    Ok(QRDecomposition { q: narrow_matrix(&q)?, r: narrow_matrix(&r)?, compute_q: q, compute_r: r })
 }
 
 impl QRDecomposition {
-    /// Solve Ax = b via R^{-1} Q^T b (back substitution).
+    /// Solve Ax = b via R^{-1} Q^T b on the compute-tier factors: `Q^T b`
+    /// exact sums, back substitution at the compute tier, the solution
+    /// rounded once (before 0.6.4 on the storage factors: up to 27 units on
+    /// well-conditioned 4 x 4 systems).
     pub fn solve(&self, b: &FixedVector) -> Result<FixedVector, OverflowDetected> {
         let m = self.q.rows();
         let n = self.r.cols();
         assert_eq!(b.len(), m, "QR solve: dimension mismatch");
 
-        // Compute Q^T b via compute-tier dot products
-        let mut qtb = FixedVector::new(m);
+        let bc: Vec<ComputeStorage> = (0..m).map(|j| upscale_to_compute(b[j].raw())).collect();
+        let mut qtb = Vec::with_capacity(m);
         for i in 0..m {
-            let q_col_raw: Vec<BinaryStorage> = (0..m).map(|j| self.q.get(j, i).raw()).collect();
-            let b_raw: Vec<BinaryStorage> = (0..m).map(|j| b[j].raw()).collect();
-            qtb[i] = FixedPoint::from_raw(compute_tier_dot_raw(&q_col_raw, &b_raw));
+            let q_col: Vec<ComputeStorage> = (0..m).map(|j| self.compute_q.get(j, i)).collect();
+            qtb.push(narrow_product_to_compute(exact_dot_compute(&q_col, &bc)?)?);
         }
 
-        // Back substitution on R (n×n upper triangular part)
-        let mut x = FixedVector::new(n);
+        let mut x = vec![make_compute_int(0); n];
         for i in (0..n).rev() {
-            let diag = self.r.get(i, i);
-            if diag.is_zero() {
+            let diag = self.compute_r.get(i, i);
+            if compute_is_zero(&diag) {
                 return Err(OverflowDetected::DivisionByZero);
             }
-            if i == n - 1 {
-                x[n - 1] = qtb[n - 1] / diag;
-            } else {
-                let r_row = self.r.row_raw_range(i, i + 1, n);
-                let x_raw: Vec<BinaryStorage> = (i + 1..n).map(|j| x[j].raw()).collect();
-                let numerator = FixedPoint::from_raw(
-                    compute_tier_sub_dot_raw(qtb[i].raw(), &r_row, &x_raw)
-                );
-                x[i] = numerator / diag;
-            }
+            let r_row: Vec<ComputeStorage> = (i + 1..n).map(|j| self.compute_r.get(i, j)).collect();
+            let numerator = exact_sub_dot_compute(qtb[i], &r_row, &x[i + 1..n])?;
+            x[i] = compute_divide(numerator, diag)?;
         }
-
-        Ok(x)
+        narrow_vector(&x)
     }
 }
 
@@ -371,119 +234,81 @@ impl QRDecomposition {
 
 /// Result of Cholesky decomposition: A = LL^T.
 ///
-/// `l` is lower triangular with positive diagonal entries.
+/// `l` is lower triangular with positive diagonal entries: the compute-tier
+/// factor rounded once to storage. `solve` and `determinant` use the
+/// compute-tier factor, kept alongside.
 #[derive(Clone, Debug)]
 pub struct CholeskyDecomposition {
     pub l: FixedMatrix,
+    compute: ComputeMatrix,
 }
 
 /// Cholesky decomposition for symmetric positive-definite matrices.
 ///
 /// Returns `Err(DomainError)` if the matrix is not positive-definite.
 ///
-/// **Precision strategy:** Uses fused compute-tier operations throughout:
-/// - Diagonal: `sqrt(A[i][i] - dot(L_row, L_row))` computed entirely at tier N+1,
-///   single downscale at the end → 0-1 ULP per entry.
-/// - Off-diagonal: `(A[j][i] - dot(L_j, L_i)) / L[i][i]` with the sub_dot at
-///   tier N+1 fed directly into compute_divide, single downscale → 0-1 ULP.
+/// **Precision strategy:** the factor is built at the compute tier: each
+/// diagonal entry `sqrt(A[i][i] - sum L[i][k]^2)` and each off-diagonal
+/// `(A[j][i] - sum L[j][k] L[i][k]) / L[i][i]` from exact sums of the
+/// compute-tier entries before it, rounded once to storage for `l`. Before
+/// 0.6.4 each entry was rounded to storage and reused.
 pub fn cholesky_decompose(a: &FixedMatrix) -> Result<CholeskyDecomposition, OverflowDetected> {
     assert!(a.is_square(), "cholesky_decompose: matrix must be square");
     let n = a.rows();
-    let mut l = FixedMatrix::new(n, n);
+    let mut lc = ComputeMatrix::new(n, n);
 
     for i in 0..n {
-        // Diagonal: L[i][i] = sqrt(A[i][i] - SUM L[i][k]^2)
-        // FUSED at compute tier: sub_dot → sqrt → downscale (single rounding)
-        let diag_compute = if i == 0 {
-            upscale_to_compute(a.get(0, 0).raw())
-        } else {
-            let l_row = l.row_raw_range(i, 0, i);
-            compute_tier_sub_dot_compute(a.get(i, i).raw(), &l_row, &l_row)
-        };
-
-        // Check positive-definiteness at compute tier (before sqrt)
-        if compute_is_negative(&diag_compute) || compute_is_zero(&diag_compute) {
+        let row_i: Vec<ComputeStorage> = (0..i).map(|k| lc.get(i, k)).collect();
+        let diag = exact_sub_dot_compute(upscale_to_compute(a.get(i, i).raw()), &row_i, &row_i)?;
+        // positive-definiteness, decided at the compute tier (before sqrt)
+        if compute_is_negative(&diag) || compute_is_zero(&diag) {
             return Err(OverflowDetected::DomainError);
         }
-
-        // sqrt at compute tier, then single downscale → 0-1 ULP
-        let sqrt_compute = sqrt_at_compute_tier(diag_compute);
-        let l_ii_raw = downscale_to_storage(sqrt_compute)
-            .map_err(|_| OverflowDetected::TierOverflow)?;
-        let l_ii = FixedPoint::from_raw(l_ii_raw);
-        l.set(i, i, l_ii);
-
-        // Off-diagonal: L[j][i] = (A[j][i] - SUM L[j][k]*L[i][k]) / L[i][i]
-        // FUSED: sub_dot at compute tier → divide at compute tier → downscale
-        let l_ii_compute = upscale_to_compute(l_ii.raw());
+        let l_ii = sqrt_at_compute_tier(diag);
+        lc.set(i, i, l_ii);
         for j in (i + 1)..n {
-            let numerator_compute = if i == 0 {
-                upscale_to_compute(a.get(j, i).raw())
-            } else {
-                let l_j_row = l.row_raw_range(j, 0, i);
-                let l_i_row = l.row_raw_range(i, 0, i);
-                compute_tier_sub_dot_compute(a.get(j, i).raw(), &l_j_row, &l_i_row)
-            };
-            let quotient_compute = compute_divide(numerator_compute, l_ii_compute)
-                .map_err(|_| OverflowDetected::DivisionByZero)?;
-            let l_ji_raw = downscale_to_storage(quotient_compute)
-                .map_err(|_| OverflowDetected::TierOverflow)?;
-            l.set(j, i, FixedPoint::from_raw(l_ji_raw));
+            let row_j: Vec<ComputeStorage> = (0..i).map(|k| lc.get(j, k)).collect();
+            let numerator = exact_sub_dot_compute(upscale_to_compute(a.get(j, i).raw()), &row_j, &row_i)?;
+            lc.set(j, i, compute_divide(numerator, l_ii)?);
         }
     }
 
-    Ok(CholeskyDecomposition { l })
+    Ok(CholeskyDecomposition { l: narrow_matrix(&lc)?, compute: lc })
 }
 
 impl CholeskyDecomposition {
-    /// Solve Ax = b: forward (Ly = b), then back (L^T x = y).
+    /// Solve Ax = b: forward (Ly = b), then back (L^T x = y), on the
+    /// compute-tier factor with exact sums; the solution rounded once.
     pub fn solve(&self, b: &FixedVector) -> Result<FixedVector, OverflowDetected> {
         let n = self.l.rows();
         assert_eq!(b.len(), n, "Cholesky solve: dimension mismatch");
+        let l = &self.compute;
 
-        // Forward: Ly = b
-        let mut y = FixedVector::new(n);
+        let mut y = vec![make_compute_int(0); n];
         for i in 0..n {
-            let diag = self.l.get(i, i);
-            if i == 0 {
-                y[0] = b[0] / diag;
-            } else {
-                let l_row = self.l.row_raw_range(i, 0, i);
-                let y_raw: Vec<BinaryStorage> = (0..i).map(|j| y[j].raw()).collect();
-                let numerator = FixedPoint::from_raw(
-                    compute_tier_sub_dot_raw(b[i].raw(), &l_row, &y_raw)
-                );
-                y[i] = numerator / diag;
-            }
+            let l_row: Vec<ComputeStorage> = (0..i).map(|k| l.get(i, k)).collect();
+            let numerator = exact_sub_dot_compute(upscale_to_compute(b[i].raw()), &l_row, &y[..i])?;
+            y[i] = compute_divide(numerator, l.get(i, i))?;
         }
 
-        // Back: L^T x = y (L^T[i][j] = L[j][i])
-        let mut x = FixedVector::new(n);
+        let mut x = vec![make_compute_int(0); n];
         for i in (0..n).rev() {
-            let diag = self.l.get(i, i);
-            if i == n - 1 {
-                x[n - 1] = y[n - 1] / diag;
-            } else {
-                let lt_row = self.l.col_raw_range(i, i + 1, n);
-                let x_raw: Vec<BinaryStorage> = (i + 1..n).map(|j| x[j].raw()).collect();
-                let numerator = FixedPoint::from_raw(
-                    compute_tier_sub_dot_raw(y[i].raw(), &lt_row, &x_raw)
-                );
-                x[i] = numerator / diag;
-            }
+            let lt_row: Vec<ComputeStorage> = (i + 1..n).map(|k| l.get(k, i)).collect();
+            let numerator = exact_sub_dot_compute(y[i], &lt_row, &x[i + 1..n])?;
+            x[i] = compute_divide(numerator, l.get(i, i))?;
         }
-
-        Ok(x)
+        narrow_vector(&x)
     }
 
-    /// Determinant: det(A) = product(L[i][i])^2.
+    /// Determinant: det(A) = product(L[i][i])^2, formed at the compute tier
+    /// and rounded once (before 0.6.4 a chain of storage products).
     pub fn determinant(&self) -> FixedPoint {
         let n = self.l.rows();
-        let mut det_l = FixedPoint::one();
+        let mut det_l = make_compute_int(1);
         for i in 0..n {
-            det_l = det_l * self.l.get(i, i);
+            det_l = compute_multiply(det_l, self.compute.get(i, i));
         }
-        det_l * det_l
+        FixedPoint::from_raw(round_to_storage(compute_multiply(det_l, det_l)))
     }
 }
 
@@ -493,11 +318,13 @@ impl CholeskyDecomposition {
 //
 // Jacobi, Golub-Kahan and Francis converge only if the orthogonal transforms
 // they apply inject less rounding noise than their convergence tests resolve.
-// A coefficient rounded to storage precision injects about |x| ulp into every
-// entry it touches, so every coefficient here stays at the compute tier and
-// every transformed entry is narrowed once, from an exact accumulator
-// (`Rotation`, `householder_vector` and `reflect` in `linalg`). Every step is
-// checked: leaving the storage range is a `TierOverflow`, never a wrap.
+// Their state (the matrix being reduced and the accumulated transforms) is
+// carried at the compute tier, every transformed entry rounded once there
+// from an exact accumulator (`Rotation::apply_compute`,
+// `householder_vector_compute` and `reflect_compute` in `linalg`), and the
+// convergence tests work at the compute scale; the results are rounded to
+// storage once. Every step is checked: leaving the range is a `TierOverflow`,
+// never a wrap.
 
 /// Iteration budget of the QR-type iterations: this many steps per n².
 const ITERATIONS_PER_N_SQUARED: usize = 30;
@@ -509,49 +336,39 @@ const JACOBI_MAX_SWEEPS: usize = 100;
 /// a stagnant block may be taken to sit at the precision floor.
 const SCHUR_FLOOR_ITERATIONS: usize = 30;
 
-/// Reflect column `col` of `mat`, rows `start..start + v.len()`, in the
-/// hyperplane orthogonal to `v`.
-fn reflect_column(
-    mat: &mut FixedMatrix, col: usize, start: usize, v: &[BinaryStorage], v_dot_v: ComputeStorage,
+/// Reflect column `col` of a compute-tier matrix, rows `start..start + v.len()`.
+fn reflect_compute_column(
+    mat: &mut ComputeMatrix, col: usize, start: usize, v: &[ComputeStorage], v_dot_v: ComputeStorage,
 ) -> Result<(), OverflowDetected> {
-    let mut w: Vec<BinaryStorage> = (start..start + v.len()).map(|i| mat.get(i, col).raw()).collect();
-    reflect(&mut w, v, v_dot_v)?;
+    let mut w: Vec<ComputeStorage> = (start..start + v.len()).map(|i| mat.get(i, col)).collect();
+    reflect_compute(&mut w, v, v_dot_v)?;
     for (k, value) in w.into_iter().enumerate() {
-        mat.set(start + k, col, FixedPoint::from_raw(value));
+        mat.set(start + k, col, value);
     }
     Ok(())
 }
 
-/// Reflect row `row` of `mat`, columns `start..start + v.len()`, in the
-/// hyperplane orthogonal to `v`.
-fn reflect_row(
-    mat: &mut FixedMatrix, row: usize, start: usize, v: &[BinaryStorage], v_dot_v: ComputeStorage,
+/// Reflect row `row` of a compute-tier matrix, columns `start..start + v.len()`.
+fn reflect_compute_row(
+    mat: &mut ComputeMatrix, row: usize, start: usize, v: &[ComputeStorage], v_dot_v: ComputeStorage,
 ) -> Result<(), OverflowDetected> {
-    let mut w: Vec<BinaryStorage> = (start..start + v.len()).map(|c| mat.get(row, c).raw()).collect();
-    reflect(&mut w, v, v_dot_v)?;
+    let mut w: Vec<ComputeStorage> = (start..start + v.len()).map(|c| mat.get(row, c)).collect();
+    reflect_compute(&mut w, v, v_dot_v)?;
     for (k, value) in w.into_iter().enumerate() {
-        mat.set(row, start + k, FixedPoint::from_raw(value));
+        mat.set(row, start + k, value);
     }
     Ok(())
 }
 
-/// Rotate columns `a` and `b` of every row:
-/// `(M_a, M_b) <- (cs M_a + sn M_b, -sn M_a + cs M_b)`.
-fn rotate_columns(mat: &mut FixedMatrix, a: usize, b: usize, rot: &Rotation) -> Result<(), OverflowDetected> {
+/// Rotate columns `a` and `b` of every row of a compute-tier matrix, each
+/// entry rounded once at the compute tier.
+fn rotate_compute_columns(mat: &mut ComputeMatrix, a: usize, b: usize, rot: &Rotation) -> Result<(), OverflowDetected> {
     for r in 0..mat.rows() {
-        let (new_a, new_b) = rot.apply(mat.get(r, a), mat.get(r, b))?;
+        let (new_a, new_b) = rot.apply_compute(mat.get(r, a), mat.get(r, b))?;
         mat.set(r, a, new_a);
         mat.set(r, b, new_b);
     }
     Ok(())
-}
-
-fn checked_add_fp(a: FixedPoint, b: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-    a.raw().checked_add(b.raw()).map(FixedPoint::from_raw).ok_or(OverflowDetected::TierOverflow)
-}
-
-fn checked_sub_fp(a: FixedPoint, b: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-    a.raw().checked_sub(b.raw()).map(FixedPoint::from_raw).ok_or(OverflowDetected::TierOverflow)
 }
 
 fn compute_sum(terms: &[ComputeStorage]) -> Result<ComputeStorage, OverflowDetected> {
@@ -600,17 +417,20 @@ pub struct EigenDecomposition {
 /// 2. The rotation angle comes from the quadratic formula, no trig: `t = tan θ`
 ///    is the smaller root, formed without squaring τ when |τ| > 1. The diagonal
 ///    is updated in Rutishauser's form `a_pp + t a_pq`, `a_qq - t a_pq`.
-/// 3. Converged when a whole sweep finds every off-diagonal entry within the
-///    tight relative bound of its two diagonal entries, floored at four quanta.
-///    The absolute floor matters: an exact zero eigenvalue pair is computed as
-///    rounding noise, which a purely relative test never passes. A run whose
-///    largest off-diagonal entry has not decreased for five sweeps has reached
-///    the precision floor and is accepted only if every entry is within the
-///    looser sqrt(quantum) relative bound.
+/// 3. Converged when a whole sweep finds every off-diagonal entry within
+///    `2^-(3F/2)` of its two diagonal entries (relative), floored at
+///    `2^-(3F/2)` absolute. The absolute floor matters: an exact zero
+///    eigenvalue pair is computed as rounding noise, which a purely relative
+///    test never passes. A run whose largest off-diagonal entry has not
+///    decreased for five sweeps has reached the precision floor and is
+///    accepted only if every entry is within one storage unit relative.
 ///
-/// **Precision:** rotation coefficients stay at the compute tier; every updated
-/// entry is narrowed once from an exact accumulator. No entry is squared at
-/// storage precision.
+/// **Precision:** the matrix and the eigenvector accumulator are carried at
+/// the compute tier through every rotation (coefficients too), each updated
+/// entry rounded once at the compute tier from its exact value, and rounded
+/// to storage once at the end. Measured against mpmath on well-separated
+/// spectra: eigenvalues and eigenvectors within one unit on every profile and
+/// split (0.6.3 carried them at storage between rotations).
 ///
 /// **Errors:** `Err(PrecisionLimit)` if neither criterion is met within 100
 /// sweeps (never a partially converged result); `Err(TierOverflow)` if an entry
@@ -638,19 +458,20 @@ fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDec
         });
     }
 
-    // Work on a mutable copy; accumulate eigenvectors in V (starts as I)
-    let mut s = a.clone();
-    let mut v = FixedMatrix::identity(n);
+    // S and the eigenvector accumulator V stay at the compute tier through
+    // every rotation and are rounded to storage once at the end.
+    let mut s = ComputeMatrix::from_fixed_matrix(a);
+    let mut v = ComputeMatrix::identity(n);
 
     let mut converged = false;
-    let mut best_off: Option<FixedPoint> = None;
+    let mut best_off: Option<ComputeStorage> = None;
     let mut stagnant = 0usize;
     for _sweep in 0..max_sweeps {
         let mut rotated = false;
         for p in 0..n {
             for q in (p + 1)..n {
-                let bound = deflation_threshold(s.get(p, p).abs().max(s.get(q, q).abs()));
-                if s.get(p, q).abs() > bound {
+                let bound = compute_deflation_threshold(compute_abs(s.get(p, p)).max(compute_abs(s.get(q, q))));
+                if compute_abs(s.get(p, q)) > bound {
                     jacobi_rotate(&mut s, &mut v, p, q)?;
                     rotated = true;
                 }
@@ -680,24 +501,26 @@ fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDec
     // One rotation on the largest remaining off-diagonal entry: it is within
     // the bound, but still contributes to the nearest eigenvalues.
     let (largest, p, q) = largest_off_diagonal(&s);
-    if !largest.is_zero() {
+    if !compute_is_zero(&largest) {
         jacobi_rotate(&mut s, &mut v, p, q)?;
     }
 
-    // Extract eigenvalues from diagonal
-    let mut eigen_pairs: Vec<(FixedPoint, usize)> = (0..n)
-        .map(|i| (s.get(i, i), i))
-        .collect();
+    // Eigenvalues from the diagonal, each rounded once
+    let mut eigen_pairs: Vec<(FixedPoint, usize)> = Vec::with_capacity(n);
+    for i in 0..n {
+        eigen_pairs.push((FixedPoint::from_raw(downscale_to_storage(s.get(i, i))?), i));
+    }
 
     // Sort descending by absolute value
     eigen_pairs.sort_by(|a, b| b.0.abs().partial_cmp(&a.0.abs()).unwrap_or(std::cmp::Ordering::Equal));
 
+    let vectors_all = narrow_matrix(&v)?;
     let mut values = FixedVector::new(n);
     let mut vectors = FixedMatrix::new(n, n);
     for (k, (val, orig_idx)) in eigen_pairs.iter().enumerate() {
         values[k] = *val;
         for r in 0..n {
-            vectors.set(r, k, v.get(r, *orig_idx));
+            vectors.set(r, k, vectors_all.get(r, *orig_idx));
         }
     }
 
@@ -705,12 +528,12 @@ fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDec
 }
 
 /// Largest |s[p][q]| over p < q, with its position (the first on ties).
-fn largest_off_diagonal(s: &FixedMatrix) -> (FixedPoint, usize, usize) {
+fn largest_off_diagonal(s: &ComputeMatrix) -> (ComputeStorage, usize, usize) {
     let n = s.rows();
-    let (mut largest, mut at_p, mut at_q) = (FixedPoint::ZERO, 0, 1);
+    let (mut largest, mut at_p, mut at_q) = (make_compute_int(0), 0, 1);
     for p in 0..n {
         for q in (p + 1)..n {
-            let value = s.get(p, q).abs();
+            let value = compute_abs(s.get(p, q));
             if value > largest {
                 largest = value;
                 at_p = p;
@@ -721,10 +544,12 @@ fn largest_off_diagonal(s: &FixedMatrix) -> (FixedPoint, usize, usize) {
     (largest, at_p, at_q)
 }
 
-fn off_diagonal_within_stagnation_bound(s: &FixedMatrix) -> bool {
+fn off_diagonal_within_stagnation_bound(s: &ComputeMatrix) -> bool {
     let n = s.rows();
     (0..n).all(|p| {
-        ((p + 1)..n).all(|q| s.get(p, q).abs() <= stagnation_threshold(s.get(p, p).abs().max(s.get(q, q).abs())))
+        ((p + 1)..n).all(|q| {
+            compute_abs(s.get(p, q)) <= compute_stagnation_threshold(compute_abs(s.get(p, p)).max(compute_abs(s.get(q, q))))
+        })
     })
 }
 
@@ -733,15 +558,17 @@ fn off_diagonal_within_stagnation_bound(s: &FixedMatrix) -> bool {
 /// With `τ = (a_pp - a_qq) / (2 a_pq)`, `t = sign(τ) / (|τ| + sqrt(1 + τ²))`,
 /// `cs = 1 / sqrt(1 + t²)`, `sn = t cs`, all at the compute tier. The
 /// off-diagonal rows rotate by `(cs, sn)`; the diagonal moves by `± t a_pq`.
-fn jacobi_rotate(s: &mut FixedMatrix, v: &mut FixedMatrix, p: usize, q: usize) -> Result<(), OverflowDetected> {
+/// Every entry is a compute raw, each updated entry rounded once at the
+/// compute tier from its exact value.
+fn jacobi_rotate(s: &mut ComputeMatrix, v: &mut ComputeMatrix, p: usize, q: usize) -> Result<(), OverflowDetected> {
     let n = s.rows();
     let (a_pp, a_qq, a_pq) = (s.get(p, p), s.get(q, q), s.get(p, q));
-    if a_pq.is_zero() {
+    if compute_is_zero(&a_pq) {
         return Ok(());
     }
     let one = make_compute_int(1);
-    let num = compute_checked_add(upscale_to_compute(a_pp.raw()), compute_negate(upscale_to_compute(a_qq.raw())))?;
-    let den = compute_checked_add(upscale_to_compute(a_pq.raw()), upscale_to_compute(a_pq.raw()))?;
+    let num = compute_checked_add(a_pp, compute_negate(a_qq))?;
+    let den = compute_checked_add(a_pq, a_pq)?;
     let negative = !compute_is_zero(&num) && (compute_is_negative(&num) != compute_is_negative(&den));
     let (num_abs, den_abs) = (compute_abs(num), compute_abs(den));
     let t_abs = if num_abs <= den_abs {
@@ -763,20 +590,25 @@ fn jacobi_rotate(s: &mut FixedMatrix, v: &mut FixedMatrix, p: usize, q: usize) -
         if r == p || r == q {
             continue;
         }
-        let (new_rp, new_rq) = rot.apply(s.get(r, p), s.get(r, q))?;
+        let (new_rp, new_rq) = rot.apply_compute(s.get(r, p), s.get(r, q))?;
         s.set(r, p, new_rp);
         s.set(p, r, new_rp);
         s.set(r, q, new_rq);
         s.set(q, r, new_rq);
     }
 
-    let shift = scale_by(t, a_pq)?;
-    s.set(p, p, checked_add_fp(a_pp, shift)?);
-    s.set(q, q, checked_sub_fp(a_qq, shift)?);
-    s.set(p, q, FixedPoint::ZERO);
-    s.set(q, p, FixedPoint::ZERO);
+    let shift = compute_product(t, a_pq)?;
+    s.set(p, p, compute_checked_add(a_pp, shift)?);
+    s.set(q, q, compute_checked_add(a_qq, compute_negate(shift))?);
+    s.set(p, q, make_compute_int(0));
+    s.set(q, p, make_compute_int(0));
 
-    rotate_columns(v, p, q, &rot)
+    for r in 0..v.rows() {
+        let (new_a, new_b) = rot.apply_compute(v.get(r, p), v.get(r, q))?;
+        v.set(r, p, new_a);
+        v.set(r, q, new_b);
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -809,19 +641,22 @@ pub struct SVDDecomposition {
 ///    (row rotations) or V (column rotations) taking the matching transpose
 /// 3. Singular values extracted from converged B diagonal
 ///
-/// **Precision:** Householder factors `2 (v.w)/(v.v)` and rotation
-/// coefficients stay at the compute tier, and every transformed entry is
-/// narrowed once from an exact accumulator. The Wilkinson shift is formed at
-/// the compute tier from exact products.
+/// **Precision:** B, U and V are carried at the compute tier through the
+/// bidiagonalization and the whole iteration (Householder factors, rotation
+/// coefficients and the Wilkinson shift too), each transformed entry rounded
+/// once at the compute tier from its exact value, and rounded to storage once
+/// at the end. Measured against mpmath on well-separated spectra: singular
+/// values and vectors within one unit on every profile and split (0.6.3
+/// carried them at storage and converged to `2^-(2F/3)` relative).
 ///
-/// **Convergence:** a superdiagonal entry is negligible within the tight
-/// relative bound of its diagonal neighbours, floored at four quanta, and a
-/// diagonal entry of at most four quanta is set to zero and deflated. An exact
-/// zero singular value is computed as a block of rounding noise that a purely
-/// relative test never passes. A block in which no diagonal or superdiagonal
-/// entry has reached a new smallest magnitude for five iterations has reached
-/// the precision floor: its entry with the smallest backward error is deflated
-/// if it lies within the looser sqrt(quantum) relative bound.
+/// **Convergence:** a superdiagonal entry is negligible within `2^-(3F/2)`
+/// of its diagonal neighbours (relative), floored at `2^-(3F/2)` absolute,
+/// and a diagonal entry at or below that floor is set to zero and deflated.
+/// An exact zero singular value is computed as a block of rounding noise that
+/// a purely relative test never passes. A block in which no diagonal or
+/// superdiagonal entry has reached a new smallest magnitude for five
+/// iterations has reached the precision floor: its entry with the smallest
+/// backward error is deflated if it lies within one storage unit relative.
 ///
 /// **Errors:** `Err(PrecisionLimit)` if the iteration budget (30 n² steps) runs
 /// out: the unconverged diagonal is never returned. `Err(TierOverflow)` if a
@@ -859,31 +694,40 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // ── Phase 1: Householder Bidiagonalization ──
     // Transform A into upper bidiagonal B via left and right Householder reflections:
     // U₀ᵀ A V₀ = B
-    let mut b = a.clone();
-    let mut u_acc = FixedMatrix::identity(m);
-    let mut v_acc = FixedMatrix::identity(n);
+    // B, U and V stay at the compute tier through the bidiagonalization and
+    // the QR iteration, and are rounded to storage once at the end.
+    let mut b = ComputeMatrix::from_fixed_matrix(a);
+    let mut u_acc = ComputeMatrix::identity(m);
+    let mut v_acc = ComputeMatrix::identity(n);
 
     for j in 0..n {
         // ── Left Householder: zero out B[j+1..m, j] ──
-        let column: Vec<BinaryStorage> = (j..m).map(|i| b.get(i, j).raw()).collect();
-        if let Some((v_hh, vtv)) = householder_vector(&column)? {
+        let column: Vec<ComputeStorage> = (j..m).map(|i| b.get(i, j)).collect();
+        if let Some((v_hh, vtv)) = householder_vector_compute(&column)? {
             for c in j..n {
-                reflect_column(&mut b, c, j, &v_hh, vtv)?;
+                reflect_compute_column(&mut b, c, j, &v_hh, vtv)?;
             }
             for r in 0..m {
-                reflect_row(&mut u_acc, r, j, &v_hh, vtv)?;
+                reflect_compute_row(&mut u_acc, r, j, &v_hh, vtv)?;
+            }
+            // the reflected column is (alpha, 0, ..., 0) exactly
+            for i in (j + 1)..m {
+                b.set(i, j, make_compute_int(0));
             }
         }
 
         // ── Right Householder: zero out B[j, j+2..n] ──
         if j + 1 < n {
-            let row: Vec<BinaryStorage> = (j + 1..n).map(|c| b.get(j, c).raw()).collect();
-            if let Some((v_hh, vtv)) = householder_vector(&row)? {
+            let row: Vec<ComputeStorage> = (j + 1..n).map(|c| b.get(j, c)).collect();
+            if let Some((v_hh, vtv)) = householder_vector_compute(&row)? {
                 for r in j..m {
-                    reflect_row(&mut b, r, j + 1, &v_hh, vtv)?;
+                    reflect_compute_row(&mut b, r, j + 1, &v_hh, vtv)?;
                 }
                 for r in 0..n {
-                    reflect_row(&mut v_acc, r, j + 1, &v_hh, vtv)?;
+                    reflect_compute_row(&mut v_acc, r, j + 1, &v_hh, vtv)?;
+                }
+                for c in (j + 2)..n {
+                    b.set(j, c, make_compute_int(0));
                 }
             }
         }
@@ -895,11 +739,19 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // chase rounded to storage loses a bulge of less than one quantum, and with
     // it the shift: on entries of a few hundred quanta the step then repeats
     // itself exactly and the block never converges.
-    let mut d: Vec<ComputeStorage> = (0..n).map(|i| upscale_to_compute(b.get(i, i).raw())).collect();
-    let mut e: Vec<ComputeStorage> = (0..n.saturating_sub(1)).map(|i| upscale_to_compute(b.get(i, i + 1).raw())).collect();
+    let mut d: Vec<ComputeStorage> = (0..n).map(|i| b.get(i, i)).collect();
+    let mut e: Vec<ComputeStorage> = (0..n.saturating_sub(1)).map(|i| b.get(i, i + 1)).collect();
     let zero = make_compute_int(0);
+    // Power-of-two exponent by which each d[i] (and e[i]) has been scaled up.
+    // An active block whose entries are all below 1/2 is scaled up (exactly)
+    // until its largest lies in [1/2, 1): singular values scale with the
+    // block and the rotations do not depend on the scale, while the shift and
+    // the chase keep their relative precision only at that size (at F = 10 a
+    // block near 2^-8 left the shift a few significant bits and the iteration
+    // froze). Undone in the final rounding.
+    let mut exponent = vec![0u32; n];
 
-    let floor = noise_floor();
+    let floor = compute_noise_floor();
     let max_iter = iterations_per_n_squared * n * n;
     let mut iter_count = 0usize;
     let mut q_end = n; // exclusive end of the unconverged part
@@ -914,7 +766,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     loop {
         // Peel converged superdiagonal entries off the bottom
         while q_end > 1
-            && compute_within(e[q_end - 2], deflation_threshold(storage_magnitude(d[q_end - 1], d[q_end - 2])?))
+            && compute_abs(e[q_end - 2]) <= compute_deflation_threshold(compute_abs(d[q_end - 1]).max(compute_abs(d[q_end - 2])))
         {
             q_end -= 1;
         }
@@ -928,8 +780,24 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // Active block: d[p..=q], e[p..q]
         let q = q_end - 1;
         let mut p = q;
-        while p > 0 && !compute_within(e[p - 1], deflation_threshold(storage_magnitude(d[p], d[p - 1])?)) {
+        while p > 0 && compute_abs(e[p - 1]) > compute_deflation_threshold(compute_abs(d[p]).max(compute_abs(d[p - 1]))) {
             p -= 1;
+        }
+
+        let k = scale_up_exponent(&d[p..=q].iter().chain(&e[p..q]).copied().collect::<Vec<_>>());
+        if k > 0 {
+            for i in p..=q {
+                d[i] = compute_scale_up(d[i], k);
+                exponent[i] += k;
+            }
+            for i in p..q {
+                e[i] = compute_scale_up(e[i], k);
+            }
+            if stall_block == (p, q) {
+                for best in stall_best.iter_mut() {
+                    *best = compute_scale_up(*best, k);
+                }
+            }
         }
 
         // ── Stagnation fallback ──
@@ -958,7 +826,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
             stall_count = 0;
             let ie = (p..q).min_by_key(|&k| compute_abs(e[k])).expect("active block has a superdiagonal entry");
             let id = (p..=q).min_by_key(|&k| compute_abs(d[k])).expect("active block has a diagonal entry");
-            let e_ok = compute_within(e[ie], stagnation_threshold(storage_magnitude(d[ie], d[ie + 1])?));
+            let e_ok = compute_abs(e[ie]) <= compute_stagnation_threshold(compute_abs(d[ie]).max(compute_abs(d[ie + 1])));
             let mut neighbour = zero;
             if id > 0 {
                 neighbour = neighbour.max(compute_abs(d[id - 1])).max(compute_abs(e[id - 1]));
@@ -966,7 +834,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
             if id < q {
                 neighbour = neighbour.max(compute_abs(e[id]));
             }
-            let d_ok = compute_within(d[id], stagnation_threshold(storage_magnitude(neighbour, zero)?));
+            let d_ok = compute_abs(d[id]) <= compute_stagnation_threshold(neighbour);
             if e_ok && (!d_ok || compute_abs(e[ie]) <= compute_abs(d[id])) {
                 e[ie] = zero;
                 iter_count += 1;
@@ -979,7 +847,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 
         // ── Zero diagonal at the bottom of the block ──
         // Chase e[q-1] upward with column rotations (columns j and q), which V takes.
-        if compute_within(d[q], floor) || forced_zero == Some(q) {
+        if compute_abs(d[q]) <= floor || forced_zero == Some(q) {
             d[q] = zero;
             let mut bulge = e[q - 1];
             e[q - 1] = zero;
@@ -990,7 +858,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
                     bulge = rot.neg_sin_times_compute(e[j - 1])?;
                     e[j - 1] = rot.cos_times_compute(e[j - 1])?;
                 }
-                rotate_columns(&mut v_acc, j, q, &rot)?;
+                rotate_compute_columns(&mut v_acc, j, q, &rot)?;
             }
             iter_count += 1;
             continue;
@@ -999,7 +867,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // ── Zero diagonal inside the block ──
         // Chase e[i] downward with row rotations (rows j and i): the rows move by
         // G, so U takes Gᵀ on columns (j, i).
-        if let Some(i) = (p..q).find(|&i| compute_within(d[i], floor) || forced_zero == Some(i)) {
+        if let Some(i) = (p..q).find(|&i| compute_abs(d[i]) <= floor || forced_zero == Some(i)) {
             d[i] = zero;
             let mut bulge = e[i];
             e[i] = zero;
@@ -1010,7 +878,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
                     bulge = rot.neg_sin_times_compute(e[j])?;
                     e[j] = rot.cos_times_compute(e[j])?;
                 }
-                rotate_columns(&mut u_acc, j, i, &rot)?;
+                rotate_compute_columns(&mut u_acc, j, i, &rot)?;
             }
             iter_count += 1;
             continue;
@@ -1030,13 +898,13 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
             (d[i], e[i]) = rot.apply_compute(d[i], e[i])?;
             let bulge = rot.sin_times_compute(d[i + 1])?;
             d[i + 1] = rot.cos_times_compute(d[i + 1])?;
-            rotate_columns(&mut v_acc, i, i + 1, &rot)?;
+            rotate_compute_columns(&mut v_acc, i, i + 1, &rot)?;
 
             // Left rotation on rows i, i+1
             let rot2 = Rotation::zeroing_compute(d[i], bulge)?;
             d[i] = rot2.combine_compute(d[i], bulge)?;
             (e[i], d[i + 1]) = rot2.apply_compute(e[i], d[i + 1])?;
-            rotate_columns(&mut u_acc, i, i + 1, &rot2)?;
+            rotate_compute_columns(&mut u_acc, i, i + 1, &rot2)?;
 
             // Set up for next iteration of the chase
             if i + 1 < q {
@@ -1052,14 +920,15 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // ── Phase 3: Make singular values non-negative and sort descending ──
     let mut values: Vec<FixedPoint> = Vec::with_capacity(n);
     for i in 0..n {
-        values.push(FixedPoint::from_raw(downscale_to_storage(compute_abs(d[i]))?));
+        values.push(FixedPoint::from_raw(downscale_shifted_to_storage(compute_abs(d[i]), exponent[i])?));
         if compute_is_negative(&d[i]) {
             // Flip sign of corresponding V column (row of Vᵀ)
             for r in 0..n {
-                v_acc.set(r, i, -v_acc.get(r, i));
+                v_acc.set(r, i, compute_negate(v_acc.get(r, i)));
             }
         }
     }
+    let (u_acc, v_acc) = (narrow_matrix(&u_acc)?, narrow_matrix(&v_acc)?);
 
     // Sort by descending singular value
     let mut indices: Vec<usize> = (0..n).collect();
@@ -1124,18 +993,6 @@ fn wilkinson_shift(
     compute_checked_add(g, compute_negate(compute_multiply(h, ratio)))
 }
 
-/// The larger of `|a|` and `|b|` (compute raws) at the storage scale, for the
-/// convergence thresholds. A magnitude beyond storage is a `TierOverflow`.
-fn storage_magnitude(a: ComputeStorage, b: ComputeStorage) -> Result<FixedPoint, OverflowDetected> {
-    Ok(FixedPoint::from_raw(downscale_to_storage(compute_abs(a).max(compute_abs(b)))?))
-}
-
-/// `|v| <= bound` for a compute raw and a storage bound.
-#[inline]
-fn compute_within(v: ComputeStorage, bound: FixedPoint) -> bool {
-    compute_abs(v) <= upscale_to_compute(bound.raw())
-}
-
 // ============================================================================
 // Schur Decomposition (Hessenberg Reduction + Francis QR Iteration)
 // ============================================================================
@@ -1167,16 +1024,20 @@ pub struct SchurDecomposition {
 ///    bulge chased to the last row (a final 2×2 rotation) and the chased
 ///    entries set to zero; exceptional shifts every 10 iterations without
 ///    deflation break the cycles an ordinary shift can sit in
-/// 3. Deflate when a subdiagonal entry is within the tight relative bound of
-///    its diagonal neighbours, floored at four quanta (set to zero); split
-///    converged 2×2 blocks with real eigenvalues
+/// 3. Deflate when a subdiagonal entry is within `2^-(3F/2)` of its diagonal
+///    neighbours (relative), floored at `2^-(3F/2)` absolute (set to zero);
+///    split converged 2×2 blocks with real eigenvalues
 ///
-/// **Precision:** Householder factors, rotation coefficients and shifts stay at
-/// the compute tier; every transformed entry is narrowed once from an exact
-/// accumulator. A block that has not deflated after 30 iterations and in which
-/// no subdiagonal entry has reached a new minimum for five iterations has
+/// **Precision:** H and Q are carried at the compute tier through the
+/// Hessenberg reduction and the whole iteration (Householder factors, rotation
+/// coefficients and shifts too), each transformed entry rounded once at the
+/// compute tier from its exact value, and rounded to storage once at the end.
+/// Measured against exact eigenvalues: within one unit on every profile and
+/// split (0.6.3 carried H at storage and converged to `2^-(2F/3)` relative).
+/// A block that has not deflated after 30 iterations and in which no
+/// subdiagonal entry has reached a new minimum for five iterations has
 /// reached the precision floor: its smallest subdiagonal entry is deflated if
-/// it lies within the looser sqrt(quantum) relative bound.
+/// it lies within one storage unit relative.
 ///
 /// **Errors:** `Err(PrecisionLimit)` if the iteration budget (30 n² steps) runs
 /// out: an unconverged T is never returned. `Err(TierOverflow)` if a norm or a
@@ -1198,31 +1059,34 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
     }
 
     // ── Phase 1: Hessenberg Reduction ──
-    // Reduce A to upper Hessenberg form H via Householder: Qᵀ A Q = H
-    let mut h = a.clone();
-    let mut q_acc = FixedMatrix::identity(n);
+    // Reduce A to upper Hessenberg form H via Householder: Qᵀ A Q = H. H and
+    // Q stay at the compute tier through the reduction and the Francis
+    // iteration, and are rounded to storage once at the end.
+    let mut h = ComputeMatrix::from_fixed_matrix(a);
+    let mut q_acc = ComputeMatrix::identity(n);
+    let zero = make_compute_int(0);
 
     for k in 0..n.saturating_sub(2) {
         let start = k + 1;
-        let column: Vec<BinaryStorage> = (start..n).map(|i| h.get(i, k).raw()).collect();
-        let (v_hh, vtv) = match householder_vector(&column)? {
+        let column: Vec<ComputeStorage> = (start..n).map(|i| h.get(i, k)).collect();
+        let (v_hh, vtv) = match householder_vector_compute(&column)? {
             Some(reflector) => reflector,
             None => continue,
         };
         // Left: H[start..n, :] ; columns before k are already zero in these rows
         for c in k..n {
-            reflect_column(&mut h, c, start, &v_hh, vtv)?;
+            reflect_compute_column(&mut h, c, start, &v_hh, vtv)?;
         }
         // Right: H[:, start..n]
         for r in 0..n {
-            reflect_row(&mut h, r, start, &v_hh, vtv)?;
+            reflect_compute_row(&mut h, r, start, &v_hh, vtv)?;
         }
         // Accumulate into Q: Q[:, start..n]
         for r in 0..n {
-            reflect_row(&mut q_acc, r, start, &v_hh, vtv)?;
+            reflect_compute_row(&mut q_acc, r, start, &v_hh, vtv)?;
         }
         for i in (start + 1)..n {
-            h.set(i, k, FixedPoint::ZERO);
+            h.set(i, k, zero);
         }
     }
 
@@ -1236,7 +1100,7 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
     // each subdiagonal entry has reached, and the iterations since any entry
     // last reached a new one
     let mut stall_block = (usize::MAX, usize::MAX);
-    let mut stall_best: Vec<FixedPoint> = Vec::new();
+    let mut stall_best: Vec<ComputeStorage> = Vec::new();
     let mut stall_count = 0usize;
 
     while nn > 0 {
@@ -1244,9 +1108,9 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
         // is set to zero (its backward error is the entry itself)
         let mut l = nn - 1;
         while l > 0 {
-            let bound = deflation_threshold(h.get(l, l).abs().max(h.get(l - 1, l - 1).abs()));
-            if h.get(l, l - 1).abs() <= bound {
-                h.set(l, l - 1, FixedPoint::ZERO);
+            let bound = compute_deflation_threshold(compute_abs(h.get(l, l)).max(compute_abs(h.get(l - 1, l - 1))));
+            if compute_abs(h.get(l, l - 1)) <= bound {
+                h.set(l, l - 1, zero);
                 break;
             }
             l -= 1;
@@ -1275,7 +1139,7 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
         // subdiagonal entry has reached a new minimum for five iterations,
         // deflate the smallest entry if it is within the loose bound. A block
         // that is still converging, however slowly, keeps iterating.
-        let subdiagonal: Vec<FixedPoint> = ((l + 1)..nn).map(|i| h.get(i, i - 1).abs()).collect();
+        let subdiagonal: Vec<ComputeStorage> = ((l + 1)..nn).map(|i| compute_abs(h.get(i, i - 1))).collect();
         if stall_block != (l, nn) {
             stall_block = (l, nn);
             stall_best = subdiagonal.clone();
@@ -1291,9 +1155,11 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
             stall_count = if improved { 0 } else { stall_count + 1 };
         }
         if its >= SCHUR_FLOOR_ITERATIONS && stall_count >= STAGNATION_SWEEPS {
-            let i = ((l + 1)..nn).min_by_key(|&i| h.get(i, i - 1).abs()).expect("block of size >= 3");
-            if h.get(i, i - 1).abs() <= stagnation_threshold(h.get(i, i).abs().max(h.get(i - 1, i - 1).abs())) {
-                h.set(i, i - 1, FixedPoint::ZERO);
+            let i = ((l + 1)..nn).min_by_key(|&i| compute_abs(h.get(i, i - 1))).expect("block of size >= 3");
+            if compute_abs(h.get(i, i - 1))
+                <= compute_stagnation_threshold(compute_abs(h.get(i, i)).max(compute_abs(h.get(i - 1, i - 1))))
+            {
+                h.set(i, i - 1, zero);
                 its = 0;
                 stall_count = 0;
                 iter_count += 1;
@@ -1301,26 +1167,35 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
             }
         }
 
+        // The shifts and the first column of the step are homogeneous in H, so
+        // they are formed from the active block scaled up by a power of two
+        // (exact) until its largest entry lies in [1/2, 1): a small block
+        // keeps its relative precision there, and the step's direction is the
+        // same.
+        let block: Vec<ComputeStorage> = (l..nn).flat_map(|i| (l..nn).map(move |j| (i, j))).map(|(i, j)| h.get(i, j)).collect();
+        let k = scale_up_exponent(&block);
         let (trace, det) = if its > 0 && its % 10 == 0 {
-            exceptional_shifts(&h, l, nn, its)?
+            exceptional_shifts(&h, l, nn, its, k)?
         } else {
-            trailing_shifts(&h, nn)?
+            trailing_shifts(&h, nn, k)?
         };
-        francis_step(&mut h, &mut q_acc, l, nn, trace, det)?;
+        francis_step(&mut h, &mut q_acc, l, nn, trace, det, k)?;
         its += 1;
         iter_count += 1;
     }
 
-    Ok(SchurDecomposition { q: q_acc, t: h })
+    Ok(SchurDecomposition { q: narrow_matrix(&q_acc)?, t: narrow_matrix(&h)? })
 }
 
 /// Trace and determinant of the trailing 2×2 block (the double-shift pair),
-/// as compute raws.
-fn trailing_shifts(h: &FixedMatrix, nn: usize) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
-    let (a, b) = (h.get(nn - 2, nn - 2), h.get(nn - 2, nn - 1));
-    let (c, d) = (h.get(nn - 1, nn - 2), h.get(nn - 1, nn - 1));
-    let trace = compute_checked_add(upscale_to_compute(a.raw()), upscale_to_compute(d.raw()))?;
-    let det = compute_checked_add(exact_product(a.raw(), d.raw()), compute_negate(exact_product(b.raw(), c.raw())))?;
+/// as compute raws (the determinant from exact products, rounded once), of H
+/// scaled by `2^k`.
+fn trailing_shifts(h: &ComputeMatrix, nn: usize, k: u32) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
+    let hs = |i: usize, j: usize| compute_scale_up(h.get(i, j), k);
+    let (a, b) = (hs(nn - 2, nn - 2), hs(nn - 2, nn - 1));
+    let (c, d) = (hs(nn - 1, nn - 2), hs(nn - 1, nn - 1));
+    let trace = compute_checked_add(a, d)?;
+    let det = exact_sub_dot_compute(make_compute_int(0), &[b, compute_negate(a)], &[c, d])?;
     Ok((trace, det))
 }
 
@@ -1329,17 +1204,18 @@ fn trailing_shifts(h: &FixedMatrix, nn: usize) -> Result<(ComputeStorage, Comput
 /// where `s` sums two subdiagonal magnitudes, at the top of the block after
 /// 10, 30, 50, ... iterations and at the bottom after 20, 40, .... It breaks
 /// the cycles an ordinary Francis step sits in, such as permutation matrices;
-/// with shifts at 10 and 20 only, a cycle entered later persisted.
-fn exceptional_shifts(h: &FixedMatrix, l: usize, nn: usize, its: usize) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
-    let (s, anchor) = if its % 20 == 10 {
-        (checked_add_fp(h.get(l + 1, l).abs(), h.get(l + 2, l + 1).abs())?, h.get(l, l))
+/// with shifts at 10 and 20 only, a cycle entered later persisted. Of H
+/// scaled by `2^k`.
+fn exceptional_shifts(h: &ComputeMatrix, l: usize, nn: usize, its: usize, k: u32) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
+    let hs = |i: usize, j: usize| compute_scale_up(h.get(i, j), k);
+    let (s_c, anchor) = if its % 20 == 10 {
+        (compute_checked_add(compute_abs(hs(l + 1, l)), compute_abs(hs(l + 2, l + 1)))?, hs(l, l))
     } else {
-        (checked_add_fp(h.get(nn - 1, nn - 2).abs(), h.get(nn - 2, nn - 3).abs())?, h.get(nn - 1, nn - 1))
+        (compute_checked_add(compute_abs(hs(nn - 1, nn - 2)), compute_abs(hs(nn - 2, nn - 3)))?, hs(nn - 1, nn - 1))
     };
-    let s_c = upscale_to_compute(s.raw());
     let three_quarters = compute_divide(make_compute_int(3), make_compute_int(4))?;
     let seven_sixteenths = compute_divide(make_compute_int(7), make_compute_int(16))?;
-    let w = compute_checked_add(upscale_to_compute(anchor.raw()), compute_multiply(three_quarters, s_c))?;
+    let w = compute_checked_add(anchor, compute_multiply(three_quarters, s_c))?;
     let trace = compute_checked_add(w, w)?;
     let det = compute_checked_add(
         compute_multiply(w, w),
@@ -1351,49 +1227,33 @@ fn exceptional_shifts(h: &FixedMatrix, l: usize, nn: usize, its: usize) -> Resul
 /// One Francis double-shift step on the unreduced block `h[l..nn, l..nn]`
 /// (size >= 3), applied to all of H (real Schur form) and accumulated into Q.
 /// The shifts only steer convergence; every transform applied is orthogonal.
+/// `trace` and `det` are of H scaled by `2^k`; the first column is formed at
+/// that scale (its direction does not depend on it).
 fn francis_step(
-    h: &mut FixedMatrix, q_acc: &mut FixedMatrix, l: usize, nn: usize,
-    trace: ComputeStorage, det: ComputeStorage,
+    h: &mut ComputeMatrix, q_acc: &mut ComputeMatrix, l: usize, nn: usize,
+    trace: ComputeStorage, det: ComputeStorage, k: u32,
 ) -> Result<(), OverflowDetected> {
     let n = h.rows();
+    let zero = make_compute_int(0);
 
     // First column of (H - s1 I)(H - s2 I) = H² - trace H + det I
-    let (h11, h12, h21) = (h.get(l, l), h.get(l, l + 1), h.get(l + 1, l));
-    let (h22, h32) = (h.get(l + 1, l + 1), h.get(l + 2, l + 1));
-    let h11_c = upscale_to_compute(h11.raw());
-    let x = compute_sum(&[
-        exact_product(h11.raw(), h11.raw()),
-        exact_product(h12.raw(), h21.raw()),
-        compute_negate(compute_multiply(trace, h11_c)),
-        det,
-    ])?;
-    let y = compute_multiply(
-        upscale_to_compute(h21.raw()),
-        compute_sum(&[h11_c, upscale_to_compute(h22.raw()), compute_negate(trace)])?,
-    );
-    let z = exact_product(h21.raw(), h32.raw());
+    let hs = |i: usize, j: usize| compute_scale_up(h.get(i, j), k);
+    let (h11, h12, h21) = (hs(l, l), hs(l, l + 1), hs(l + 1, l));
+    let (h22, h32) = (hs(l + 1, l + 1), hs(l + 2, l + 1));
+    let x = exact_sub_dot_compute(det, &[compute_negate(h11), compute_negate(h12), trace], &[h11, h21, h11])?;
+    let y = compute_product(h21, compute_sum(&[h11, h22, compute_negate(trace)])?)?;
+    let z = compute_product(h21, h32)?;
 
     // Reflector introducing the bulge at rows l..l+3
-    let norm = compute_hypot(compute_hypot(x, y)?, z)?;
-    if compute_is_zero(&norm) {
-        return Ok(());
-    }
-    let lead = if compute_is_negative(&x) {
-        compute_checked_add(x, compute_negate(norm))?
-    } else {
-        compute_checked_add(x, norm)?
-    };
-    let v_hh = direction_to_storage(&[lead, y, z])?;
-    let vtv = exact_dot(&v_hh, &v_hh)?;
-    if !compute_is_zero(&vtv) {
+    if let Some((v_hh, vtv)) = householder_vector_compute(&[x, y, z])? {
         for c in l..n {
-            reflect_column(h, c, l, &v_hh, vtv)?;
+            reflect_compute_column(h, c, l, &v_hh, vtv)?;
         }
         for r in 0..nn.min(l + 4) {
-            reflect_row(h, r, l, &v_hh, vtv)?;
+            reflect_compute_row(h, r, l, &v_hh, vtv)?;
         }
         for r in 0..n {
-            reflect_row(q_acc, r, l, &v_hh, vtv)?;
+            reflect_compute_row(q_acc, r, l, &v_hh, vtv)?;
         }
     }
 
@@ -1401,35 +1261,35 @@ fn francis_step(
     for k in (l + 1)..(nn - 1) {
         if k + 2 < nn {
             // 3-element reflector on rows k..k+3 zeroes h[k+1, k-1], h[k+2, k-1]
-            let column: Vec<BinaryStorage> = (k..k + 3).map(|i| h.get(i, k - 1).raw()).collect();
-            if let Some((v_hh, vtv)) = householder_vector(&column)? {
+            let column: Vec<ComputeStorage> = (k..k + 3).map(|i| h.get(i, k - 1)).collect();
+            if let Some((v_hh, vtv)) = householder_vector_compute(&column)? {
                 for c in (k - 1)..n {
-                    reflect_column(h, c, k, &v_hh, vtv)?;
+                    reflect_compute_column(h, c, k, &v_hh, vtv)?;
                 }
                 for r in 0..nn.min(k + 4) {
-                    reflect_row(h, r, k, &v_hh, vtv)?;
+                    reflect_compute_row(h, r, k, &v_hh, vtv)?;
                 }
                 for r in 0..n {
-                    reflect_row(q_acc, r, k, &v_hh, vtv)?;
+                    reflect_compute_row(q_acc, r, k, &v_hh, vtv)?;
                 }
             }
-            h.set(k + 1, k - 1, FixedPoint::ZERO);
-            h.set(k + 2, k - 1, FixedPoint::ZERO);
+            h.set(k + 1, k - 1, zero);
+            h.set(k + 2, k - 1, zero);
         } else {
             // Last step: a rotation on rows k, k+1 zeroes h[k+1, k-1]
-            let rot = Rotation::zeroing(h.get(k, k - 1), h.get(k + 1, k - 1))?;
+            let rot = Rotation::zeroing_compute(h.get(k, k - 1), h.get(k + 1, k - 1))?;
             for c in (k - 1)..n {
-                let (top, bottom) = rot.apply(h.get(k, c), h.get(k + 1, c))?;
+                let (top, bottom) = rot.apply_compute(h.get(k, c), h.get(k + 1, c))?;
                 h.set(k, c, top);
                 h.set(k + 1, c, bottom);
             }
             for r in 0..nn {
-                let (left, right) = rot.apply(h.get(r, k), h.get(r, k + 1))?;
+                let (left, right) = rot.apply_compute(h.get(r, k), h.get(r, k + 1))?;
                 h.set(r, k, left);
                 h.set(r, k + 1, right);
             }
-            rotate_columns(q_acc, k, k + 1, &rot)?;
-            h.set(k + 1, k - 1, FixedPoint::ZERO);
+            rotate_compute_columns(q_acc, k, k + 1, &rot)?;
+            h.set(k + 1, k - 1, zero);
         }
     }
 
@@ -1441,15 +1301,20 @@ fn francis_step(
 /// `(λ - d, c)` of `λ = (a+d)/2 + sign(p) sqrt(p² + bc)`, `p = (a-d)/2`
 /// (no cancellation in `λ - d = p + sign(p) sqrt(..)`). A complex pair keeps
 /// its block.
-fn split_real_block(h: &mut FixedMatrix, q_acc: &mut FixedMatrix, i: usize) -> Result<(), OverflowDetected> {
+fn split_real_block(h: &mut ComputeMatrix, q_acc: &mut ComputeMatrix, i: usize) -> Result<(), OverflowDetected> {
     let n = h.rows();
-    let (a, b) = (h.get(i, i), h.get(i, i + 1));
-    let (c, d) = (h.get(i + 1, i), h.get(i + 1, i + 1));
-    if c.is_zero() {
+    if compute_is_zero(&h.get(i + 1, i)) {
         return Ok(());
     }
-    let p = compute_halve(compute_checked_add(upscale_to_compute(a.raw()), compute_negate(upscale_to_compute(d.raw())))?);
-    let disc = compute_checked_add(compute_multiply(p, p), exact_product(b.raw(), c.raw()))?;
+    // the rotation's direction is homogeneous in the block: form it from the
+    // block scaled up to [1/2, 1) (exact), where a small block keeps its
+    // relative precision
+    let k = scale_up_exponent(&[h.get(i, i), h.get(i, i + 1), h.get(i + 1, i), h.get(i + 1, i + 1)]);
+    let hs = |r: usize, c: usize| compute_scale_up(h.get(r, c), k);
+    let (a, b) = (hs(i, i), hs(i, i + 1));
+    let (c, d) = (hs(i + 1, i), hs(i + 1, i + 1));
+    let p = compute_halve(compute_checked_add(a, compute_negate(d))?);
+    let disc = exact_sub_dot_compute(make_compute_int(0), &[compute_negate(p), compute_negate(b)], &[p, c])?;
     if compute_is_negative(&disc) {
         return Ok(());
     }
@@ -1459,91 +1324,22 @@ fn split_real_block(h: &mut FixedMatrix, q_acc: &mut FixedMatrix, i: usize) -> R
     } else {
         compute_checked_add(p, root)?
     };
-    let rot = Rotation::zeroing_compute(lead, upscale_to_compute(c.raw()))?;
+    let rot = Rotation::zeroing_compute(lead, c)?;
     // Gᵀ H on rows i, i+1 (entries left of column i are zero in both rows)
     for col in i..n {
-        let (top, bottom) = rot.apply(h.get(i, col), h.get(i + 1, col))?;
+        let (top, bottom) = rot.apply_compute(h.get(i, col), h.get(i + 1, col))?;
         h.set(i, col, top);
         h.set(i + 1, col, bottom);
     }
     // H G on columns i, i+1 (entries below row i+1 are zero in both columns)
     for row in 0..(i + 2) {
-        let (left, right) = rot.apply(h.get(row, i), h.get(row, i + 1))?;
+        let (left, right) = rot.apply_compute(h.get(row, i), h.get(row, i + 1))?;
         h.set(row, i, left);
         h.set(row, i + 1, right);
     }
-    rotate_columns(q_acc, i, i + 1, &rot)?;
-    h.set(i + 1, i, FixedPoint::ZERO);
+    rotate_compute_columns(q_acc, i, i + 1, &rot)?;
+    h.set(i + 1, i, make_compute_int(0));
     Ok(())
-}
-
-/// An integer vector parallel to `values` (compute raws) whose largest entry
-/// lies in `(M/2, M]`, `M = 2^min(2F, W-3)` raw. All entries are halved or
-/// doubled together, so the direction is kept to one part in `M/2`; a
-/// reflector depends only on the direction of its vector. The size matters for
-/// `reflect`: its factor `2 (v.w)/(v.v)` is rounded at `2F` fractional bits,
-/// which moves an output entry by up to `|v_k| / 2^(2F+1)` ulp, so a direction
-/// much larger than `2^(2F)` would cost precision; and `M <= 2^(W-3)` keeps a
-/// three-entry `v.v` inside the compute tier.
-fn direction_to_storage(values: &[ComputeStorage]) -> Result<Vec<BinaryStorage>, OverflowDetected> {
-    let largest = |vs: &[ComputeStorage]| {
-        let mut big = make_compute_int(0);
-        for value in vs {
-            let magnitude = compute_abs(*value);
-            if magnitude > big {
-                big = magnitude;
-            }
-        }
-        big
-    };
-    let mut scaled = values.to_vec();
-    if compute_is_zero(&largest(&scaled)) {
-        return Ok(vec![FixedPoint::ZERO.raw(); values.len()]);
-    }
-    let limit = widen_storage(direction_magnitude());
-    while largest(&scaled) > limit {
-        for value in scaled.iter_mut() {
-            *value = compute_halve(*value);
-        }
-    }
-    let half_limit = compute_halve(limit);
-    while largest(&scaled) <= half_limit {
-        for value in scaled.iter_mut() {
-            *value = compute_checked_add(*value, *value)?;
-        }
-    }
-    Ok(scaled.into_iter().map(compute_to_storage_exact).collect())
-}
-
-/// `2^min(2F, W-3)` as a storage raw: the largest entry of a reflector
-/// direction built by `direction_to_storage`.
-#[inline]
-fn direction_magnitude() -> BinaryStorage {
-    #[cfg(table_format = "q16_16")]
-    { 1i32 << (2 * crate::fixed_point::frac_config::FRAC_BITS).min(29) }
-    #[cfg(table_format = "q32_32")]
-    { 1i64 << 61 }
-    #[cfg(table_format = "q64_64")]
-    { 1i128 << 125 }
-    #[cfg(table_format = "q128_128")]
-    { crate::fixed_point::I256::from_i128(1) << 253usize }
-    #[cfg(table_format = "q256_256")]
-    { crate::fixed_point::I512::from_i128(1) << 509usize }
-}
-
-/// A compute-width integer known to fit storage, as a storage integer.
-#[inline]
-fn compute_to_storage_exact(v: ComputeStorage) -> BinaryStorage {
-    #[cfg(table_format = "q16_16")]
-    { v as i32 }
-    #[cfg(table_format = "q32_32")]
-    { v as i64 }
-    #[cfg(table_format = "q64_64")]
-    { v.as_i128() }
-    #[cfg(table_format = "q128_128")]
-    { v.as_i256() }
-    #[cfg(table_format = "q256_256")]
-    { v.as_i512() }
 }
 
 #[cfg(test)]

@@ -74,12 +74,38 @@ compositions) for wide-precision consumers (e.g. chaining on the wide-output
 path-independent with the surfaces above: `to_fixed(compute_tier::exp(from_fixed(x)))`
 is bit-identical to `x.exp()`.
 
+On every profile, **[g_math::wide](../PUBLIC_API.md#wide-tier-q6464)** exposes
+`exp_q64`, `ln_q64`, `sin_q64`, `cos_q64` and `sincos_q64` over raw Q64.64
+`i128` values, with `PI_Q64`, `TWO_PI_Q64`, `PI_HALF_Q64`, `PI_Q32` and
+`TWO_PI_Q32`, for quantities outside every storage tier (RoPE inverse
+frequencies `theta^(-2i/d)`). These are the Q64.64 engines of the realtime and
+compact compute tiers, with the same results on every profile. Measured
+accuracy against mpmath (units of `2^-64`): `exp` 4 relative to the result,
+`ln` 55, `sin`/`cos` 3 for `|x| <= 2π`, growing as `0.34 |x|` beyond (range
+reduction by the truncated π/2: 1390 below `2^12`, 8e-11 absolute below
+`2^32`). `exp_q64` saturates to `i128::MAX` for `x >= 41` and flushes to 0 below
+`-40`; `ln_q64` returns `None` for `x <= 0`.
+
 ## Behaviour & limits
 
-- On `FixedPoint`, every function also has a fallible `try_*` variant returning
-  `Result<_, OverflowDetected>`.
+- On `FixedPoint` and `DecimalFixed`, every function also has a fallible `try_*`
+  variant returning `Result<_, OverflowDetected>`: `DomainError` outside the
+  domain, `TierOverflow` out of range, and on `DecimalFixed` `PrecisionLimit`
+  when an in-domain argument rounds onto a domain boundary at its compute
+  precision. The `try_` forms never panic and equal the infallible ones
+  whenever those return.
 - On `DecimalFixed`, transcendentals run natively in the decimal domain, no
-  round-trip through binary.
+  round-trip through binary. `exp` (and `sinh`, `cosh`, `tanh`) and `sin`/`cos`
+  reduce their argument at a working precision wider than the compute tier
+  (`x = n ln2 + r`; an exact quadrant count against pi/2 held to twice that
+  precision), so they are correctly rounded over their whole range on every
+  profile, gated by `tests/decimal_exp_range_validation.rs` (0.6.3: `exp(22)`
+  on realtime was 446565 units off, `exp` past 22.9 wrapped there, and
+  embedded lost up to 267 units at 19 decimals near the top of the range).
+  A result beyond the range is `Err(TierOverflow)` from the `try_` form (every
+  `DecimalFixed` transcendental has one, as on `FixedPoint`) and through the
+  canonical layer, and a panic from the infallible method; `exp` far below
+  zero is 0.
 - Accuracy is defined by the test suite against mpmath references, not by slogans;
   see [the precision guide](README_PRECISION.md) and the validation methodology in
   **[CONTRACT.md](../CONTRACT.md)**. Inputs that are inexact in a *pinned*

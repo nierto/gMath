@@ -1,115 +1,107 @@
-//! Decimal sine and cosine: Cody-Waite range reduction with decimal π, Horner Taylor.
+//! Decimal sine and cosine: exact range reduction at a wide precision, Taylor
+//! at the compute dp.
 //!
 //! # Algorithm
 //!
-//! 1. **Range reduction**: Given `x`, compute `k = round(x × 2/π)`, `r = x - k × π/2`.
-//!    Then `|r| ≤ π/4` and `sin(x), cos(x)` are expressed in terms of `sin(r), cos(r)`
-//!    via the quadrant `k mod 4`.
-//! 2. **Taylor series** for `|r| ≤ π/4`:
-//!    - `sin(r) = r - r³/3! + r⁵/5! - r⁷/7! + ...`
-//!    - `cos(r) = 1 - r²/2! + r⁴/4! - r⁶/6! + ...`
-//!    Iterative term computation: `term_k = -term_{k-1} × r² / ((2k)(2k+1))` for sin.
-//! 3. **Quadrant reconstruction**:
-//!    - k mod 4 == 0: `(sin_r, cos_r)`
-//!    - k mod 4 == 1: `(cos_r, -sin_r)`
-//!    - k mod 4 == 2: `(-sin_r, -cos_r)`
-//!    - k mod 4 == 3: `(-cos_r, sin_r)`
+//! 1. **Range reduction** at `HP_DP` (see `hp.rs`): `k = round(|x| 2/pi)`,
+//!    `r = |x| - k pi/2`, with pi/2 held to `2 HP_DP` digits as a split
+//!    constant, so `r` is exact to half a unit at `HP_DP` for every `k` the
+//!    compute tier can produce. `r` is then rounded once to the compute dp.
+//! 2. **Taylor series** for `|r| <= pi/4`:
+//!    - `sin(r) = r - r^3/3! + r^5/5! - r^7/7! + ...`
+//!    - `cos(r) = 1 - r^2/2! + r^4/4! - r^6/6! + ...`
+//!    Iterative term computation: `term_k = -term_{k-1} * r^2 / ((2k)(2k+1))` for sin.
+//! 3. **Quadrant reconstruction** from `k mod 4`, then `sin(-x) = -sin(x)`.
 //!
-//! # π computation
+//! Before 0.6.4 the reduction used pi at the compute dp and an i64 quadrant
+//! count: the error of pi grew with `k` (realtime `sin(10^5)` at 4 decimals
+//! was 4 units off, `sin(10^9)` had the wrong sign; embedded `sin(10^17)` at
+//! 19 decimals 1 unit), and a count beyond i64 wrapped.
 //!
-//! π is computed via **Machin's formula**: `π/4 = 4·atan(1/5) - atan(1/239)`.
-//! Uses our own `decimal_atan` Taylor series (for small arguments, converges fast).
-//! Result is cached in a thread-local cell to avoid recomputation.
+//! # pi
+//!
+//! Machin's formula `pi/4 = 4 atan(1/5) - atan(1/239)`, each arctangent
+//! summed at `2 HP_DP` digits with divisions by small integers only. The
+//! compute-dp pi (`pi_at_decimal_compute`) is that value rounded half to even.
 
 use super::decimal_compute::{
     ComputeStorage, DECIMAL_COMPUTE_DP,
-    decimal_compute_zero, decimal_compute_one, decimal_compute_halve,
+    decimal_compute_zero, decimal_compute_one,
     decimal_compute_add, decimal_compute_sub, decimal_compute_mul,
-    decimal_compute_div, decimal_compute_div_int,
+    decimal_compute_div_int,
     decimal_compute_is_zero, decimal_compute_is_negative, decimal_compute_neg,
-    decimal_compute_cmp, decimal_compute_abs,
 };
+use super::hp::*;
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ============================================================================
-// π COMPUTATION VIA MACHIN'S FORMULA
+// pi AT 2 HP_DP DIGITS (built once per thread)
 // ============================================================================
+
+struct PiConsts {
+    /// pi/2 to `2 HP_DP` digits, split: `pi/2 = (hi + lo / 10^HP_DP) / 10^HP_DP`.
+    half_hi: Hp,
+    half_lo: Hp,
+    /// Half a unit at `HP_DP` (`10^HP_DP / 2`).
+    half_unit: Hp,
+    /// pi/2 and pi/4 at `HP_DP` (rounded), 2/pi at `HP_DP` (truncated).
+    half_pi: Hp,
+    quarter_pi: Hp,
+    two_over_pi: Hp,
+    /// pi at the compute dp, rounded half to even.
+    pi_compute: ComputeStorage,
+}
 
 thread_local! {
-    static PI_CACHE: std::cell::RefCell<Option<ComputeStorage>> = const { std::cell::RefCell::new(None) };
+    static PI_CONSTS: RefCell<Option<Rc<PiConsts>>> = const { RefCell::new(None) };
 }
 
-/// Compute π at decimal compute-tier precision, cached in thread-local storage.
-///
-/// Uses Machin's formula: `π/4 = 4·atan(1/5) - atan(1/239)`.
-///
-/// Both `atan(1/5)` and `atan(1/239)` converge via direct Taylor series because the
-/// arguments are small (no range reduction needed, avoiding circular dependency on π).
+/// `atan(1/m)` at `2 HP_DP` digits: `sum (-1)^k / ((2k+1) m^(2k+1))`, each
+/// term truncated (the sum is off by at most a few hundred units there).
+fn atan_inverse_wide(m: u64) -> Hp {
+    let mut p = hp_divmod_small(hp_pow10(2 * HP_DP), m).0;
+    let (mut plus, mut minus) = (p, hp_small(0));
+    let mut k: u64 = 1;
+    loop {
+        p = hp_divmod_small(p, m * m).0;
+        if hp_is_zero(&p) {
+            break;
+        }
+        let term = hp_divmod_small(p, 2 * k + 1).0;
+        if k % 2 == 1 { minus = minus + term } else { plus = plus + term }
+        k += 1;
+    }
+    plus - minus
+}
+
+fn build_pi_consts() -> Result<PiConsts, OverflowDetected> {
+    // pi/2 = 8 atan(1/5) - 2 atan(1/239); 1.6 * 10^(2 HP_DP) fits Hp
+    let half_wide = hp_mul_small(atan_inverse_wide(5), 8) - hp_mul_small(atan_inverse_wide(239), 2);
+    let half_hi = hp_div_pow10(half_wide, HP_DP);
+    let half_lo = half_wide - hp_mul_pow10(half_hi, HP_DP);
+    let half_unit = hp_divmod_small(hp_pow10(HP_DP), 2).0;
+    let half_pi = half_hi + hp_div_pow10(half_lo + half_unit, HP_DP);
+    let quarter_pi = hp_div_pow10(hp_divmod_small(half_wide, 2).0 + half_unit, HP_DP);
+    let two_over_pi = hp_div(hp_pow10(2 * HP_DP), half_pi);
+    let pi_wide = hp_mul_small(half_wide, 2);
+    let pi_compute = hp_to_compute(&hp_div_round_half_even(pi_wide, 2 * HP_DP - DECIMAL_COMPUTE_DP as u32, 0))?;
+    Ok(PiConsts { half_hi, half_lo, half_unit, half_pi, quarter_pi, two_over_pi, pi_compute })
+}
+
+fn pi_consts() -> Result<Rc<PiConsts>, OverflowDetected> {
+    if let Some(c) = PI_CONSTS.with(|c| c.borrow().clone()) {
+        return Ok(c);
+    }
+    let c = Rc::new(build_pi_consts()?);
+    PI_CONSTS.with(|slot| *slot.borrow_mut() = Some(c.clone()));
+    Ok(c)
+}
+
+/// pi at decimal compute-tier precision, rounded half to even, cached per thread.
 pub fn pi_at_decimal_compute() -> Result<ComputeStorage, OverflowDetected> {
-    let cached: Option<ComputeStorage> = PI_CACHE.with(|c| c.borrow().clone());
-    if let Some(pi) = cached {
-        return Ok(pi);
-    }
-
-    // Compute 1/5 and 1/239 at compute dp
-    let one = decimal_compute_one();
-    let five = super::decimal_compute::decimal_compute_from_int(5);
-    let two_thirty_nine = super::decimal_compute::decimal_compute_from_int(239);
-    let one_fifth = decimal_compute_div(one, five)?;
-    let one_239th = decimal_compute_div(one, two_thirty_nine)?;
-
-    // atan(1/5) via direct Taylor (|x| = 0.2, fast convergence)
-    let atan_fifth = atan_small_direct(one_fifth);
-    // atan(1/239) via direct Taylor (|x| ≈ 0.004, extremely fast)
-    let atan_239 = atan_small_direct(one_239th);
-
-    // π/4 = 4 × atan(1/5) - atan(1/239)
-    let four_atan_fifth = decimal_compute_add(atan_fifth, decimal_compute_add(atan_fifth, decimal_compute_add(atan_fifth, atan_fifth)));
-    let pi_over_4 = decimal_compute_sub(four_atan_fifth, atan_239);
-
-    // π = 4 × (π/4)
-    let pi = decimal_compute_add(pi_over_4, decimal_compute_add(pi_over_4, decimal_compute_add(pi_over_4, pi_over_4)));
-
-    PI_CACHE.with(|c: &std::cell::RefCell<Option<ComputeStorage>>| *c.borrow_mut() = Some(pi));
-    Ok(pi)
-}
-
-/// Direct Taylor for `atan(x)` when `|x| < 0.3`.
-///
-/// Used ONLY by `pi_at_decimal_compute` to bootstrap π without depending on
-/// the full `decimal_atan` function (which itself needs π for `|x| > 1` cases).
-fn atan_small_direct(x: ComputeStorage) -> ComputeStorage {
-    if decimal_compute_is_zero(&x) {
-        return decimal_compute_zero();
-    }
-
-    let x_sq = decimal_compute_mul(x, x);
-    let mut term = x;
-    let mut sum = x;
-    let mut sign_positive = true;
-
-    // Taylor: atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
-    // For |x| ≤ 0.2, term k ~ 0.2^(2k+1)/(2k+1) < 10^-dp when k ≈ dp × 0.72
-    let max_terms = (DECIMAL_COMPUTE_DP as u32 * 2) + 20;
-    for k in 1..=max_terms {
-        term = decimal_compute_mul(term, x_sq);
-        if decimal_compute_is_zero(&term) {
-            break;
-        }
-        sign_positive = !sign_positive;
-        let divisor = (2 * k as u64) + 1;
-        let contribution = decimal_compute_div_int(term, divisor);
-        if decimal_compute_is_zero(&contribution) {
-            break;
-        }
-        if sign_positive {
-            sum = decimal_compute_add(sum, contribution);
-        } else {
-            sum = decimal_compute_sub(sum, contribution);
-        }
-    }
-
-    sum
+    Ok(pi_consts()?.pi_compute)
 }
 
 // ============================================================================
@@ -122,47 +114,48 @@ const fn max_trig_taylor_terms() -> u32 {
     (DECIMAL_COMPUTE_DP as u32 / 2) + 20
 }
 
+/// `a = k pi/2 + r` for `a >= 0` at the compute dp (held in `Hp`, so the
+/// magnitude of the compute tier's minimum fits): the quadrant count `k`
+/// (exact, in `Hp`) and `r` at `HP_DP` (signed, `|r| <= pi/4` up to a unit).
+fn reduce(c: &PiConsts, a_c: Hp) -> (Hp, Hp) {
+    // k within one of floor(a 2/pi): 2/pi has HP_DP digits, k fewer
+    let mut k = hp_div_pow10(a_c * c.two_over_pi, DECIMAL_COMPUTE_DP as u32 + HP_DP);
+    let a_wide = hp_mul_pow10(a_c, HP_DP - DECIMAL_COMPUTE_DP as u32);
+    let k_half_pi = k * c.half_hi + hp_div_pow10(k * c.half_lo + c.half_unit, HP_DP);
+    let mut r = a_wide - k_half_pi;
+    let minus_quarter = -c.quarter_pi;
+    while r > c.quarter_pi {
+        k = k + hp_small(1);
+        r = r - c.half_pi;
+    }
+    while !hp_is_zero(&k) && r < minus_quarter {
+        k = k - hp_small(1);
+        r = r + c.half_pi;
+    }
+    (k, r)
+}
+
 /// Compute both `sin(x)` and `cos(x)` at compute dp: single shared range reduction.
 pub fn decimal_sincos(x: ComputeStorage) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
     if decimal_compute_is_zero(&x) {
         return Ok((decimal_compute_zero(), decimal_compute_one()));
     }
-
-    // Range reduction: k = round(x × 2/π), r = x - k × π/2
-    let pi = pi_at_decimal_compute()?;
-    let pi_half = decimal_compute_halve(pi);
-    let pi_quarter = decimal_compute_halve(pi_half);
-
-    // Compute k = round(x / (π/2)) as an integer
-    let x_over_pi_half = decimal_compute_div(x, pi_half)?;
-    let k = round_to_int(x_over_pi_half);
-
-    // r = x - k × (π/2)
-    let k_times_pi_half = mul_by_int(pi_half, k);
-    let r = decimal_compute_sub(x, k_times_pi_half);
-
-    // Ensure |r| ≤ π/4 by one additional correction if needed
-    // (rounding errors in k computation could leave |r| slightly > π/4)
-    let abs_r = decimal_compute_abs(r);
-    if decimal_compute_cmp(&abs_r, &pi_quarter) == std::cmp::Ordering::Greater {
-        // Leave as-is; Taylor will just need a few more terms
-    }
-
-    // Taylor series for sin(r) and cos(r) — iterative
-    let (sin_r, cos_r) = sincos_taylor(r);
+    let negative = decimal_compute_is_negative(&x);
+    // |x| in Hp: negating at the compute tier panicked at its minimum
+    let xh = compute_to_hp(x);
+    let a = if negative { -xh } else { xh };
+    let c = pi_consts()?;
+    let (k, r) = reduce(&c, a);
+    let (sin_r, cos_r) = sincos_taylor(hp_signed_to_compute(r)?);
 
     // Quadrant reconstruction: k mod 4
-    let k_mod_4 = ((k % 4) + 4) % 4;
-    let (sin_x, cos_x) = match k_mod_4 {
+    let (sin_a, cos_a) = match k.words[0] & 3 {
         0 => (sin_r, cos_r),
         1 => (cos_r, decimal_compute_neg(sin_r)),
         2 => (decimal_compute_neg(sin_r), decimal_compute_neg(cos_r)),
-        3 => (decimal_compute_neg(cos_r), sin_r),
-        _ => unreachable!(),
+        _ => (decimal_compute_neg(cos_r), sin_r),
     };
-
-    let _ = r; // silence mutability warning if we remove correction
-    Ok((sin_x, cos_x))
+    Ok((if negative { decimal_compute_neg(sin_a) } else { sin_a }, cos_a))
 }
 
 /// Compute `sin(x)` at compute dp.
@@ -229,62 +222,6 @@ fn sincos_taylor(r: ComputeStorage) -> (ComputeStorage, ComputeStorage) {
     }
 
     (sin_sum, cos_sum)
-}
-
-/// Round a compute-tier value to the nearest integer (as i64, for small values).
-fn round_to_int(v: ComputeStorage) -> i64 {
-    // Add 0.5 (ULP = scale/2), then truncate toward zero via division by scale
-    let half = decimal_compute_halve(decimal_compute_one());
-    let rounded = if decimal_compute_is_negative(&v) {
-        decimal_compute_sub(v, half)
-    } else {
-        decimal_compute_add(v, half)
-    };
-
-    // Divide by scale (10^dp) to get integer part
-    let scale = decimal_compute_one();
-    #[cfg(table_format = "q16_16")]
-    { (rounded / scale) as i64 }
-    #[cfg(table_format = "q32_32")]
-    { (rounded / scale) as i64 }
-    #[cfg(table_format = "q64_64")]
-    { (rounded / scale).as_i128() as i64 }
-    #[cfg(table_format = "q128_128")]
-    { (rounded / scale).as_i128() as i64 }
-    #[cfg(table_format = "q256_256")]
-    { (rounded / scale).as_i128() as i64 }
-}
-
-/// Multiply a compute-tier value by a small integer `n`.
-fn mul_by_int(v: ComputeStorage, n: i64) -> ComputeStorage {
-    if n == 0 {
-        return decimal_compute_zero();
-    }
-    let negative = n < 0;
-    let n_abs = n.unsigned_abs();
-
-    // For small n, repeated addition is fine. But for n up to ~10^18 we need multiplication.
-    // Use native multiplication by converting n into ComputeStorage scale.
-    let n_compute: ComputeStorage = {
-        #[cfg(table_format = "q16_16")]
-        { n_abs as i64 }
-        #[cfg(table_format = "q32_32")]
-        { n_abs as i128 }
-        #[cfg(table_format = "q64_64")]
-        { crate::fixed_point::i256::I256::from_i128(n_abs as i128) }
-        #[cfg(table_format = "q128_128")]
-        { crate::fixed_point::i512::I512::from_i128(n_abs as i128) }
-        #[cfg(table_format = "q256_256")]
-        { crate::fixed_point::I1024::from_i128(n_abs as i128) }
-    };
-
-    let result = v * n_compute;
-
-    if negative {
-        decimal_compute_neg(result)
-    } else {
-        result
-    }
 }
 
 #[cfg(all(test, table_format = "q64_64"))]

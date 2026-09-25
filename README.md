@@ -49,6 +49,10 @@ The build-with surface is five layers; everything beneath them is internal.
 - **Geometric** - `imperative::{decompose, derived, matrix_functions, manifold,
   lie_group, curvature, projective, fiber_bundle, ode, tensor, tensor_decompose,
   serialization}`.
+- **Wide** - `g_math::wide`: Q64.64 `exp`/`ln`/`sin`/`cos`, π constants and an
+  exact decimal-literal parser, for quantities outside the storage tiers.
+- **Compute tier** - `g_math::compute_tier` (feature `inference`): the tier-N+1
+  engines over raw compute-tier integers.
 - **TQ1.9** - `g_math::tq19` (feature `inference`): standalone ternary inference.
 - **Internal** - the `universal`/`fasc` evaluator, the domain implementations
   beneath `DecimalFixed` and the ternary types, the wide-integer types, and the

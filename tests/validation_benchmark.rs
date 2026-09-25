@@ -26,7 +26,7 @@ use std::time::Instant;
 // ════════════════════════════════════════════════════════════════════
 
 #[cfg(table_format = "q16_16")]
-const ACTIVE_PROFILE: &str = "Q16.16 (realtime)";
+const ACTIVE_PROFILE: &str = "realtime (Q32-F.F, F = GMATH_FRAC_BITS)";
 #[cfg(table_format = "q32_32")]
 const ACTIVE_PROFILE: &str = "Q32.32 (compact)";
 #[cfg(table_format = "q64_64")]
@@ -37,7 +37,7 @@ const ACTIVE_PROFILE: &str = "Q128.128 (balanced)";
 const ACTIVE_PROFILE: &str = "Q256.256 (scientific)";
 
 #[cfg(table_format = "q16_16")]
-const FRAC_BITS: u32 = 16;
+const FRAC_BITS: u32 = g_math::fixed_point::frac_config::FRAC_BITS;
 #[cfg(table_format = "q32_32")]
 const FRAC_BITS: u32 = 32;
 #[cfg(table_format = "q64_64")]
@@ -1247,7 +1247,8 @@ mod trans_q16_16 {
     use super::*;
     include!("data/fasc_ulp_refs_q16.rs");
     fn run_func(name: &str, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
-        let refs: Vec<_> = Q16_REFS.iter().filter(|r| r.3 == name).collect();
+        assert_eq!(REALTIME_REFS_FRAC_BITS, FRAC_BITS, "no references for this GMATH_FRAC_BITS");
+        let refs: Vec<_> = REALTIME_REFS.iter().filter(|r| r.3 == name).collect();
         let mut stats = UlpStats::new(name);
         if let Some(r) = refs.first() { let _ = evaluate(&method(gmath_safe(r.0))); }
         let start = Instant::now();

@@ -27,6 +27,21 @@ fn fp(s: &str) -> FixedPoint {
     else { FixedPoint::from_str(s) }
 }
 
+/// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+/// `t`, raised to `k` storage units where the split cannot resolve it.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
+/// The stored value itself. Re-parsing the Display string would add error
+/// of its own: it carries only 2 fractional digits at GMATH_FRAC_BITS=8.
+fn stored(sv: &g_math::canonical::StackValue) -> FixedPoint {
+    FixedPoint::from_raw(sv.as_binary_storage().expect("binary-materializable result"))
+}
+
 #[test]
 fn test_chain_persistence_overflow_intermediate() {
     // Build the LazyExpr tree: Sin(Exp(44))
@@ -121,9 +136,10 @@ fn test_chain_atan_of_exp() {
     if let Ok(sv) = result {
         let s = format!("{}", sv);
         println!("atan(exp(30)) via FASC chain = {}", s);
-        let val = fp(&s);
-        // Should be very close to π/2
-        assert!((val - fp("1.5707963267948966192")).abs() < fp("0.001"),
+        let val = stored(&sv);
+        // Should be very close to π/2 (0.001 is 0 raw at GMATH_FRAC_BITS=8:
+        // at least 1 unit, i.e. exact, there)
+        assert!((val - fp("1.5707963267948966192")).abs() < at_least(fp("0.001"), 1),
             "atan(exp(30)) ≈ π/2: got {}", val);
     }
 }
@@ -141,8 +157,9 @@ fn test_chain_triple_transcendental() {
     if let Ok(sv) = result {
         let s = format!("{}", sv);
         println!("sin(cos(exp(1))) via FASC chain = {}", s);
-        let val = fp(&s);
-        assert!((val - fp("-0.7905667351815867542")).abs() < fp("0.001"),
+        let val = stored(&sv);
+        // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
+        assert!((val - fp("-0.7905667351815867542")).abs() < at_least(fp("0.001"), 1),
             "sin(cos(exp(1))) mpmath: got {}", val);
     }
 }

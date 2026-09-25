@@ -19,9 +19,15 @@ fn sv_to_fp(sv: &StackValue) -> FixedPoint {
     match sv {
         StackValue::Error(e) => panic!("sv_to_fp: error value {:?}", e),
         _ => {
-            // Use to_decimal_string() for the most general conversion path
+            // Binary-materializable values: take the stored raw directly. The
+            // Display string carries only as many digits as the split
+            // resolves (2 at GMATH_FRAC_BITS=8), so re-parsing it adds up to
+            // ~1.3 units of error of its own.
+            if let Some(raw) = sv.as_binary_storage() {
+                return FixedPoint::from_raw(raw);
+            }
+            // Other domains: parse the formatted output as FixedPoint
             let s = format!("{}", sv);
-            // Parse the formatted output as FixedPoint
             fp(&s)
         }
     }
@@ -36,9 +42,18 @@ fn tight() -> FixedPoint {
     { fp("0.000000001") }
 }
 
+/// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+/// `t`, raised to `k` storage units where the split cannot resolve it.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
-    assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
+    assert!(d < tol, "{}: got {}, expected {}, diff={} ({} raw units)", name, got, exp, d, d.raw());
 }
 
 // ============================================================================
@@ -190,5 +205,6 @@ fn test_identity_does_not_fire_on_different_inner() {
     let result = evaluate(&expr).unwrap();
     let r = sv_to_fp(&result);
     // exp(ln(2) + ln(3)) = exp(ln(6)) = 6
-    assert_fp(r, fp("6"), fp("0.001"), "exp(ln(2)+ln(3)) = 6");
+    // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
+    assert_fp(r, fp("6"), at_least(fp("0.001"), 1), "exp(ln(2)+ln(3)) = 6");
 }

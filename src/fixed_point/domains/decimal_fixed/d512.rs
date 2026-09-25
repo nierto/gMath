@@ -323,15 +323,9 @@ impl Ord for D512 {
 /// PRECISION: Maintains exact arithmetic for decimal scaling operations
 /// DOMAIN: Pure decimal domain - optimized for base-10 operations
 pub fn divmod_d512_by_d512(dividend: D512, divisor: D512) -> (D512, D512) {
-    // Handle division by zero with saturation
-    if divisor.is_zero() {
-        let saturated_quotient = if dividend.is_negative() {
-            D512::min_value()
-        } else {
-            D512::max_value()
-        };
-        return (saturated_quotient, D512::zero());
-    }
+    // like integer division: a zero divisor panics (before 0.6.4 it returned
+    // a saturated quotient, a plausible value)
+    assert!(!divisor.is_zero(), "divmod_d512_by_d512: division by zero");
 
     // Optimize for cases where both fit in D256
     if dividend.fits_in_d256() && divisor.fits_in_d256() {

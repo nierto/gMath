@@ -2,9 +2,10 @@
 //!
 //! Core routines:
 //! - `compute_tier_dot`: accumulates dot products at tier N+1 (double width)
-//! - `compute_tier_sub_dot_raw`: fused init-minus-dot at compute tier
-//! - `Rotation`, `householder_vector`, `reflect`: orthogonal transforms whose
-//!   coefficients stay at the compute tier, each output narrowed once
+//! - `compute_tier_sub_dot_compute`: init-minus-dot at compute tier
+//! - `Rotation`, `householder_vector_compute`, `reflect_compute`: orthogonal
+//!   transforms on compute-tier state, each output rounded once at the
+//!   compute tier from its exact value
 //!
 //! These are the matrix-operation analog of BinaryCompute chain persistence.
 
@@ -26,7 +27,7 @@ use crate::fixed_point::{I512, I1024};
 
 // Re-export ComputeStorage for fused operations
 pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::downscale_to_storage;
+pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::downscale_to_storage;
 
 // Re-export fused sincos for imperative-module consumers (lie_group, etc.)
 pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::sincos_at_compute_tier;
@@ -70,90 +71,17 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 /// Dot product accumulated at tier N+1 (compute tier).
 ///
 /// Each product a_i * b_i is computed at double width without truncation.
-/// The entire sum is accumulated at double width. Only one rounding step
-/// occurs at the very end when truncating back to storage tier.
-///
-/// For an n-element dot product, this gives 1 ULP of rounding error instead
-/// of the n ULP that storage-tier accumulation would produce.
+/// The entire sum is accumulated at double width (checked: a sum beyond the
+/// compute tier panics, never wraps) and rounded to storage once, to nearest
+/// with ties toward +infinity like every binary result. Before 0.6.4 this
+/// floored (`acc >> F`), up to one unit below the matrix path's nearest.
 ///
 /// Panics if the slices have different lengths.
 pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     assert_eq!(a.len(), b.len(), "compute_tier_dot: length mismatch");
-
-    #[cfg(table_format = "q64_64")]
-    {
-        // i128 × i128 → I256 (Q128.128), accumulate in I256, shift >> 64
-        let mut acc = I256::zero();
-        for i in 0..a.len() {
-            let a_wide = I256::from_i128(a[i].raw());
-            let b_wide = I256::from_i128(b[i].raw());
-            // I256 * I256 → I256 (no overflow: inputs are sign-extended i128,
-            // so the mathematical product fits in 256 bits)
-            acc = acc + (a_wide * b_wide);
-        }
-        // Shift right by FRAC_BITS (64) to convert from Q128.128 to Q64.64
-        FixedPoint::from_raw((acc >> 64u32).as_i128())
-    }
-
-    #[cfg(table_format = "q32_32")]
-    {
-        // i64 × i64 → i128 (Q64.64), accumulate in i128, shift >> 32
-        let mut acc: i128 = 0;
-        for i in 0..a.len() {
-            acc += (a[i].raw() as i128) * (b[i].raw() as i128);
-        }
-        FixedPoint::from_raw((acc >> 32) as i64)
-    }
-
-    #[cfg(table_format = "q16_16")]
-    {
-        // i32 × i32 → i64, accumulate in i64, shift >> FRAC_BITS
-        let mut acc: i64 = 0;
-        for i in 0..a.len() {
-            acc += (a[i].raw() as i64) * (b[i].raw() as i64);
-        }
-        FixedPoint::from_raw((acc >> frac_config::FRAC_BITS) as i32)
-    }
-
-    #[cfg(table_format = "q128_128")]
-    {
-        // I256 × I256 → I512 (Q256.256), accumulate in I512, shift >> 128
-        let mut acc = I512::zero();
-        for i in 0..a.len() {
-            let a_raw = a[i].raw();
-            let b_raw = b[i].raw();
-            // Signed widening multiply: I256 × I256 → I512
-            let a_neg = a_raw.is_negative();
-            let b_neg = b_raw.is_negative();
-            let result_neg = a_neg != b_neg;
-            let abs_a = if a_neg { -a_raw } else { a_raw };
-            let abs_b = if b_neg { -b_raw } else { b_raw };
-            let product = abs_a.mul_to_i512(abs_b);
-            let signed_product = if result_neg { -product } else { product };
-            acc = acc + signed_product;
-        }
-        FixedPoint::from_raw((acc >> 128usize).as_i256())
-    }
-
-    #[cfg(table_format = "q256_256")]
-    {
-        // I512 × I512 → I1024 (Q512.512), accumulate in I1024, shift >> 256
-        let mut acc = I1024::zero();
-        for i in 0..a.len() {
-            let a_raw = a[i].raw();
-            let b_raw = b[i].raw();
-            // Signed widening multiply: I512 × I512 → I1024
-            let a_neg = a_raw.is_negative();
-            let b_neg = b_raw.is_negative();
-            let result_neg = a_neg != b_neg;
-            let abs_a = if a_neg { -a_raw } else { a_raw };
-            let abs_b = if b_neg { -b_raw } else { b_raw };
-            let product = abs_a.mul_to_i1024(abs_b);
-            let signed_product = if result_neg { -product } else { product };
-            acc = acc + signed_product;
-        }
-        FixedPoint::from_raw((acc >> 256usize).as_i512())
-    }
+    FixedPoint::from_raw(round_to_storage(compute_tier_dot_acc_pairs(
+        a.iter().zip(b).map(|(x, y)| (x.raw(), y.raw())),
+    )))
 }
 
 /// Compute-tier multiply-accumulate: acc += a_i * b_i for matrix operations.
@@ -162,108 +90,116 @@ pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
 /// internal use where the FixedPoint wrapper would add unnecessary overhead.
 #[inline]
 pub(crate) fn compute_tier_dot_raw(a: &[BinaryStorage], b: &[BinaryStorage]) -> BinaryStorage {
+    round_to_storage(compute_tier_dot_acc(a, b))
+}
+
+/// sqrt(sum a_i b_i) with the sum AND the root at the compute tier and one
+/// rounding to storage. Rounding the sum to storage first (then `.sqrt()`)
+/// rounds twice, amplifies the first rounding by 1 / (2 |x|) for small norms,
+/// and overflows storage once the SQUARED norm leaves the range even though
+/// the norm fits. `Err(DomainError)` for a negative sum.
+pub(crate) fn compute_tier_sqrt_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<BinaryStorage, OverflowDetected> {
+    use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_is_negative, sqrt_at_compute_tier};
+    let acc = compute_tier_dot_acc(a, b);
+    if compute_is_negative(&acc) { return Err(OverflowDetected::DomainError); }
+    downscale_to_storage(sqrt_at_compute_tier(acc))
+}
+
+/// sum a_i b_i at the compute tier, unrounded. The accumulation is checked:
+/// a sum beyond the compute tier panics instead of wrapping (the plain
+/// additions wrapped silently in release builds before 0.6.4).
+#[inline]
+pub(crate) fn compute_tier_dot_acc(a: &[BinaryStorage], b: &[BinaryStorage]) -> ComputeStorage {
     assert_eq!(a.len(), b.len(), "compute_tier_dot_raw: length mismatch");
+    compute_tier_dot_acc_pairs(a.iter().copied().zip(b.iter().copied()))
+}
+
+/// The checked compute-tier accumulator over (a_i, b_i) pairs.
+#[inline]
+fn compute_tier_dot_acc_pairs(pairs: impl Iterator<Item = (BinaryStorage, BinaryStorage)>) -> ComputeStorage {
+    const OVERFLOW: &str = "compute_tier_dot: sum exceeds the compute tier";
 
     #[cfg(table_format = "q64_64")]
     {
         let mut acc = I256::zero();
-        for i in 0..a.len() {
-            acc = acc + (I256::from_i128(a[i]) * I256::from_i128(b[i]));
+        for (x, y) in pairs {
+            acc = acc.checked_add(I256::from_i128(x) * I256::from_i128(y)).expect(OVERFLOW);
         }
-        round_to_storage(acc)
+        acc
     }
 
     #[cfg(table_format = "q32_32")]
     {
-        // i64 × i64 → i128, accumulate in i128
         let mut acc: i128 = 0;
-        for i in 0..a.len() {
-            acc += (a[i] as i128) * (b[i] as i128);
+        for (x, y) in pairs {
+            acc = acc.checked_add((x as i128) * (y as i128)).expect(OVERFLOW);
         }
-        round_to_storage(acc)
+        acc
     }
 
     #[cfg(table_format = "q16_16")]
     {
-        // i32 × i32 → i64, accumulate in i64
         let mut acc: i64 = 0;
-        for i in 0..a.len() {
-            acc += (a[i] as i64) * (b[i] as i64);
+        for (x, y) in pairs {
+            acc = acc.checked_add((x as i64) * (y as i64)).expect(OVERFLOW);
         }
-        round_to_storage(acc)
+        acc
     }
 
     #[cfg(table_format = "q128_128")]
     {
         let mut acc = I512::zero();
-        for i in 0..a.len() {
-            let a_neg = a[i].is_negative();
-            let b_neg = b[i].is_negative();
+        for (x, y) in pairs {
+            let a_neg = x.is_negative();
+            let b_neg = y.is_negative();
             let result_neg = a_neg != b_neg;
-            let abs_a = if a_neg { -a[i] } else { a[i] };
-            let abs_b = if b_neg { -b[i] } else { b[i] };
+            // `-MIN` is MIN again, whose bit pattern read unsigned by the
+            // word-wise `mul_to_i512` is 2^(W-1), the true magnitude: the
+            // product (at most 2^(2W-2)) stays exact and non-negative
+            let abs_a = if a_neg { -x } else { x };
+            let abs_b = if b_neg { -y } else { y };
             let product = abs_a.mul_to_i512(abs_b);
-            acc = acc + if result_neg { -product } else { product };
+            acc = acc.checked_add(if result_neg { -product } else { product }).expect(OVERFLOW);
         }
-        round_to_storage(acc)
+        acc
     }
 
     #[cfg(table_format = "q256_256")]
     {
         let mut acc = I1024::zero();
-        for i in 0..a.len() {
-            let a_neg = a[i].is_negative();
-            let b_neg = b[i].is_negative();
+        for (x, y) in pairs {
+            let a_neg = x.is_negative();
+            let b_neg = y.is_negative();
             let result_neg = a_neg != b_neg;
-            let abs_a = if a_neg { -a[i] } else { a[i] };
-            let abs_b = if b_neg { -b[i] } else { b[i] };
+            // `-MIN` is MIN again, whose bit pattern read unsigned by the
+            // word-wise `mul_to_i1024` is 2^(W-1), the true magnitude: the
+            // product (at most 2^(2W-2)) stays exact and non-negative
+            let abs_a = if a_neg { -x } else { x };
+            let abs_b = if b_neg { -y } else { y };
             let product = abs_a.mul_to_i1024(abs_b);
-            acc = acc + if result_neg { -product } else { product };
+            acc = acc.checked_add(if result_neg { -product } else { product }).expect(OVERFLOW);
         }
-        round_to_storage(acc)
+        acc
     }
 }
 
-// ============================================================================
-// Fused init-minus-dot at compute tier
-// ============================================================================
 
-/// Compute `init - dot(a, b)` entirely at compute tier (tier N+1).
-///
-/// Widens `init` to compute-tier format, subtracts each product a_i * b_i
-/// accumulated at compute tier, then rounds back to storage tier once.
-///
-/// This is the core primitive for Gaussian elimination, forward/back
-/// substitution, and Cholesky inner sums. It avoids the n ULP accumulation
-/// error that would result from element-wise storage-tier operations.
-///
-/// Panics if `a.len() != b.len()`.
-pub(crate) fn compute_tier_sub_dot_raw(
-    init: BinaryStorage,
-    a: &[BinaryStorage],
-    b: &[BinaryStorage],
-) -> BinaryStorage {
-    assert_eq!(a.len(), b.len(), "compute_tier_sub_dot_raw: length mismatch");
-
-    let acc = compute_tier_sub_dot_compute(init, a, b);
-    round_to_storage(acc)
-}
-
-/// Same as `compute_tier_sub_dot_raw` but returns the result at compute tier
-/// (ComputeStorage) WITHOUT downscaling. Used for fused operations where the
-/// compute-tier intermediate feeds directly into sqrt or divide at compute tier.
+/// `init - sum a_i b_i` of storage raws at the compute tier, WITHOUT
+/// downscaling (the products are exact at the compute tier). Used where the
+/// compute-tier value feeds a further compute-tier step.
 pub(crate) fn compute_tier_sub_dot_compute(
     init: BinaryStorage,
     a: &[BinaryStorage],
     b: &[BinaryStorage],
 ) -> ComputeStorage {
+    const OVERFLOW: &str = "compute_tier_sub_dot: sum exceeds the compute tier";
     assert_eq!(a.len(), b.len(), "compute_tier_sub_dot_compute: length mismatch");
 
     #[cfg(table_format = "q64_64")]
     {
         let mut acc = I256::from_i128(init) << 64usize;
         for i in 0..a.len() {
-            acc = acc - (I256::from_i128(a[i]) * I256::from_i128(b[i]));
+            acc = acc.checked_sub(I256::from_i128(a[i]) * I256::from_i128(b[i])).expect(OVERFLOW);
         }
         acc
     }
@@ -273,7 +209,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
         // i64 upscaled to i128, then subtract i64×i64→i128 products
         let mut acc: i128 = (init as i128) << 32;
         for i in 0..a.len() {
-            acc -= (a[i] as i128) * (b[i] as i128);
+            acc = acc.checked_sub((a[i] as i128) * (b[i] as i128)).expect(OVERFLOW);
         }
         acc
     }
@@ -283,7 +219,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
         // i32 upscaled to i64, then subtract i32×i32→i64 products
         let mut acc: i64 = (init as i64) << frac_config::FRAC_BITS;
         for i in 0..a.len() {
-            acc -= (a[i] as i64) * (b[i] as i64);
+            acc = acc.checked_sub((a[i] as i64) * (b[i] as i64)).expect(OVERFLOW);
         }
         acc
     }
@@ -298,7 +234,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
             let abs_a = if a_neg { -a[i] } else { a[i] };
             let abs_b = if b_neg { -b[i] } else { b[i] };
             let product = abs_a.mul_to_i512(abs_b);
-            acc = acc - if result_neg { -product } else { product };
+            acc = acc.checked_add(if result_neg { product } else { -product }).expect(OVERFLOW);
         }
         acc
     }
@@ -313,7 +249,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
             let abs_a = if a_neg { -a[i] } else { a[i] };
             let abs_b = if b_neg { -b[i] } else { b[i] };
             let product = abs_a.mul_to_i1024(abs_b);
-            acc = acc - if result_neg { -product } else { product };
+            acc = acc.checked_add(if result_neg { product } else { -product }).expect(OVERFLOW);
         }
         acc
     }
@@ -333,10 +269,10 @@ pub(crate) fn compute_tier_sub_dot_compute(
 // leaving the storage range is a `TierOverflow`, never a wrap.
 
 use super::interval::exact_product;
-use super::wide_acc::{acc, narrow_product_to_compute, narrow_triple_nearest, widen_product, widen_storage, Wide};
+use super::wide_acc::{divide_to_compute_nearest, exact_dot_compute, narrow_product_to_compute, widen_product, Wide};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_checked_add, compute_checked_divide, compute_divide, compute_is_negative,
+    compute_checked_add, compute_divide, compute_is_negative,
     compute_is_zero, compute_multiply, compute_negate, make_compute_int, sqrt_at_compute_tier,
 };
 
@@ -344,63 +280,78 @@ use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
 /// is taken to sit at its precision floor.
 pub(crate) const STAGNATION_SWEEPS: usize = 5;
 
-/// Absolute noise floor of the iterative decompositions: four quanta.
-///
-/// An off-diagonal entry at or below it cannot be told apart from the rounding
-/// the iterations inject, and dropping it moves every eigen- or singular value
-/// by at most that much (Weyl). An exact zero eigen- or singular value is
-/// computed as a block of such noise, which a purely relative test floored at
-/// one quantum never deflates.
+/// Storage fraction bits of the build.
 #[inline]
-pub(crate) fn noise_floor() -> FixedPoint {
-    FixedPoint::from_raw(noise_floor_raw())
-}
-
-/// Deflation bound for an entry beside diagonal magnitude `magnitude`: the
-/// tight relative bound, floored at the absolute noise floor.
-#[inline]
-pub(crate) fn deflation_threshold(magnitude: FixedPoint) -> FixedPoint {
-    convergence_threshold_tight(magnitude).max(noise_floor())
-}
-
-/// The looser sqrt(quantum) relative bound, floored at the noise floor,
-/// accepted only once an iteration has stopped improving.
-///
-/// On realtime the shared [`convergence_threshold`] shifts by 8 whatever
-/// `GMATH_FRAC_BITS` is. That is sqrt(quantum) at Q16.16 and looser above it,
-/// but below it the bound is tighter than the precision floor: at Q22.10 it is
-/// 4 ulps beside entries near one, under the rounding floor of a Francis step
-/// there, and the iteration stalls until its budget runs out. So the shift is
-/// `min(8, F/2)`.
-#[inline]
-pub(crate) fn stagnation_threshold(magnitude: FixedPoint) -> FixedPoint {
+fn storage_frac_bits() -> u32 {
     #[cfg(table_format = "q16_16")]
-    {
-        let shift = (frac_config::FRAC_BITS / 2).min(8);
-        FixedPoint::from_raw(magnitude.abs().raw() >> shift).max(noise_floor())
-    }
-    #[cfg(not(table_format = "q16_16"))]
-    {
-        convergence_threshold(magnitude).max(noise_floor())
-    }
+    { frac_config::FRAC_BITS }
+    #[cfg(table_format = "q32_32")]
+    { 32 }
+    #[cfg(table_format = "q64_64")]
+    { 64 }
+    #[cfg(table_format = "q128_128")]
+    { 128 }
+    #[cfg(table_format = "q256_256")]
+    { 256 }
+}
+
+/// `|v| >> shift` for a compute raw.
+#[inline]
+pub(crate) fn compute_abs_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
+    let v = compute_abs(v);
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+    { v >> shift }
+    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+    { v >> shift as usize }
+}
+
+/// `2^shift` compute quanta.
+#[inline]
+fn compute_quanta(shift: u32) -> ComputeStorage {
+    #[cfg(table_format = "q16_16")]
+    { 1i64 << shift }
+    #[cfg(table_format = "q32_32")]
+    { 1i128 << shift }
+    #[cfg(table_format = "q64_64")]
+    { I256::from_i128(1) << shift as usize }
+    #[cfg(table_format = "q128_128")]
+    { I512::from_i128(1) << shift as usize }
+    #[cfg(table_format = "q256_256")]
+    { I1024::from_i128(1) << shift as usize }
+}
+
+/// Deflation bound of the iterations that keep their state at the compute
+/// tier: `magnitude * 2^-(3F/2)`, floored at `2^-(3F/2)` absolute.
+///
+/// The compute tier resolves `2^-2F`, so the iteration reaches this bound
+/// with `F/2` bits to spare; dropping an entry this small moves an eigen- or
+/// singular value of the magnitude's size by at most `2^-(F/2)` units (Weyl;
+/// quadratically less for a symmetric matrix), below the final rounding.
+#[inline]
+pub(crate) fn compute_deflation_threshold(magnitude: ComputeStorage) -> ComputeStorage {
+    let shift = storage_frac_bits() * 3 / 2;
+    compute_abs_shr(magnitude, shift).max(compute_quanta(storage_frac_bits() / 2))
+}
+
+/// Absolute noise floor of the compute-tier iterations, `2^-(3F/2)`: a
+/// diagonal entry at or below it is an exact zero computed as rounding noise.
+#[inline]
+pub(crate) fn compute_noise_floor() -> ComputeStorage {
+    compute_quanta(storage_frac_bits() / 2)
+}
+
+/// The looser bound accepted once a compute-tier iteration has stopped
+/// improving: one storage unit relative to the magnitude, with the same
+/// absolute floor as [`compute_deflation_threshold`].
+#[inline]
+pub(crate) fn compute_stagnation_threshold(magnitude: ComputeStorage) -> ComputeStorage {
+    compute_abs_shr(magnitude, storage_frac_bits()).max(compute_quanta(storage_frac_bits() / 2))
 }
 
 /// Magnitude of a compute-tier value.
 #[inline]
 pub(crate) fn compute_abs(v: ComputeStorage) -> ComputeStorage {
     if compute_is_negative(&v) { compute_negate(v) } else { v }
-}
-
-#[inline]
-fn narrowed(value: acc::Orient) -> Result<FixedPoint, OverflowDetected> {
-    Ok(FixedPoint::from_raw(narrow_triple_nearest(value)?))
-}
-
-/// `c x` for a compute-tier coefficient `c` and a storage value `x`, narrowed
-/// once from the exact product.
-#[inline]
-pub(crate) fn scale_by(c: ComputeStorage, x: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
-    narrowed(widen_product(c, widen_storage(x.raw())))
 }
 
 /// A plane rotation `[cs sn; -sn cs]` whose coefficients stay at the compute
@@ -443,20 +394,6 @@ impl Rotation {
             let cs = if compute_is_negative(&a) { compute_negate(inv) } else { inv };
             Ok(Rotation { cs, sn: compute_multiply(cs, tau) })
         }
-    }
-
-    /// The rotation taking the storage values `(a, b)` to `(r, 0)`.
-    #[inline]
-    pub(crate) fn zeroing(a: FixedPoint, b: FixedPoint) -> Result<Self, OverflowDetected> {
-        Self::zeroing_compute(upscale_to_compute(a.raw()), upscale_to_compute(b.raw()))
-    }
-
-    /// `(cs x + sn y, -sn x + cs y)`, each narrowed once from its exact value.
-    pub(crate) fn apply(&self, x: FixedPoint, y: FixedPoint) -> Result<(FixedPoint, FixedPoint), OverflowDetected> {
-        let (xw, yw) = (widen_storage(x.raw()), widen_storage(y.raw()));
-        let first = widen_product(self.cs, xw).add_exact(widen_product(self.sn, yw))?;
-        let second = widen_product(compute_negate(self.sn), xw).add_exact(widen_product(self.cs, yw))?;
-        Ok((narrowed(first)?, narrowed(second)?))
     }
 
     /// `(cs x + sn y, -sn x + cs y)` on compute raws, each rounded once at the
@@ -511,60 +448,131 @@ pub(crate) fn exact_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<Comp
     Ok(acc)
 }
 
-/// Householder direction `v = x - alpha e_1` for `x`, with
-/// `alpha = -sign(x_0) ||x||` (no cancellation in `v_0`), and the exact `v.v`.
-/// `None` when `x` is zero. `||x||` is a compute-tier square root of the exact
-/// sum of squares, so a column whose squared norm exceeds the storage range is
-/// still reflected; only a norm (or `v_0`) beyond storage is a `TierOverflow`.
-pub(crate) fn householder_vector(
-    x: &[BinaryStorage],
-) -> Result<Option<(Vec<BinaryStorage>, ComputeStorage)>, OverflowDetected> {
-    let xx = exact_dot(x, x)?;
+/// A compute raw scaled by `2^-shift`, rounded once to storage (nearest,
+/// ties toward +infinity, checked): for iterations that scaled a block up by
+/// a power of two to keep relative precision.
+pub(crate) fn downscale_shifted_to_storage(v: ComputeStorage, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
+    if shift == 0 {
+        return downscale_to_storage(v);
+    }
+    let f = storage_frac_bits();
+    let half = compute_quanta(f + shift - 1);
+    let q = compute_shr(compute_checked_add(v, half)?, f + shift);
+    // a multiple of 2^F at the compute scale: the downscale is exact
+    downscale_to_storage(compute_shl(q, f))
+}
+
+/// `v * 2^shift` for a compute raw (exact; the caller keeps it in range).
+#[inline]
+pub(crate) fn compute_scale_up(v: ComputeStorage, shift: u32) -> ComputeStorage {
+    compute_shl(v, shift)
+}
+
+/// The power-of-two exponent that brings the largest of `values` into
+/// `[1/2, 1)` at the compute scale when it is below `1/2`, else 0.
+pub(crate) fn scale_up_exponent(values: &[ComputeStorage]) -> u32 {
+    let bits = values.iter().map(|&v| compute_bit_length(v)).max().unwrap_or(0);
+    let unit_bits = 2 * storage_frac_bits();
+    if bits == 0 || bits >= unit_bits { 0 } else { unit_bits - bits }
+}
+
+/// Significant bits of `|v|` for a compute raw.
+#[inline]
+fn compute_bit_length(v: ComputeStorage) -> u32 {
+    #[cfg(table_format = "q16_16")]
+    { 64 - v.unsigned_abs().leading_zeros() }
+    #[cfg(table_format = "q32_32")]
+    { 128 - v.unsigned_abs().leading_zeros() }
+    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+    {
+        let words = compute_abs(v).words;
+        (0..words.len()).rev().find(|&i| words[i] != 0).map_or(0, |i| i as u32 * 64 + (64 - words[i].leading_zeros()))
+    }
+}
+
+/// `v << shift` for a compute raw (exact; the caller keeps it in range).
+#[inline]
+fn compute_shl(v: ComputeStorage, shift: u32) -> ComputeStorage {
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    { v << shift }
+    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+    { v << shift as usize }
+}
+
+/// `v >> shift` (arithmetic) for a compute raw.
+#[inline]
+fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+    { v >> shift }
+    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+    { v >> shift as usize }
+}
+
+/// Householder direction for a column held at the compute tier: `v = x -
+/// alpha e_1`, `alpha = -sign(x_0) ||x||`, and `v.v` (both compute raws).
+/// The sums of squares are exact (4F) and narrowed once, the root taken at
+/// the compute tier. `None` when `x` (or `v`) is zero.
+///
+/// The column is first scaled by a power of two so its largest entry lies in
+/// `[1/2, 1)`: the reflection depends only on the direction of `v`, while
+/// `x.x` and `v.v` narrowed to the compute tier keep their relative precision
+/// only at that size (at `F = 10` an entry near `2^-8` left `x.x` a few
+/// significant bits, and the reflection lost orthogonality), and fit the
+/// compute tier only below it (on realtime the compute tier has the storage
+/// range, so `x.x` of a large column overflowed). Scaling up is exact;
+/// scaling down keeps `2F` significant bits of the largest entry. The
+/// returned `v` is the scaled one.
+pub(crate) fn householder_vector_compute(
+    x: &[ComputeStorage],
+) -> Result<Option<(Vec<ComputeStorage>, ComputeStorage)>, OverflowDetected> {
+    let bits = x.iter().map(|&xi| compute_bit_length(xi)).max().unwrap_or(0);
+    if bits == 0 {
+        return Ok(None);
+    }
+    let unit_bits = 2 * storage_frac_bits();
+    let scaled: Vec<ComputeStorage>;
+    let x = if bits < unit_bits {
+        scaled = x.iter().map(|&xi| compute_shl(xi, unit_bits - bits)).collect();
+        &scaled[..]
+    } else if bits > unit_bits {
+        scaled = x.iter().map(|&xi| compute_shr(xi, bits - unit_bits)).collect();
+        &scaled[..]
+    } else {
+        x
+    };
+    let xx = narrow_product_to_compute(exact_dot_compute(x, x)?)?;
     if compute_is_zero(&xx) {
         return Ok(None);
     }
-    let norm = FixedPoint::from_raw(downscale_to_storage(sqrt_at_compute_tier(xx))?);
-    let alpha = if FixedPoint::from_raw(x[0]).is_negative() { norm } else { -norm };
+    let norm = sqrt_at_compute_tier(xx);
+    let alpha = if compute_is_negative(&x[0]) { norm } else { compute_negate(norm) };
     let mut v = x.to_vec();
-    v[0] = x[0].checked_sub(alpha.raw()).ok_or(OverflowDetected::TierOverflow)?;
-    let vv = exact_dot(&v, &v)?;
+    v[0] = compute_checked_add(x[0], compute_negate(alpha))?;
+    let vv = narrow_product_to_compute(exact_dot_compute(&v, &v)?)?;
     if compute_is_zero(&vv) {
         return Ok(None);
     }
     Ok(Some((v, vv)))
 }
 
-/// Reflect `w` in the hyperplane orthogonal to `v`: `w - 2 v (v.w) / (v.v)`.
-///
-/// `v` is an integer direction at any scale (the scale cancels) and `v_dot_v`
-/// its exact `v.v`. The factor `2 (v.w) / (v.v)` is formed once at the compute
-/// tier from exact sums, and each output entry is narrowed once from its exact
-/// product with `v_k`.
-pub(crate) fn reflect(
-    w: &mut [BinaryStorage], v: &[BinaryStorage], v_dot_v: ComputeStorage,
+/// Reflect a compute-tier vector `w` in the hyperplane orthogonal to `v`:
+/// each `w_k -= 2 (v.w) v_k / (v.v)` as one exact quotient at the compute
+/// tier. No rounding to storage: callers carry the state across reflections
+/// and round once at the end.
+pub(crate) fn reflect_compute(
+    w: &mut [ComputeStorage], v: &[ComputeStorage], v_dot_v: ComputeStorage,
 ) -> Result<(), OverflowDetected> {
-    let vw = exact_dot(v, w)?;
+    let vw = narrow_product_to_compute(exact_dot_compute(v, w)?)?;
     if compute_is_zero(&vw) {
         return Ok(());
     }
-    let factor = compute_checked_divide(compute_checked_add(vw, vw)?, v_dot_v)?;
+    let two_vw = compute_checked_add(vw, vw)?;
     for (wk, vk) in w.iter_mut().zip(v) {
-        let update = narrow_triple_nearest(widen_product(factor, widen_storage(*vk)))?;
-        *wk = wk.checked_sub(update).ok_or(OverflowDetected::TierOverflow)?;
+        let update = divide_to_compute_nearest(widen_product(two_vw, *vk), v_dot_v)?;
+        *wk = compute_checked_add(*wk, compute_negate(update))?;
     }
     Ok(())
 }
-
-#[cfg(table_format = "q64_64")]
-fn noise_floor_raw() -> BinaryStorage { 4i128 }
-#[cfg(table_format = "q32_32")]
-fn noise_floor_raw() -> BinaryStorage { 4i64 }
-#[cfg(table_format = "q16_16")]
-fn noise_floor_raw() -> BinaryStorage { 4i32 }
-#[cfg(table_format = "q128_128")]
-fn noise_floor_raw() -> BinaryStorage { I256::from_i128(4) }
-#[cfg(table_format = "q256_256")]
-fn noise_floor_raw() -> BinaryStorage { I512::from_i128(4) }
 
 // ============================================================================
 // Convergence threshold for fixed-point iterative algorithms
@@ -589,35 +597,6 @@ pub(crate) fn convergence_threshold(magnitude: FixedPoint) -> FixedPoint {
     let result = FixedPoint::from_raw(shifted);
     if result.is_zero() { quantum } else { result }
 }
-
-/// Tighter convergence threshold for compute-tier iterative algorithms.
-///
-/// When all rotation/accumulation steps happen at tier N+1 (via
-/// `Rotation`, `reflect`, `compute_tier_dot_raw`), each step introduces
-/// only 1 ULP of error, NOT √quantum. So we can converge to
-/// `magnitude >> (2 * FRAC_BITS / 3)` instead of `>> (FRAC_BITS / 2)`.
-///
-/// Profile-dependent precision:
-/// - Q64.64:  ~2^-42 relative (~12.6 decimal digits)
-/// - Q128.128: ~2^-85 relative (~25.6 decimal digits)
-/// - Q256.256: ~2^-170 relative (~51.2 decimal digits)
-pub(crate) fn convergence_threshold_tight(magnitude: FixedPoint) -> FixedPoint {
-    let quantum = FixedPoint::from_raw(quantum_raw());
-    let shifted = magnitude.abs().raw() >> two_thirds_frac_bits();
-    let result = FixedPoint::from_raw(shifted);
-    if result.is_zero() { quantum } else { result }
-}
-
-#[cfg(table_format = "q64_64")]
-fn two_thirds_frac_bits() -> u32 { 42 }
-#[cfg(table_format = "q32_32")]
-fn two_thirds_frac_bits() -> u32 { 21 }
-#[cfg(table_format = "q16_16")]
-fn two_thirds_frac_bits() -> u32 { 10 }
-#[cfg(table_format = "q128_128")]
-fn two_thirds_frac_bits() -> u32 { 85 }
-#[cfg(table_format = "q256_256")]
-fn two_thirds_frac_bits() -> usize { 170 }
 
 #[cfg(table_format = "q64_64")]
 fn half_frac_bits() -> u32 { 32 }

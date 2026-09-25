@@ -77,7 +77,16 @@ fn dyadic_spd(rng: &mut Rng, n: usize) -> FixedMatrix {
 fn proven_positive_definite() {
     assert_eq!(pd_verdict(&FixedMatrix::identity(1)).unwrap(), PdVerdict::PositiveDefinite);
     assert_eq!(pd_verdict(&FixedMatrix::identity(7)).unwrap(), PdVerdict::PositiveDefinite);
-    let diag = matrix(&[&["2", "0", "0"], &["0", "0.5", "0"], &["0", "0", "0.001"]]);
+    let mut diag = matrix(&[&["2", "0", "0"], &["0", "0.5", "0"], &["0", "0", "0.001"]]);
+    // the small positive pivot: 0.001 is stored as 0 below 10 fraction bits
+    // (a singular matrix, correctly not PD), so it is one unit there instead
+    if diag.get(2, 2).is_zero() {
+        let mut unit = FixedPoint::one();
+        for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS {
+            unit = unit / FixedPoint::from_int(2);
+        }
+        diag.set(2, 2, unit);
+    }
     assert_eq!(pd_verdict(&diag).unwrap(), PdVerdict::PositiveDefinite);
     // the classic 3x3 with an exact factor: L = [[2,0,0],[1,1,0],[2,0,1]]
     let spd = matrix(&[&["4", "2", "4"], &["2", "2", "2"], &["4", "2", "5"]]);
@@ -157,7 +166,20 @@ fn last_pivot_width_stays_bounded() {
     let mut rng = Rng(0x1D7);
     for n in [23usize, 50] {
         let m = dyadic_spd(&mut rng, n);
-        assert_eq!(pd_verdict(&m).unwrap(), PdVerdict::PositiveDefinite, "n = {n}");
+        let verdict = pd_verdict(&m).unwrap();
+        // Width compounds through the factor and scales with the ulp: at 10
+        // fraction bits (64x coarser than 16) the n = 50 pivot 35 straddles
+        // zero (measured [-11257, 11693] raw around an exact 3058). The
+        // verdict is then Inconclusive, which is sound; it must never be wrong.
+        // At 8 fraction bits (4x coarser again) n = 23 straddles as well:
+        // measured pivot 21 in [-160, 1028] raw.
+        let bits = g_math::fixed_point::frac_config::FRAC_BITS;
+        if (n == 50 && bits < 16) || (n == 23 && bits < 10) {
+            assert!(!matches!(verdict, PdVerdict::NotPositiveDefinite { .. }), "A^T A + I proven not PD");
+            println!("pd_verdict n = {n} at FRAC_BITS {bits}: {verdict:?} (width limit, see comment)");
+            continue;
+        }
+        assert_eq!(verdict, PdVerdict::PositiveDefinite, "n = {n}");
         // recover the last pivot's enclosure by re-running the factorisation
         // through the public interval operations, so the width is observable
         let zero = Interval::point(FixedPoint::ZERO);

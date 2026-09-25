@@ -21,8 +21,9 @@
 use g_math::fixed_point::imperative::fused;
 use g_math::fixed_point::{FixedMatrix, FixedPoint, FixedVector, Interval, OverflowDetected};
 
+// realtime: the build's split (GMATH_FRAC_BITS; 16 by default, 10 at Q22.10)
 #[cfg(table_format = "q16_16")]
-const FB: u32 = 16; // default FRAC_BITS in CI; custom splits share the kernel
+const FB: u32 = g_math::fixed_point::frac_config::FRAC_BITS;
 #[cfg(table_format = "q32_32")]
 const FB: u32 = 32;
 #[cfg(table_format = "q64_64")]
@@ -75,9 +76,18 @@ fn from_i128(r: i128) -> FixedPoint { FixedPoint::from_raw(r as _) }
 /// Sample a raw value whose products with another sample stay within i128
 /// at the compute scale: |raw| < 2^(FB + FB/2 - 2) keeps a*b < 2^(3FB - 4),
 /// which is 2^188 at FB = 64; so at q64_64 the sweep restricts to |raw| < 2^62.
+/// The width is also capped at (SB + FB)/2 - 2 bits so that operands are valid
+/// storage values and their products fit the storage tier (a*b / 2^FB <
+/// 2^(SB - 4)). The cap only binds on realtime above 16 fraction bits: it
+/// equals FB + FB/2 - 2 at FB = 16 and FB = 32 and exceeds it below.
 #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 fn sample_raw(rng: &mut Rng) -> i128 {
-    let bits = if FB >= 64 { 62 } else { FB + FB / 2 - 2 };
+    sample_bits(rng, if FB >= 64 { 62 } else { (FB + FB / 2 - 2).min((SB + FB) / 2 - 2) })
+}
+
+/// A signed raw with a magnitude below 2^bits.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
+fn sample_bits(rng: &mut Rng, bits: u32) -> i128 {
     let mask = (1u128 << bits) - 1;
     let mag = (rng.next() as u128) & mask;
     let v = mag as i128;
@@ -120,8 +130,19 @@ fn div_interval_is_floor_ceil_of_exact_quotient() {
     let mut negatives = 0usize;
     let mut overflowed = 0usize;
     for _ in 0..20_000 {
-        let a = sample_raw(&mut rng);
-        let mut b = sample_raw(&mut rng) >> (FB / 2);
+        // Below 16 fraction bits, FB + FB/2 - 2 bits never reach the realtime
+        // storage boundary (13 bits at Q22.10): draw both operands wider.
+        // Above 16, sample_raw >> FB/2 makes nearly every quotient (about
+        // 1.5 FB bits) overflow: draw b with FB + 4 bits so the quotient has
+        // about 26 bits, as at Q22.10, and small divisors still overflow.
+        let a = if SB == 32 && FB != 16 { sample_bits(&mut rng, 30) } else { sample_raw(&mut rng) };
+        let mut b = if SB == 32 && FB < 16 {
+            sample_bits(&mut rng, 19) >> 5
+        } else if SB == 32 && FB > 16 {
+            sample_bits(&mut rng, FB + 9) >> 5
+        } else {
+            sample_raw(&mut rng) >> (FB / 2)
+        };
         if b == 0 { b = 3; }
         let num = a << FB;
         let q = num / b;
@@ -401,13 +422,17 @@ fn quadratic_form_with_identity_equals_dot() {
 /// interval path on every profile.
 #[test]
 fn composed_chain_contains_scalar_result() {
+    // the last field bounds the magnitude of every intermediate (integer part)
     let cases = [
-        ("0.1", "0.2", "0.3", "0.7"),
-        ("-1.5", "2.25", "0.125", "3"),
-        ("123.456", "-0.001", "7", "-0.5"),
-        ("0.333333", "3", "-0.000001", "1.000001"),
+        ("0.1", "0.2", "0.3", "0.7", 1),
+        ("-1.5", "2.25", "0.125", "3", 2),
+        ("123.456", "-0.001", "7", "-0.5", 138),
+        ("0.333333", "3", "-0.000001", "1.000001", 1),
     ];
-    for (a, b, c, d) in cases {
+    for (a, b, c, d, bound) in cases {
+        // the result (-137.2 for the third case) must fit the storage range
+        // 2^(SB - FB - 1): not at 24 or more realtime fraction bits (+-128)
+        if (bound as i128) >= (1i128 << (ALL_SB - ALL_FB - 1).min(126)) { continue; }
         let (fa, fb, fc, fd) = (fp(a), fp(b), fp(c), fp(d));
         let scalar = (fa * fb + fc) / fd - fa;
         let iv = (pt(a) * pt(b) + pt(c)) / pt(d) - pt(a);
@@ -495,7 +520,7 @@ fn scalar_sqrt_lies_inside_the_certified_enclosure_across_magnitudes() {
 }
 
 #[cfg(table_format = "q16_16")]
-const ALL_FB: u32 = 16;
+const ALL_FB: u32 = g_math::fixed_point::frac_config::FRAC_BITS;
 #[cfg(table_format = "q32_32")]
 const ALL_FB: u32 = 32;
 #[cfg(table_format = "q64_64")]

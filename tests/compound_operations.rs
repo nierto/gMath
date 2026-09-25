@@ -10,6 +10,8 @@
 //! All tests are pure Rust, no external dependencies, no rebuild required.
 
 use g_math::canonical::{gmath, evaluate, LazyExpr};
+use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::imperative::OverflowDetected;
 use g_math::fixed_point::prime_table::{is_prime, nth_prime, prime_count_up_to, PRIME_COUNT, MAX_PRIME};
 
 // ============================================================================
@@ -101,7 +103,17 @@ fn value_chaining_compound_interest_30_years() {
 
     for year in 1..=30 {
         let expr = LazyExpr::from(balance) * gmath("1.05");
-        balance = evaluate(&expr).expect("compound interest step should not fail");
+        balance = match evaluate(&expr) {
+            Ok(b) => b,
+            // Without `infinite-precision` the exact rational outgrows its
+            // widest tier at year 29 and multiply_via_rational falls back to
+            // the binary compute tier; 1000 * 1.05^29 = 4116.1 exceeds the
+            // realtime storage range 2^(31-F) at GMATH_FRAC_BITS >= 19, so
+            // that fallback must fail loud there. All checked years precede it.
+            Err(OverflowDetected::TierOverflow)
+                if year >= 29 && FixedPoint::try_from_int(4117).is_err() => break,
+            Err(e) => panic!("compound interest step should not fail: {:?}", e),
+        };
 
         let s = format!("{}", balance);
         if year < expected_prefixes.len() {
@@ -209,12 +221,16 @@ fn value_chaining_transcendental_result() {
     let e = evaluate(&gmath("1").exp()).unwrap();
     // e * e should be e^2 ≈ 7.389056...
     let e_squared = evaluate(&(LazyExpr::from(e.clone()) * LazyExpr::from(e))).unwrap();
-    let s = format!("{}", e_squared);
-    assert!(
-        s.starts_with("7.389"),
-        "e * e should be ~7.389, got '{}'",
-        s
-    );
+    // e was materialized to storage (error up to half a unit), so e * e
+    // carries 2e * 0.5 + 0.5 < 3.2 units: 7.391 at Q22.10, where one unit is
+    // 0.001 and a three-digit string check cannot hold.
+    use g_math::fixed_point::FixedPoint;
+    let got = FixedPoint::from_raw(e_squared.as_binary_storage().expect("binary result"));
+    let mut unit = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { unit = unit / FixedPoint::from_int(2); }
+    let tol = unit * FixedPoint::from_int(4);
+    let diff = (got - FixedPoint::from_str("7.389056098930650227230427460575007813180315570551847324087127822522573796079057763384312485079121795")).abs();
+    assert!(diff <= tol, "e * e should be e^2 within 4 units, got {got} (diff {diff})");
 }
 
 // ============================================================================

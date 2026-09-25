@@ -4,7 +4,7 @@
 
 use std::ops::{Add, Sub, Neg, Mul, Index, IndexMut};
 use super::FixedPoint;
-use super::linalg::{compute_tier_dot, compute_tier_dot_raw};
+use super::linalg::{compute_tier_dot, compute_tier_sqrt_dot};
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 /// A dynamically-sized vector of fixed-point values.
@@ -69,9 +69,12 @@ impl FixedVector {
         self.dot(self)
     }
 
-    /// Length (Euclidean norm).
+    /// Length (Euclidean norm): the sum of squares and the root at the
+    /// compute tier, one rounding (was `length_squared().sqrt()`: two roundings,
+    /// and an overflow once the squared length left storage).
     pub fn length(&self) -> FixedPoint {
-        self.length_squared().sqrt()
+        let raw: Vec<BinaryStorage> = self.data.iter().map(|x| x.raw()).collect();
+        FixedPoint::from_raw(compute_tier_sqrt_dot(&raw, &raw).expect("FixedVector::length exceeds storage"))
     }
 
     /// Fused length: sqrt(Σ x_i²) entirely at compute tier.
@@ -94,11 +97,26 @@ impl FixedVector {
 
     /// Normalize in place (divide each component by length).
     ///
-    /// Panics if length is zero.
+    /// The sum of squares is exact and its root is taken at the compute tier;
+    /// each component is divided by that compute-tier length and rounded to
+    /// storage once (the length is never rounded to storage, so a short
+    /// nonzero vector normalizes instead of dividing by zero).
+    ///
+    /// Panics if the vector is zero or its squared length exceeds the compute
+    /// tier.
     pub fn normalize(&mut self) {
-        let len = self.length();
+        use super::linalg::{exact_dot, upscale_to_compute};
+        use super::wide_acc::{divide_to_storage_nearest, widen_product, widen_storage};
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_is_zero, sqrt_at_compute_tier};
+        let raw: Vec<BinaryStorage> = self.data.iter().map(|x| x.raw()).collect();
+        let sum_sq = exact_dot(&raw, &raw).expect("FixedVector::normalize: squared length exceeds the compute tier");
+        assert!(!compute_is_zero(&sum_sq), "FixedVector::normalize: zero vector");
+        let len = sqrt_at_compute_tier(sum_sq);
+        let one = widen_storage(FixedPoint::one().raw());
         for v in &mut self.data {
-            *v = *v / len;
+            // v at 3F over the length at 2F: |v / len| <= 1, never overflows
+            let numer = widen_product(upscale_to_compute(v.raw()), one);
+            *v = FixedPoint::from_raw(divide_to_storage_nearest(numer, len).expect("FixedVector::normalize: zero length"));
         }
     }
 
@@ -134,8 +152,7 @@ impl FixedVector {
         let diff_raw: Vec<BinaryStorage> = (0..self.len())
             .map(|i| (self.data[i] - other.data[i]).raw())
             .collect();
-        let sum_sq = FixedPoint::from_raw(compute_tier_dot_raw(&diff_raw, &diff_raw));
-        sum_sq.sqrt()
+        FixedPoint::from_raw(compute_tier_sqrt_dot(&diff_raw, &diff_raw).expect("metric distance exceeds storage"))
     }
 }
 
@@ -273,15 +290,24 @@ impl FixedVector {
 
     /// Cross product (3D vectors only).
     ///
-    /// Panics if either vector is not 3-dimensional.
+    /// Each component `a b - c d` is the exact difference of two exact
+    /// products at the compute tier, rounded to storage once.
+    ///
+    /// Panics if either vector is not 3-dimensional or a component exceeds
+    /// storage.
     pub fn cross(&self, other: &FixedVector) -> FixedVector {
+        use super::linalg::{exact_dot, round_to_storage};
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_subtract;
         assert_eq!(self.len(), 3, "FixedVector::cross: self must be 3D");
         assert_eq!(other.len(), 3, "FixedVector::cross: other must be 3D");
-        FixedVector::from_slice(&[
-            self.data[1] * other.data[2] - self.data[2] * other.data[1],
-            self.data[2] * other.data[0] - self.data[0] * other.data[2],
-            self.data[0] * other.data[1] - self.data[1] * other.data[0],
-        ])
+        let (u, v) = (&self.data, &other.data);
+        let component = |i: usize, j: usize| {
+            // u_i v_j - u_j v_i; each product of two storage values is exact at 2F
+            let first = exact_dot(&[u[i].raw()], &[v[j].raw()]).expect("FixedVector::cross: product");
+            let second = exact_dot(&[u[j].raw()], &[v[i].raw()]).expect("FixedVector::cross: product");
+            FixedPoint::from_raw(round_to_storage(compute_subtract(first, second)))
+        };
+        FixedVector::from_slice(&[component(1, 2), component(2, 0), component(0, 1)])
     }
 
     /// Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j].

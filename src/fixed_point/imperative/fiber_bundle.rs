@@ -16,9 +16,14 @@
 use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
-use super::linalg::compute_tier_dot_raw;
+use super::linalg::{exact_dot, upscale_to_compute, downscale_to_storage, ComputeStorage};
+use super::compute_matrix::{ComputeMatrix, compute_lu_decompose};
+use super::wide_acc::{acc, exact_sub_dot_compute, narrow_triple_nearest, widen_product, widen_storage, Wide};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
+    compute_checked_add, compute_multiply, compute_subtract, make_compute_int,
+};
 
 // ============================================================================
 // FiberBundle trait
@@ -246,6 +251,11 @@ impl VectorBundle {
             }
         }
     }
+
+    /// The raws A^a_{b0..n} of one (a, b) pair.
+    fn coeff_row(&self, a: usize, b: usize) -> Vec<BinaryStorage> {
+        (0..self.base_dim_val).map(|i| self.get_coeff(a, b, i).raw()).collect()
+    }
 }
 
 impl FiberBundle for VectorBundle {
@@ -303,18 +313,18 @@ impl BundleConnection for VectorBundle {
         for i in 0..n {
             total_tangent[i] = base_tangent[i];
         }
-        // Fiber part: -A^a_{bi} ξ^b v^i (negative connection term)
-        // Accumulate at compute tier to avoid storage-tier precision loss
+        // Fiber part: -A^a_{bi} ξ^b v^i (negative connection term). The inner
+        // sums over i are exact at the compute tier, each times ξ^b exact at
+        // 3F, the whole sum negated and rounded once (before 0.6.4 every
+        // triple product was rounded to storage twice before the sum).
+        let v_raw: Vec<BinaryStorage> = (0..n).map(|i| base_tangent[i].raw()).collect();
         for a in 0..k {
-            let mut terms: Vec<BinaryStorage> = Vec::with_capacity(k * n);
+            let mut sum = <acc::Orient as Wide>::zero();
             for b in 0..k {
-                for i in 0..n {
-                    terms.push((self.get_coeff(a, b, i) * fiber[b] * base_tangent[i]).raw());
-                }
+                let a_dot_v = exact_dot(&self.coeff_row(a, b), &v_raw)?;
+                sum = sum.add_exact(widen_product(a_dot_v, widen_storage(fiber[b].raw())))?;
             }
-            let ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); terms.len()];
-            let sum = FixedPoint::from_raw(compute_tier_dot_raw(&terms, &ones));
-            total_tangent[n + a] = -sum;
+            total_tangent[n + a] = FixedPoint::from_raw(narrow_triple_nearest(-sum)?);
         }
         Ok(total_tangent)
     }
@@ -343,34 +353,39 @@ impl BundleConnection for VectorBundle {
         }
 
         let k = self.fiber_dim_val;
-        let mut fiber = initial_fiber.clone();
+        let n = self.base_dim_val;
+        let up = |x: FixedPoint| upscale_to_compute(x.raw());
 
-        // Discrete parallel transport: at each step, solve
+        // Discrete parallel transport: at each step
         //   ξ^a_{n+1} = ξ^a_n - A^a_{bi} ξ^b_n Δx^i
-        // where Δx = base_path[n+1] - base_path[n]
+        // where Δx = base_path[n+1] - base_path[n]. The fiber state stays at
+        // the compute tier across all steps (Δx and sum_i A^a_{bi} Δx^i exact,
+        // each update one compute-tier rounding) and is rounded to storage
+        // once at the end (before 0.6.4 it was rounded after every step).
+        let mut fiber: Vec<ComputeStorage> = (0..k).map(|a| up(initial_fiber[a])).collect();
         for step in 0..base_path.len() - 1 {
-            let n = self.base_dim_val;
-            let dx: Vec<FixedPoint> = (0..n)
-                .map(|i| base_path[step + 1][i] - base_path[step][i])
+            let dx: Vec<ComputeStorage> = (0..n)
+                .map(|i| compute_subtract(up(base_path[step + 1][i]), up(base_path[step][i])))
                 .collect();
-
-            let mut new_fiber = FixedVector::new(k);
+            let mut new_fiber = Vec::with_capacity(k);
             for a in 0..k {
-                // Accumulate correction at compute tier to avoid storage-tier precision loss
-                let mut terms: Vec<BinaryStorage> = Vec::with_capacity(k * n);
+                let mut coeff_dx = Vec::with_capacity(k);
                 for b in 0..k {
+                    let mut acc = make_compute_int(0);
                     for i in 0..n {
-                        terms.push((self.get_coeff(a, b, i) * fiber[b] * dx[i]).raw());
+                        // both factors have zero low FRAC_BITS: the product is exact
+                        acc = compute_checked_add(acc, compute_multiply(up(self.get_coeff(a, b, i)), dx[i]))?;
                     }
+                    coeff_dx.push(acc);
                 }
-                let ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); terms.len()];
-                let correction = FixedPoint::from_raw(compute_tier_dot_raw(&terms, &ones));
-                new_fiber[a] = fiber[a] - correction;
+                new_fiber.push(exact_sub_dot_compute(fiber[a], &coeff_dx, &fiber)?);
             }
             fiber = new_fiber;
         }
 
-        Ok(fiber)
+        let mut out = FixedVector::new(k);
+        for a in 0..k { out[a] = FixedPoint::from_raw(downscale_to_storage(fiber[a])?); }
+        Ok(out)
     }
 }
 
@@ -416,13 +431,22 @@ impl PrincipalBundle {
     }
 
     /// Set a transition function g_{αβ} and automatically set g_{βα} = g_{αβ}⁻¹.
+    ///
+    /// The inverse comes from a compute-tier LU, each entry rounded once
+    /// (the storage LU inverse carried O(κ) units before 0.6.4).
     pub fn set_transition(
         &mut self,
         alpha: usize,
         beta: usize,
         g: FixedMatrix,
     ) -> Result<(), OverflowDetected> {
-        let g_inv = super::derived::inverse(&g)?;
+        let inv_c = compute_lu_decompose(&ComputeMatrix::from_fixed_matrix(&g))?.inverse()?;
+        let mut g_inv = FixedMatrix::new(g.rows(), g.cols());
+        for i in 0..g.rows() {
+            for j in 0..g.cols() {
+                g_inv.set(i, j, FixedPoint::from_raw(downscale_to_storage(inv_c.get(i, j))?));
+            }
+        }
         self.transitions[alpha * self.num_charts + beta] = g;
         self.transitions[beta * self.num_charts + alpha] = g_inv;
         Ok(())
@@ -535,8 +559,8 @@ pub fn change_chart(
 ///
 /// Returns a rank-4 tensor [k, k, n, n] where entry [a, b, i, j] = F^a_{bij}.
 ///
-/// Uses numerical differentiation for ∂_i A terms and compute_tier_dot_raw
-/// for the quadratic A·A contractions.
+/// The ∂A terms vanish (the stored coefficients are constant); each
+/// quadratic A·A contraction is one rounding of its exact value.
 pub fn vector_bundle_curvature(
     bundle: &VectorBundle,
     _base_point: &FixedVector,
@@ -565,20 +589,18 @@ pub fn vector_bundle_curvature(
                     let d_i_a_bj = FixedPoint::ZERO; // constant coefficients
                     let d_j_a_bi = FixedPoint::ZERO;
 
-                    // Quadratic terms: A^a_{ci} A^c_{bj} - A^a_{cj} A^c_{bi}
-                    // Accumulate at compute tier to avoid storage-tier precision loss
-                    let mut pos_terms: Vec<BinaryStorage> = Vec::with_capacity(k);
-                    let mut neg_terms: Vec<BinaryStorage> = Vec::with_capacity(k);
-                    for c in 0..k {
-                        pos_terms.push((bundle.get_coeff(a, c, i) * bundle.get_coeff(c, b, j)).raw());
-                        neg_terms.push((bundle.get_coeff(a, c, j) * bundle.get_coeff(c, b, i)).raw());
-                    }
-                    let pos_ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); pos_terms.len()];
-                    let neg_ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); neg_terms.len()];
-                    let quad_pos = FixedPoint::from_raw(compute_tier_dot_raw(&pos_terms, &pos_ones));
-                    let quad_neg = FixedPoint::from_raw(compute_tier_dot_raw(&neg_terms, &neg_ones));
+                    // Quadratic terms: A^a_{ci} A^c_{bj} - A^a_{cj} A^c_{bi}, both
+                    // sums exact at the compute tier and their difference
+                    // rounded once (before 0.6.4 each sum was rounded, then
+                    // subtracted)
+                    let a_ci: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(a, c, i).raw()).collect();
+                    let c_bj: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(c, b, j).raw()).collect();
+                    let a_cj: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(a, c, j).raw()).collect();
+                    let c_bi: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(c, b, i).raw()).collect();
+                    let quad = compute_subtract(exact_dot(&a_ci, &c_bj)?, exact_dot(&a_cj, &c_bi)?);
+                    let quad = FixedPoint::from_raw(downscale_to_storage(quad)?);
 
-                    curv.set(&[a, b, i, j], d_i_a_bj - d_j_a_bi + quad_pos - quad_neg);
+                    curv.set(&[a, b, i, j], d_i_a_bj - d_j_a_bi + quad);
                 }
             }
         }

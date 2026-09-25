@@ -51,7 +51,7 @@ let root  = "2".parse::<DecimalFixed<9>>().unwrap().sqrt(); // native decimal tr
 ## Public API
 
 - **[PUBLIC_API.md → FixedPoint](../PUBLIC_API.md#fixedpoint)**: `Copy` Q-format
-  scalar: arithmetic, comparisons, `abs`, `from_str`/`from_int`/`from_raw`, all 18
+  scalar: arithmetic, comparisons, `abs`, `from_str`/`try_from_str`/`from_int`/`from_raw`, all 18
   [transcendentals](README_TRANSCENDENTALS.md), `sincos`, `sinhcosh`, float
   conversions for interop (`to_f64`/`to_f32`, `from_f64`/`from_f32` and their
   fallible `try_from_f64`/`try_from_f32`), and a fallible `try_*` variant per
@@ -85,6 +85,27 @@ Live signatures on [docs.rs](https://docs.rs/g_math).
   `from_f32` truncate toward zero; NaN, infinity and values outside the
   profile's range are an error from `try_from_f64` / `try_from_f32` and a panic
   from the infallible forms.
+- `from_str` / `try_from_str` convert a decimal literal, with or without
+  exponent notation (`"1e-06"`, `".5"`, `"5."`), exactly with integer arithmetic
+  and round once to nearest, ties toward +∞, for any number of digits. Other
+  literals (hex `0x..` and binary `0b..`, which denote their integer, ternary `0t..`, fractions, repeating decimals, named
+  constants) go through the canonical parser as before. `try_from_str` returns
+  `Err(ParseError)` or `Err(TierOverflow)`; `from_str` panics there.
+- `sincos_wide(angle_q32_32)` and `sincos_wide_q64(angle_q64)` (realtime and
+  compact) take angles beyond the storage range and round sin and cos once to
+  storage; the Q64.64 form is the same computation without truncating the angle
+  to Q32.32.
+- The operators `+ - * /` and unary `-` on `FixedPoint` and `DecimalFixed`
+  panic when the result leaves the storage range or on division by zero
+  (0.6.3 wrapped `FixedPoint` and saturated `DecimalFixed`); `try_add`,
+  `try_sub`, `try_mul`, `try_div`, `try_neg` return `Err(TierOverflow)` or
+  `Err(DivisionByZero)` instead. In range the results are unchanged. These
+  types have a fixed width and cannot promote; for automatic promotion to a
+  wider tier or an exact rational use the [canonical layer](README_ROUTING.md).
+  `to_int` / `try_to_int` and `from_int` / `try_from_int` follow the same rule.
+- Multi-step routines on these types (solvers, decompositions, integrators,
+  manifold and Lie-group maps, curvature) carry their state at the compute tier
+  and round once; see [the linear algebra guide](README_LINALG.md).
 - `DecimalFixed` computes natively in the decimal domain (no binary round-trip),
   so its results are correctly rounded *in decimal*; see
   [the precision guide](README_PRECISION.md).

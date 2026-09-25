@@ -36,6 +36,22 @@ fn matrices_approx_eq(a: &FixedMatrix, b: &FixedMatrix, tol: FixedPoint) -> bool
     true
 }
 
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
+/// `k` on realtime splits with fewer than 10 fraction bits, where 0.01 is
+/// under 3 units, else 0: floors measured there leave every other split's
+/// tolerance as it was.
+fn coarse(k: i32) -> i32 { if g_math::fixed_point::frac_config::FRAC_BITS < 10 { k } else { 0 } }
+
 fn tol() -> FixedPoint {
     #[cfg(table_format = "q16_16")]
     { fp("0.01") }
@@ -104,7 +120,8 @@ fn test_eigen_reconstruction() {
         if r == c { eig.values[r] } else { FixedPoint::ZERO }
     });
     let a_rec = &(&eig.vectors * &lambda) * &eig.vectors.transpose();
-    assert!(matrices_approx_eq(&a, &a_rec, tol()),
+    // measured 4 units at 8 fraction bits (8 at 10, 106 at 16)
+    assert!(matrices_approx_eq(&a, &a_rec, at_least(tol(), coarse(8))),
         "QΛQᵀ != A reconstruction failed");
 }
 
@@ -320,9 +337,9 @@ fn test_svd_rank_deficient() {
     assert!((svd.sigma[0] - fp("14")).abs() < tol(),
         "σ₀ = {} (expected 14)", svd.sigma[0]);
     // Remaining singular values should be near zero
-    assert!(svd.sigma[1] < fp("0.0001"),
+    assert!(svd.sigma[1] <= at_least(fp("0.0001"), 4),
         "σ₁ = {} (expected ≈0)", svd.sigma[1]);
-    assert!(svd.sigma[2] < fp("0.0001"),
+    assert!(svd.sigma[2] <= at_least(fp("0.0001"), 4),
         "σ₂ = {} (expected ≈0)", svd.sigma[2]);
 }
 
@@ -347,7 +364,8 @@ fn test_svd_rectangular_tall() {
         if r == c && r < 2 { svd.sigma[r] } else { FixedPoint::ZERO }
     });
     let a_rec = &(&svd.u * &sigma_mat) * &svd.vt;
-    assert!(matrices_approx_eq(&a, &a_rec, tol()),
+    // measured 12 units at 8 fraction bits (9 at 10, 8 at 16)
+    assert!(matrices_approx_eq(&a, &a_rec, at_least(tol(), coarse(16))),
         "SVD reconstruction failed for 4×2 matrix");
 }
 
@@ -370,7 +388,8 @@ fn test_svd_rectangular_wide() {
         if r == c && r < 2 { svd.sigma[r] } else { FixedPoint::ZERO }
     });
     let a_rec = &(&svd.u * &sigma_mat) * &svd.vt;
-    assert!(matrices_approx_eq(&a, &a_rec, tol()),
+    // measured 9 units at 8 fraction bits (6 at 10, 9 at 16)
+    assert!(matrices_approx_eq(&a, &a_rec, at_least(tol(), coarse(12))),
         "SVD reconstruction failed for 2×4 matrix");
 }
 
@@ -424,7 +443,9 @@ fn test_schur_reconstruction() {
 
     // Reconstruct: A_rec = Q T Qᵀ
     let a_rec = &(&schur.q * &schur.t) * &schur.q.transpose();
-    assert!(matrices_approx_eq(&a, &a_rec, tol()),
+    // each storage unit of error in Q costs up to |A| ~ 7 units in Q T Q^T:
+    // measured 16 units at Q22.10, where 0.01 is only 10
+    assert!(matrices_approx_eq(&a, &a_rec, at_least(tol(), 32)),
         "QTQᵀ != A: Schur reconstruction failed");
 }
 
@@ -437,7 +458,8 @@ fn test_schur_orthogonality() {
     ]);
     let schur = schur_decompose(&a).unwrap();
     let qtq = &schur.q.transpose() * &schur.q;
-    assert!(matrices_approx_eq(&qtq, &FixedMatrix::identity(3), tol()),
+    // measured 6 units at 8 fraction bits (5 at 10, 2 at 16)
+    assert!(matrices_approx_eq(&qtq, &FixedMatrix::identity(3), at_least(tol(), coarse(8))),
         "QᵀQ != I: Schur Q not orthogonal");
 }
 
@@ -489,9 +511,10 @@ fn test_pseudoinverse_square_invertible() {
         fp("2"), fp("6"),
     ]);
     let pinv = pseudoinverse(&a).unwrap();
-    // A * A⁺ should be I
+    // A * A⁺ should be I: even the correctly rounded inverse leaves
+    // ||A||_inf = 11 times half a unit, plus the rounding of the product
     let prod = &a * &pinv;
-    assert!(matrices_approx_eq(&prod, &FixedMatrix::identity(2), tol()),
+    assert!(matrices_approx_eq(&prod, &FixedMatrix::identity(2), at_least(tol(), 7)),
         "A * A⁺ != I for invertible matrix");
 }
 
@@ -527,7 +550,11 @@ fn test_pseudoinverse_rank_deficient() {
             eprintln!("A[{},{}]={}, APA[{},{}]={}, diff={}", r, c, a.get(r, c), r, c, apa.get(r, c), diff);
         }
     }
-    let rank_tol = fp("0.01");
+    // A+ entries correctly rounded from the SVD factors (0.5 unit each) are
+    // amplified by A's absolute row and column sums (3 and 6) in A A+ A: up
+    // to 18 units, measured 10 at 8 fraction bits. Before 0.6.4 an entry off
+    // by 0.6 unit happened to cancel here.
+    let rank_tol = at_least(fp("0.01"), coarse(18));
     assert!(matrices_approx_eq(&a, &apa, rank_tol),
         "A * A⁺ * A != A for rank-deficient matrix");
 }
@@ -627,7 +654,10 @@ fn test_eigen_4x4_spd() {
         if r == c { eig.values[r] } else { FixedPoint::ZERO }
     });
     let a_rec = &(&eig.vectors * &lambda) * &eig.vectors.transpose();
-    assert!(matrices_approx_eq(&a, &a_rec, tol()),
+    // each storage unit of error in Q costs up to lambda_max ~ 13 units in
+    // Q L Q^T: measured 32 units at Q22.10 (eigenvalues within 1.2 units of
+    // mpmath, orthogonality 2 units), where 0.01 is only 10
+    assert!(matrices_approx_eq(&a, &a_rec, at_least(tol(), 64)),
         "4×4 SPD eigenvalue reconstruction failed");
 
     // Orthogonality

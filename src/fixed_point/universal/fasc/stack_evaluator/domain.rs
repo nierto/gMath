@@ -13,7 +13,7 @@ use crate::fixed_point::domains::binary_fixed::binary_types::{UniversalBinaryFix
 use crate::fixed_point::domains::decimal_fixed::decimal_types::UniversalDecimalTiered;
 use crate::fixed_point::universal::tier_types::CompactShadow;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
-use super::conversion::{to_binary_storage, binary_storage_to_i128};
+use super::conversion::binary_storage_to_i128;
 
 pub(super) fn ternary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<UniversalTernaryFixed, OverflowDetected> {
     match tier {
@@ -391,66 +391,45 @@ pub(super) fn decimal_from_storage(decimal_places: u8, storage: &BinaryStorage) 
 }
 
 /// Convert UniversalDecimalTiered result back to (decimal_places, BinaryStorage): full precision
-pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> (u8, BinaryStorage) {
+///
+/// `Err(TierOverflow)` when the scaled value does not fit storage; callers
+/// fall back to the exact rational. Every arm used to narrow with a
+/// truncating cast, so a decimal result beyond storage (realtime:
+/// `214748.3647 + 1`) wrapped into a wrong value on every profile.
+pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> Result<(u8, BinaryStorage), OverflowDetected> {
     use crate::fixed_point::domains::decimal_fixed::decimal_types::DecimalRaw;
-    let (tier, raw) = decimal.to_tier_raw();
+    use super::conversion::try_to_binary_storage;
+    let (_tier, raw) = decimal.to_tier_raw();
     let decimal_places = decimal.decimal_places();
+    let overflow = OverflowDetected::TierOverflow;
     let storage = match raw {
-        DecimalRaw::Small(v) => to_binary_storage(v),
+        DecimalRaw::Small(v) => try_to_binary_storage(v)?,
         DecimalRaw::Medium(v) => {
             #[cfg(table_format = "q256_256")]
             { I512::from_i256(v) }
-
             #[cfg(table_format = "q128_128")]
             { v }
-
-            #[cfg(table_format = "q64_64")]
-            { v.as_i128() }
-
-            #[cfg(table_format = "q32_32")]
-            { v.as_i128() as i64 }
-
-            #[cfg(table_format = "q16_16")]
-            { v.as_i128() as i32 }
-
+            #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
+            { if v.fits_in_i128() { try_to_binary_storage(v.as_i128())? } else { return Err(overflow) } }
         }
         DecimalRaw::Large(v) => {
             #[cfg(table_format = "q256_256")]
             { v }
-
             #[cfg(table_format = "q128_128")]
-            { v.as_i256() }
-
-            #[cfg(table_format = "q64_64")]
-            { v.as_i128() }
-
-            #[cfg(table_format = "q32_32")]
-            { v.as_i128() as i64 }
-
-            #[cfg(table_format = "q16_16")]
-            { v.as_i128() as i32 }
-
+            { if v.fits_in_i256() { v.as_i256() } else { return Err(overflow) } }
+            #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
+            { if v.fits_in_i128() { try_to_binary_storage(v.as_i128())? } else { return Err(overflow) } }
         }
         DecimalRaw::XLarge(v) => {
             #[cfg(table_format = "q256_256")]
-            { v.as_i512() }
-
+            { if v.fits_in_i512() { v.as_i512() } else { return Err(overflow) } }
             #[cfg(table_format = "q128_128")]
-            { v.as_i256() }
-
-            #[cfg(table_format = "q64_64")]
-            { v.as_i128() }
-
-            #[cfg(table_format = "q32_32")]
-            { v.as_i128() as i64 }
-
-            #[cfg(table_format = "q16_16")]
-            { v.as_i128() as i32 }
-
+            { if v.fits_in_i256() { v.as_i256() } else { return Err(overflow) } }
+            #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
+            { if v.fits_in_i128() { try_to_binary_storage(v.as_i128())? } else { return Err(overflow) } }
         }
     };
-    let _ = tier; // tier stored implicitly via decimal_places
-    (decimal_places, storage)
+    Ok((decimal_places, storage))
 }
 
 /// Create UniversalBinaryFixed from StackValue binary storage: full precision

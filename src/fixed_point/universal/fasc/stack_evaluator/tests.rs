@@ -2,6 +2,16 @@ use super::*;
 use crate::fixed_point::universal::fasc::lazy_expr::gmath;
 use crate::fixed_point::universal::tier_types::{CompactShadow, ShadowConstantId};
 
+/// A hex and a binary literal whose integers fit the build's range: since
+/// 0.6.4 they denote their integer, and 255 (10) leaves the realtime range past
+/// 23 (27) fraction bits (then they parse to the exact rational instead).
+fn fitting_hex() -> (&'static str, i128) {
+    if crate::fixed_point::FixedPoint::try_from_int(255).is_ok() { ("0xFF", 255) } else { ("0x1", 1) }
+}
+fn fitting_bin() -> (&'static str, i128) {
+    if crate::fixed_point::FixedPoint::try_from_int(10).is_ok() { ("0b1010", 10) } else { ("0b1", 1) }
+}
+
 #[test]
 fn test_literal_parsing() {
     let mut eval = StackEvaluator::new(DeploymentProfile::default());
@@ -16,11 +26,11 @@ fn test_literal_parsing() {
     assert!(matches!(integer, StackValue::Binary(_, _, _)));
 
     // Test hex parsing (now works via byte-level 0x prefix check)
-    let hex = eval.parse_literal("0xFF").unwrap();
+    let hex = eval.parse_literal(fitting_hex().0).unwrap();
     assert!(matches!(hex, StackValue::Binary(_, _, _)));
 
     // Test binary prefix parsing
-    let bin = eval.parse_literal("0b1010").unwrap();
+    let bin = eval.parse_literal(fitting_bin().0).unwrap();
     assert!(matches!(bin, StackValue::Binary(_, _, _)));
 
     // Test fraction parsing
@@ -310,7 +320,7 @@ fn test_sinh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::new(DeploymentProfile::default());
     let val = eval.to_binary_storage(&result).unwrap();
-    let zero = to_binary_storage(0);
+    let zero = try_to_binary_storage(0).unwrap();
     assert_eq!(val, zero, "sinh(0) should be exactly 0");
 }
 
@@ -332,7 +342,7 @@ fn test_tanh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::new(DeploymentProfile::default());
     let val = eval.to_binary_storage(&result).unwrap();
-    let zero = to_binary_storage(0);
+    let zero = try_to_binary_storage(0).unwrap();
     assert_eq!(val, zero, "tanh(0) should be exactly 0");
 }
 
@@ -423,7 +433,7 @@ fn test_asinh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::new(DeploymentProfile::default());
     let _val = eval.to_binary_storage(&result).unwrap();
-    let _zero = to_binary_storage(0);
+    let _zero = try_to_binary_storage(0).unwrap();
     // Allow small tolerance from ln(1) computation
     #[cfg(table_format = "q256_256")]
     {
@@ -468,7 +478,7 @@ fn test_atanh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::new(DeploymentProfile::default());
     let _val = eval.to_binary_storage(&result).unwrap();
-    let _zero = to_binary_storage(0);
+    let _zero = try_to_binary_storage(0).unwrap();
     #[cfg(table_format = "q256_256")]
     {
         let diff = if _val > _zero { _val - _zero } else { _zero - _val };
@@ -809,7 +819,7 @@ fn test_gmath_parse_repeating_decimal() {
 
 #[test]
 fn test_gmath_parse_hex() {
-    let s = String::from("0xFF");
+    let s = String::from(fitting_hex().0);
     let expr = gmath_parse(&s).unwrap();
     let result = evaluate(&expr).unwrap();
     assert!(matches!(result, StackValue::Binary(_, _, _)),
@@ -818,7 +828,7 @@ fn test_gmath_parse_hex() {
 
 #[test]
 fn test_gmath_parse_binary_literal() {
-    let s = String::from("0b1010");
+    let s = String::from(fitting_bin().0);
     let expr = gmath_parse(&s).unwrap();
     let result = evaluate(&expr).unwrap();
     assert!(matches!(result, StackValue::Binary(_, _, _)),
@@ -1185,20 +1195,22 @@ fn test_shadow_convenience_accessors() {
 fn test_shadow_hex_literal() {
     // Hex literals should have shadows
     let mut eval = StackEvaluator::new(DeploymentProfile::default());
-    let result = eval.parse_literal("0xFF").unwrap();
+    let (lit, value) = fitting_hex();
+    let result = eval.parse_literal(lit).unwrap();
     let shadow = result.shadow();
-    assert!(shadow.is_some(), "hex literal 0xFF should have shadow, got {:?}", shadow);
-    assert_eq!(shadow.as_rational(), Some((255, 1)));
+    assert!(shadow.is_some(), "hex literal {lit} should have shadow, got {:?}", shadow);
+    assert_eq!(shadow.as_rational(), Some((value, 1)));
 }
 
 #[test]
 fn test_shadow_binary_literal() {
     // Binary literals should have shadows
     let mut eval = StackEvaluator::new(DeploymentProfile::default());
-    let result = eval.parse_literal("0b1010").unwrap();
+    let (lit, value) = fitting_bin();
+    let result = eval.parse_literal(lit).unwrap();
     let shadow = result.shadow();
-    assert!(shadow.is_some(), "binary literal 0b1010 should have shadow, got {:?}", shadow);
-    assert_eq!(shadow.as_rational(), Some((10, 1)));
+    assert!(shadow.is_some(), "binary literal {lit} should have shadow, got {:?}", shadow);
+    assert_eq!(shadow.as_rational(), Some((value, 1)));
 }
 
 #[test]
@@ -1223,4 +1235,37 @@ fn test_shadow_negation_preserves() {
     let (num, den) = shadow.as_rational().unwrap();
     // -1.5 = -(15/10) → shadow_negate
     assert!(num < 0, "negated value should have negative numerator, got {}/{}", num, den);
+}
+
+/// DecimalCompute -> binary storage rounds to nearest (ties toward +inf) and
+/// refuses out-of-range values. Before 0.6.4 it truncated toward zero.
+/// Exact check in i128 where the product val * 2^F fits it.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[test]
+fn decimal_compute_to_binary_rounds_to_nearest() {
+    use crate::fixed_point::domains::decimal_fixed::transcendental::DECIMAL_COMPUTE_DP;
+    // values within a quarter of the storage range: |v| < 2^(31 - F) * 10^9 / 4
+    #[cfg(table_format = "q16_16")]
+    let (f, bound) = {
+        let f = crate::fixed_point::frac_config::FRAC_BITS;
+        (f, (1i128 << 40).min((1_000_000_000i128 << (31 - f)) >> 2))
+    };
+    #[cfg(table_format = "q32_32")]
+    let (f, bound) = (32u32, 1i128 << 60);
+    let den = 10i128.pow(DECIMAL_COMPUTE_DP as u32);
+    let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut differs_from_truncation = 0;
+    for _ in 0..50_000 {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let val = ((state >> 1) as i128 % bound) * if state & 1 == 0 { 1 } else { -1 };
+        let got = decimal_compute_to_binary_storage(val as _).unwrap() as i128;
+        let t = val << f;
+        let want = (2 * t + den).div_euclid(2 * den);
+        assert_eq!(got, want, "{val}");
+        differs_from_truncation += (want != t / den) as u32;
+    }
+    assert!(differs_from_truncation > 10_000, "{differs_from_truncation}");
+    // beyond the storage range: an error, never a wrapped value
+    #[cfg(table_format = "q16_16")]
+    assert!(decimal_compute_to_binary_storage(i64::MAX).is_err());
 }

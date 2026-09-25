@@ -10,22 +10,25 @@ use crate::fixed_point::i256::I256;
 use crate::fixed_point::i512::I512;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
 
-pub(crate) fn to_binary_storage(val: i128) -> BinaryStorage {
+/// Checked i128 -> BinaryStorage: `Err(TierOverflow)` when the value does not
+/// fit (realtime i32, compact i64); lossless on the wider profiles. The
+/// unchecked `as` casts this replaced wrapped silently.
+#[inline(always)]
+pub(crate) fn try_to_binary_storage(val: i128) -> Result<BinaryStorage, OverflowDetected> {
     #[cfg(table_format = "q256_256")]
-    { I512::from_i128(val) }
+    { Ok(I512::from_i128(val)) }
 
     #[cfg(table_format = "q128_128")]
-    { I256::from_i128(val) }
+    { Ok(I256::from_i128(val)) }
 
     #[cfg(table_format = "q64_64")]
-    { val }
+    { Ok(val) }
 
     #[cfg(table_format = "q32_32")]
-    { val as i64 }
+    { i64::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
 
     #[cfg(table_format = "q16_16")]
-    { val as i32 }
-
+    { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
 }
 
 /// Profile-specific extraction to i128 from BinaryStorage

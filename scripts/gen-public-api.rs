@@ -21,8 +21,8 @@
 //! WHAT IT EXTRACTS (per file)
 //! ---------------------------
 //! * Free items declared `pub`: `pub fn` / `pub struct` / `pub enum` /
-//!   `pub trait` / `pub const` / `pub type`. Summary = the first non-empty
-//!   `///` doc line immediately preceding the item (leading `/// ` stripped).
+//!   `pub trait` / `pub const` / `pub type`. Summary = the first sentence of
+//!   the first `///` doc paragraph immediately preceding the item.
 //! * Methods: `impl` blocks are tracked by brace depth (handles `impl<...> T`,
 //!   `impl T`, `impl Trait for T`, and multi-line signatures). Inside an
 //!   INHERENT impl, `pub fn` (plus `pub const` / `pub type` associated items)
@@ -89,6 +89,7 @@ const SURFACE: &[(&str, &str, &str, Option<&str>)] = &[
     ("src/fixed_point/tq19/planar.rs", "g_math::tq19", "tq19", Some("inference")),
     ("src/fixed_point/tq19/hybrid.rs", "g_math::tq19", "tq19", Some("inference")),
     ("src/fixed_point/compute_tier.rs", "g_math::compute_tier", "compute_tier", Some("inference")),
+    ("src/fixed_point/wide.rs", "g_math::wide", "wide", None),
     ("src/fixed_point/domains/balanced_ternary/mod.rs", "g_math::fixed_point::domains::balanced_ternary", "ternary", None),
     ("src/fixed_point/domains/balanced_ternary/trit_packing.rs", "g_math::fixed_point::domains::balanced_ternary", "ternary", None),
 ];
@@ -110,6 +111,7 @@ const SECTIONS: &[(&str, &str)] = &[
     ("ternary", "Balanced ternary"),
     ("tq19", "TQ1.9 inference"),
     ("compute_tier", "Compute-tier transcendentals"),
+    ("wide", "Wide tier (Q64.64)"),
     ("serialization", "Serialization"),
 ];
 
@@ -426,13 +428,47 @@ fn pop_impls(stack: &mut Vec<ImplCtx>, depth: i32) {
     }
 }
 
+/// The first sentence of the first doc paragraph: the paragraph's lines are
+/// joined, then cut after the first `.` that ends a sentence (followed by a
+/// space or the end, not an abbreviation such as `e.g.`). A summary that
+/// wraps onto a second line is no longer cut mid-sentence.
 fn first_nonempty(doc: &[String]) -> String {
+    let mut para: Vec<&str> = Vec::new();
     for l in doc {
-        if !l.trim().is_empty() {
-            return l.trim().to_string();
+        let t = l.trim();
+        if t.is_empty() {
+            if para.is_empty() { continue; }
+            break;
+        }
+        // a code fence, list or heading ends the summary paragraph
+        if !para.is_empty() && (t.starts_with("```") || t.starts_with("- ") || t.starts_with("* ") || t.starts_with('#')) {
+            break;
+        }
+        para.push(t);
+    }
+    let joined = para.join(" ");
+    let bytes = joined.as_bytes();
+    let mut depth = 0i32; // inside backticks, parentheses or brackets no sentence ends
+    let mut in_code = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'`' => in_code = !in_code,
+            b'(' | b'[' if !in_code => depth += 1,
+            b')' | b']' if !in_code => depth -= 1,
+            b'.' if !in_code && depth <= 0 => {
+                let at_end = i + 1 == bytes.len();
+                if at_end || bytes[i + 1] == b' ' {
+                    let before = &joined[..i];
+                    let abbrev = ["e.g", "i.e", "vs", "etc", "cf"].iter().any(|a| before.ends_with(a));
+                    if !abbrev {
+                        return joined[..=i].to_string();
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    String::new()
+    joined
 }
 
 // Count net brace delta, ignoring braces in string/char literals and line comments.
@@ -767,7 +803,7 @@ Regenerate with: `rustc -O scripts/gen-public-api.rs -o /tmp/gen-public-api && /
     out.push_str(
         "This is a **pragmatic source scan** of a curated set of surface files, not a \
 compiler-verified export list. It lists `pub` free items and impl methods with the \
-first line of their doc comment. `pub use` re-exports, `#[cfg(test)]` items, and \
+first sentence of their doc comment. `pub use` re-exports, `#[cfg(test)]` items, and \
 `#[doc(hidden)]` items are omitted, as are impls of std/derive traits. See the header \
 of `scripts/gen-public-api.rs` for exact scope and limitations.\n\n",
     );

@@ -547,10 +547,14 @@ impl From<i64> for I2048 {
 /// This exists because I2048 does not implement the Div trait.
 /// Used by compute-tier division in the scientific profile (Q512.512 format).
 pub fn i2048_div(dividend: I2048, divisor: I2048) -> I2048 {
-    if divisor == I2048::zero() {
-        // Division by zero — return zero (caller should check)
-        return I2048::zero();
-    }
+    i2048_divmod(dividend, divisor).0
+}
+
+/// Schoolbook long division with remainder: quotient truncated toward zero,
+/// remainder with the dividend's sign (as Rust's `/` and `%`). Division by
+/// zero panics, like integer division (before 0.6.4 it returned (0, 0)).
+pub fn i2048_divmod(dividend: I2048, divisor: I2048) -> (I2048, I2048) {
+    assert!(divisor != I2048::zero(), "I2048: division by zero");
 
     // Handle signs manually
     let dividend_neg = (dividend.words[31] & 0x8000_0000_0000_0000) != 0;
@@ -579,7 +583,10 @@ pub fn i2048_div(dividend: I2048, divisor: I2048) -> I2048 {
     }
 
     let result_neg = dividend_neg != divisor_neg;
-    if result_neg { -quotient } else { quotient }
+    (
+        if result_neg { -quotient } else { quotient },
+        if dividend_neg { -remainder } else { remainder },
+    )
 }
 
 /// Schoolbook long division: I2048 / I1024 → I2048

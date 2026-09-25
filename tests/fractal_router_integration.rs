@@ -208,7 +208,8 @@ fn oversized_integer_literal_falls_back_to_symbolic() {
         // fallback domain is Symbolic; wide profiles keep Binary.
         let fits_binary = {
             #[cfg(table_format = "q16_16")]
-            { s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << 15) }
+            // integer range of the build's split: 2^(31 - GMATH_FRAC_BITS)
+            { s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << (31 - g_math::fixed_point::frac_config::FRAC_BITS)) }
             #[cfg(table_format = "q32_32")]
             { s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << 31) }
             #[cfg(table_format = "q64_64")]

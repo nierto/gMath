@@ -148,6 +148,18 @@ parsing (values beyond a narrow profile's binary or decimal range parse into
 the exact symbolic domain). Gated per profile by
 `tests/ugod_promotion_validation.rs`.
 
+Imperative overflow (0.6.4): the `FixedPoint` and `DecimalFixed` operators
+(`+ - * /`, unary `-`), conversions (`from_int`, `to_int`, `from_integer`,
+`from_parts`), transcendentals, and every narrowing inside the library either
+return the in-range result or panic; each has a `try_` form returning
+`Err(TierOverflow)`, `Err(DivisionByZero)` or `Err(DomainError)` (and, on
+`DecimalFixed`, `Err(PrecisionLimit)` for an in-domain argument that rounds
+onto a domain boundary at the compute precision), which never panics. None
+wraps or saturates. The fixed-width types cannot promote; for promotion use
+the canonical layer. Gated by `tests/operator_overflow_validation.rs` (every
+profile, realtime splits 2 to 30), `tests/narrowing_defects_validation.rs` and
+`tests/decimal_try_transcendentals_validation.rs`.
+
 ## 6. Requirements & dependencies
 
 - **Edition** 2021. No MSRV is currently pinned.

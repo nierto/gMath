@@ -107,8 +107,7 @@ fn cos_q64_64(x: i128) -> i128 {
 }
 
 /// Compute both sin and cos simultaneously (shared range reduction)
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn sincos_q64_64(x: i128) -> (i128, i128) {
+pub(crate) fn sincos_q64_64(x: i128) -> (i128, i128) {
     let one_q64: i128 = 1i128 << 64;
 
     // Handle x = 0
@@ -161,7 +160,6 @@ fn sincos_q64_64(x: i128) -> (i128, i128) {
 
 /// Taylor series for sin(r) in Q64.64 format
 /// sin(r) = Σ (-1)^k * r^(2k+1) / (2k+1)!
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn taylor_sin_q64_64(r: i128) -> i128 {
     // Horner form: sin(r) = r * (1 - r²/6 * (1 - r²/20 * (1 - r²/42 * ...)))
     let r_sq = {
@@ -210,7 +208,6 @@ fn taylor_sin_q64_64(r: i128) -> i128 {
 
 /// Taylor series for cos(r) in Q64.64 format
 /// cos(r) = Σ (-1)^k * r^(2k) / (2k)!
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 fn taylor_cos_q64_64(r: i128) -> i128 {
     let r_sq = {
         let r_wide = I256::from_i128(r);

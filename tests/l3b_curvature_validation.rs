@@ -33,6 +33,22 @@ fn curv_tol() -> FixedPoint {
     { fp("0.0000001") }
 }
 
+/// `k` units in the last place of this build's storage (realtime follows
+/// GMATH_FRAC_BITS: one unit is 2^-8 at Q24.8, 256x coarser than Q16.16).
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+/// The larger of a decimal tolerance and `k` storage units.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+
+/// A difference in storage units (its raw value), for printing measured
+/// errors. Doubling the value instead would leave the range at 24 fraction
+/// bits, where the scalar operators wrap.
+fn in_ulps(d: FixedPoint) -> String { format!("{:?}", d.raw()) }
+
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
     assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
@@ -311,6 +327,13 @@ fn test_scalar_from_ricci_consistency() {
     let ricci = ricci_tensor(&metric, &p).unwrap();
     let r1 = scalar_curvature(&metric, &p).unwrap();
     let r2 = scalar_from_ricci(&g_inv, &ricci);
+    println!("scalar curvature consistency: r1 = {r1}, r2 = {r2}, diff {} ulp", in_ulps((r1 - r2).abs()));
 
-    assert_fp(r1, r2, tol(), "scalar curvature consistency");
+    // r1 is the closed form (exactly 2), r2 contracts the finite-difference
+    // Ricci tensor. At 8 fraction bits the difference step is h = 2^-3 and the
+    // nested differences amplify the rounding: measured 14 units (0.055) there,
+    // 1-107 units at 10-24 bits (at most 0.0001, below 0.01), 683 on compact.
+    // 0.01 is 2.56 units at 8 bits: only that build is widened, to 16 units.
+    let t = if g_math::fixed_point::frac_config::FRAC_BITS < 10 { at_least(tol(), 16) } else { tol() };
+    assert_fp(r1, r2, t, "scalar curvature consistency");
 }

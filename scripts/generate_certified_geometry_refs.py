@@ -54,7 +54,8 @@ mp.dps = 300
 
 PROFILES = [
     # name,      F,   W
-    ("q16_16",   16,  32),
+    # realtime: one table per split the build accepts (GMATH_FRAC_BITS 2..30)
+    *[("q16_16", F, 32) for F in range(2, 31)],
     ("q32_32",   32,  64),
     ("q64_64",   64,  128),
     ("q128_128", 128, 256),
@@ -206,6 +207,8 @@ def sqrt_entries(F, W):
         (1 << (W - 1)) - 1,              # the storage maximum itself
         3 * one + one // 7,
     ]
+    # inputs must fit storage (at realtime F = 29, 30 the range is +-4, +-2)
+    xs = [x for x in xs if x < (1 << (W - 1))]
     out = []
     for x in xs:
         n = x << F
@@ -223,6 +226,8 @@ def mul_div_entries(F, W):
     one = 1 << F
     big = (1 << (W - 2)) + 977
     vals = [3, -3, one // 3, -(one // 3), one + 1, -(one + 1), 5 * one + one // 2, -(7 * one) - 1, big, -big]
+    # operands must fit storage (at realtime F >= 28 the range is +-8 or less)
+    vals = [v for v in vals if -(1 << (W - 1)) <= v < (1 << (W - 1))]
     mul, div = [], []
     for a in vals:
         for b in vals:
@@ -238,7 +243,12 @@ def mul_div_entries(F, W):
     return mul, div
 
 
-def pivot_entries(F):
+def pivot_entries(F, W=None):
+    """Last Cholesky pivots of the dyadic k/16 family: only where the family is
+    representable (k/16 needs F >= 4) and its entries (up to about 13.5) fit
+    the storage range (realtime: F <= 27)."""
+    if F < 4 or (W == 32 and F > 27):
+        return []
     rng = Rng(0x1D7)
     out = []
     for n in (23, 50):
@@ -346,21 +356,29 @@ def qf_entries(F, W):
         ([one // 2, -3 * one // 4, 5 * one // 8],
          [[one, one // 4, -one // 8], [one // 4, 2 * one, one // 16], [-one // 8, one // 16, one // 2]]),
     ]
-    # random raws at a quarter of the storage width, dims 2..7
+    # random raws at a quarter of the storage width, dims 2..7; at coarse
+    # realtime splits capped so n^2 2^(3b - 2F) still fits the storage range
+    b = min(W // 4, (W - 1 + 2 * F - 12) // 3)
     for n in (2, 3, 5, 7):
         for _ in range(3):
-            v = [signed(W // 4) for _ in range(n)]
-            m = [[signed(W // 4) for _ in range(n)] for _ in range(n)]
+            v = [signed(b) for _ in range(n)]
+            m = [[signed(b) for _ in range(n)] for _ in range(n)]
             cases.append((v, m))
     # operands near the storage maximum with a result that still fits:
     # raws of 2^k with k = (W - 1 + 2F) // 3 - 2, n = 2, four terms
     k = (W - 1 + 2 * F) // 3 - 2
-    big = (1 << k) - 977
+    # offsets below 2^k (the original 977 and 12345 need k >= 15)
+    off1 = 977 if k >= 15 else (1 << (k - 2)) - 1
+    off2 = 12345 if k >= 15 else (1 << (k - 3)) + 1
+    big = (1 << k) - off1
     for sv, sm in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
-        v = [sv * big, sv * (big - 12345)]
+        v = [sv * big, sv * (big - off2)]
         m = [[sm * big, sm * (big // 3)], [sm * (big // 5), sm * (big - 1)]]
         cases.append((v, m))
 
+    # operands must fit storage (the dyadic 3 x 3 holds 2.0: not at F = 30)
+    lim = 1 << (W - 1)
+    cases = [(v, m) for v, m in cases if all(-lim <= x < lim for x in v + [e for row in m for e in row])]
     out = []
     for v, m in cases:
         n = len(v)
@@ -427,7 +445,9 @@ def main():
     w("")
     for name, F, W in PROFILES:
         w(f'#[cfg(table_format = "{name}")]')
-        w("pub mod refs {")
+        # realtime has one table per supported split; `refs` selects by FRAC_BITS
+        mod = f"refs_f{F}" if name == "q16_16" else "refs"
+        w(f"pub mod {mod} {{")
         w(f"    pub const FRAC_BITS: u32 = {F};")
         w(f"    pub const STORAGE_BITS: u32 = {W};")
         w("    /// (x_raw, floor_raw, ceil_raw) of sqrt at the storage scale.")
@@ -449,7 +469,7 @@ def main():
         w("    /// (n, floor_raw, ceil_raw) of the exact rational last Cholesky pivot of the")
         w("    /// dyadic A^T A + I matrices from tests/pd_verdict_validation.rs (seed 0x1D7).")
         w("    pub const PIVOT: &[(usize, &[u8], &[u8])] = &[")
-        for n, f, c in pivot_entries(F):
+        for n, f, c in pivot_entries(F, W):
             w(f"        ({n}, {le_bytes(f, W)}, {le_bytes(c, W)}),")
         w("    ];")
         w("    /// (n, v raws, m raws row-major, floor_raw, ceil_raw, nearest_raw) of v^T M v.")
@@ -471,6 +491,25 @@ def main():
             w("    ];")
         w("}")
         w("")
+    realtime = [F for name, F, _ in PROFILES if name == "q16_16"]
+    w('#[cfg(table_format = "q16_16")]')
+    w("/// The realtime table for the build's split (GMATH_FRAC_BITS, every value")
+    w("/// the build accepts).")
+    w("pub mod refs {")
+    w("    pub use g_math::fixed_point::frac_config::FRAC_BITS;")
+    w("    pub const STORAGE_BITS: u32 = 32;")
+    def pick(field, ty):
+        arms = " ".join(f"{F} => super::refs_f{F}::{field}," for F in realtime if F != 16)
+        w(f"    pub const {field}: {ty} = match FRAC_BITS {{ {arms} _ => super::refs_f16::{field} }};")
+    pick("SQRT", "&[(&[u8], &[u8], &[u8])]")
+    pick("MUL", "&[(&[u8], &[u8], &[u8], &[u8])]")
+    pick("DIV", "&[(&[u8], &[u8], &[u8], &[u8])]")
+    pick("PIVOT", "&[(usize, &[u8], &[u8])]")
+    pick("QF", "&[(usize, &[&[u8]], &[&[u8]], &[u8], &[u8], &[u8])]")
+    for key in ("ORIENT2D", "ORIENT3D", "INCIRCLE", "INSPHERE"):
+        pick(key, "&[(&[&[&[u8]]], i8)]")
+    w("}")
+    w("")
     dec = decimal_entries()
     w("/// Decimal references, profile-independent (DecimalFixed is i128 everywhere).")
     w("pub mod decimal_refs {")

@@ -438,15 +438,9 @@ impl Div for I1024 {
     /// CRITICAL: Required for Q256.256 fixed-point division (tier N+1 strategy)
     #[inline(always)]
     fn div(self, rhs: Self) -> Self {
-        // Handle zero divisor
-        if rhs == I1024::zero() {
-            // Return max/min value based on sign of dividend
-            return if (self.words[15] as i64) < 0 {
-                I1024::min_value()
-            } else {
-                I1024::max_value()
-            };
-        }
+        // like integer division: a zero divisor panics (before 0.6.4 it
+        // returned a saturated quotient, a plausible value)
+        assert!(rhs != I1024::zero(), "I1024: division by zero");
 
         // Optimize for smaller values
         if self.fits_in_i128() && rhs.fits_in_i128() {
@@ -476,10 +470,8 @@ impl Rem for I1024 {
     /// PRECISION: Full 1024-bit precision remainder
     #[inline(always)]
     fn rem(self, rhs: Self) -> Self {
-        // Handle zero divisor
-        if rhs == I1024::zero() {
-            return I1024::zero();
-        }
+        // like integer remainder: a zero divisor panics (0.6.3 returned 0)
+        assert!(rhs != I1024::zero(), "I1024: division by zero");
 
         // Optimize for smaller values
         if self.fits_in_i128() && rhs.fits_in_i128() {

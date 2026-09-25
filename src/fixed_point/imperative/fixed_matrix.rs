@@ -407,11 +407,6 @@ impl FixedMatrix {
         self.data[r * self.cols + col_start..r * self.cols + col_end]
             .iter().map(|fp| fp.raw()).collect()
     }
-
-    /// Extract raw BinaryStorage values for column `c`, rows `row_start..row_end`.
-    pub(crate) fn col_raw_range(&self, c: usize, row_start: usize, row_end: usize) -> Vec<BinaryStorage> {
-        (row_start..row_end).map(|r| self.data[r * self.cols + c].raw()).collect()
-    }
 }
 
 // ============================================================================

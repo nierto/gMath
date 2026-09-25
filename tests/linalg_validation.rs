@@ -14,10 +14,12 @@ use g_math::fixed_point::imperative::OverflowDetected;
 
 #[test]
 fn test_fixedpoint_serialization_roundtrip() {
-    let values = [
-        fp("0"), fp("1"), fp("-1"), fp("3.14159265358979323846"),
-        fp("0.5"), fp("-0.333333333333333"), fp("12345.6789"),
-    ];
+    // literals outside a coarse realtime split's range (12345.6789 at Q8.24)
+    // are refused by the parser now instead of wrapping: skip them
+    let values: Vec<FixedPoint> = ["0", "1", "-1", "3.14159265358979323846", "0.5", "-0.333333333333333", "12345.6789"]
+        .iter()
+        .filter_map(|s| FixedPoint::try_from_str(s).ok())
+        .collect();
     for &val in &values {
         let bytes = val.to_bytes();
         let recovered = FixedPoint::from_bytes(&bytes).unwrap();
@@ -118,6 +120,17 @@ fn test_serialization_byte_sizes() {
 fn fp(s: &str) -> FixedPoint {
     FixedPoint::from_str(s)
 }
+
+/// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+#[allow(dead_code)]
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+/// `t`, raised to `k` storage units where the split cannot resolve it.
+#[allow(dead_code)]
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
 
 // ============================================================================
 // 1. FixedVector operator tests
@@ -411,31 +424,32 @@ fn test_matrix_multiply_identity_left() {
 
 #[test]
 fn test_matrix_multiply_non_square() {
-    // [1 2 3] * [7  8 ]   = [1*7+2*9+3*11  1*8+2*10+3*12]   = [58  64]
-    // [4 5 6]   [9  10]     [4*7+5*9+6*11  4*8+5*10+6*12]     [139 154]
-    //           [11 12]
+    // [1 2 3] * [1 2]   = [1*1+2*3+3*5  1*2+2*4+3*6]   = [22 28]
+    // [4 5 6]   [3 4]     [4*1+5*3+6*5  4*2+5*4+6*6]     [49 64]
+    //           [5 6]
+    // (entries kept below 128 so the product fits Q8.24, GMATH_FRAC_BITS=24)
     let a = FixedMatrix::from_slice(2, 3, &[fp("1"), fp("2"), fp("3"), fp("4"), fp("5"), fp("6")]);
-    let b = FixedMatrix::from_slice(3, 2, &[fp("7"), fp("8"), fp("9"), fp("10"), fp("11"), fp("12")]);
+    let b = FixedMatrix::from_slice(3, 2, &[fp("1"), fp("2"), fp("3"), fp("4"), fp("5"), fp("6")]);
     let c = &a * &b;
     assert_eq!(c.rows(), 2);
     assert_eq!(c.cols(), 2);
-    assert_eq!(c.get(0, 0), fp("58"));
-    assert_eq!(c.get(0, 1), fp("64"));
-    assert_eq!(c.get(1, 0), fp("139"));
-    assert_eq!(c.get(1, 1), fp("154"));
+    assert_eq!(c.get(0, 0), fp("22"));
+    assert_eq!(c.get(0, 1), fp("28"));
+    assert_eq!(c.get(1, 0), fp("49"));
+    assert_eq!(c.get(1, 1), fp("64"));
 }
 
 #[test]
 fn test_matrix_transpose_multiply_property() {
-    // (AB)ᵀ = BᵀAᵀ
+    // (AB)ᵀ = BᵀAᵀ (AB entries at most 64, so the product fits Q8.24)
     let a = FixedMatrix::from_slice(2, 3, &[
         fp("1"), fp("2"), fp("3"),
         fp("4"), fp("5"), fp("6"),
     ]);
     let b = FixedMatrix::from_slice(3, 2, &[
-        fp("7"), fp("8"),
-        fp("9"), fp("10"),
-        fp("11"), fp("12"),
+        fp("1"), fp("2"),
+        fp("3"), fp("4"),
+        fp("5"), fp("6"),
     ]);
     let ab_t = (&a * &b).transpose();
     let bt_at = &b.transpose() * &a.transpose();
@@ -684,8 +698,9 @@ fn test_try_exp_monotone_and_overflow_terminal() {
 /// (2x > 40), plus sign symmetry.
 #[test]
 fn test_tanh_saturating_region_is_one() {
+    // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
     #[cfg(table_format = "q16_16")]
-    let tol = fp("0.001");
+    let tol = at_least(fp("0.001"), 1);
     #[cfg(not(table_format = "q16_16"))]
     let tol = fp("0.000000001");
     for s in ["20", "25", "60"] {
@@ -702,8 +717,9 @@ fn test_tanh_saturating_region_is_one() {
 #[test]
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 fn test_try_tanh_try_cosh_saturating_region() {
+    // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
     #[cfg(table_format = "q16_16")]
-    let tol = fp("0.001");
+    let tol = at_least(fp("0.001"), 1);
     #[cfg(not(table_format = "q16_16"))]
     let tol = fp("0.000000001");
     let t = fp("20").try_tanh().expect("tanh(20) must not error");

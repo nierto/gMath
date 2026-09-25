@@ -116,75 +116,56 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 /// prevents silent truncation of large results (e.g., exp(44) in Q64.64).
 #[inline]
 pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    // The round bit is added at the compute width BEFORE the range check:
+    // checking first let a value that rounds up to 2^(W-1) through, and the
+    // bump then overflowed the storage type (a panic in debug builds, a wrap
+    // in release; before 0.6.4).
     #[cfg(table_format = "q256_256")]
     {
         // I1024 → I512, shift right 256 with rounding
         let round_bit = (val & (I1024::from_i128(1) << 255)) != I1024::zero();
-        let shifted = val >> 256;
+        let mut shifted = val >> 256;
+        if round_bit { shifted = shifted + I1024::from_i128(1); }
         if !shifted.fits_in_i512() {
             return Err(OverflowDetected::TierOverflow);
         }
-        let mut result = shifted.as_i512();
-        if round_bit {
-            result = result + I512::from_i128(1);
-        }
-        Ok(result)
+        Ok(shifted.as_i512())
     }
     #[cfg(table_format = "q128_128")]
     {
         // I512 → I256, shift right 128 with rounding
         let round_bit = (val & (I512::from_i128(1) << 127)) != I512::zero();
-        let shifted = val >> 128;
+        let mut shifted = val >> 128;
+        if round_bit { shifted = shifted + I512::from_i128(1); }
         if !shifted.fits_in_i256() {
             return Err(OverflowDetected::TierOverflow);
         }
-        let mut result = shifted.as_i256();
-        if round_bit {
-            result = result + I256::from_i128(1);
-        }
-        Ok(result)
+        Ok(shifted.as_i256())
     }
     #[cfg(table_format = "q64_64")]
     {
         // I256 → i128, shift right 64 with rounding
         let round_bit = (val & (I256::from_i128(1) << 63)) != I256::zero();
-        let shifted = val >> 64;
+        let mut shifted = val >> 64;
+        if round_bit { shifted = shifted + I256::from_i128(1); }
         if !shifted.fits_in_i128() {
             return Err(OverflowDetected::TierOverflow);
         }
-        let mut result = shifted.as_i128();
-        if round_bit {
-            result += 1;
-        }
-        Ok(result)
+        Ok(shifted.as_i128())
     }
     #[cfg(table_format = "q32_32")]
     {
         // i128 → i64, shift right 32 with rounding (Q64.64 → Q32.32)
         let round_bit = (val & (1i128 << 31)) != 0;
-        let shifted = val >> 32;
-        if shifted > i64::MAX as i128 || shifted < i64::MIN as i128 {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        let mut result = shifted as i64;
-        if round_bit {
-            result += 1;
-        }
-        Ok(result)
+        let shifted = (val >> 32) + round_bit as i128;
+        i64::try_from(shifted).map_err(|_| OverflowDetected::TierOverflow)
     }
     #[cfg(table_format = "q16_16")]
     {
         // i64 → i32, shift right by FRAC_BITS with rounding
         let round_bit = (val & (1i64 << frac_config::FRAC_ROUND_BIT)) != 0;
-        let shifted = val >> frac_config::FRAC_BITS;
-        if shifted > i32::MAX as i64 || shifted < i32::MIN as i64 {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        let mut result = shifted as i32;
-        if round_bit {
-            result += 1;
-        }
-        Ok(result)
+        let shifted = (val >> frac_config::FRAC_BITS) + round_bit as i64;
+        i32::try_from(shifted).map_err(|_| OverflowDetected::TierOverflow)
     }
 }
 
@@ -342,7 +323,11 @@ pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) ->
         #[cfg(table_format = "q32_32")]
         { return Ok((scaled as i128) << 64); }
         #[cfg(table_format = "q16_16")]
-        { return Ok((scaled as i64) << frac_config::COMPUTE_FRAC_BITS); }
+        {
+            // checked: at 24 fraction bits the compute tier holds +-2^15
+            let v = (scaled as i128) << frac_config::COMPUTE_FRAC_BITS;
+            return i64::try_from(v).map_err(|_| OverflowDetected::TierOverflow);
+        }
     }
 
     let den = pow10_compute(decimals)?;
@@ -370,9 +355,10 @@ pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) ->
     }
     #[cfg(table_format = "q16_16")]
     {
-        // BinaryStorage=i32 → promote to i64, shift by COMPUTE_FRAC_BITS (compute format)
-        let num = (scaled as i64) << frac_config::COMPUTE_FRAC_BITS;
-        Ok(num / den)
+        // i128: scaled << 2F can pass i64 at high fraction bits (it wrapped:
+        // "100.1234" at 24 fraction bits is 1001234 * 2^48; before 0.6.4)
+        let num = (scaled as i128) << frac_config::COMPUTE_FRAC_BITS;
+        i64::try_from(num / den as i128).map_err(|_| OverflowDetected::TierOverflow)
     }
 }
 
@@ -587,14 +573,20 @@ pub(super) fn symbolic_to_compute_storage(num: i128, den: i128) -> Result<Comput
         // ComputeStorage = i128 (Q64.64). Use I256 intermediate for (num << 64) / den.
         let n = I256::from_i128(num) << 64;
         let d = I256::from_i128(den);
-        Ok((n / d).as_i128())
+        let q = n / d;
+        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i128())
     }
     #[cfg(table_format = "q16_16")]
     {
-        // ComputeStorage = i64. Use i128 intermediate for (num << COMPUTE_FRAC_BITS) / den.
-        let n = (num as i128) << frac_config::COMPUTE_FRAC_BITS;
-        let d = den as i128;
-        Ok((n / d) as i64)
+        // ComputeStorage = i64. I256 intermediate: num << 2F can pass i128.
+        // Range-checked: the bare `as i64` wrapped a symbolic value beyond
+        // the realtime compute range (atan(999999999) at 24 fraction bits
+        // came out as -pi/2; before 0.6.4).
+        let n = I256::from_i128(num) << (frac_config::COMPUTE_FRAC_BITS as usize);
+        let q = n / I256::from_i128(den);
+        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+        i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow)
     }
 }
 
@@ -617,7 +609,9 @@ pub(super) fn symbolic_wide_to_compute_storage(
         if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
             let n = I1024::from_i512(num_i512) << 256;
             let d = I1024::from_i512(den_i512);
-            return Ok((n / d).as_i512());
+            let q = n / d;
+            if !q.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
+            return Ok(q.as_i512());
         }
     }
 
@@ -633,9 +627,10 @@ pub(super) fn symbolic_wide_to_compute_storage(
     #[cfg(table_format = "q64_64")]
     {
         if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            let n = I256::from_i128(num_i256.as_i128()) << 128;
-            let d = I256::from_i128(den_i256.as_i128());
-            return Ok(n / d);
+            // I512: an I256 numerator shifted by 128 (was truncated to i128)
+            let q = (I512::from_i256(num_i256) << 128) / I512::from_i256(den_i256);
+            if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+            return Ok(q.as_i256());
         }
         // Ultra tier (I512): mathematical constants (e, π, etc.) are stored at
         // 77-digit precision as I512/I512 rationals. Use I1024 intermediate to
@@ -643,7 +638,9 @@ pub(super) fn symbolic_wide_to_compute_storage(
         if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
             let n = I1024::from_i512(num_i512) << 128;
             let d = I1024::from_i512(den_i512);
-            return Ok((n / d).as_i256());
+            let q = n / d;
+            if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+            return Ok(q.as_i256());
         }
     }
 
@@ -651,14 +648,16 @@ pub(super) fn symbolic_wide_to_compute_storage(
     {
         // ComputeStorage = i128 (Q64.64). I256 intermediate for shift+divide.
         if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            let n = I256::from_i128(num_i256.as_i128()) << 64;
-            let d = I256::from_i128(den_i256.as_i128());
-            return Ok((n / d).as_i128());
+            let q = (I512::from_i256(num_i256) << 64) / I512::from_i256(den_i256);
+            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+            return Ok(q.as_i128());
         }
         if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
             let n = I1024::from_i512(num_i512) << 64;
             let d = I1024::from_i512(den_i512);
-            return Ok((n / d).as_i512().as_i256().as_i128());
+            let q = n / d;
+            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+            return Ok(q.as_i512().as_i256().as_i128());
         }
     }
 
@@ -666,14 +665,16 @@ pub(super) fn symbolic_wide_to_compute_storage(
     {
         // ComputeStorage = i64. Use I256 intermediate for shift+divide → i64.
         if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            let n = I256::from_i128(num_i256.as_i128()) << (frac_config::COMPUTE_FRAC_BITS as usize);
-            let d = I256::from_i128(den_i256.as_i128());
-            return Ok((n / d).as_i128() as i64);
+            let q = (I512::from_i256(num_i256) << (frac_config::COMPUTE_FRAC_BITS as usize)) / I512::from_i256(den_i256);
+            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+            return i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow);
         }
         if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
             let n = I1024::from_i512(num_i512) << (frac_config::COMPUTE_FRAC_BITS as usize);
             let d = I1024::from_i512(den_i512);
-            return Ok((n / d).as_i512().as_i256().as_i128() as i64);
+            let q = n / d;
+            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+            return i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow);
         }
     }
 
@@ -687,7 +688,10 @@ pub(super) fn symbolic_wide_to_compute_storage(
 /// Add two compute-tier values
 #[inline]
 pub(crate) fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    a + b
+    // checked: a sum beyond the compute tier panics instead of wrapping
+    // (before 0.6.4 it wrapped silently in release builds);
+    // compute_checked_add returns the error instead
+    a.checked_add(b).expect("compute tier: addition overflow")
 }
 
 /// Add two compute-tier values, detecting signed overflow instead of wrapping.
@@ -702,6 +706,22 @@ pub(crate) fn compute_checked_add(
     b: ComputeStorage,
 ) -> Result<ComputeStorage, OverflowDetected> {
     a.checked_add(b).ok_or(OverflowDetected::TierOverflow)
+}
+
+/// `a - b` at the compute tier, `Err(TierOverflow)` when it leaves the tier.
+pub(crate) fn compute_checked_subtract(
+    a: ComputeStorage,
+    b: ComputeStorage,
+) -> Result<ComputeStorage, OverflowDetected> {
+    compute_checked_add(a, compute_checked_negate(b)?)
+}
+
+/// `-a` at the compute tier, `Err(TierOverflow)` for the tier's minimum.
+pub(crate) fn compute_checked_negate(a: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(not(table_format = "q256_256"))]
+    { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
+    #[cfg(table_format = "q256_256")]
+    { if a == I1024::min_value() { Err(OverflowDetected::TierOverflow) } else { Ok(-a) } }
 }
 
 /// The compute tier's maximum value: the ceiling that saturating downscales
@@ -748,163 +768,164 @@ pub(crate) fn exp_sentinel_reached(v: &ComputeStorage) -> bool {
 /// Subtract two compute-tier values
 #[inline]
 pub(crate) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    a - b
+    // checked like compute_add
+    #[cfg(not(table_format = "q256_256"))]
+    { a.checked_sub(b).expect("compute tier: subtraction overflow") }
+    #[cfg(table_format = "q256_256")]
+    { a.checked_add(compute_negate(b)).expect("compute tier: subtraction overflow") }
 }
 
 /// Negate a compute-tier value
 #[inline]
 pub(crate) fn compute_negate(a: ComputeStorage) -> ComputeStorage {
-    -a
-}
-
-/// Multiply two compute-tier values (needs double-width intermediate)
-#[inline]
-pub(crate) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    // the compute-tier minimum has no positive twin: panic, never wrap
+    #[cfg(not(table_format = "q256_256"))]
+    { a.checked_neg().expect("compute tier: negation overflow") }
     #[cfg(table_format = "q256_256")]
     {
-        // I1024 × I1024 → I2048 >> 512 → I1024
-        // MUST use signed multiply: mul_to_i2048 is unsigned
-        use crate::fixed_point::domains::binary_fixed::transcendental::multiply_i1024_q512_512;
-        multiply_i1024_q512_512(a, b)
+        assert!(a != I1024::min_value(), "compute tier: negation overflow");
+        -a
+    }
+}
+
+/// Multiply two compute-tier values (needs double-width intermediate).
+///
+/// Rounded to nearest from the exact product and range-checked: a product
+/// beyond the compute tier panics (before 0.6.4 every arm narrowed with an
+/// unchecked cast). In-range results are unchanged.
+pub(crate) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
+    compute_checked_multiply(a, b).expect("compute tier: multiplication overflow")
+}
+
+/// `a * b` at the compute tier, rounded to nearest from the exact product;
+/// `Err(TierOverflow)` when it leaves the compute tier.
+pub(crate) fn compute_checked_multiply(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    const OVERFLOW: OverflowDetected = OverflowDetected::TierOverflow;
+    #[cfg(table_format = "q256_256")]
+    {
+        // I1024 x I1024 -> I2048 >> 512 on magnitudes, as multiply_i1024_q512_512
+        // (mul_to_i2048 is unsigned), with the narrowing checked
+        let a_negative = a < I1024::zero();
+        let b_negative = b < I1024::zero();
+        let abs_a = if a_negative { I1024::zero() - a } else { a };
+        let abs_b = if b_negative { I1024::zero() - b } else { b };
+        let product = abs_a.mul_to_i2048(abs_b);
+        let rounded = (product + (I2048::from_i128(1) << 511)) >> 512;
+        if !(rounded.fits_in_i1024()) { return Err(OVERFLOW); }
+        let magnitude = rounded.as_i1024();
+        Ok(if a_negative != b_negative { I1024::zero() - magnitude } else { magnitude })
     }
     #[cfg(table_format = "q128_128")]
     {
-        // I512 × I512 → I1024 >> 256 → I512 (with rounding)
-        let a_wide = I1024::from_i512(a);
-        let b_wide = I1024::from_i512(b);
-        let product = a_wide * b_wide;
+        // I512 x I512 -> I1024 >> 256 -> I512 (with rounding)
+        let product = I1024::from_i512(a) * I1024::from_i512(b);
         let round_bit = (product & (I1024::from_i128(1) << 255)) != I1024::zero();
-        let mut result = (product >> 256).as_i512();
-        if round_bit {
-            result = result + I512::from_i128(1);
-        }
-        result
+        let mut shifted = product >> 256;
+        if round_bit { shifted = shifted + I1024::from_i128(1); }
+        if !(shifted.fits_in_i512()) { return Err(OVERFLOW); }
+        Ok(shifted.as_i512())
     }
     #[cfg(table_format = "q64_64")]
     {
-        // I256 × I256 → I512 >> 128 → I256 (with rounding)
-        let a_wide = I512::from_i256(a);
-        let b_wide = I512::from_i256(b);
-        let product = a_wide * b_wide;
+        // I256 x I256 -> I512 >> 128 -> I256 (with rounding)
+        let product = I512::from_i256(a) * I512::from_i256(b);
         let round_bit = (product & (I512::from_i128(1) << 127)) != I512::zero();
-        let mut result = (product >> 128).as_i256();
-        if round_bit {
-            result = result + I256::from_i128(1);
-        }
-        result
+        let mut shifted = product >> 128;
+        if round_bit { shifted = shifted + I512::from_i128(1); }
+        if !(shifted.fits_in_i256()) { return Err(OVERFLOW); }
+        Ok(shifted.as_i256())
     }
     #[cfg(table_format = "q32_32")]
     {
-        // i128 × i128 → I256 >> 64 → i128 (with rounding)
-        // ComputeStorage = i128 (Q64.64), COMPUTE_FRAC = 64
-        let a_wide = I256::from_i128(a);
-        let b_wide = I256::from_i128(b);
-        let product = a_wide * b_wide;
+        // i128 x i128 -> I256 >> 64 -> i128 (with rounding)
+        let product = I256::from_i128(a) * I256::from_i128(b);
         let round_bit = (product & (I256::from_i128(1) << 63)) != I256::zero();
-        let mut result = (product >> 64).as_i128();
-        if round_bit {
-            result += 1;
-        }
-        result
+        let mut shifted = product >> 64;
+        if round_bit { shifted = shifted + I256::from_i128(1); }
+        if !(shifted.fits_in_i128()) { return Err(OVERFLOW); }
+        Ok(shifted.as_i128())
     }
     #[cfg(table_format = "q16_16")]
     {
-        // i64 × i64 → i128 >> COMPUTE_FRAC_BITS → i64 (with rounding)
+        // i64 x i64 -> i128 >> COMPUTE_FRAC_BITS -> i64 (with rounding)
         let product = (a as i128) * (b as i128);
-        let round_bit = (product & (1i128 << frac_config::COMPUTE_ROUND_BIT)) != 0;
-        let mut result = (product >> frac_config::COMPUTE_FRAC_BITS) as i64;
-        if round_bit {
-            result += 1;
-        }
-        result
+        let round_bit = ((product >> frac_config::COMPUTE_ROUND_BIT) & 1) as i128;
+        i64::try_from((product >> frac_config::COMPUTE_FRAC_BITS) + round_bit).map_err(|_| OVERFLOW)
     }
 }
 
-/// Divide two compute-tier values (needs double-width intermediate for numerator shift)
+/// Divide two compute-tier values (needs double-width intermediate for numerator shift).
+///
+/// `Err(TierOverflow)` when the quotient leaves the compute tier. Before 0.6.4
+/// every arm narrowed the quotient with a truncating cast and returned the
+/// wrapped value as `Ok`; it is now [`compute_checked_divide`].
 #[inline]
 pub(crate) fn compute_divide(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    #[cfg(table_format = "q256_256")]
-    {
-        // (I1024 << 512) / I1024 — uses I2048 for numerator
-        if b == I1024::zero() { return Err(OverflowDetected::DivisionByZero); }
-        let a_wide = I2048::from_i1024(a) << 512;
-        let b_wide = I2048::from_i1024(b);
-        // I2048 has no Div trait — use the schoolbook division helper
-        use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
-        Ok(i2048_div(a_wide, b_wide).as_i1024())
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        // (I512 << 256) / I512 — use I1024 for shifted numerator
-        if b == I512::zero() { return Err(OverflowDetected::DivisionByZero); }
-        let a_wide = I1024::from_i512(a) << 256;
-        let b_wide = I1024::from_i512(b);
-        Ok((a_wide / b_wide).as_i512())
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        // (I256 << 128) / I256 — use I512 for shifted numerator
-        if b == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
-        let a_wide = I512::from_i256(a) << 128;
-        let b_wide = I512::from_i256(b);
-        Ok((a_wide / b_wide).as_i256())
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        // (i128 << 64) / i128 — use I256 for shifted numerator
-        // ComputeStorage = i128 (Q64.64), COMPUTE_FRAC = 64
-        if b == 0i128 { return Err(OverflowDetected::DivisionByZero); }
-        let a_wide = I256::from_i128(a) << 64;
-        let b_wide = I256::from_i128(b);
-        Ok((a_wide / b_wide).as_i128())
-    }
-    #[cfg(table_format = "q16_16")]
-    {
-        // (i64 << COMPUTE_FRAC_BITS) / i64 — use i128 for shifted numerator
-        if b == 0i64 { return Err(OverflowDetected::DivisionByZero); }
-        let a_wide = (a as i128) << frac_config::COMPUTE_FRAC_BITS;
-        let b_wide = b as i128;
-        Ok((a_wide / b_wide) as i64)
-    }
+    compute_checked_divide(a, b)
 }
 
-/// Divide two compute-tier values, reporting a quotient beyond the compute
-/// tier as `TierOverflow` (`compute_divide` truncates it into range).
+/// Divide two compute-tier values, rounded to nearest with ties toward
+/// +infinity (the crate's binary rule) from the exact quotient; a quotient
+/// beyond the compute tier is `TierOverflow`. Before 0.6.4 every arm
+/// truncated toward zero, so each compute-tier quotient in a chain carried
+/// up to one unit of one-sided error.
 #[inline]
 pub(crate) fn compute_checked_divide(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    // n / d truncated to q with remainder r (sign of n); step one unit away
+    // from zero when 2|r| > |d|, or 2|r| == |d| and the quotient is positive
+    macro_rules! nearest {
+        ($n:expr, $d:expr, $q:expr, $r:expr, $zero:expr, $one:expr) => {{
+            let (n, d, q, r) = ($n, $d, $q, $r);
+            let positive = (n < $zero) == (d < $zero);
+            let r_abs = if r < $zero { $zero - r } else { r };
+            let d_abs = if d < $zero { $zero - d } else { d };
+            let rest = d_abs - r_abs; // compare |r| with |d| - |r|: no doubling
+            let bump = if positive { r_abs >= rest } else { r_abs > rest };
+            if !bump { q } else if positive { q + $one } else { q - $one }
+        }};
+    }
     #[cfg(table_format = "q256_256")]
     {
         if b == I1024::zero() { return Err(OverflowDetected::DivisionByZero); }
-        use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
-        let q = i2048_div(I2048::from_i1024(a) << 512, I2048::from_i1024(b));
+        use crate::fixed_point::domains::binary_fixed::i2048::i2048_divmod;
+        let (n, d) = (I2048::from_i1024(a) << 512, I2048::from_i1024(b));
+        let (q, r) = i2048_divmod(n, d);
+        let q = nearest!(n, d, q, r, I2048::zero(), I2048::from_i128(1));
         if !q.fits_in_i1024() { return Err(OverflowDetected::TierOverflow); }
         Ok(q.as_i1024())
     }
     #[cfg(table_format = "q128_128")]
     {
         if b == I512::zero() { return Err(OverflowDetected::DivisionByZero); }
-        let q = (I1024::from_i512(a) << 256) / I1024::from_i512(b);
+        let (n, d) = (I1024::from_i512(a) << 256, I1024::from_i512(b));
+        let q = n / d;
+        let q = nearest!(n, d, q, n - q * d, I1024::zero(), I1024::from_i128(1));
         if !q.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
         Ok(q.as_i512())
     }
     #[cfg(table_format = "q64_64")]
     {
         if b == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
-        let q = (I512::from_i256(a) << 128) / I512::from_i256(b);
+        let (n, d) = (I512::from_i256(a) << 128, I512::from_i256(b));
+        let q = n / d;
+        let q = nearest!(n, d, q, n - q * d, I512::zero(), I512::from_i128(1));
         if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
         Ok(q.as_i256())
     }
     #[cfg(table_format = "q32_32")]
     {
         if b == 0i128 { return Err(OverflowDetected::DivisionByZero); }
-        let q = (I256::from_i128(a) << 64) / I256::from_i128(b);
+        let (n, d) = (I256::from_i128(a) << 64, I256::from_i128(b));
+        let q = n / d;
+        let q = nearest!(n, d, q, n - q * d, I256::zero(), I256::from_i128(1));
         if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
         Ok(q.as_i128())
     }
     #[cfg(table_format = "q16_16")]
     {
         if b == 0i64 { return Err(OverflowDetected::DivisionByZero); }
-        let q = ((a as i128) << frac_config::COMPUTE_FRAC_BITS) / (b as i128);
+        let (n, d) = ((a as i128) << frac_config::COMPUTE_FRAC_BITS, b as i128);
+        let q = nearest!(n, d, n / d, n % d, 0i128, 1i128);
         if q > i64::MAX as i128 || q < i64::MIN as i128 { return Err(OverflowDetected::TierOverflow); }
         Ok(q as i64)
     }
@@ -916,7 +937,10 @@ pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
     a >> 1
 }
 
-/// Create a compute-tier integer (e.g., 1, 2 in the compute Q-format)
+/// Create a compute-tier integer (e.g., 1, 2 in the compute Q-format).
+///
+/// On realtime the tier holds only +-2^(63 - 2F): a larger `n` panics
+/// instead of wrapping (use `compute_mul_div_int` to scale by a large integer).
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
@@ -929,7 +953,50 @@ pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
     #[cfg(table_format = "q32_32")]
     { (n as i128) << 64 }
     #[cfg(table_format = "q16_16")]
-    { n << frac_config::COMPUTE_FRAC_BITS }
+    {
+        n.checked_mul(1i64 << frac_config::COMPUTE_FRAC_BITS)
+            .expect("make_compute_int: integer outside the realtime compute range")
+    }
+}
+
+/// `c * num / den` at the compute tier for integers `num`, `den` (den > 0),
+/// rounded to nearest, ties toward +infinity. On realtime the compute tier
+/// holds only +-2^(63 - 2F), so `num` and `den` never become compute-tier
+/// values themselves (an ODE tableau numerator of 339200 or a Pade
+/// denominator of 665280 does not fit at 24 fraction bits); an i128
+/// intermediate carries the product and the result is range-checked.
+pub(crate) fn compute_mul_div_int(c: ComputeStorage, num: i64, den: i64) -> Result<ComputeStorage, OverflowDetected> {
+    if den <= 0 { return Err(OverflowDetected::DivisionByZero); }
+    #[cfg(table_format = "q16_16")]
+    {
+        let p = (c as i128) * (num as i128);
+        let d = den as i128;
+        // floor((2p + d) / 2d): nearest, ties toward +infinity
+        let q = (2 * p + d).div_euclid(2 * d);
+        i64::try_from(q).map_err(|_| OverflowDetected::TierOverflow)
+    }
+    #[cfg(not(table_format = "q16_16"))]
+    {
+        compute_divide(compute_multiply(c, make_compute_int(num)), make_compute_int(den))
+    }
+}
+
+/// `c / n` for a count `n > 0`, rounded to nearest (ties toward +infinity)
+/// as `compute_divide(c, make_compute_int(n))`, without making `n` a
+/// compute-tier value (on realtime the tier holds only +-2^(63 - 2F)).
+pub(crate) fn compute_div_count(c: ComputeStorage, n: usize) -> Result<ComputeStorage, OverflowDetected> {
+    if n == 0 { return Err(OverflowDetected::DivisionByZero); }
+    #[cfg(table_format = "q16_16")]
+    {
+        // one exact quotient, nearest: the rule compute_divide follows
+        // (it truncated like compute_divide did before 0.6.4)
+        let n = i64::try_from(n).map_err(|_| OverflowDetected::TierOverflow)?;
+        compute_mul_div_int(c, 1, n)
+    }
+    #[cfg(not(table_format = "q16_16"))]
+    {
+        compute_divide(c, make_compute_int(n as i64))
+    }
 }
 
 /// Check if a compute-tier value is zero

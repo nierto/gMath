@@ -9,18 +9,30 @@
 //! - `sectional_curvature`: K(u,v) = R(u,v,v,u)/(|u|²|v|²-<u,v>²)
 //!
 //! **FASC-UGOD integration:** Numerical differentiation uses h = 2^(-FRAC_BITS/3)
-//! (power-of-2 for exact division by 2h via bit-shift). All contractions (Γ·g⁻¹,
-//! Riemann·g) use compute_tier_dot_raw for 1-ULP accumulation. Riemann tensor
-//! involves nested finite differences → O(h²) total error; scientific profile
-//! recommended for curvature computations.
+//! (power-of-2, so division by 2h is exact). Metric partials, the inverse
+//! metric, Christoffel symbols, their central differences, the Riemann, Ricci,
+//! scalar and sectional contractions all stay at the compute tier (2F bits)
+//! and each returned value is rounded to storage once: a storage rounding
+//! inside a central difference would come out multiplied by 1/(2h). Riemann
+//! tensor involves nested finite differences → O(h²) total error; scientific
+//! profile recommended for curvature computations.
 
 use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
 use super::tensor::Tensor;
-use super::linalg::compute_tier_dot_raw;
+use super::linalg::{
+    compute_product, compute_tier_dot_raw, downscale_to_storage, round_to_storage,
+    sincos_at_compute_tier, upscale_to_compute, ComputeStorage,
+};
 use super::derived::inverse;
+use super::compute_matrix::{compute_lu_decompose, ComputeMatrix};
+use super::ode::{OdeSystem, rk4_step_compute, state_to_compute};
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
+    compute_add, compute_checked_add, compute_checked_divide, compute_divide, compute_halve,
+    compute_mul_div_int, compute_multiply, compute_negate, compute_subtract,
+};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
@@ -32,15 +44,19 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// This minimizes total error (truncation + rounding) for central differences.
 /// Being a power of 2, division by 2h is an exact bit-shift (no rounding).
 ///
-/// Profile values:
+/// Profile values (k = FRAC_BITS/3 rounded to nearest, h = 2^-k):
+/// - realtime:  k = (FRAC_BITS + 1) / 3, e.g. 2^(-5) at Q16.16, 2^(-3) at Q22.10
+/// - Q32.32:    h = 2^(-11)
 /// - Q64.64:    h ≈ 2^(-21) ≈ 4.8e-7
 /// - Q128.128:  h ≈ 2^(-43) ≈ 1.1e-13
 /// - Q256.256:  h ≈ 2^(-85) ≈ 2.6e-26
 pub fn differentiation_step() -> FixedPoint {
     #[cfg(table_format = "q32_32")]
     { FixedPoint::from_raw(1i64 << (32 - 11)) }
+    // realtime follows GMATH_FRAC_BITS; a fixed Q16.16 exponent made h = 2.0
+    // at Q22.10 (before 0.6.4)
     #[cfg(table_format = "q16_16")]
-    { FixedPoint::from_raw(1i32 << (16 - 5)) }
+    { FixedPoint::from_raw(1i32 << (crate::fixed_point::frac_config::FRAC_BITS - step_exponent())) }
     #[cfg(table_format = "q64_64")]
     { FixedPoint::from_raw(1i128 << (64 - 21)) }
     #[cfg(table_format = "q128_128")]
@@ -55,25 +71,11 @@ pub fn differentiation_step() -> FixedPoint {
     }
 }
 
-/// Divide by 2h exactly via bit-shift.
-/// Since h = 2^(-FRAC_BITS/3), 2h = 2^(-FRAC_BITS/3 + 1), and dividing by 2h
-/// is equivalent to shifting left by (FRAC_BITS/3 - 1) then right by FRAC_BITS,
-/// or equivalently, just a right-shift of the difference value.
+/// k with h = 2^-k on realtime: FRAC_BITS / 3 rounded to nearest (>= 1).
+#[cfg(table_format = "q16_16")]
 #[inline]
-fn divide_by_two_h(val: FixedPoint) -> FixedPoint {
-    // val / (2h) where 2h = 2^(-FRAC_BITS/3 + 1)
-    // = val * 2^(FRAC_BITS/3 - 1)
-    // In Q-format, this means shifting the raw value left by (FRAC_BITS/3 - 1)
-    #[cfg(table_format = "q32_32")]
-    { FixedPoint::from_raw(val.raw() << 10) }  // 11 - 1 = 10
-    #[cfg(table_format = "q16_16")]
-    { FixedPoint::from_raw(val.raw() << 4) }  // 5 - 1 = 4
-    #[cfg(table_format = "q64_64")]
-    { FixedPoint::from_raw(val.raw() << 20u32) }  // 21 - 1 = 20
-    #[cfg(table_format = "q128_128")]
-    { FixedPoint::from_raw(val.raw() << 42usize) }  // 43 - 1 = 42
-    #[cfg(table_format = "q256_256")]
-    { FixedPoint::from_raw(val.raw() << 84usize) }  // 85 - 1 = 84
+fn step_exponent() -> u32 {
+    (crate::fixed_point::frac_config::FRAC_BITS + 1) / 3
 }
 
 // ============================================================================
@@ -103,6 +105,17 @@ pub trait MetricProvider {
     fn christoffel_closed_form(&self, _p: &FixedVector) -> Option<Tensor> {
         None
     }
+    /// Closed-form Christoffel symbols at the compute tier, unrounded.
+    ///
+    /// Implemented by the built-in metrics so that curvature, which
+    /// differences the symbols at p +- h and multiplies the difference by
+    /// 1 / (2h), does not amplify their storage rounding. The value cannot be
+    /// built outside the crate: other providers keep the default `None` and
+    /// their [`christoffel_closed_form`](Self::christoffel_closed_form) is used.
+    #[doc(hidden)]
+    fn christoffel_closed_form_compute(&self, _p: &FixedVector) -> Option<ComputeChristoffel> {
+        None
+    }
     /// Closed-form scalar curvature, if known analytically.
     ///
     /// Override this for constant-curvature spaces to get exact results.
@@ -111,39 +124,146 @@ pub trait MetricProvider {
     }
 }
 
+/// Christoffel symbols Γ^k_{ij} at the compute tier (row-major [k, i, j]).
+/// Opaque: only the crate's built-in metrics construct it.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct ComputeChristoffel {
+    data: Vec<ComputeStorage>,
+}
+
+// ============================================================================
+// Compute-tier building blocks
+// ============================================================================
+
+/// `(a - b) / (2h)` at the compute tier: the exact difference doubled
+/// k - 1 times (h = 2^-k), checked. Before 0.6.4 the difference of storage
+/// values was shifted in storage, so a rounding in either operand came out
+/// multiplied by 2^(k-1) (2^84 on scientific).
+fn central_difference(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    let mut d = checked_sub(a, b)?;
+    for _ in 1..differentiation_exponent() {
+        d = compute_checked_add(d, d)?;
+    }
+    Ok(d)
+}
+
+/// k with h = 2^-k (see [`differentiation_step`]).
+fn differentiation_exponent() -> u32 {
+    #[cfg(table_format = "q32_32")]
+    { 11 }
+    #[cfg(table_format = "q16_16")]
+    { step_exponent() }
+    #[cfg(table_format = "q64_64")]
+    { 21 }
+    #[cfg(table_format = "q128_128")]
+    { 43 }
+    #[cfg(table_format = "q256_256")]
+    { 85 }
+}
+
+fn compute_zero() -> ComputeStorage {
+    upscale_to_compute(FixedPoint::ZERO.raw())
+}
+
+fn compute_one() -> ComputeStorage {
+    upscale_to_compute(FixedPoint::one().raw())
+}
+
+/// A compute-tier tensor rounded to storage once per entry.
+fn round_tensor(shape: &[usize], data: &[ComputeStorage]) -> Result<Tensor, OverflowDetected> {
+    let values = data.iter()
+        .map(|&c| downscale_to_storage(c).map(FixedPoint::from_raw))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Tensor::from_data(shape, &values))
+}
+
+/// g^{kl} at the compute tier, row-major.
+///
+/// The provider's `metric_inverse` is authoritative. When it agrees with the
+/// compute-tier LU inverse of `metric()` to within one storage unit per
+/// entry (the default, and any correctly rounded override), the compute-tier
+/// inverse is the same matrix carried to 2F bits and is used unrounded;
+/// otherwise the provider's values are used as given.
+fn metric_inverse_compute(
+    provider: &dyn MetricProvider,
+    p: &FixedVector,
+) -> Result<Vec<ComputeStorage>, OverflowDetected> {
+    let n = provider.dimension();
+    let given = provider.metric_inverse(p)?;
+    let given_c: Vec<ComputeStorage> = (0..n * n)
+        .map(|e| upscale_to_compute(given.get(e / n, e % n).raw()))
+        .collect();
+    let wide = compute_lu_decompose(&ComputeMatrix::from_fixed_matrix(&provider.metric(p)))
+        .and_then(|lu| lu.inverse());
+    let Ok(wide) = wide else { return Ok(given_c) };
+    let unit = compute_one_unit();
+    let mut out = Vec::with_capacity(n * n);
+    for e in 0..n * n {
+        let c = wide.get(e / n, e % n);
+        let diff = checked_sub(c, given_c[e])?;
+        let diff = if diff < compute_zero() { compute_negate(diff) } else { diff };
+        if diff > unit { return Ok(given_c); }
+        out.push(c);
+    }
+    Ok(out)
+}
+
+/// One storage unit (2^-F) as a compute raw.
+fn compute_one_unit() -> ComputeStorage {
+    upscale_to_compute(FixedPoint::from_raw(unit_raw()).raw())
+}
+
+/// Raw 1 of the storage type.
+fn unit_raw() -> BinaryStorage {
+    #[cfg(table_format = "q16_16")]
+    { 1i32 }
+    #[cfg(table_format = "q32_32")]
+    { 1i64 }
+    #[cfg(table_format = "q64_64")]
+    { 1i128 }
+    #[cfg(table_format = "q128_128")]
+    { crate::fixed_point::I256::from_i128(1) }
+    #[cfg(table_format = "q256_256")]
+    { crate::fixed_point::I512::from_i128(1) }
+}
+
 // ============================================================================
 // Partial derivatives of the metric
 // ============================================================================
 
-/// Compute ∂_k g_ij at point p via central differences.
+/// Compute ∂_m g_ij at point p via central differences, at the compute tier.
 ///
-/// Returns an n×n matrix where entry (i,j) = ∂g_ij/∂x^k.
-fn metric_partial(
+/// Returns n×n compute raws, row-major, entry (i,j) = ∂g_ij/∂x^m. The metric
+/// values are the provider's storage values; their difference and the
+/// division by 2h are exact.
+fn metric_partial_compute(
     provider: &dyn MetricProvider,
     p: &FixedVector,
-    k: usize,
-) -> FixedMatrix {
+    m: usize,
+) -> Result<Vec<ComputeStorage>, OverflowDetected> {
     let h = differentiation_step();
     let n = provider.dimension();
 
-    // p + h*e_k and p - h*e_k
+    // p + h*e_m and p - h*e_m
     let mut p_plus = p.clone();
     let mut p_minus = p.clone();
-    p_plus[k] = p_plus[k] + h;
-    p_minus[k] = p_minus[k] - h;
+    p_plus[m] = p_plus[m] + h;
+    p_minus[m] = p_minus[m] - h;
 
     let g_plus = provider.metric(&p_plus);
     let g_minus = provider.metric(&p_minus);
 
-    // (g(p+h) - g(p-h)) / (2h), exact bit-shift division
-    let mut result = FixedMatrix::new(n, n);
+    let mut result = Vec::with_capacity(n * n);
     for i in 0..n {
         for j in 0..n {
-            let diff = g_plus.get(i, j) - g_minus.get(i, j);
-            result.set(i, j, divide_by_two_h(diff));
+            result.push(central_difference(
+                upscale_to_compute(g_plus.get(i, j).raw()),
+                upscale_to_compute(g_minus.get(i, j).raw()),
+            )?);
         }
     }
-    result
+    Ok(result)
 }
 
 // ============================================================================
@@ -156,40 +276,55 @@ fn metric_partial(
 ///
 /// Returns a rank-3 Tensor of shape [n, n, n] where element [k, i, j] = Γ^k_{ij}.
 ///
-/// All contractions with g^{kl} use compute_tier_dot_raw for 1-ULP accumulation.
+/// The metric partials, the inverse metric, the contraction and the factor
+/// ½ are all at the compute tier; each symbol is rounded to storage once.
 pub fn christoffel(
     provider: &dyn MetricProvider,
     p: &FixedVector,
 ) -> Result<Tensor, OverflowDetected> {
+    let n = provider.dimension();
+    round_tensor(&[n, n, n], &christoffel_compute(provider, p)?)
+}
+
+/// Γ^k_{ij} at the compute tier, row-major [k, i, j].
+fn christoffel_compute(
+    provider: &dyn MetricProvider,
+    p: &FixedVector,
+) -> Result<Vec<ComputeStorage>, OverflowDetected> {
+    let n = provider.dimension();
     // Prefer closed-form if available (exact, no numerical differentiation)
+    if let Some(gamma) = provider.christoffel_closed_form_compute(p) {
+        return Ok(gamma.data);
+    }
     if let Some(gamma) = provider.christoffel_closed_form(p) {
-        return Ok(gamma);
+        let mut out = Vec::with_capacity(n * n * n);
+        for k in 0..n { for i in 0..n { for j in 0..n {
+            out.push(upscale_to_compute(gamma.get(&[k, i, j]).raw()));
+        } } }
+        return Ok(out);
     }
 
-    let n = provider.dimension();
-    let g_inv = provider.metric_inverse(p)?;
+    let g_inv = metric_inverse_compute(provider, p)?;
 
-    // Pre-compute all metric partial derivatives ∂_k g_ij for k = 0..n
-    let dg: Vec<FixedMatrix> = (0..n).map(|k| metric_partial(provider, p, k)).collect();
+    // All metric partial derivatives ∂_m g_ij for m = 0..n
+    let dg: Vec<Vec<ComputeStorage>> = (0..n)
+        .map(|m| metric_partial_compute(provider, p, m))
+        .collect::<Result<_, _>>()?;
 
-    // Compute Γ^k_{ij} = ½ g^{kl} (∂_i g_{jl} + ∂_j g_{li} - ∂_l g_{ij})
-    let mut gamma = Tensor::new(&[n, n, n]);
-    let half = FixedPoint::one() / FixedPoint::from_int(2);
-
+    // Γ^k_{ij} = ½ sum_l g^{kl} (∂_i g_{jl} + ∂_j g_{li} - ∂_l g_{ij})
+    let mut gamma = Vec::with_capacity(n * n * n);
     for k in 0..n {
         for i in 0..n {
             for j in 0..n {
-                // Compute sum over l: g^{kl} * (∂_i g_{jl} + ∂_j g_{li} - ∂_l g_{ij})
-                let g_inv_row: Vec<BinaryStorage> = (0..n).map(|l| g_inv.get(k, l).raw()).collect();
-                let bracket: Vec<BinaryStorage> = (0..n).map(|l| {
-                    // ∂_i g_{jl} + ∂_j g_{li} - ∂_l g_{ij}
-                    let term = dg[i].get(j, l) + dg[j].get(l, i) - dg[l].get(i, j);
-                    term.raw()
-                }).collect();
-                let contracted = FixedPoint::from_raw(
-                    compute_tier_dot_raw(&g_inv_row, &bracket)
-                );
-                gamma.set(&[k, i, j], half * contracted);
+                let mut acc = compute_zero();
+                for l in 0..n {
+                    let bracket = checked_sub(
+                        compute_checked_add(dg[i][j * n + l], dg[j][l * n + i])?,
+                        dg[l][i * n + j],
+                    )?;
+                    acc = compute_checked_add(acc, compute_product(g_inv[k * n + l], bracket)?)?;
+                }
+                gamma.push(compute_halve(acc));
             }
         }
     }
@@ -207,6 +342,11 @@ pub fn christoffel(
 ///
 /// Returns a rank-4 Tensor of shape [n, n, n, n] where element [l, i, j, k] = R^l_{ijk}.
 ///
+/// The Christoffel symbols stay at the compute tier through the central
+/// difference and the contractions; each component is rounded to storage
+/// once. Before 0.6.4 the symbols were rounded to storage and then
+/// differenced, which multiplied their rounding by 2^(k-1) (h = 2^-k).
+///
 /// **Precision warning:** This involves nested finite differences (derivatives of
 /// Christoffel symbols). Total error is O(h²) where h = differentiation_step().
 /// For best precision, use the scientific profile.
@@ -215,67 +355,50 @@ pub fn riemann_curvature(
     p: &FixedVector,
 ) -> Result<Tensor, OverflowDetected> {
     let n = provider.dimension();
+    round_tensor(&[n, n, n, n], &riemann_compute(provider, p)?)
+}
+
+/// R^l_{ijk} at the compute tier, row-major [l, i, j, k].
+fn riemann_compute(
+    provider: &dyn MetricProvider,
+    p: &FixedVector,
+) -> Result<Vec<ComputeStorage>, OverflowDetected> {
+    let n = provider.dimension();
     let h = differentiation_step();
+    let at3 = |a: usize, b: usize, c: usize| (a * n + b) * n + c;
 
-    // Compute Christoffel symbols at p and at neighboring points p ± h*e_k
-    let gamma_center = christoffel(provider, p)?;
+    // Compute Christoffel symbols at p and at neighboring points p ± h*e_j
+    let gamma = christoffel_compute(provider, p)?;
 
-    // Derivatives of Christoffel: ∂_j Γ^l_{ik} via central difference
     // ∂_j Γ^l_{ik} = (Γ^l_{ik}(p + h*e_j) - Γ^l_{ik}(p - h*e_j)) / (2h)
-    let mut dgamma: Vec<Tensor> = Vec::with_capacity(n);
+    let mut dgamma: Vec<Vec<ComputeStorage>> = Vec::with_capacity(n);
     for j in 0..n {
         let mut p_plus = p.clone();
         let mut p_minus = p.clone();
         p_plus[j] = p_plus[j] + h;
         p_minus[j] = p_minus[j] - h;
 
-        let gamma_plus = christoffel(provider, &p_plus)?;
-        let gamma_minus = christoffel(provider, &p_minus)?;
-
-        // (Γ_plus - Γ_minus) / (2h)
-        let mut dg_j = Tensor::new(&[n, n, n]);
-        for l in 0..n {
-            for ii in 0..n {
-                for kk in 0..n {
-                    let diff = gamma_plus.get(&[l, ii, kk]) - gamma_minus.get(&[l, ii, kk]);
-                    dg_j.set(&[l, ii, kk], divide_by_two_h(diff));
-                }
-            }
-        }
-        dgamma.push(dg_j);
+        let gamma_plus = christoffel_compute(provider, &p_plus)?;
+        let gamma_minus = christoffel_compute(provider, &p_minus)?;
+        dgamma.push(gamma_plus.iter().zip(&gamma_minus)
+            .map(|(&a, &b)| central_difference(a, b))
+            .collect::<Result<_, _>>()?);
     }
 
     // Assemble Riemann tensor
-    let mut riemann = Tensor::new(&[n, n, n, n]);
+    let mut riemann = Vec::with_capacity(n * n * n * n);
     for l in 0..n {
         for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
                     // ∂_j Γ^l_{ik} - ∂_k Γ^l_{ij}
-                    let deriv_term = dgamma[j].get(&[l, i, k]) - dgamma[k].get(&[l, i, j]);
-
-                    // Γ^l_{jm} Γ^m_{ik} - Γ^l_{km} Γ^m_{ij} (sum over m)
-                    let gamma_jm: Vec<BinaryStorage> = (0..n).map(|m|
-                        gamma_center.get(&[l, j, m]).raw()
-                    ).collect();
-                    let gamma_mik: Vec<BinaryStorage> = (0..n).map(|m|
-                        gamma_center.get(&[m, i, k]).raw()
-                    ).collect();
-                    let gamma_km: Vec<BinaryStorage> = (0..n).map(|m|
-                        gamma_center.get(&[l, k, m]).raw()
-                    ).collect();
-                    let gamma_mij: Vec<BinaryStorage> = (0..n).map(|m|
-                        gamma_center.get(&[m, i, j]).raw()
-                    ).collect();
-
-                    let contraction_pos = FixedPoint::from_raw(
-                        compute_tier_dot_raw(&gamma_jm, &gamma_mik)
-                    );
-                    let contraction_neg = FixedPoint::from_raw(
-                        compute_tier_dot_raw(&gamma_km, &gamma_mij)
-                    );
-
-                    riemann.set(&[l, i, j, k], deriv_term + contraction_pos - contraction_neg);
+                    let mut acc = checked_sub(dgamma[j][at3(l, i, k)], dgamma[k][at3(l, i, j)])?;
+                    // + Γ^l_{jm} Γ^m_{ik} - Γ^l_{km} Γ^m_{ij} (sum over m)
+                    for m in 0..n {
+                        acc = compute_checked_add(acc, compute_product(gamma[at3(l, j, m)], gamma[at3(m, i, k)])?)?;
+                        acc = checked_sub(acc, compute_product(gamma[at3(l, k, m)], gamma[at3(m, i, j)])?)?;
+                    }
+                    riemann.push(acc);
                 }
             }
         }
@@ -291,29 +414,41 @@ pub fn riemann_curvature(
 /// Compute Ricci tensor Rᵢⱼ = R^k_{ikj} at point p.
 ///
 /// This is the trace of the Riemann tensor over the first and third indices.
-/// Returns an n×n FixedMatrix.
+/// Returns an n×n FixedMatrix. The trace is taken over the compute-tier
+/// Riemann tensor and rounded once.
 pub fn ricci_tensor(
     provider: &dyn MetricProvider,
     p: &FixedVector,
 ) -> Result<FixedMatrix, OverflowDetected> {
     let n = provider.dimension();
-    let riemann = riemann_curvature(provider, p)?;
-
-    let mut ricci = FixedMatrix::new(n, n);
+    let ricci = ricci_compute(provider, p)?;
+    let mut out = FixedMatrix::new(n, n);
     for i in 0..n {
         for j in 0..n {
-            // R_{ij} = R^k_{ikj} = sum over k of R[k, i, k, j]
-            let k_vals: Vec<BinaryStorage> = (0..n).map(|k|
-                riemann.get(&[k, i, k, j]).raw()
-            ).collect();
-            let ones: Vec<BinaryStorage> = (0..n).map(|_|
-                FixedPoint::one().raw()
-            ).collect();
-            let val = FixedPoint::from_raw(compute_tier_dot_raw(&k_vals, &ones));
-            ricci.set(i, j, val);
+            out.set(i, j, FixedPoint::from_raw(downscale_to_storage(ricci[i * n + j])?));
         }
     }
+    Ok(out)
+}
 
+/// R_{ij} = sum_k R^k_{ikj} at the compute tier, row-major.
+fn ricci_compute(
+    provider: &dyn MetricProvider,
+    p: &FixedVector,
+) -> Result<Vec<ComputeStorage>, OverflowDetected> {
+    let n = provider.dimension();
+    let riemann = riemann_compute(provider, p)?;
+    let at4 = |a: usize, b: usize, c: usize, d: usize| ((a * n + b) * n + c) * n + d;
+    let mut ricci = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            let mut acc = compute_zero();
+            for k in 0..n {
+                acc = compute_checked_add(acc, riemann[at4(k, i, k, j)])?;
+            }
+            ricci.push(acc);
+        }
+    }
     Ok(ricci)
 }
 
@@ -338,8 +473,8 @@ pub fn ricci_from_riemann(riemann: &Tensor, n: usize) -> FixedMatrix {
 
 /// Compute scalar curvature R = g^{ij} R_{ij} at point p.
 ///
-/// The full trace of the Ricci tensor with the inverse metric.
-/// Returns a single FixedPoint.
+/// The full trace of the Ricci tensor with the inverse metric, both at the
+/// compute tier, rounded once. Returns a single FixedPoint.
 pub fn scalar_curvature(
     provider: &dyn MetricProvider,
     p: &FixedVector,
@@ -350,20 +485,15 @@ pub fn scalar_curvature(
     }
 
     let n = provider.dimension();
-    let g_inv = provider.metric_inverse(p)?;
-    let ricci = ricci_tensor(provider, p)?;
+    let g_inv = metric_inverse_compute(provider, p)?;
+    let ricci = ricci_compute(provider, p)?;
 
     // R = g^{ij} R_{ij} = sum over i,j of g_inv[i,j] * ricci[i,j]
-    let mut g_flat = Vec::with_capacity(n * n);
-    let mut r_flat = Vec::with_capacity(n * n);
-    for i in 0..n {
-        for j in 0..n {
-            g_flat.push(g_inv.get(i, j).raw());
-            r_flat.push(ricci.get(i, j).raw());
-        }
+    let mut acc = compute_zero();
+    for e in 0..n * n {
+        acc = compute_checked_add(acc, compute_product(g_inv[e], ricci[e])?)?;
     }
-
-    Ok(FixedPoint::from_raw(compute_tier_dot_raw(&g_flat, &r_flat)))
+    Ok(FixedPoint::from_raw(downscale_to_storage(acc)?))
 }
 
 /// Compute scalar curvature from pre-computed Ricci tensor and inverse metric.
@@ -386,12 +516,17 @@ pub fn scalar_from_ricci(g_inv: &FixedMatrix, ricci: &FixedMatrix) -> FixedPoint
 
 /// Compute sectional curvature K(u, v) at point p.
 ///
-/// K(u,v) = R(u,v,v,u) / (|u|²|v|² - <u,v>²)
+/// K(u,v) = <R(u,v)v, u> / (|u|²|v|² - <u,v>²)
 ///
-/// where R(u,v,v,u) = R^l_{ijk} u^i v^j v^k g_{ls} u^s (lowered first index).
+/// where <R(u,v)v, u> = g_{ls} R^l_{ijk} v^i u^j v^k u^s (R(∂_j, ∂_k)∂_i =
+/// R^l_{ijk} ∂_l). Before 0.6.4 the contraction was R^l_{ijk} u^i v^j v^k,
+/// which is zero in exact arithmetic (R^l_{ijk} is antisymmetric in j, k):
+/// the result was rounding noise, not the curvature.
 ///
 /// The denominator is the squared area of the parallelogram spanned by u and v.
-/// Uses compute-tier accumulation throughout.
+/// Numerator, the three inner products and the difference in the denominator
+/// (which cancels for near-parallel u, v) are at the compute tier; the zero
+/// test is on the compute-tier denominator and the quotient is rounded once.
 pub fn sectional_curvature(
     provider: &dyn MetricProvider,
     p: &FixedVector,
@@ -400,63 +535,55 @@ pub fn sectional_curvature(
 ) -> Result<FixedPoint, OverflowDetected> {
     let n = provider.dimension();
     let g = provider.metric(p);
-    let riemann = riemann_curvature(provider, p)?;
+    let riemann = riemann_compute(provider, p)?;
+    let at4 = |a: usize, b: usize, c: usize, d: usize| ((a * n + b) * n + c) * n + d;
+    let uc: Vec<ComputeStorage> = (0..n).map(|i| upscale_to_compute(u[i].raw())).collect();
+    let vc: Vec<ComputeStorage> = (0..n).map(|i| upscale_to_compute(v[i].raw())).collect();
 
-    // R(u,v,v,u) = R_{lijk} u^i v^j v^k u^l where R_{lijk} = g_{ls} R^s_{ijk}
-    // = sum_{i,j,k,l,s} g_{ls} R^s_{ijk} u^i v^j v^k u^l
-    // = sum_{i,j,k,s} R^s_{ijk} u^i v^j v^k (sum_l g_{ls} u^l)
-    //
-    // First lower the first index: w_s = g_{ls} u^l
-    let mut w = FixedVector::new(n);
-    for s in 0..n {
-        let g_row: Vec<BinaryStorage> = (0..n).map(|l| g.get(l, s).raw()).collect();
-        let u_raw: Vec<BinaryStorage> = (0..n).map(|l| u[l].raw()).collect();
-        w[s] = FixedPoint::from_raw(compute_tier_dot_raw(&g_row, &u_raw));
-    }
+    // g u and g v, exact at the compute tier (products of storage values);
+    // w_s = g_{ls} u^l lowers the first index (g symmetric)
+    let lower = |x: &[ComputeStorage]| -> Result<Vec<ComputeStorage>, OverflowDetected> {
+        (0..n).map(|i| {
+            let mut acc = compute_zero();
+            for j in 0..n {
+                acc = compute_checked_add(acc, compute_product(upscale_to_compute(g.get(i, j).raw()), x[j])?)?;
+            }
+            Ok(acc)
+        }).collect()
+    };
+    let gu = lower(&uc)?;
+    let gv = lower(&vc)?;
 
-    // R(u,v,v,u) = sum_{s,i,j,k} R^s_{ijk} * u^i * v^j * v^k * w_s
-    let mut numerator = FixedPoint::ZERO;
+    // <R(u,v)v, u> = sum_{s,i,j,k} R^s_{ijk} v^i u^j v^k w_s
+    let mut numerator = compute_zero();
     for s in 0..n {
         for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
-                    let r_comp = riemann.get(&[s, i, j, k]);
-                    if !r_comp.is_zero() {
-                        numerator = numerator + r_comp * u[i] * v[j] * v[k] * w[s];
-                    }
+                    let r = riemann[at4(s, i, j, k)];
+                    if r == compute_zero() { continue; }
+                    let term = compute_product(compute_product(compute_product(r, vc[i])?, uc[j])?, vc[k])?;
+                    numerator = compute_checked_add(numerator, compute_product(term, gu[s])?)?;
                 }
             }
         }
     }
 
-    // Denominator: <u,u>*<v,v> - <u,v>²
-    // where <,> is the metric inner product
-    let u_raw: Vec<BinaryStorage> = (0..n).map(|i| u[i].raw()).collect();
-    let v_raw: Vec<BinaryStorage> = (0..n).map(|i| v[i].raw()).collect();
-
-    // <u,u> = u^i g_{ij} u^j
-    let gu: Vec<BinaryStorage> = (0..n).map(|i| {
-        let g_row: Vec<BinaryStorage> = (0..n).map(|j| g.get(i, j).raw()).collect();
-        compute_tier_dot_raw(&g_row, &u_raw)
-    }).collect();
-    let uu = FixedPoint::from_raw(compute_tier_dot_raw(&u_raw, &gu));
-
-    // <v,v>
-    let gv: Vec<BinaryStorage> = (0..n).map(|i| {
-        let g_row: Vec<BinaryStorage> = (0..n).map(|j| g.get(i, j).raw()).collect();
-        compute_tier_dot_raw(&g_row, &v_raw)
-    }).collect();
-    let vv = FixedPoint::from_raw(compute_tier_dot_raw(&v_raw, &gv));
-
-    // <u,v>
-    let uv = FixedPoint::from_raw(compute_tier_dot_raw(&u_raw, &gv));
-
-    let denom = uu * vv - uv * uv;
-    if denom.is_zero() {
+    // Denominator: <u,u>*<v,v> - <u,v>², all at the compute tier
+    let inner = |x: &[ComputeStorage], gy: &[ComputeStorage]| -> Result<ComputeStorage, OverflowDetected> {
+        let mut acc = compute_zero();
+        for i in 0..n { acc = compute_checked_add(acc, compute_product(x[i], gy[i])?)?; }
+        Ok(acc)
+    };
+    let uu = inner(&uc, &gu)?;
+    let vv = inner(&vc, &gv)?;
+    let uv = inner(&uc, &gv)?;
+    let denom = checked_sub(compute_product(uu, vv)?, compute_product(uv, uv)?)?;
+    if denom == compute_zero() {
         return Err(OverflowDetected::DomainError);
     }
 
-    Ok(numerator / denom)
+    Ok(FixedPoint::from_raw(downscale_to_storage(compute_checked_divide(numerator, denom)?)?))
 }
 
 // ============================================================================
@@ -492,18 +619,28 @@ pub struct SphereMetric {
     pub radius: FixedPoint,
 }
 
+impl SphereMetric {
+    /// r² at the compute tier (exact).
+    fn radius_sq_compute(&self) -> ComputeStorage {
+        let r = upscale_to_compute(self.radius.raw());
+        compute_multiply(r, r)
+    }
+}
+
 impl MetricProvider for SphereMetric {
     fn dimension(&self) -> usize { 2 }
 
+    /// g = r² [[1, 0], [0, sin²θ]], each entry formed at the compute tier and
+    /// rounded once (r² sin²θ was three storage roundings before 0.6.4).
     fn metric(&self, p: &FixedVector) -> FixedMatrix {
         // p = [θ, φ]
-        let theta = p[0];
-        let r_sq = self.radius * self.radius;
-        let sin_theta = theta.sin();
+        let (sin_t, _) = sincos_at_compute_tier(upscale_to_compute(p[0].raw()));
+        let r_sq = self.radius_sq_compute();
+        let g11 = compute_multiply(r_sq, compute_multiply(sin_t, sin_t));
         let z = FixedPoint::ZERO;
         FixedMatrix::from_slice(2, 2, &[
-            r_sq, z,
-            z, r_sq * sin_theta * sin_theta,
+            FixedPoint::from_raw(round_to_storage(r_sq)), z,
+            z, FixedPoint::from_raw(round_to_storage(g11)),
         ])
     }
 
@@ -514,27 +651,34 @@ impl MetricProvider for SphereMetric {
     /// All others = 0.
     ///
     /// These are derived analytically from g = r²[[1,0],[0,sin²θ]].
-    /// Uses the FASC sin/cos engines, no numerical differentiation involved.
+    /// Uses the compute-tier sincos engine, no numerical differentiation
+    /// involved; each symbol is rounded to storage once.
     fn christoffel_closed_form(&self, p: &FixedVector) -> Option<Tensor> {
-        let theta = p[0];
-        let sin_t = theta.sin();
-        let cos_t = theta.cos();
-        let mut gamma = Tensor::new(&[2, 2, 2]);
-        // Γ^0_{11} = -sin(θ)cos(θ) (radius cancels in Christoffel)
-        gamma.set(&[0, 1, 1], -sin_t * cos_t);
-        // Γ^1_{01} = Γ^1_{10} = cos(θ)/sin(θ) = cot(θ)
-        if !sin_t.is_zero() {
-            let cot_t = cos_t / sin_t;
-            gamma.set(&[1, 0, 1], cot_t);
-            gamma.set(&[1, 1, 0], cot_t);
-        }
-        Some(gamma)
+        let gamma = self.christoffel_closed_form_compute(p)?;
+        Some(round_tensor(&[2, 2, 2], &gamma.data).expect("sphere: Christoffel symbol exceeds storage"))
     }
 
-    /// Exact scalar curvature for S²: R = 2/r².
+    #[doc(hidden)]
+    fn christoffel_closed_form_compute(&self, p: &FixedVector) -> Option<ComputeChristoffel> {
+        let (sin_t, cos_t) = sincos_at_compute_tier(upscale_to_compute(p[0].raw()));
+        let mut data = vec![compute_zero(); 8];
+        // Γ^0_{11} = -sin(θ)cos(θ) (radius cancels in Christoffel)
+        data[3] = compute_negate(compute_multiply(sin_t, cos_t));
+        // Γ^1_{01} = Γ^1_{10} = cos(θ)/sin(θ) = cot(θ)
+        if sin_t != compute_zero() {
+            let cot_t = compute_divide(cos_t, sin_t).expect("sphere: cot(theta) exceeds the compute tier");
+            data[5] = cot_t;
+            data[6] = cot_t;
+        }
+        Some(ComputeChristoffel { data })
+    }
+
+    /// Exact scalar curvature for S²: R = 2/r², one rounding.
     fn scalar_curvature_closed_form(&self, _p: &FixedVector) -> Option<FixedPoint> {
-        let r_sq = self.radius * self.radius;
-        Some(FixedPoint::from_int(2) / r_sq)
+        let two = compute_add(compute_one(), compute_one());
+        let r = compute_divide(two, self.radius_sq_compute())
+            .expect("sphere: 2 / r^2 exceeds the compute tier");
+        Some(FixedPoint::from_raw(round_to_storage(r)))
     }
 }
 
@@ -549,11 +693,13 @@ pub struct HyperbolicMetric;
 impl MetricProvider for HyperbolicMetric {
     fn dimension(&self) -> usize { 2 }
 
+    /// g = (1/y²) I, 1/y² formed at the compute tier and rounded once.
     fn metric(&self, p: &FixedVector) -> FixedMatrix {
         // p = [x, y], y > 0
-        let y = p[1];
-        let y_sq = y * y;
-        let scale = FixedPoint::one() / y_sq;
+        let y = upscale_to_compute(p[1].raw());
+        let scale = compute_divide(compute_one(), compute_multiply(y, y))
+            .expect("hyperbolic metric: 1/y^2 exceeds the compute tier");
+        let scale = FixedPoint::from_raw(round_to_storage(scale));
         let z = FixedPoint::ZERO;
         FixedMatrix::from_slice(2, 2, &[
             scale, z,
@@ -570,19 +716,25 @@ impl MetricProvider for HyperbolicMetric {
     ///
     /// Derived analytically from g = (1/y²)·I.
     fn christoffel_closed_form(&self, p: &FixedVector) -> Option<Tensor> {
+        let gamma = self.christoffel_closed_form_compute(p)?;
+        Some(round_tensor(&[2, 2, 2], &gamma.data).expect("hyperbolic: Christoffel symbol exceeds storage"))
+    }
+
+    #[doc(hidden)]
+    fn christoffel_closed_form_compute(&self, p: &FixedVector) -> Option<ComputeChristoffel> {
         let y = p[1];
         if y.is_zero() { return None; }
-        let inv_y = FixedPoint::one() / y;
-
-        let mut gamma = Tensor::new(&[2, 2, 2]);
+        let inv_y = compute_divide(compute_one(), upscale_to_compute(y.raw()))
+            .expect("hyperbolic: 1/y exceeds the compute tier");
+        let mut data = vec![compute_zero(); 8];
         // Γ^0_{01} = Γ^0_{10} = -1/y
-        gamma.set(&[0, 0, 1], -inv_y);
-        gamma.set(&[0, 1, 0], -inv_y);
+        data[1] = compute_negate(inv_y);
+        data[2] = compute_negate(inv_y);
         // Γ^1_{00} = 1/y
-        gamma.set(&[1, 0, 0], inv_y);
+        data[4] = inv_y;
         // Γ^1_{11} = -1/y
-        gamma.set(&[1, 1, 1], -inv_y);
-        Some(gamma)
+        data[7] = compute_negate(inv_y);
+        Some(ComputeChristoffel { data })
     }
 
     /// Exact scalar curvature for H²: R = -2.
@@ -595,7 +747,6 @@ impl MetricProvider for HyperbolicMetric {
 // Geodesic ODE and parallel transport ODE
 // ============================================================================
 
-use super::ode::{OdeSystem, rk4_step};
 
 /// ODE system for the geodesic equation on a Riemannian manifold.
 ///
@@ -609,9 +760,9 @@ use super::ode::{OdeSystem, rk4_step};
 /// (either via closed-form or numerical differentiation, depending on the
 /// MetricProvider implementation).
 ///
-/// **FASC-UGOD integration:** The Γ·v·v contraction uses compute_tier_dot_raw
-/// for 1-ULP accumulation per velocity component. RK4 weighted sums operate
-/// at storage tier (FixedPoint arithmetic with tier N+1 multiplication).
+/// **FASC-UGOD integration:** The Christoffel symbols stay at the compute tier
+/// and the Γ·v·v contraction is summed there (exact v^i v^j, one compute-tier
+/// product with Γ per term), rounded to storage once per velocity component.
 pub struct GeodesicOde<'a> {
     provider: &'a dyn MetricProvider,
 }
@@ -623,8 +774,8 @@ impl<'a> OdeSystem for GeodesicOde<'a> {
         let mut v = FixedVector::new(n);
         for i in 0..n { x[i] = state[i]; v[i] = state[n + i]; }
 
-        // Evaluate Christoffel symbols at current position
-        let gamma = match christoffel(self.provider, &x) {
+        // Christoffel symbols at the current position, at the compute tier
+        let gamma = match christoffel_compute(self.provider, &x) {
             Ok(g) => g,
             Err(_) => return FixedVector::new(2 * n), // zero on error
         };
@@ -633,20 +784,19 @@ impl<'a> OdeSystem for GeodesicOde<'a> {
         // dx^k/dt = v^k
         for k in 0..n { dstate[k] = v[k]; }
 
-        // dv^k/dt = -Γ^k_{ij} v^i v^j (compute-tier contraction)
+        // dv^k/dt = -Γ^k_{ij} v^i v^j, summed at the compute tier and rounded
+        // once (v^i v^j of two storage values is exact at the compute tier;
+        // 0.6.3 rounded it to storage before the dot product)
+        let v_c = state_to_compute(&v);
         for k in 0..n {
-            let mut gamma_k = Vec::with_capacity(n * n);
-            let mut vv = Vec::with_capacity(n * n);
+            let mut acc = upscale_to_compute(FixedPoint::ZERO.raw());
             for i in 0..n {
                 for j in 0..n {
-                    gamma_k.push(gamma.get(&[k, i, j]).raw());
-                    vv.push((v[i] * v[j]).raw());
+                    let vv = compute_multiply(v_c[i], v_c[j]);
+                    acc = compute_add(acc, compute_multiply(gamma[(k * n + i) * n + j], vv));
                 }
             }
-            let contraction = FixedPoint::from_raw(
-                compute_tier_dot_raw(&gamma_k, &vv)
-            );
-            dstate[n + k] = -contraction;
+            dstate[n + k] = FixedPoint::from_raw(round_to_storage(compute_negate(acc)));
         }
 
         dstate
@@ -658,6 +808,12 @@ impl<'a> OdeSystem for GeodesicOde<'a> {
 /// Returns a sequence of points along the geodesic.
 ///
 /// `num_steps` controls the number of RK4 steps. Step size h = total_time / num_steps.
+///
+/// The step boundaries k T / N, the steps between them and the state
+/// [x, v] are carried at the compute tier across all steps; the state is
+/// rounded to storage only to evaluate the Christoffel symbols and once per
+/// reported point (0.6.3 rounded the state and the step to storage every step:
+/// 32 units on a straight line of 96 steps at every split).
 pub fn geodesic_integrate(
     provider: &dyn MetricProvider,
     initial_point: &FixedVector,
@@ -666,29 +822,36 @@ pub fn geodesic_integrate(
     num_steps: usize,
 ) -> Result<Vec<FixedVector>, OverflowDetected> {
     let n = provider.dimension();
-    let h = total_time / FixedPoint::from_int(num_steps as i32);
+    // Step k runs from k T / N to (k + 1) T / N, both at the compute tier, so
+    // the steps add up to T exactly and each is T / N to 2F bits.
+    let time_at = |k: usize| -> ComputeStorage {
+        compute_mul_div_int(upscale_to_compute(total_time.raw()), k as i64, num_steps as i64)
+            .expect("geodesic: num_steps > 0 and the time fits")
+    };
 
-    // Build initial state [x, v]
+    // Build initial state [x, v] at the compute tier
     let mut state = FixedVector::new(2 * n);
     for i in 0..n { state[i] = initial_point[i]; state[n + i] = initial_velocity[i]; }
+    let mut state = state_to_compute(&state);
 
     let sys = GeodesicOde { provider };
     let mut points = Vec::with_capacity(num_steps + 1);
-    let mut t = FixedPoint::ZERO;
+    let mut t = time_at(0);
 
-    // Extract position from state
-    let extract_pos = |s: &FixedVector| -> FixedVector {
+    // Position from the compute-tier state, rounded once
+    let extract_pos = |s: &[ComputeStorage]| -> Result<FixedVector, OverflowDetected> {
         let mut p = FixedVector::new(n);
-        for i in 0..n { p[i] = s[i]; }
-        p
+        for i in 0..n { p[i] = FixedPoint::from_raw(downscale_to_storage(s[i])?); }
+        Ok(p)
     };
 
-    points.push(extract_pos(&state));
+    points.push(initial_point.clone());
 
-    for _ in 0..num_steps {
-        state = rk4_step(&sys, t, &state, h);
-        t = t + h;
-        points.push(extract_pos(&state));
+    for k in 0..num_steps {
+        let t_next = time_at(k + 1);
+        state = rk4_step_compute(&sys, t, &state, compute_subtract(t_next, t));
+        t = t_next;
+        points.push(extract_pos(&state)?);
     }
 
     Ok(points)
@@ -701,11 +864,15 @@ pub fn geodesic_integrate(
 ///
 /// where dx/dt is approximated by finite differences along the curve.
 ///
-/// **FASC-UGOD integration:** At each step:
+/// **FASC-UGOD integration:** V is carried at the compute tier along the whole
+/// curve and rounded to storage once at the end. At each step:
 /// - Christoffel symbols evaluated at current point (compute-tier contractions)
-/// - Γ·V·dx contraction via compute_tier_dot_raw (1 ULP per component)
-/// - Optional re-orthogonalization every `reorthog_interval` steps using
-///   compute_tier_dot_raw for the projection
+/// - Γ·V·dx contraction and the update of V at the compute tier
+/// - Optional re-orthogonalization every `reorthog_interval` steps with the
+///   projection coefficient and update at the compute tier
+///
+/// A compute-tier overflow in the update is `Err(TierOverflow)`, as is a
+/// final V beyond the storage range.
 ///
 /// `reorthog_interval`: re-orthogonalize V against the curve tangent every N steps.
 /// Set to 0 to disable. Recommended: 10-50 for long curves.
@@ -720,7 +887,8 @@ pub fn parallel_transport_ode(
     }
 
     let n = provider.dimension();
-    let mut v = initial_vector.clone();
+    let mut v = state_to_compute(initial_vector);
+    let zero = upscale_to_compute(FixedPoint::ZERO.raw());
 
     for step in 0..curve.len() - 1 {
         let p = &curve[step];
@@ -729,42 +897,59 @@ pub fn parallel_transport_ode(
         // Curve tangent: dx = p_next - p
         let dx: Vec<FixedPoint> = (0..n).map(|i| p_next[i] - p[i]).collect();
 
-        // Christoffel at current point
-        let gamma = christoffel(provider, p)?;
+        // Christoffel at current point, at the compute tier
+        let gamma = christoffel_compute(provider, p)?;
 
-        // dV^k = -Γ^k_{ij} V^i dx^j (one step of Euler — for RK4 on
-        // the transport ODE, we'd need Christoffel at intermediate points)
-        let mut v_new = FixedVector::new(n);
+        // dV^k = -Γ^k_{ij} V^i dx^j (one step of Euler; for RK4 on
+        // the transport ODE, we'd need Christoffel at intermediate points),
+        // with V, the contraction and the update at the compute tier
+        let dx_c: Vec<ComputeStorage> = dx.iter().map(|d| upscale_to_compute(d.raw())).collect();
+        let mut v_new = Vec::with_capacity(n);
         for k in 0..n {
-            // -Γ^k_{ij} V^i dx^j via compute-tier contraction
-            let gamma_k_v: Vec<BinaryStorage> = (0..n).map(|j| {
+            let mut correction = zero;
+            for j in 0..n {
                 // Sum over i: Γ^k_{ij} V^i
-                let gamma_ki: Vec<BinaryStorage> = (0..n).map(|i|
-                    gamma.get(&[k, i, j]).raw()
-                ).collect();
-                let v_raw: Vec<BinaryStorage> = (0..n).map(|i| v[i].raw()).collect();
-                compute_tier_dot_raw(&gamma_ki, &v_raw)
-            }).collect();
-            let dx_raw: Vec<BinaryStorage> = dx.iter().map(|d| d.raw()).collect();
-            let correction = FixedPoint::from_raw(
-                compute_tier_dot_raw(&gamma_k_v, &dx_raw)
-            );
-            v_new[k] = v[k] - correction;
+                let mut gamma_v = zero;
+                for i in 0..n {
+                    gamma_v = compute_checked_add(gamma_v, compute_product(gamma[(k * n + i) * n + j], v[i])?)?;
+                }
+                correction = compute_checked_add(correction, compute_product(gamma_v, dx_c[j])?)?;
+            }
+            v_new.push(checked_sub(v[k], correction)?);
         }
 
         v = v_new;
 
         // Re-orthogonalization: project V perpendicular to curve tangent
         if reorthog_interval > 0 && (step + 1) % reorthog_interval == 0 {
-            let dx_vec = FixedVector::from_slice(&dx);
-            let dx_norm_sq = dx_vec.dot_precise(&dx_vec);
-            if !dx_norm_sq.is_zero() {
-                let v_dot_dx = v.dot_precise(&dx_vec);
-                let coeff = v_dot_dx / dx_norm_sq;
-                v = &v - &(&dx_vec * coeff);
+            let mut dx_norm_sq = zero;
+            let mut v_dot_dx = zero;
+            for i in 0..n {
+                dx_norm_sq = compute_checked_add(dx_norm_sq, compute_product(dx_c[i], dx_c[i])?)?;
+                v_dot_dx = compute_checked_add(v_dot_dx, compute_product(v[i], dx_c[i])?)?;
+            }
+            if dx_norm_sq != zero {
+                let coeff = compute_checked_divide(v_dot_dx, dx_norm_sq)?;
+                for i in 0..n {
+                    v[i] = checked_sub(v[i], compute_product(dx_c[i], coeff)?)?;
+                }
             }
         }
     }
 
-    Ok(v)
+    let mut out = FixedVector::new(n);
+    for i in 0..n { out[i] = FixedPoint::from_raw(downscale_to_storage(v[i])?); }
+    Ok(out)
+}
+
+/// `a - b` at the compute tier, `TierOverflow` instead of a wrap.
+fn checked_sub(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
+    #[cfg(not(table_format = "q256_256"))]
+    { a.checked_sub(b).ok_or(OverflowDetected::TierOverflow) }
+    #[cfg(table_format = "q256_256")]
+    {
+        // I1024 has no checked_sub; the minimum has no negation
+        if b == ComputeStorage::min_value() { return Err(OverflowDetected::TierOverflow); }
+        compute_checked_add(a, compute_negate(b))
+    }
 }

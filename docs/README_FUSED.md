@@ -41,10 +41,20 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | `euclidean_distance(&a, &b)` | √(Σ (aᵢ−bᵢ)²) |
 | `softmax(&scores)` | numerically stable softmax |
 | `softmax_mix(&scores, &values)` | softmax(scores) · V, weights never materialized to storage |
-| `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε) |
+| `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε), ε a storage value |
+| `rms_norm_factor_eps_wide(&x, eps_q64)` | the same with ε in Q64.64, added at the compute tier (0.6.4) |
 | `silu(x)` | x/(1+e⁻ˣ) |
 | `quadratic_form(&v, &m)` | vᵀMv with ONE rounding: exact triple products at 3·FRAC_BITS, nearest with ties toward +∞; the correctly rounded scalar, always inside `Interval::quadratic_form` (0.6.1) |
 | `try_quadratic_form(&v, &m)` | the same, `Err(TierOverflow)` instead of a panic where the result leaves storage |
+
+`rms_norm_factor` takes ε at the storage tier, so an ε below `2^-FRAC_BITS` is
+zero: on realtime at Q22.10 both `1e-5` and `1e-6` vanish, and an all-zero input
+is `Err(DivisionByZero)` instead of `1/√ε`. `rms_norm_factor_eps_wide` takes ε as a
+Q64.64 integer (`g_math::wide::try_from_str("1e-5", 64)`) and rounds it once to
+the compute tier (`2·FRAC_BITS` fractional bits; nearest, ties toward +∞; exact on
+compact and wider). On realtime the compute tier still limits it: at Q22.10,
+`1e-5` becomes `10/2^20` (`9.54e-6`) and an all-zero input gives 323.83, where the
+exact `1/√1e-5` is 316.23.
 
 `softmax_mix` exists because materializing softmax weights to storage tier before
 the value mix imposes a 2^−FRAC_BITS resolution floor: under a low-fractional-bit

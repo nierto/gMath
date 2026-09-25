@@ -8,7 +8,8 @@
 //!
 //! All tests are pure Rust, no external dependencies, no rebuild required.
 
-use g_math::canonical::{gmath, evaluate, LazyExpr};
+use g_math::canonical::{gmath, gmath_parse, evaluate, LazyExpr, StackValue};
+use g_math::fixed_point::FixedPoint;
 
 // ============================================================================
 // Helper
@@ -25,6 +26,42 @@ fn gmath_safe(input: &'static str) -> LazyExpr {
         -gmath(positive)
     } else {
         gmath(input)
+    }
+}
+
+/// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+
+fn frac_digits(s: &str) -> usize {
+    s.split_once('.').map_or(0, |(_, f)| f.len())
+}
+
+/// Display-prefix check where the Display prints enough fractional digits to
+/// decide it. The canonical Display prints only the digits the split
+/// resolves (2 at GMATH_FRAC_BITS=8), so a 3-digit prefix is undecidable
+/// there: the stored value must then lie within `k` storage units of the
+/// mpmath `reference` instead. A pattern without a '.' must match the whole
+/// Display string (e.g. "0" for an exact Symbolic zero).
+fn assert_display_or_stored(v: &StackValue, patterns: &[&str], reference: &str, k: i32, what: &str) {
+    let s = format!("{}", v);
+    if patterns.iter().any(|p| !p.contains('.') && s == *p) {
+        return;
+    }
+    let need = patterns.iter().map(|p| frac_digits(p)).max().unwrap_or(0);
+    if frac_digits(&s) >= need {
+        assert!(patterns.iter().any(|p| p.contains('.') && s.starts_with(p)), "{what}: got '{s}'");
+    } else {
+        let got = FixedPoint::from_raw(v.as_binary_storage().expect("binary-materializable result"));
+        let r = match reference.strip_prefix('-') {
+            Some(m) => -FixedPoint::from_str(m),
+            None => FixedPoint::from_str(reference),
+        };
+        let d = (got - r).abs();
+        assert!(d <= ulps(k), "{what}: stored {got} ({} raw) vs {reference}: {} units > {k}", got.raw(), d.raw());
     }
 }
 
@@ -47,7 +84,9 @@ fn tier_boundary_i8_overflow_to_small() {
     let r = evaluate(&(gmath("127") + gmath("1")));
     assert!(r.is_ok(), "127 + 1 should succeed (promote to tier 2), got {:?}", r);
     let s = format!("{}", r.unwrap());
-    assert!(s.starts_with("128."), "127 + 1 = 128, got '{}'", s);
+    // 128 exceeds the binary range at GMATH_FRAC_BITS=24 (+-128): the exact
+    // result then stays Symbolic and displays without a fraction point
+    assert!(s.starts_with("128.") || s == "128", "127 + 1 = 128, got '{}'", s);
 }
 
 /// i16::MAX = 32767
@@ -56,7 +95,9 @@ fn tier_boundary_i16_max() {
     let r = evaluate(&gmath("32767"));
     assert!(r.is_ok(), "32767 should parse, got {:?}", r);
     let s = format!("{}", r.unwrap());
-    assert!(s.starts_with("32767."), "32767 should display correctly, got '{}'", s);
+    // 32767 exceeds the binary range at GMATH_FRAC_BITS >= 17: the literal
+    // then parses to Symbolic and displays without a fraction point
+    assert!(s.starts_with("32767.") || s == "32767", "32767 should display correctly, got '{}'", s);
 }
 
 /// Product requiring tier promotion — profile-appropriate values
@@ -75,7 +116,9 @@ fn tier_boundary_multiply_requires_promotion() {
     let r = evaluate(&(gmath("15") * gmath("15")));
     assert!(r.is_ok(), "15 * 15 should succeed with tier promotion, got {:?}", r);
     let s = format!("{}", r.unwrap());
-    assert!(s.starts_with("225."), "15 * 15 = 225, got '{}'", s);
+    // 225 exceeds the binary range at GMATH_FRAC_BITS=24 (+-128): the exact
+    // product then stays Symbolic and displays without a fraction point
+    assert!(s.starts_with("225.") || s == "225", "15 * 15 = 225, got '{}'", s);
 }
 
 /// Large multiply — profile-appropriate values
@@ -97,15 +140,21 @@ fn tier_boundary_large_multiply() {
     let ulp = (raw - 9222993873574297600_i64).unsigned_abs();
     assert!(ulp <= 1, "46340² ULP={}", ulp);
 }
-/// Q16.16: 180² = 32400 (near max). mpmath: 32400 * 2^16 = 2123366400
+/// Realtime: 180² = 32400 (near the Q16.16 max), raw 32400 * 2^F for the
+/// build's split (2123366400 at Q16.16, 33177600 at Q22.10). Where 32400
+/// exceeds the range 2^(31-F) (GMATH_FRAC_BITS >= 17) the largest n with n²
+/// in range is used instead (11² = 121 at Q8.24).
 #[test]
 #[cfg(table_format = "q16_16")]
 fn tier_boundary_large_multiply() {
-    let r = evaluate(&(gmath("180") * gmath("180")));
-    assert!(r.is_ok(), "180² should succeed in Q16.16, got {:?}", r);
+    let mut n: i32 = 180;
+    while FixedPoint::try_from_int(n * n).is_err() { n -= 1; }
+    let lit = n.to_string();
+    let r = evaluate(&(gmath_parse(&lit).unwrap() * gmath_parse(&lit).unwrap()));
+    assert!(r.is_ok(), "{n}² should succeed on realtime, got {:?}", r);
     let raw = r.unwrap().as_binary_storage().unwrap();
-    let ulp = (raw - 2123366400_i32).unsigned_abs();
-    assert!(ulp <= 1, "180² ULP={}", ulp);
+    let ulp = (raw - ((n * n) << g_math::fixed_point::frac_config::FRAC_BITS)).unsigned_abs();
+    assert!(ulp <= 1, "{n}² ULP={}", ulp);
 }
 
 /// i32::MAX = 2147483647 — overflows Q16.16 (max integer ~32767)
@@ -207,14 +256,11 @@ fn transcendental_exp_large_negative() {
     let r = evaluate(&gmath_safe("-44").exp());
     match &r {
         Ok(val) => {
-            let s = format!("{}", val);
-            println!("exp(-44) = {}", s);
-            // Should be very close to zero
-            assert!(
-                s.starts_with("0.000") || s.starts_with("-0.000"),
-                "exp(-44) should be near zero, got '{}'",
-                s
-            );
+            println!("exp(-44) = {}", val);
+            // Should be very close to zero (7.78e-20, far below 1 unit on
+            // every realtime split)
+            assert_display_or_stored(val, &["0.000", "-0.000"], "0", 0,
+                "exp(-44) should be near zero");
         }
         Err(e) => {
             // Underflow to zero is acceptable
@@ -228,12 +274,7 @@ fn transcendental_exp_large_negative() {
 fn transcendental_exp_zero() {
     let r = evaluate(&gmath("0").exp());
     assert!(r.is_ok(), "exp(0) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("1.000"),
-        "exp(0) should be exactly 1.0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "exp(0) should be exactly 1.0");
 }
 
 /// exp(1) = e ≈ 2.71828...
@@ -241,12 +282,7 @@ fn transcendental_exp_zero() {
 fn transcendental_exp_one() {
     let r = evaluate(&gmath("1").exp());
     assert!(r.is_ok(), "exp(1) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("2.718"),
-        "exp(1) should be ~2.718..., got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["2.718"], "2.718281828459045235360287471352662", 0, "exp(1) should be ~2.718...");
 }
 
 /// ln(tiny value) — very negative result
@@ -275,12 +311,7 @@ fn transcendental_ln_tiny() {
 fn transcendental_ln_one() {
     let r = evaluate(&gmath("1").ln());
     assert!(r.is_ok(), "ln(1) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("0.000") || s == "0",
-        "ln(1) should be exactly 0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["0.000", "0"], "0", 0, "ln(1) should be exactly 0");
 }
 
 /// sin(1000000) — tests range reduction over many periods
@@ -313,13 +344,9 @@ fn transcendental_atan_large() {
     let r = evaluate(&gmath("999999999").atan());
     match &r {
         Ok(val) => {
-            let s = format!("{}", val);
-            // atan(inf) = pi/2 ≈ 1.5707963...
-            assert!(
-                s.starts_with("1.570"),
-                "atan(999999999) should approach pi/2 ≈ 1.5708, got '{}'",
-                s
-            );
+            // atan(999999999) = pi/2 - 1.000000001e-9 (mpmath)
+            assert_display_or_stored(val, &["1.570"], "1.570796325794896618231321690973084775432", 0,
+                "atan(999999999) should approach pi/2 ≈ 1.5708");
         }
         Err(e) => {
             println!("atan(999999999) returned error: {:?}", e);
@@ -332,12 +359,7 @@ fn transcendental_atan_large() {
 fn transcendental_sqrt_zero() {
     let r = evaluate(&gmath("0").sqrt());
     assert!(r.is_ok(), "sqrt(0) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("0.000") || s == "0",
-        "sqrt(0) should be 0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["0.000", "0"], "0", 0, "sqrt(0) should be 0");
 }
 
 /// sqrt(1) = 1 exactly
@@ -345,12 +367,7 @@ fn transcendental_sqrt_zero() {
 fn transcendental_sqrt_one() {
     let r = evaluate(&gmath("1").sqrt());
     assert!(r.is_ok(), "sqrt(1) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("1.000"),
-        "sqrt(1) should be 1, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "sqrt(1) should be 1");
 }
 
 /// sqrt(very large number) — 1e12 overflows Q32.32/Q16.16
@@ -372,12 +389,7 @@ fn transcendental_sqrt_large() {
 fn transcendental_cos_zero() {
     let r = evaluate(&gmath("0").cos());
     assert!(r.is_ok(), "cos(0) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("1.000"),
-        "cos(0) should be exactly 1, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "cos(0) should be exactly 1");
 }
 
 /// sin(0) = 0 exactly
@@ -385,12 +397,7 @@ fn transcendental_cos_zero() {
 fn transcendental_sin_zero() {
     let r = evaluate(&gmath("0").sin());
     assert!(r.is_ok(), "sin(0) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("0.000") || s == "0",
-        "sin(0) should be exactly 0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["0.000", "0"], "0", 0, "sin(0) should be exactly 0");
 }
 
 // ============================================================================
@@ -777,12 +784,7 @@ fn arithmetic_commutativity_mul() {
 fn transcendental_exp_ln_2_exact() {
     let r = evaluate(&gmath("2").ln().exp());
     assert!(r.is_ok(), "exp(ln(2)) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("2.000") || s.starts_with("1.999"),
-        "exp(ln(2)) should be exactly 2.0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["2.000", "1.999"], "2", 0, "exp(ln(2)) should be exactly 2.0");
 }
 
 /// ln(e) = 1 — using named constant
@@ -790,23 +792,23 @@ fn transcendental_exp_ln_2_exact() {
 fn transcendental_ln_e_is_one() {
     let r = evaluate(&gmath("e").ln());
     assert!(r.is_ok(), "ln(e) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("1.000") || s.starts_with("0.999"),
-        "ln(e) should be ~1.0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["1.000", "0.999"], "1", 0, "ln(e) should be ~1.0");
 }
 
 /// pow(2, 10) = 1024
 #[test]
 fn transcendental_pow_2_10() {
-    let r = evaluate(&gmath("2").pow(gmath("10")));
-    assert!(r.is_ok(), "pow(2, 10) should succeed, got {:?}", r);
+    // 1024 exceeds the realtime range at GMATH_FRAC_BITS >= 21: use the
+    // largest power of two in range there (2^6 = 64 at Q8.24)
+    let mut e: u32 = 10;
+    while FixedPoint::try_from_int(1 << e).is_err() { e -= 1; }
+    let r = evaluate(&gmath("2").pow(gmath_parse(&e.to_string()).unwrap()));
+    assert!(r.is_ok(), "pow(2, {e}) should succeed, got {:?}", r);
     let s = format!("{}", r.unwrap());
     assert!(
-        s.starts_with("1024."),
-        "2^10 should be 1024, got '{}'",
+        s.starts_with(&format!("{}.", 1 << e)),
+        "2^{e} should be {}, got '{}'",
+        1 << e,
         s
     );
 }
@@ -816,12 +818,7 @@ fn transcendental_pow_2_10() {
 fn transcendental_pow_x_zero() {
     let r = evaluate(&gmath("10").pow(gmath("0")));
     assert!(r.is_ok(), "pow(10, 0) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("1.000"),
-        "10^0 should be 1, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "10^0 should be 1");
 }
 
 /// sqrt(4) = 2 exactly
@@ -829,12 +826,7 @@ fn transcendental_pow_x_zero() {
 fn transcendental_sqrt_4_exact() {
     let r = evaluate(&gmath("4").sqrt());
     assert!(r.is_ok(), "sqrt(4) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("2.000"),
-        "sqrt(4) should be exactly 2.0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["2.000"], "2", 0, "sqrt(4) should be exactly 2.0");
 }
 
 /// sqrt(9) = 3 exactly
@@ -842,10 +834,5 @@ fn transcendental_sqrt_4_exact() {
 fn transcendental_sqrt_9_exact() {
     let r = evaluate(&gmath("9").sqrt());
     assert!(r.is_ok(), "sqrt(9) should succeed, got {:?}", r);
-    let s = format!("{}", r.unwrap());
-    assert!(
-        s.starts_with("3.000"),
-        "sqrt(9) should be exactly 3.0, got '{}'",
-        s
-    );
+    assert_display_or_stored(&r.unwrap(), &["3.000"], "3", 0, "sqrt(9) should be exactly 3.0");
 }

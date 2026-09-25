@@ -1,0 +1,59 @@
+# The realtime profile at the fraction-bit splits users choose with
+# GMATH_FRAC_BITS (Q22.10, Q20.12, ...), not only the default Q16.16.
+#
+# full-suite: every test at GMATH_FRAC_BITS 8..24, the range the suite gates
+# (owner decision 2026-09-24). Tests derive their values and tolerances from
+# the build's FRAC_BITS.
+#
+# edge-smoke: the build accepts 2..30; at the edges most tests cannot be
+# meaningful (one unit is 1/16 at F=4, the range is +-2 at F=30), so these
+# splits run the split-generic correctness gates: exact literals, the Q64.64
+# wide tier, no silent wraps (exact or loud), the float boundary.
+name: realtime-splits
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  full-suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        frac_bits: ["8", "10", "12", "16", "20", "24"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Full suite at GMATH_FRAC_BITS=${{ matrix.frac_bits }}
+        env:
+          GMATH_PROFILE: realtime
+          GMATH_FRAC_BITS: ${{ matrix.frac_bits }}
+        run: cargo test --no-fail-fast
+
+  edge-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        frac_bits: ["2", "4", "6", "26", "28", "30"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Correctness gates at GMATH_FRAC_BITS=${{ matrix.frac_bits }}
+        env:
+          GMATH_PROFILE: realtime
+          GMATH_FRAC_BITS: ${{ matrix.frac_bits }}
+        run: |
+          cargo test --no-fail-fast --test wide_q64_validation --test ugod_promotion_validation --test float_boundary_validation --test operator_overflow_validation
+          cargo test --lib literal_parser_tests

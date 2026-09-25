@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""References for the Q64.64 wide tier and the exact decimal-literal parser
+(tests/data/wide_q64_refs.rs).
+
+  - exp / ln / sin / cos: Q64.64 inputs and the nearest Q64.64 integer to the
+    true result, computed with mpmath at 120 significant digits. sin/cos inputs
+    are grouped in magnitude bands, because range reduction by a 64-bit pi/2
+    loses accuracy as |x| grows.
+  - decimal literals: strings (plain, exponent notation, constructed ties,
+    range edges) and the raw each must parse to, `floor(v * 2^F + 1/2)` of
+    the exact rational value (nearest, ties toward +infinity), or None where
+    it does not fit. Wide (i128) cases for several F; storage cases for every
+    profile, realtime at FRAC_BITS 16 and 10.
+  - rms_norm_factor_eps_wide: 1 / sqrt(eps_c) for an all-zero vector, eps_c
+    the Q64.64 epsilon rounded to each profile's compute tier.
+Deterministic: fixed seed; no floating-point arithmetic in the references.
+
+Usage: python3 scripts/generate_wide_refs.py
+"""
+import random
+from fractions import Fraction
+
+from mpmath import mp, mpf, exp, log, sin, cos, sqrt, nint
+
+mp.dps = 120
+SEED = 20260924
+ONE = 1 << 64
+
+PROFILES = [
+    # (name, storage width W, fraction bits F); realtime: every GMATH_FRAC_BITS
+    *[(f"REALTIME_F{F}", 32, F) for F in range(2, 31)],
+    ("COMPACT", 64, 32),
+    ("EMBEDDED", 128, 64),
+    ("BALANCED", 256, 128),
+    ("SCIENTIFIC", 512, 256),
+]
+WIDE_FRAC_BITS = [0, 1, 10, 16, 20, 32, 52, 64, 100, 126, 127]
+
+
+def q64(v):
+    return int(nint(v * ONE))
+
+
+def nearest_up(v, f):
+    """floor(v * 2^f + 1/2) for a Fraction v: nearest, ties toward +inf."""
+    t = v * (1 << f) + Fraction(1, 2)
+    return t.numerator // t.denominator
+
+
+def decimal_of(v):
+    """Exact decimal string of a Fraction whose denominator is 2^a 5^b."""
+    sign = "-" if v < 0 else ""
+    v = abs(v)
+    digits = 0
+    while (v * 10 ** digits).denominator != 1:
+        digits += 1
+    n = int(v * 10 ** digits)
+    if digits == 0:
+        return f"{sign}{n}"
+    s = str(n).rjust(digits + 1, "0")
+    return f"{sign}{s[:-digits]}.{s[-digits:]}"
+
+
+def literal_value(s):
+    """Exact Fraction of a literal in the parser grammar."""
+    s = s.strip()
+    mant, _, e = s.replace("E", "e").partition("e")
+    neg = mant.startswith("-")
+    mant = mant.lstrip("+-")
+    ip, _, fp = mant.partition(".")
+    v = Fraction(int((ip or "0") + (fp or "")), 10 ** len(fp))
+    v *= Fraction(10) ** int(e or "0")
+    return -v if neg else v
+
+
+def random_literal(rng, max_int_digits):
+    int_len = rng.randint(0, max_int_digits)
+    frac_len = rng.randint(0, 45)
+    ip = "".join(rng.choice("0123456789") for _ in range(int_len))
+    fp = "".join(rng.choice("0123456789") for _ in range(frac_len))
+    if not ip and not fp:
+        ip = "0"
+    form = rng.randint(0, 5)
+    if form == 0 and ip:
+        body = f"{ip}."
+    elif form == 1 and fp:
+        body = f".{fp}"
+    else:
+        body = f"{ip or '0'}.{fp}" if fp else (ip or "0")
+    if rng.random() < 0.3:
+        e = rng.randint(-40, 3)
+        body += rng.choice("eE") + (str(e) if e < 0 else rng.choice(["", "+"]) + str(e))
+    return rng.choice(["", "", "-", "+"]) + body
+
+
+def literal_cases(rng, width, f, count):
+    """(literal, expected raw or None) for a width-bit raw with f frac bits."""
+    lo, hi = -(1 << (width - 1)), (1 << (width - 1)) - 1
+    int_digits = max(1, (width - 1 - f) * 30103 // 100000)
+    lits = [random_literal(rng, int_digits) for _ in range(count)]
+    half = Fraction(1, 1 << (f + 1))
+    ulp = Fraction(1, 1 << f)
+    tiny = Fraction(1, 10 ** (f + 10))
+    for _ in range(12):
+        k = rng.randrange(0, 1 << min(width - 2, 40))
+        tie = k * ulp + half
+        for v in (tie, -tie, tie + tiny, tie - tiny, -tie - tiny, -tie + tiny):
+            lits.append(decimal_of(v) if (v * 10 ** (f + 11)).denominator == 1 else None)
+        # the exact tie with trailing zeros and in exponent form
+        lits.append(decimal_of(tie) + "000")
+        d = decimal_of(tie)
+        if "." in d:
+            ip, fp = d.split(".")
+            lits.append(f"{ip}{fp}e-{len(fp)}")
+    top = Fraction(hi, 1 << f)
+    bottom = Fraction(lo, 1 << f)
+    for v in (top, top + half, top + half - tiny, bottom, bottom - half, bottom - half - tiny):
+        lits.append(decimal_of(v) if (v * 10 ** (f + 11)).denominator == 1 else None)
+    lits += ["0", "-0", "0.0", "-0.000", "00012.5000", "  1.5  ", "1e400", "-1e400", "1e-400", "-1e-400",
+             "1e-06", "1e-05", "1E6", "6.283185307179586476925286766559"]
+    out = []
+    for s in lits:
+        if s is None:
+            continue
+        r = nearest_up(literal_value(s), f)
+        out.append((s, r if lo <= r <= hi else None))
+    return out
+
+
+def rust_i128(v):
+    return f"{v}" if v >= 0 else f"-{-v}"
+
+
+def main():
+    rng = random.Random(SEED)
+    lines = [
+        "// Generated by scripts/generate_wide_refs.py - do not edit.",
+        "// mpmath 120 significant digits (transcendentals); exact fractions.Fraction",
+        "// (literals: nearest, ties toward +infinity).",
+        "",
+    ]
+
+    # ---- exp -------------------------------------------------------------
+    xs = [rng.randrange(-40 * ONE, 41 * ONE) for _ in range(600)]
+    xs += [rng.randrange(-ONE, ONE) >> rng.randint(0, 60) for _ in range(150)]
+    xs += [k * ONE + d for k in range(-40, 41, 7) for d in (-1, 1, 1 << 40)]
+    xs = [x for x in xs if -40 * ONE <= x < 41 * ONE]
+    lines.append("/// (x, nearest Q64.64 of e^x), x in [-40, 41).")
+    lines.append("pub const EXP: &[(i128, i128)] = &[")
+    for x in xs:
+        lines.append(f"    ({rust_i128(x)}, {rust_i128(q64(exp(mpf(x) / ONE)))}),")
+    lines.append("];\n")
+
+    # ---- ln --------------------------------------------------------------
+    xs = []
+    for _ in range(700):
+        bits = rng.randint(1, 127)
+        xs.append(rng.randrange(1 << (bits - 1), (1 << bits) if bits < 127 else (1 << 127) - 1))
+    xs += [1, 2, ONE - 1, ONE + 1, (1 << 127) - 1]
+    lines.append("/// (x, nearest Q64.64 of ln x), x > 0.")
+    lines.append("pub const LN: &[(i128, i128)] = &[")
+    for x in xs:
+        lines.append(f"    ({rust_i128(x)}, {rust_i128(q64(log(mpf(x) / ONE)))}),")
+    lines.append("];\n")
+
+    # ---- sin / cos -------------------------------------------------------
+    bands = [
+        ("SINCOS_0_2PI", 0, q64(2 * mp.pi)),
+        ("SINCOS_2PI_2P12", q64(2 * mp.pi), 1 << (64 + 12)),
+        ("SINCOS_2P12_2P20", 1 << (64 + 12), 1 << (64 + 20)),
+        ("SINCOS_2P20_2P32", 1 << (64 + 20), 1 << (64 + 32)),
+        ("SINCOS_2P32_2P62", 1 << (64 + 32), 1 << (64 + 62)),
+    ]
+    for name, lo, hi in bands:
+        lines.append(f"/// (x, nearest Q64.64 of sin x, of cos x), |x| in [{name}).")
+        lines.append(f"pub const {name}: &[(i128, i128, i128)] = &[")
+        for _ in range(300):
+            x = rng.randrange(lo, hi) * rng.choice([1, -1])
+            v = mpf(x) / ONE
+            lines.append(f"    ({rust_i128(x)}, {rust_i128(q64(sin(v)))}, {rust_i128(q64(cos(v)))}),")
+        lines.append("];\n")
+
+    # ---- literals: wide ----------------------------------------------------
+    lines.append("/// (literal, frac_bits, i128 raw or None = TierOverflow).")
+    lines.append("pub const LITERALS_WIDE: &[(&str, u32, Option<i128>)] = &[")
+    for f in WIDE_FRAC_BITS:
+        for s, r in literal_cases(rng, 128, f, 250):
+            lines.append(f"    ({s!r}, {f}, {'None' if r is None else f'Some({rust_i128(r)})'}),".replace("'", '"'))
+    lines.append("];\n")
+
+    # ---- literals: storage -------------------------------------------------
+    lines.append("/// (literal, raw as (negative, hex magnitude), or None = TierOverflow).")
+    lines.append("pub type Storage = (&'static str, Option<(bool, &'static str)>);\n")
+    for name, width, f in PROFILES:
+        lines.append(f"pub const {name}_LITERALS: &[Storage] = &[")
+        for s, r in literal_cases(rng, width, f, 250):
+            ref = "None" if r is None else f'Some(({"true" if r < 0 else "false"}, "{abs(r):x}"))'
+            lines.append(f'    ("{s}", {ref}),')
+        lines.append("];\n")
+
+    # ---- rms_norm_factor_eps_wide on an all-zero vector ---------------------
+    eps_q64 = {e: nearest_up(Fraction(e), 64) for e in ("1e-5", "1e-6")}
+    lines.append("/// Q64.64 epsilons (nearest, ties toward +inf).")
+    for e, v in eps_q64.items():
+        lines.append(f"pub const EPS_{e.replace('-', '_M').upper().replace('.', '_')}_Q64: i128 = {v};")
+    lines.append("")
+    lines.append("/// (epsilon literal, exact 1/sqrt(eps_c) at 100 digits) per profile, eps_c the")
+    lines.append("/// Q64.64 epsilon rounded to the compute tier (2F bits, nearest ties toward +inf).")
+    for name, width, f in PROFILES:
+        cf = 2 * f
+        lines.append(f"pub const {name}_RMS_ZERO: &[(&str, &str)] = &[")
+        for e, v in eps_q64.items():
+            if cf < 64:
+                t = Fraction(v, 1 << (64 - cf)) + Fraction(1, 2)
+                eps_c = Fraction(t.numerator // t.denominator, 1 << cf)
+            else:
+                eps_c = Fraction(v, 1 << 64)
+            if eps_c == 0:
+                # the epsilon rounds to zero at the compute tier: no 1/sqrt
+                lines.append(f'    ("{e}", "DivisionByZero"),')
+                continue
+            r = 1 / sqrt(mpf(eps_c.numerator) / eps_c.denominator)
+            lines.append(f'    ("{e}", "{mp.nstr(r, 100, strip_zeros=False)}"),')
+        lines.append("];\n")
+
+    arms = " ".join(f"{F} => REALTIME_F{F}_LITERALS," for F in range(2, 31))
+    lines.append("/// The realtime literal table for the build's split.")
+    lines.append(f"pub const REALTIME_LITERALS: &[Storage] = match g_math::fixed_point::frac_config::FRAC_BITS {{ {arms} _ => &[] }};")
+    arms = " ".join(f"{F} => REALTIME_F{F}_RMS_ZERO," for F in range(2, 31))
+    lines.append("/// The realtime rms table for the build's split.")
+    lines.append(f"pub const REALTIME_RMS_ZERO: &[(&str, &str)] = match g_math::fixed_point::frac_config::FRAC_BITS {{ {arms} _ => &[] }};")
+    lines.append("")
+    with open("tests/data/wide_q64_refs.rs", "w") as fh:
+        fh.write("\n".join(lines))
+
+
+if __name__ == "__main__":
+    main()

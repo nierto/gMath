@@ -1,0 +1,47 @@
+# State carried at the compute tier (0.6.4): multi-step computations round
+# once, and operators and narrowings never wrap or saturate. The mpmath and
+# exact-rational gates below run on the wide profiles here; realtime runs them
+# as part of the full suite at every split 8..24 (realtime-splits.yml).
+#
+# References: scripts/generate_one_rounding_refs.py,
+# generate_ode_compute_state_refs.py, generate_curvature_compute_tier_refs.py,
+# generate_manifold_compute_tier_refs.py, generate_lie_fiber_compute_tier_refs.py,
+# generate_projective_tensor_compute_tier_refs.py,
+# generate_narrowing_defects_refs.py, generate_decimal_exp_range_refs.py.
+name: compute-tier-state
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [compact, embedded, balanced, scientific]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Compute-tier state gates (${{ matrix.profile }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: >
+          cargo test --no-fail-fast
+          --test one_rounding_validation
+          --test ode_compute_state_validation
+          --test curvature_compute_tier_validation
+          --test manifold_compute_tier_validation
+          --test lie_fiber_compute_tier_validation
+          --test projective_tensor_compute_tier_validation
+          --test operator_overflow_validation
+          --test narrowing_defects_validation
+          --test decimal_exp_range_validation
+          --test try_direct_bypass_validation
+          --test decimal_try_transcendentals_validation

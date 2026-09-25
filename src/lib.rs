@@ -41,6 +41,9 @@ pub use fixed_point::tq19;
 #[cfg(feature = "inference")]
 pub use fixed_point::compute_tier;
 
+/// Q64.64 exp, ln, sin, cos, π constants and an exact decimal-literal parser.
+pub use fixed_point::wide;
+
 // gmath!() macro — available when g_math_macros is published as a separate crate.
 // See g_math_macros/ directory for the proc-macro implementation.
 

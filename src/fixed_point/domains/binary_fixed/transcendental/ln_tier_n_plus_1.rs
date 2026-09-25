@@ -65,7 +65,6 @@ include!("../../../../generated_tables/ln_q512_512_tables.rs");
 
 /// Find the position of the most significant bit (0-indexed from LSB)
 /// Returns None for x == 0
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
 fn find_msb_position_i128(x: i128) -> Option<u32> {
     if x <= 0 {
@@ -135,7 +134,6 @@ fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 /// **TABLES**: Uses Q64.64 tables directly (no conversion)
 /// **DOMAIN**: x > 0 (returns i128::MIN for x <= 0)
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn ln_q64_64_native(x: i128) -> i128 {
     use crate::fixed_point::multiply_binary_i128;
     use crate::fixed_point::i256::I256;
@@ -875,15 +873,18 @@ fn divide_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
     use crate::fixed_point::I2048;
     use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
 
-    if b == I1024::zero() {
-        return I1024::zero();
-    }
+    // the callers divide by table factors 1 + k/2^10 (never zero, quotients
+    // below 2): both checks are invariants, loud if ever broken (before 0.6.4
+    // a zero divisor returned 0 and the narrowing was unchecked)
+    assert!(b != I1024::zero(), "divide_i1024_q512_512: division by zero");
 
     // To compute a/b in Q512.512:
-    // Result = (a << 512) / b — upscale to I2048 to avoid overflow
+    // Result = (a << 512) / b, upscaled to I2048 to avoid overflow
     let a_i2048 = I2048::from_i1024(a) << 512;
     let b_i2048 = I2048::from_i1024(b);
-    i2048_div(a_i2048, b_i2048).as_i1024()
+    let q = i2048_div(a_i2048, b_i2048);
+    assert!(q.fits_in_i1024(), "divide_i1024_q512_512: quotient beyond I1024");
+    q.as_i1024()
 }
 
 // ============================================================================

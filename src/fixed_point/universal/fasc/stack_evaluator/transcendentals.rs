@@ -9,7 +9,7 @@
 use super::{BinaryStorage, ComputeStorage, StackValue, StackEvaluator, DECIMAL_DP_PROMOTION_THRESHOLD};
 use super::compute::*;
 #[allow(unused_imports)]
-use super::conversion::{to_binary_storage, reduce_decimal_to_rational};
+use super::conversion::{try_to_binary_storage, reduce_decimal_to_rational};
 #[allow(unused_imports)]
 use super::domain::{ternary_to_rational, ternary_to_storage, decimal_from_storage, decimal_to_storage, binary_to_storage};
 #[allow(unused_imports)]
@@ -836,7 +836,9 @@ impl StackEvaluator {
                     let mut den = I512::from_i128(1);
                     let ten = I512::from_i128(10);
                     for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
-                    Ok((num / den).as_i256())
+                    let q = num / den;
+                    if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+                    Ok(q.as_i256())
                 }
                 #[cfg(table_format = "q128_128")]
                 {
@@ -845,7 +847,9 @@ impl StackEvaluator {
                     let mut den = I1024::from_i128(1);
                     let ten = I1024::from_i128(10);
                     for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
-                    Ok((num / den).as_i512())
+                    let q = num / den;
+                    if !q.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
+                    Ok(q.as_i512())
                 }
                 #[cfg(table_format = "q256_256")]
                 {
@@ -858,6 +862,7 @@ impl StackEvaluator {
                     for _ in 0..DECIMAL_COMPUTE_DP { pow = pow * ten; }
                     let den = I2048::from_i1024(pow);
                     let quot = i2048_div(num, den);
+                    if !quot.fits_in_i1024() { return Err(OverflowDetected::TierOverflow); }
                     Ok(I1024::from_words([
                         quot.words[0], quot.words[1], quot.words[2], quot.words[3],
                         quot.words[4], quot.words[5], quot.words[6], quot.words[7],
@@ -872,15 +877,20 @@ impl StackEvaluator {
                     let mut den = I256::from_i128(1);
                     let ten = I256::from_i128(10);
                     for _ in 0..DECIMAL_COMPUTE_DP { den = den * ten; }
-                    Ok((num / den).as_i128())
+                    let q = num / den;
+                    if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                    Ok(q.as_i128())
                 }
                 #[cfg(table_format = "q16_16")]
                 {
                     use crate::fixed_point::frac_config;
-                    let num = (*val as i128) << (frac_config::COMPUTE_FRAC_BITS as usize);
+                    // I256: val << 2F can pass i128 at high fraction bits
+                    let num = I256::from_i128(*val as i128) << (frac_config::COMPUTE_FRAC_BITS as usize);
                     let mut den: i128 = 1;
                     for _ in 0..DECIMAL_COMPUTE_DP { den *= 10; }
-                    Ok((num / den) as i64)
+                    let q = num / I256::from_i128(den);
+                    if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+                    i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow)
                 }
             }
             StackValue::Symbolic(rational) => {
@@ -1088,7 +1098,7 @@ impl StackEvaluator {
                 let rational = value.to_rational()?;
                 let (decimals, scaled) = rational_to_decimal_components(&rational)?;
                 let shadow = value.shadow();
-                Ok(StackValue::Decimal(decimals, to_binary_storage(scaled), shadow))
+                Ok(StackValue::Decimal(decimals, try_to_binary_storage(scaled)?, shadow))
             }
         }
     }

@@ -103,8 +103,10 @@ domain-tagged values for mixed-domain matrices.
 - Routing adds dispatch overhead per operation relative to the imperative path;
   for known-domain hot loops use the [imperative layer](README_IMPERATIVE.md).
 - Literals may be decimals (`"0.1"`), integers, fractions (`"1/3"`), repeating
-  decimals (`"0.333..."`), hex/ternary (`"0x1F"`, `"0t10"`), or named constants
-  (`"pi"`, `"e"`, `"sqrt2"`, `"phi"`).
+  decimals (`"0.333..."`), hex/binary/ternary (`"0x1F"` is 31, `"0b101"` is 5,
+  `"0t10"`), or named constants (`"pi"`, `"e"`, `"sqrt2"`, `"phi"`). A literal
+  beyond the profile's storage is kept as an exact rational or fails with
+  `TierOverflow`; it never wraps.
 
 The routing and determinism contract is in **[CONTRACT.md](../CONTRACT.md)**.
 

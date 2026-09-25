@@ -4,6 +4,8 @@
 //! Tests verify both correctness and precision advantage over unfused paths.
 
 use g_math::fixed_point::{FixedPoint, FixedVector};
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+use g_math::fixed_point::imperative::OverflowDetected;
 use g_math::fixed_point::imperative::fused;
 
 fn fp(s: &str) -> FixedPoint {
@@ -19,12 +21,24 @@ fn tight() -> FixedPoint {
     #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
     { fp("0.000000001") }
 }
+/// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+fn ulps(k: i32) -> FixedPoint {
+    let mut u = FixedPoint::one();
+    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
+    u * FixedPoint::from_int(k)
+}
+/// `t`, raised to `k` storage units where the split cannot resolve it.
+fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+/// The 0.001 tolerance of the approximate checks: 0 raw at
+/// GMATH_FRAC_BITS=8, so raised to 1 unit (an exactness check) there.
+fn milli() -> FixedPoint { at_least(fp("0.001"), 1) }
+
 #[allow(dead_code)]
 fn ulp1() -> FixedPoint { fp("0.0000000000000000002") } // ~1 ULP at Q64.64
 
 fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
     let d = (got - exp).abs();
-    assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
+    assert!(d < tol, "{}: got {}, expected {}, diff={} ({} raw units)", name, got, exp, d, d.raw());
 }
 
 // ============================================================================
@@ -139,7 +153,7 @@ fn test_softmax_uniform() {
     let scores = vec![fp("1"); 4];
     let result = fused::softmax(&scores).unwrap();
     for (i, w) in result.iter().enumerate() {
-        assert_fp(*w, fp("0.25"), fp("0.001"), &format!("softmax_uniform[{i}]"));
+        assert_fp(*w, fp("0.25"), milli(), &format!("softmax_uniform[{i}]"));
     }
 }
 
@@ -181,7 +195,7 @@ fn test_softmax_shift_invariance() {
     let r1 = fused::softmax(&scores1).unwrap();
     let r2 = fused::softmax(&scores2).unwrap();
     for i in 0..3 {
-        assert_fp(r1[i], r2[i], fp("0.001"),
+        assert_fp(r1[i], r2[i], milli(),
             &format!("shift_invariance[{i}]"));
     }
 }
@@ -207,7 +221,7 @@ fn test_rms_norm_constant_vector() {
     // [2,2,2,2]: mean(x²) = 4, sqrt(4+eps) ≈ 2, factor ≈ 0.5
     let vals = vec![fp("2"); 4];
     let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
-    assert_fp(factor, fp("0.5"), fp("0.001"), "rms_norm_constant");
+    assert_fp(factor, fp("0.5"), milli(), "rms_norm_constant");
 }
 
 #[test]
@@ -215,7 +229,7 @@ fn test_rms_norm_mpmath() {
     // [1,2,3]: mean(x²) = 14/3, factor = 1/sqrt(14/3 + 1e-6) = 0.46291...
     let vals = vec![fp("1"), fp("2"), fp("3")];
     let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
-    assert_fp(factor, fp("0.46291"), fp("0.001"), "rms_norm_1_2_3");
+    assert_fp(factor, fp("0.46291"), milli(), "rms_norm_1_2_3");
 }
 
 #[test]
@@ -223,7 +237,7 @@ fn test_rms_norm_ones() {
     // [1,1,1]: mean(x²) = 1, factor = 1/sqrt(1+eps) ≈ 1
     let vals = vec![fp("1"); 3];
     let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
-    assert_fp(factor, fp("1"), fp("0.001"), "rms_norm_ones");
+    assert_fp(factor, fp("1"), milli(), "rms_norm_ones");
 }
 
 // ============================================================================
@@ -276,14 +290,14 @@ fn test_silu_large_positive() {
     // silu(x) → x for large x (sigmoid → 1)
     let x = fp("10");
     let result = fused::silu(x);
-    assert_fp(result, x, fp("0.001"), "silu(10)≈10");
+    assert_fp(result, x, milli(), "silu(10)≈10");
 }
 
 #[test]
 fn test_silu_large_negative() {
     // silu(x) → 0 for large negative x (sigmoid → 0)
     let result = fused::silu(fp("-10"));
-    assert!(result.abs() < fp("0.001"), "silu(-10)={}, expected ~0", result);
+    assert!(result.abs() < milli(), "silu(-10)={}, expected ~0", result);
 }
 
 // ============================================================================
@@ -426,28 +440,41 @@ fn test_inv_sqrt_mpmath_references() {
         tight(),
         "1/sqrt(3)",
     );
+    // 0.1 is not dyadic: the stored input is off by <= 0.5 unit and
+    // |d/dx x^(-1/2)| = 0.5 * 0.1^(-3/2) = 15.81 amplifies that to <= 7.91
+    // units, plus <= 0.5 unit output rounding and <= 0.5 unit reference
+    // rounding: |diff| <= 8.91 units, so < 9 units (measured 7 at
+    // GMATH_FRAC_BITS=8 and 10). Binding only below GMATH_FRAC_BITS=10,
+    // where tight() = 0.01 is under 9 units (3 at 8).
     assert_fp(
         fp("0.1").inv_sqrt(),
         fp("3.16227766016837933199889354443271853371955513932521682685750"),
-        tight(),
+        at_least(tight(), 9),
         "1/sqrt(0.1)",
     );
 }
 
 #[test]
 fn test_inv_sqrt_times_sqrt_is_one() {
+    // Inputs are exact on every split. Each factor is rounded (<= 0.5 unit),
+    // so the product is off by <= 0.5 * (sqrt(x) + 1/sqrt(x)) + 0.5 units
+    // (product rounding): 5.55 units at x = 100, the worst case here, so
+    // < 6 units (measured 4 at x = 100, GMATH_FRAC_BITS=8 and 10). Binding
+    // only below GMATH_FRAC_BITS=10, where tight() = 0.01 is under 6 units.
     for s in ["0.5", "2", "3", "7.75", "100"] {
         let x = fp(s);
         let product = x.inv_sqrt() * x.sqrt();
-        assert_fp(product, fp("1"), tight(), "inv_sqrt·sqrt at x");
+        assert_fp(product, fp("1"), at_least(tight(), 6), "inv_sqrt·sqrt at x");
     }
 }
 
 #[test]
 fn test_inv_sqrt_matches_unfused_path() {
     // Same engines, one fewer storage rounding: must agree within tight().
+    // 1000 exceeds the range of the coarsest realtime splits (+-512 at
+    // GMATH_FRAC_BITS=22): skip inputs the build cannot represent.
     for s in ["0.5", "2", "42", "1000"] {
-        let x = fp(s);
+        let Ok(x) = FixedPoint::try_from_str(s) else { continue };
         let unfused = fp("1") / x.sqrt();
         assert_fp(x.inv_sqrt(), unfused, tight(), "inv_sqrt vs 1/sqrt");
     }
@@ -486,7 +513,14 @@ fn test_inv_sqrt_sum_sq_matches_scalar_path() {
         let n = *x * fused_inv;
         sum_sq = sum_sq + n * n;
     }
-    assert_fp(sum_sq, fp("1"), tight(), "normalized length");
+    // Error bound in storage units: fused_inv is off by <= 0.5 unit, a
+    // relative error of 0.5 / (inv * 2^F), which doubles in the squared
+    // length (1/inv = 4.11 units); each n = x * inv rounds (<= 0.5 unit,
+    // squared: 2 * sum|n| * 0.5 = 1.83 units) and each n * n rounds
+    // (4 * 0.5 = 2 units): <= 7.94 units, so < 8 units (measured 3 at
+    // GMATH_FRAC_BITS=8, 2 at 10). Binding only below GMATH_FRAC_BITS=10,
+    // where tight() = 0.01 is under 8 units.
+    assert_fp(sum_sq, fp("1"), at_least(tight(), 8), "normalized length");
 }
 
 #[test]
@@ -502,9 +536,21 @@ fn test_inv_sqrt_extreme_small_input() {
     // representable. Pins that the wide reciprocal cannot wrap for any
     // storage-derived input (contract: fail loud, never wrap).
     let x = FixedPoint::from_raw(1);
-    #[cfg(table_format = "q16_16")]
-    let expected = fp("256"); // 2^(16/2) at default FRAC_BITS=16
-    #[cfg(table_format = "q32_32")]
-    let expected = fp("65536"); // 2^(32/2)
+    // 2^(F/2) for the build's split (realtime follows GMATH_FRAC_BITS: 256 at
+    // Q16.16, 32 at Q22.10); an odd split gives sqrt(2) * 2^((F-1)/2)
+    let f = g_math::fixed_point::frac_config::FRAC_BITS;
+    // At coarse-range splits (GMATH_FRAC_BITS >= 21) 2^(F/2) exceeds the
+    // storage range 2^(31-F): the same contract then demands a loud error.
+    if FixedPoint::try_from_int(1 << ((f + 1) / 2)).is_err() {
+        match x.try_inv_sqrt() {
+            Err(OverflowDetected::TierOverflow) => return,
+            other => panic!("1/sqrt(1 raw LSB) out of range: expected Err(TierOverflow), got {other:?}"),
+        }
+    }
+    let expected = if f % 2 == 0 {
+        FixedPoint::from_int(1 << (f / 2))
+    } else {
+        fp("1.4142135623730950488016887242096980785697") * FixedPoint::from_int(1 << (f / 2))
+    };
     assert_fp(x.inv_sqrt(), expected, tight(), "1/sqrt(1 raw LSB)");
 }

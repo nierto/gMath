@@ -64,7 +64,6 @@ include!("../../../../generated_tables/q512_512_tables.rs");
 /// **PRECISION**: ~10-13 correct digits (baseline implementation)
 /// **TABLES**: Uses Q64.64 tables directly (no conversion)
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn exp_q64_64_native(x: i128) -> i128 {
     // Tables are included directly at module level, use them without super::
     // Note: Q64.64 tables use TIER_3 naming (NOT Q64_64)

@@ -61,9 +61,27 @@ See **[PUBLIC_API.md → Geometry](../PUBLIC_API.md#geometry)**,
 ## Behaviour & limits
 
 - All operations are in the binary domain via `FixedMatrix`/`FixedVector`.
-- Geodesic and Lie-group roundtrips are validated against mpmath references;
-  accuracy of formula-sensitive constructs depends on input representability (see
-  [the precision guide](README_PRECISION.md)).
+- Manifold maps (Sphere, hyperbolic, SPD, Grassmannian, Stiefel, products),
+  Lie-group maps (SO(3), SE(3), SO(n), GL(n), SL(n)), fiber-bundle transport,
+  curvature (Christoffel symbols, Riemann, Ricci, scalar, sectional),
+  geodesic integration, ODE integrators, projective maps and tensor
+  decompositions carry their intermediate state at the compute tier and round
+  once. Against mpmath (or the same scheme in exact arithmetic, for
+  integrators and finite differences) they are within one unit on every
+  profile and at realtime 8 to 24 fraction bits, except the SE(3) log of a
+  rounded exp near pi (3 units) and CP-ALS reconstruction (2). Gates:
+  `tests/manifold_compute_tier_validation.rs`,
+  `tests/lie_fiber_compute_tier_validation.rs`,
+  `tests/curvature_compute_tier_validation.rs`,
+  `tests/ode_compute_state_validation.rs`,
+  `tests/projective_tensor_compute_tier_validation.rs`.
+- Angles are formed from exact products (`atan2` of the sine and cosine
+  parts, the logarithmic form of `acosh`), so close points keep their
+  precision. Accuracy of formula-sensitive constructs still depends on input
+  representability (see [the precision guide](README_PRECISION.md)).
+- `HyperbolicSpace` distance and log return `Err(DomainError)` for points off
+  the upper sheet; `SPDManifold::inner_product` panics on a singular base
+  point.
 
 Determinism guarantees are in **[CONTRACT.md](../CONTRACT.md)**.
 

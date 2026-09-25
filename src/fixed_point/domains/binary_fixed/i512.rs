@@ -401,15 +401,10 @@ impl Sub for I512 {
 /// Display trait implementation for I512
 impl std::fmt::Display for I512 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Decimal representation via i128 for values that fit, I256 approximation otherwise
-        if self.fits_in_i128() {
-            let as_i128 = self.as_i128();
-            write!(f, "{}", as_i128)
-        } else {
-            // For values that don't fit in i128, use I256 approximation
-            let as_i256 = self.as_i256_saturating();
-            write!(f, "{}(I256)", as_i256)
-        }
+        // exact at every width (0.6.3 printed values beyond i128 as a
+        // saturated I256 approximation)
+        let digits = crate::fixed_point::domains::binary_fixed::i256::twos_complement_words_to_decimal(&self.words);
+        f.pad_integral(!((self.words[7] as i64) < 0), "", &digits)
     }
 }
 
@@ -749,17 +744,11 @@ impl I512 {
 /// * `(quotient, remainder)` tuple where `dividend = quotient * divisor + remainder`
 ///
 /// # Panics
-/// * Never panics - division by zero returns saturated quotient and zero remainder
+/// * Panics on division by zero, like integer division
 pub fn divmod_i512_by_i512(dividend: I512, divisor: I512) -> (I512, I512) {
-    // Handle division by zero with saturation
-    if divisor.is_zero() {
-        let saturated_quotient = if dividend.is_negative() {
-            I512::min_value()
-        } else {
-            I512::max_value()
-        };
-        return (saturated_quotient, I512::zero());
-    }
+    // like integer division: a zero divisor panics (before 0.6.4 it returned
+    // a saturated quotient, a plausible value)
+    assert!(!divisor.is_zero(), "I512: division by zero");
 
     // Optimize for cases where both fit in i128 (common for small values)
     if dividend.fits_in_i128() && divisor.fits_in_i128() {
