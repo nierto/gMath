@@ -255,6 +255,7 @@ version = "0.6.5"
 dependencies = [
  "approx",
  "criterion",
+ "g_math 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-bigint",
  "num-integer",
  "num-rational",
@@ -262,6 +263,18 @@ dependencies = [
  "proptest",
  "rayon",
  "serde",
+]
+
+[[package]]
+name = "g_math"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c0f6383aaa231465841a210657f96b2c9c7fec517da0773b33ece0aa5fcb34b"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
 ]
 
 [[package]]

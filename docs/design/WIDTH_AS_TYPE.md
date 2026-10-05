@@ -1,8 +1,8 @@
 # Width as a type: one crate, every precision, no build profile
 
 **STATUS: IN PROGRESS, branch `width-types`, built on 0.6.5 (c81d3f0).**
-Phase 0 done (0.6.5 published). Phase 1 implemented: see the phase table in
-section 10. Target release: 0.7.0. `main` keeps shipping 0.6.x until this
+Phase 0 done (0.6.5 published). Phases 1 and 2 implemented: see the phase
+table in section 10 and the notes under sections 4 and 5. Target release: 0.7.0. `main` keeps shipping 0.6.x until this
 branch passes the acceptance gates in section 11.
 
 ## 1. Problem
@@ -140,45 +140,74 @@ integers gained the missing methods (`is_negative`, `checked_sub`,
 historical argument types (`I256 >> u32`, the others `usize`) and
 `shl_bits` / `shr_bits` are the uniform form.
 
-### 4.2 `FixedNum` (sealed): what a width can compute
+### 4.2 `FixedNum` (sealed): the kernels of one format
 
-Implemented once per storage type, generic over `F`:
-`impl<const F: u32> FixedNum for Fixed<i32, F>`, and for the four wide widths
-with their single admitted `F`.
+Implemented once per storage word in `src/fixed_point/fixed_num.rs`:
+`impl<const F: u32> FixedNum for Fixed<i32, F>`, and for the four wide
+widths with their single admitted `F`. All five impls compile in every build.
+
+The trait works on raw words, not on `Fixed` values, so the profile-bound
+layers that have not been made generic yet can call it through
+`ProfileFormat` (the format the build profile selects). Its methods are
+exactly the functions that used to carry one `cfg` arm per profile:
+
+- between the tiers: `upscale_to_compute`, `downscale_to_storage` (nearest,
+  ties toward +infinity), `downscale_to_storage_floor`, `_ceil`;
+- storage tier: `one_storage`, `try_from_int`, `try_to_int`, `float_bits`,
+  `truncated_raw`, `try_fixed_multiply`, `try_fixed_divide`;
+- compute tier: `compute_checked_multiply`, `compute_checked_divide`,
+  `make_compute_int`, `compute_mul_div_int`, `compute_div_count`,
+  `compute_ceiling`, `exp_sentinel_reached`, and provided methods written
+  once over `WideInt` (`compute_add`, `compute_subtract`, `compute_negate`,
+  their checked forms, `compute_halve`, `sinhcosh_at_compute_tier`);
+- the engine routing, twice: `direct_exp` ... `direct_atan2` and
+  `compute_pi_half` as the imperative methods call them, and
+  `exp_at_compute_tier` ... `pi_half_at_compute_tier` as the canonical
+  evaluator calls them.
+
+Every body was moved from its `cfg` arm by a script that specialises the
+old function for one profile, not retyped, and the old free functions now
+delegate to the trait. Three facts the move made visible, all preserved
+as they were:
+
+- **Two routings.** The imperative and canonical paths name the same engine
+  everywhere except atan at Q64.64: the imperative `atan` uses the 55-term
+  Q128.128 engine, the canonical path the 33-term one. Their compute-tier
+  values differ (the engine digests differ); whether their rounded storage
+  values ever differ has not been measured. Unifying them is a numerics
+  decision for after 0.7.0, with that measurement first.
+- **Two values of pi/2.** `compute_pi_half` (imperative acos/asin) is the
+  constant of the format below, upscaled; `pi_half_at_compute_tier` is the
+  compute tier's own constant. Same remark.
+- **One subtraction form.** The 512-bit width computes `a - b` as
+  `a + (-b)`, which panics for `b` at the compute minimum even when the
+  difference is representable. It keeps that form (an override in its impl).
+
+The scalar type is generic on top of the kernels
+(`src/fixed_point/imperative/fixed_point.rs`):
 
 ```rust
-pub trait FixedNum: Copy + Ord + Send + Sync + 'static + sealed::Sealed {
-    type Storage: Storage;
-    type Compute: Storage;
-    const FRAC_BITS: u32;
-    const COMPUTE_FRAC_BITS: u32;   // 2F
-    const DECIMAL_DIGITS: u32;      // today's MAX_DECIMAL_DIGITS
-    const TAG: [u8; 2];             // serialization: storage code + F
-
-    // conversion between tiers (today's compute.rs, nearest ties +inf)
-    fn upscale(self) -> Self::Compute;
-    fn downscale(c: Self::Compute) -> Result<Self, OverflowDetected>;
-    fn downscale_floor(c: Self::Compute) -> Result<Self, OverflowDetected>;
-    fn downscale_ceil(c: Self::Compute) -> Result<Self, OverflowDetected>;
-
-    // compute-tier kernels (today's *_compute_tier_iN and direct_* wiring)
-    fn exp_c(x: Self::Compute) -> Result<Self::Compute, OverflowDetected>;
-    fn ln_c(x: Self::Compute) -> Result<Self::Compute, OverflowDetected>;
-    fn sqrt_c(x: Self::Compute) -> Result<Self::Compute, OverflowDetected>;
-    fn sincos_c(x: Self::Compute) -> (Self::Compute, Self::Compute);
-    fn atan_c(x: Self::Compute) -> Self::Compute;
-    fn atan2_c(y: Self::Compute, x: Self::Compute) -> Self::Compute;
-    fn mul_c(a: Self::Compute, b: Self::Compute) -> Result<Self::Compute, OverflowDetected>;
-    fn div_c(a: Self::Compute, b: Self::Compute) -> Result<Self::Compute, OverflowDetected>;
+impl<S: Storage, const F: u32> Fixed<S, F> where Self: FixedNum<Storage = S> {
+    pub const ZERO: Self; pub fn one() -> Self; pub fn from_int(v: i32) -> Self;
+    // conversions, the float boundary, operators and their try_ twins,
+    // all 18 transcendentals with their try_ twins, sincos, sinhcosh, inv_sqrt
 }
+pub type FixedPoint = Fixed<BinaryStorage, { frac_config::FRAC_BITS }>;
 ```
 
-Everything above the kernels (operators, the 18 transcendentals and their
-compositions, fused ops, linear algebra, decompositions, matrix functions,
-manifolds, Lie groups, ODE, curvature, tensors, projective, fiber bundles,
-intervals) is written once, generic over `T: FixedNum`, from the code that
-exists today. The per-width `cfg` arms become the bodies of the five trait
-impls.
+`FixedPoint` is now an alias, so the whole crate above the scalar type and
+the whole test suite run on the generic code without a change.
+
+Still bound to the profile's format until phase 5, because they evaluate
+through the canonical layer: `from_str` / `try_from_str`, `Display`,
+`try_pow`, `try_atan2`. `sincos_wide` and `sincos_wide_q64` exist on
+`Fixed<i32, F>` and `Fixed<i64, 32>`, as before.
+
+Open design point for phase 3: the methods are inherent on `Fixed<S, F>`,
+so generic user code is bounded by
+`Fixed<S, F>: FixedNum<Storage = S>`. The containers (`FixedVector<T>`)
+need a bound on one type parameter, which means either moving the
+user-facing operations onto a trait or keeping two parameters.
 
 ### 4.3 Admitted fractional splits
 
@@ -192,7 +221,16 @@ impl<S: Storage, const F: u32> Fixed<S, F> {
 
 0.7.0 admits exactly today's set: `i32` with 2..=30, `i64` with 32, `i128` with
 64, `I256` with 128, `I512` with 256. `Fixed<i128, 40>` is a compile error, not
-a runtime surprise. The 32-bit mechanism (upshift by `64 - 2F` into the Q64.64
+a runtime surprise.
+
+As built: a combination without a `FixedNum` impl has no methods
+(`Fixed<i128, 40>::one()` does not resolve). For the 32-bit word, where the
+impl is generic over `F`, the range is asserted in the associated constant
+`FRAC_BITS` and every split-dependent kernel reads the split through it, so
+`Fixed<i32, 31>` fails at build time with "F must be between 2 and 30" at
+its first use. Both are pinned by `compile_fail` doctests on `Fixed`. The
+check fires in `cargo build` and `cargo test`; `cargo check` does not
+instantiate the constant. The 32-bit mechanism (upshift by `64 - 2F` into the Q64.64
 engine, shift back) generalises to other splits on other storage words, which is
 how splits like Q88.40 can be admitted later, each behind its own gate.
 
@@ -320,7 +358,7 @@ generic code, while new tests exercise all widths in one build.
 |---|---|---|
 | 0 | Fixes that belong on `main` regardless (section 12), merged into the branch. DONE: 0.6.5 | main CI green |
 | 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
-| 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased | differential gate (11.1) on scalars, all widths |
+| 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions | differential gate on linear algebra |
 | 4 | Geometry layers, ODE, tensors, fused ops, compute_tier, Interval, predicates, tq19 | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
@@ -340,6 +378,16 @@ every public scalar function, the linear algebra and geometry surface, FASC
 expressions and decimal functions, on the existing mpmath corpora plus a seeded
 random corpus. Required result: zero differing bits, including identical `Err`
 variants. Run for the five profiles and for F = 2..30 on the 32-bit width.
+
+As built for the scalar surface: `tests/differential_065_validation.rs`.
+Inputs are raw integers of every magnitude (random bit length, random sign)
+plus the extremes; each call's outcome is a value, an error variant or a
+panic, and all three must match. It runs with the ordinary suite on every
+profile and split. `tests/width_types_validation.rs` is the other half that
+only this design allows: every width in one binary, the same generic code
+checked for exact identities at ten formats, and each narrower format
+compared with Q256.256 (at most one unit apart; measured: exact on 136 to
+141 of 141 cases per format).
 
 ### 11.2 Precision gates
 

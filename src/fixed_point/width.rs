@@ -33,8 +33,9 @@ mod sealed {
 /// Each product first asserts that the operands' bit lengths fit the type,
 /// which is the width budget made loud. Sums are checked: a running sum that
 /// leaves the word is a typed `TierOverflow`, never a wrap.
-pub(crate) trait WideInt:
+pub trait WideInt:
     Copy
+    + std::fmt::Debug
     + Eq
     + Ord
     + Send
@@ -47,6 +48,7 @@ pub(crate) trait WideInt:
     + sealed::Sealed
 {
     const BITS: u32;
+    const ZERO: Self;
     fn zero() -> Self;
     fn one() -> Self;
     /// Sign extension of a native integer (every word is at least 32 bits;
@@ -100,6 +102,7 @@ macro_rules! native_wide_int {
         impl sealed::Sealed for $t {}
         impl WideInt for $t {
             const BITS: u32 = $bits;
+            const ZERO: Self = 0;
             #[inline] fn zero() -> Self { 0 }
             #[inline] fn one() -> Self { 1 }
             #[inline] fn from_i64(v: i64) -> Self { v as $t }
@@ -122,6 +125,7 @@ macro_rules! word_wide_int {
         impl sealed::Sealed for $t {}
         impl WideInt for $t {
             const BITS: u32 = $bits;
+            const ZERO: Self = $t::zero();
             #[inline] fn zero() -> Self { $t::zero() }
             #[inline] fn one() -> Self { $t::from_i128(1) }
             #[inline] fn from_i64(v: i64) -> Self { $t::from_i128(v as i128) }
@@ -147,7 +151,7 @@ word_wide_int!(I2048, 2048, usize);
 /// values and is the tier every multi-step computation keeps its state at.
 /// `Orient` is the exact accumulator of the orientation predicates and the
 /// fused kernels (it holds the exact product of two compute values).
-pub(crate) trait Storage: WideInt {
+pub trait Storage: WideInt {
     type Compute: WideInt;
     type Orient: WideInt;
 
@@ -168,7 +172,7 @@ pub(crate) trait Storage: WideInt {
 /// Storage words with a second exact accumulator, wide enough for the circle
 /// predicates. The 512-bit word has none (they would need more than 2048
 /// bits), so those predicates are absent there by trait bound.
-pub(crate) trait CircleStorage: Storage {
+pub trait CircleStorage: Storage {
     type Circle: WideInt;
     /// Sign extension to the circle accumulator (exact).
     fn circle(self) -> Self::Circle;

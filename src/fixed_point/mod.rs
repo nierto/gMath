@@ -11,6 +11,10 @@ pub mod canonical;
 pub mod imperative;
 pub use imperative::{FixedPoint, FixedVector, FixedMatrix, Interval};
 
+// Width as a type: a format is a storage word and a number of fractional bits.
+pub use fixed_num::{Fixed, FixedNum, Q16_16, Q32_32, Q64_64, Q128_128, Q256_256};
+pub use width::{CircleStorage, Storage, WideInt};
+
 /// TQ1.9 compact ternary operations: standalone, decoupled from FASC/routing.
 /// Gated behind the `inference` feature flag.
 #[cfg(feature = "inference")]
@@ -28,6 +32,9 @@ pub mod wide;
 /// Width traits: the integer words and, per storage word, its compute word
 /// and exact accumulators.
 pub(crate) mod width;
+
+/// `Fixed<S, F>` and the per-width kernels.
+pub(crate) mod fixed_num;
 
 /// Build-time Q-format configuration (FRAC_BITS and derived constants).
 #[doc(hidden)] pub mod frac_config;

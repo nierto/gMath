@@ -45,18 +45,18 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | --- | --- |
 | `OverflowDetected` | `crate::fixed_point::core_types::errors` |
 
-### FixedPoint
+### Fixed
 
 | Method | Summary |
 | --- | --- |
-| `ZERO` | Zero constant. |
-| `one` | One (1.0) in Q-format. |
 | `from_raw` | Create from raw Q-format storage. |
 | `raw` | Access the raw Q-format storage. |
 | `raw_slice` | View a slice of values as their raw storage integers, without copying. |
 | `from_raw_slice` | View a slice of raw storage integers as values, without copying. |
 | `raw_slice_mut` | Mutable form of [`raw_slice`](Self::raw_slice). |
 | `from_raw_slice_mut` | Mutable form of [`from_raw_slice`](Self::from_raw_slice). |
+| `ZERO` | Zero constant. |
+| `one` | One (1.0) in Q-format. |
 | `from_int` | Create from an integer value. |
 | `try_from_int` | Create from an integer value, `Err(TierOverflow)` outside the range. |
 | `to_int` | Extract the integer part (floor toward negative infinity). |
@@ -70,8 +70,6 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_from_f64` | Create from an f64 value like `from_f64`, returning an error instead of panicking. |
 | `to_f32` | Convert to f32: exact when the raw value fits 24 bits, else nearest-even. |
 | `to_f64` | Convert to f64: exact when the raw value fits 53 bits, else nearest-even. |
-| `from_str` | Parse from a decimal string (e.g., "3.14159", "1e-06"). |
-| `try_from_str` | Parse from a string without panicking. |
 | `exp` | e^x |
 | `ln` | ln(x), x > 0 |
 | `sqrt` | sqrt(x), x >= 0 |
@@ -100,8 +98,6 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_cos` | Fallible cos(x). |
 | `try_sincos` | Fused sin+cos: single shared range reduction at compute tier. |
 | `try_sinhcosh` | Fallible fused sinh+cosh: single shared exp-pair at compute tier. |
-| `sincos_wide` | Fused sin+cos for wide-range angles that exceed storage-tier integer range. |
-| `sincos_wide_q64` | Fused sin+cos of a Q64.64 angle (`radians * 2^64`), rounded to storage. |
 | `try_tan` | Fallible tan(x) = sin(x)/cos(x): `Err(DomainError)` if cos(x) is zero at the compute tier. |
 | `try_atan` | Fallible atan(x). |
 | `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)): `Err(DomainError)` if \|x\| > 1. |
@@ -112,13 +108,24 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
 | `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1. |
 | `try_atanh` | Fallible atanh(x) = ln((1+x)/(1-x)) / 2: `Err(DomainError)` if \|x\| >= 1. |
-| `try_pow` | Fallible x^y = exp(y * ln(x)). |
-| `try_atan2` | Fallible atan2(self=y, x). |
+| `sincos_wide` | Fused sin+cos for wide-range angles that exceed storage-tier integer range. |
+| `sincos_wide_q64` | Fused sin+cos of a Q64.64 angle (`radians * 2^64`), rounded to storage. |
 | `try_add` | `self + rhs`, `Err(TierOverflow)` when the sum leaves storage. |
 | `try_sub` | `self - rhs`, `Err(TierOverflow)` when the difference leaves storage. |
 | `try_neg` | `-self`, `Err(TierOverflow)` for the storage minimum (no positive twin). |
 | `try_mul` | `self * rhs`, rounded to nearest (ties toward +infinity) from the exact product; `Err(TierOverflow)` when it leaves storage. |
 | `try_div` | `self / rhs`, rounded to nearest (ties toward +infinity) from the exact quotient; `Err(DivisionByZero)` or `Err(TierOverflow)`. |
+
+### FixedPoint
+
+The fixed-point format this build's profile selects (`GMATH_PROFILE`, and `GMATH_FRAC_BITS` on the realtime profile).
+
+| Method | Summary |
+| --- | --- |
+| `from_str` | Parse from a decimal string (e.g., "3.14159", "1e-06"). |
+| `try_from_str` | Parse from a string without panicking. |
+| `try_pow` | Fallible x^y = exp(y * ln(x)). |
+| `try_atan2` | Fallible atan2(self=y, x). |
 
 ## FixedVector
 
