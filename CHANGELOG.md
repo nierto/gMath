@@ -5,6 +5,53 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-10-05
+
+### Upgrading
+
+One defect fix in the `inference` feature. Nothing else changes: every other
+result is the same integer as in 0.6.5, and so is every quantiser output for
+rows whose values lie within 2^100 of each other.
+
+**Do you need to act?**
+
+- **You call `tq19::quantize::quantize_tq5_rowscaled` or
+  `quantize_tq19_rowscaled` on bfloat16 weights** → Upgrade. If a row holds a
+  value near the bottom of the bfloat16 range (around 2^-124) beside ordinary
+  weights, 0.6.5 either panicked or, in a release build, could return wrong
+  codes for that row. Re-run any conversion made with 0.6.5 on data that may
+  contain such values; conversions of rows without them are byte-identical.
+- **Anything else** → Nothing to do.
+
+### Fixed
+
+- **Row-scaled quantisers on rows with a wide exponent gap.** `row_max`
+  compared two values by shifting one mantissa left by the difference of
+  their binary exponents, in 128 bits. bfloat16 exponents span 2^-133 to
+  2^120, so two elements of one row can differ by far more than that; from a
+  gap of a little over 100 bits the shifted product left the integer. In a debug build this
+  panicked ("attempt to multiply with overflow"). In a release build the
+  comparison could pick a tiny element as the row maximum, after which the
+  codes of the ordinary elements were computed from a wrapped product:
+  `quantize_tq5_rowscaled` then panicked in `RowScaledTQ5::from_parts`
+  ("code outside [-121, 121]") or returned wrong codes that happened to be in
+  range, and `quantize_tq19_rowscaled` returned wrong codes. The comparison
+  now decides by the exponents alone once they differ by 11 or more (a
+  mantissa is below 2^11, so the larger exponent is the larger value) and
+  shifts by less than 11 bits otherwise. With a correct row maximum the
+  per-element quotient needs no shift above 10 bits either, and that is now
+  asserted. binary16 rows were never affected (their exponents span 40 bits).
+
+  The 0.6.5 reference matrices had no row with a gap above 14 bits, which is
+  why the gate passed. `scripts/generate_weight_bits_refs.py` now also emits
+  a 32-row bfloat16 matrix from the exact-rational model: values near 2^-124
+  before and after ordinary weights, a row of tiny values only, rows spanning
+  2^-126 to 2^10 in both directions, subnormals beside 1.0, and 26 random
+  rows over the whole range that has a 64-bit row scale. Both quantisers
+  match the model on all 288 elements and 32 scales
+  (`tests/weight_bits_validation.rs`); the two new tests fail on 0.6.5 in
+  debug and in release.
+
 ## [0.6.5] - 2026-10-05
 
 ### Upgrading

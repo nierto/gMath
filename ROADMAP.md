@@ -425,6 +425,17 @@ softmax mix with unchanged results; five-trit row-scaled matrices
 `rms_norm`, `rotate_pairs`. Declined: importing a kernel that is not
 correctly rounded, and a second (truncating) rule for decimal literals.
 
+### v0.6.6: Row-scaled quantisers on wide exponent gaps
+
+**Release 2026-10-05.** A downstream report against 0.6.5: the row-scaled
+quantisers (`tq19::quantize`) compared and divided values by shifting a
+mantissa by the difference of two binary exponents in 128 bits. bfloat16
+rows that hold a value near 2^-124 beside ordinary weights exceed that; the
+result was a panic, or wrong codes in a release build. The comparison now
+uses the exponents alone from a gap of 11 bits and never shifts further.
+The exact-rational reference set gained a 32-row wide-gap matrix; nothing
+else changed.
+
 ### v0.6.4: Wide tier, exact literal parser, compute-tier state, loud operators
 
 **Release 2026-09-25.** A float-free downstream consumer (realtime Q22.10) reported four places it had

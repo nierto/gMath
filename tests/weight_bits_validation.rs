@@ -194,3 +194,39 @@ fn quantize_tq5_rowscaled_matches_the_exact_model() {
         }
     }
 }
+
+/// The wide-gap matrix: bfloat16 rows that hold values near 2^-124 beside
+/// ordinary weights (found in a real checkpoint), in both orders, a row of
+/// tiny values only, and rows spanning the exponent range.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+fn gap_matrix() -> WeightBits {
+    let bytes: Vec<u8> = refs::BFLOAT16_GAP_BITS.iter().flat_map(|b| b.to_le_bytes()).collect();
+    WeightBits::from_le_bytes(refs::GAP_ROWS, refs::Q_COLS, HalfKind::BFloat16, &bytes).unwrap()
+}
+
+/// 0.6.5 compared and divided by shifting a mantissa by the exponent gap,
+/// which left 128 bits from a gap of a little over 100: the row maximum came out
+/// wrong and the codes left their range.
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[test]
+fn quantize_tq19_rowscaled_holds_a_wide_exponent_gap() {
+    use g_math::tq19::quantize::quantize_tq19_rowscaled;
+    let q = quantize_tq19_rowscaled(&gap_matrix()).unwrap();
+    assert_eq!(q.data(), refs::BFLOAT16_GAP_RS19_DATA);
+    assert_eq!(q.scales_q32(), refs::BFLOAT16_GAP_RS19_SCALES);
+}
+
+#[cfg(table_format = "q16_16")]
+#[test]
+fn quantize_tq5_rowscaled_holds_a_wide_exponent_gap() {
+    use g_math::tq19::quantize::quantize_tq5_rowscaled;
+    let q = quantize_tq5_rowscaled(&gap_matrix()).unwrap();
+    assert_eq!(q.data(), refs::BFLOAT16_GAP_TQ5_DATA);
+    assert_eq!(q.scales_q32(), refs::BFLOAT16_GAP_TQ5_SCALES);
+    // the reported pattern: 2^-124-class elements beside ordinary weights
+    // quantise to zero, in either position, and the rest keep their codes
+    assert_eq!((q.data()[0], q.data()[2 * refs::Q_COLS - 1]), (0, 0));
+    for r in [0usize, 1] {
+        assert!(q.data()[r * refs::Q_COLS..(r + 1) * refs::Q_COLS].iter().any(|c| c.abs() == 121), "row {r}");
+    }
+}

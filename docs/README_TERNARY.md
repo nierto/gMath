@@ -68,6 +68,9 @@ assert_eq!(planar.matvec(&acts), dense);
   patterns decoded to fixed point by integer shifts, and the quantisers from
   those bits to `TQ19Matrix`, `RowScaledTQ19` and `RowScaledTQ5` by exact
   rational rounding. No float type is involved.
+  Rows may mix values of any magnitude: an element too small to reach half a
+  step of its row's scale quantises to 0 (0.6.6; a gap of a little over 100 binary
+  orders inside one bfloat16 row overflowed in 0.6.5).
 
 ## Public API
 
