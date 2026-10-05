@@ -40,7 +40,8 @@ fn test_fixedpoint_profile_tag() {
     let val = fp("1");
     let bytes = val.to_bytes();
     let tag = bytes[0];
-    assert!(tag >= 0x01 && tag <= 0x05, "unexpected profile tag: {:#x}", tag);
+    // 0x01..=0x05 name a profile; 0x80 | F names a non-default realtime split
+    assert!((0x01..=0x05).contains(&tag) || tag & 0x80 != 0, "unexpected profile tag: {:#x}", tag);
     assert_eq!(tag, FixedPoint::profile_tag());
 }
 

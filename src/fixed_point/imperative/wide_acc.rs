@@ -398,6 +398,29 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
     }
 }
 
+/// `a / 2^shift` rounded to nearest with ties toward positive infinity (floor
+/// plus the round bit), narrowed to storage (checked). For an exact product
+/// whose scale carries a power-of-two normalisation, so the shift is not one
+/// of the fixed `2F` or `3F`. (Realtime does the same on a plain `i128` in
+/// `fused`.)
+#[cfg(not(table_format = "q16_16"))]
+pub(crate) fn narrow_shifted_nearest(a: acc::Orient, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
+    if shift == 0 {
+        return narrow_orient_to_storage(a).ok_or(OverflowDetected::TierOverflow);
+    }
+    let round_bit = (a.words[((shift - 1) / 64) as usize] >> ((shift - 1) % 64)) & 1 == 1;
+    #[cfg(table_format = "q32_32")]
+    let floor = a >> shift;
+    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+    let floor = a >> shift as usize;
+    let floor = narrow_orient_to_storage(floor).ok_or(OverflowDetected::TierOverflow)?;
+    if round_bit {
+        floor.checked_add(storage_one()).ok_or(OverflowDetected::TierOverflow)
+    } else {
+        Ok(floor)
+    }
+}
+
 /// `num / den` rounded to nearest, ties toward positive infinity, narrowed
 /// to storage (checked): `num` an exact wide value, `den` a nonzero compute
 /// raw. With `num` at `3F` fractional bits and `den` at `2F` the quotient is

@@ -9,9 +9,17 @@ use g_math::fixed_point::imperative::{FixedPoint, BinaryStorage};
 use std::hint::black_box;
 use std::time::Instant;
 
+/// Activations in [0, 1). On the realtime profile they are in [0, 0.01)
+/// instead: a 4096-column row of weights up to 1.0 sums to about 1000, which
+/// leaves the storage range from 22 fractional bits up (until 0.6.5 the
+/// result wrapped silently; it now panics).
 fn make_activations(n: usize) -> Vec<BinaryStorage> {
     (0..n).map(|i| {
-        FixedPoint::from_str(&format!("0.{:04}", (i * 37 + 13) % 9999)).raw()
+        #[cfg(table_format = "q16_16")]
+        let s = format!("0.00{:04}", (i * 37 + 13) % 9999);
+        #[cfg(not(table_format = "q16_16"))]
+        let s = format!("0.{:04}", (i * 37 + 13) % 9999);
+        FixedPoint::from_str(&s).raw()
     }).collect()
 }
 

@@ -58,6 +58,16 @@ assert_eq!(planar.matvec(&acts), dense);
   variants), the `tq19_dot` / `trit_dot` / `packed_trit_dot` kernels (AVX2 on
   x86_64 with a scalar fallback), and the `PlanarTQ19` / `HybridTQ19` compressed
   weight forms) each bit-identical to dense `TQ19Matrix::matvec` on every profile.
+  A result that does not fit the storage type panics (0.6.5; it wrapped before).
+- **`RowScaledTQ19`** (realtime and compact) and **`RowScaledTQ5`** (realtime,
+  0.6.5): one scale per row in unsigned Q32.32, with ten trits in an i16 or
+  five trits in an i8 per weight. `RowScaledTQ5` is half the bytes per weight;
+  its kernels (scalar, AVX2 on 16-bit halves of the activations, a 4x4
+  register tile for batches) all compute the same integer per row.
+- **`tq19::bits`** and **`tq19::quantize`** (0.6.5): binary16 / bfloat16 bit
+  patterns decoded to fixed point by integer shifts, and the quantisers from
+  those bits to `TQ19Matrix`, `RowScaledTQ19` and `RowScaledTQ5` by exact
+  rational rounding. No float type is involved.
 
 ## Public API
 

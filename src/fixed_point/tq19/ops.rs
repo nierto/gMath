@@ -84,20 +84,41 @@ pub(super) fn compute_zero() -> ComputeStorage {
     { I1024::zero() }
 }
 
+const STORAGE_OVERFLOW: &str = "tq19: result exceeds storage range";
+#[cfg(table_format = "q16_16")]
+const ACC_OVERFLOW: &str = "tq19: accumulator exceeds compute-tier range";
+
 /// Narrow ComputeStorage to BinaryStorage (type-narrow only, no Q-format shift).
-/// Truncates upper bits if value exceeds storage range.
+///
+/// # Panics
+/// Panics if the value does not fit the storage type (fail loud, never wrap).
 #[inline(always)]
 pub(super) fn narrow_to_storage(v: ComputeStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
-    { v as i32 }
+    { if v > i32::MAX as i64 || v < i32::MIN as i64 { panic!("{}", STORAGE_OVERFLOW) } v as i32 }
     #[cfg(table_format = "q32_32")]
-    { v as i64 }
+    { if v > i64::MAX as i128 || v < i64::MIN as i128 { panic!("{}", STORAGE_OVERFLOW) } v as i64 }
     #[cfg(table_format = "q64_64")]
-    { v.as_i128() }
+    { if !v.fits_in_i128() { panic!("{}", STORAGE_OVERFLOW) } v.as_i128() }
     #[cfg(table_format = "q128_128")]
-    { v.as_i256() }
+    { if !v.fits_in_i256() { panic!("{}", STORAGE_OVERFLOW) } v.as_i256() }
     #[cfg(table_format = "q256_256")]
-    { v.as_i512() }
+    { if !v.fits_in_i512() { panic!("{}", STORAGE_OVERFLOW) } v.as_i512() }
+}
+
+/// Whether `len` worst-case terms can be summed at the compute tier without a
+/// per-term check.
+///
+/// Realtime: a TQ1.9 term is below `2^15 * 2^31 = 2^46` in magnitude, so
+/// `2^16` of them stay below `2^62`; a trit term is at most `2^31`, so the
+/// same bound covers it. Wider profiles have at least 49 bits of headroom per
+/// term, more than any slice length.
+#[inline(always)]
+pub(super) fn unchecked_sum_fits(len: usize) -> bool {
+    #[cfg(table_format = "q16_16")]
+    { len <= 1 << 16 }
+    #[cfg(not(table_format = "q16_16"))]
+    { let _ = len; true }
 }
 
 /// Wide matvec epilogue: the exact row value at 2·FRAC_BITS fractional
@@ -144,48 +165,57 @@ pub(super) fn wide_output(acc: ComputeStorage) -> ComputeStorage {
     }
 }
 
-/// Multiply two Q-format BinaryStorage values at compute tier.
+/// Apply a Q-format per-block scale to an accumulated trit dot:
+/// `round((dot * scale) >> FRAC_BITS)`, round to nearest.
 ///
-/// `result = (a * b) >> FRAC_BITS` with round-to-nearest.
-/// Used for applying per-block scale factors to trit dot products.
+/// On realtime and compact the product is taken on the accumulator itself, so
+/// a dot that exceeds storage but whose scaled value fits is still exact.
+///
+/// # Panics
+/// Panics if the result does not fit storage (fail loud, never wrap).
 #[inline]
-fn mul_fixed(a: BinaryStorage, b: BinaryStorage) -> BinaryStorage {
-    let a_wide = widen_activation(a);
-    let b_wide = widen_activation(b);
-    let product = a_wide * b_wide;
-    shift_right_frac_and_narrow(product)
-}
-
-/// Shift ComputeStorage right by FRAC_BITS with rounding, narrow to BinaryStorage.
-#[inline(always)]
-fn shift_right_frac_and_narrow(v: ComputeStorage) -> BinaryStorage {
+fn scale_dot(acc: ComputeStorage, scale: BinaryStorage) -> BinaryStorage {
     #[cfg(table_format = "q16_16")]
     {
-        let round = (v >> frac_config::FRAC_ROUND_BIT) & 1;
-        ((v >> frac_config::FRAC_BITS) + round) as i32
+        let p = acc as i128 * scale as i128;
+        let r = (p >> frac_config::FRAC_BITS) + ((p >> frac_config::FRAC_ROUND_BIT) & 1);
+        if r > i32::MAX as i128 || r < i32::MIN as i128 { panic!("{}", STORAGE_OVERFLOW) }
+        r as i32
     }
     #[cfg(table_format = "q32_32")]
     {
-        let round = (v >> 31) & 1;
-        ((v >> 32) + round) as i64
+        let p = match acc.checked_mul(scale as i128) {
+            Some(p) => p,
+            None => panic!("{}", STORAGE_OVERFLOW),
+        };
+        let r = (p >> 32) + ((p >> 31) & 1);
+        if r > i64::MAX as i128 || r < i64::MIN as i128 { panic!("{}", STORAGE_OVERFLOW) }
+        r as i64
     }
     #[cfg(table_format = "q64_64")]
     {
+        // Both factors fit i128 after the checked narrow, so the I256 product is exact.
+        let v = widen_activation(narrow_to_storage(acc)) * widen_activation(scale);
         let round_bit = (v & I256::from_i128(1i128 << 63)) != I256::zero();
-        let shifted = (v >> 64u32).as_i128();
-        if round_bit { shifted + 1 } else { shifted }
+        let shifted = v >> 64u32;
+        let shifted = if round_bit { shifted + I256::from_i128(1) } else { shifted };
+        narrow_to_storage(shifted)
     }
     #[cfg(table_format = "q128_128")]
     {
+        let v = widen_activation(narrow_to_storage(acc)) * widen_activation(scale);
         let round_bit = (v & (I512::from_i128(1) << 127usize)) != I512::zero();
-        let shifted = (v >> 128usize).as_i256();
-        if round_bit { shifted + I256::from_i128(1) } else { shifted }
+        let shifted = v >> 128usize;
+        let shifted = if round_bit { shifted + I512::from_i128(1) } else { shifted };
+        narrow_to_storage(shifted)
     }
     #[cfg(table_format = "q256_256")]
     {
+        let v = widen_activation(narrow_to_storage(acc)) * widen_activation(scale);
         let round_bit = (v & (I1024::from_i128(1) << 255usize)) != I1024::zero();
-        let shifted = (v >> 256usize).as_i512();
-        if round_bit { shifted + I512::from_i128(1) } else { shifted }
+        let shifted = v >> 256usize;
+        let shifted = if round_bit { shifted + I1024::from_i128(1) } else { shifted };
+        narrow_to_storage(shifted)
     }
 }
 
@@ -193,12 +223,33 @@ fn shift_right_frac_and_narrow(v: ComputeStorage) -> BinaryStorage {
 // Inner dot products — return ComputeStorage (pre-division)
 // ============================================================================
 
+/// Realtime rows too long for the unchecked i64 sum: exact i128 sum, one check.
+#[cfg(table_format = "q16_16")]
+#[cold]
+#[inline(never)]
+fn tq19_dot_exact(weights: &[i16], activations: &[BinaryStorage]) -> ComputeStorage {
+    let mut acc = 0i128;
+    for i in 0..weights.len() {
+        acc += weights[i] as i128 * activations[i] as i128;
+    }
+    if acc > i64::MAX as i128 || acc < i64::MIN as i128 { panic!("{}", ACC_OVERFLOW) }
+    acc as i64
+}
+
 /// TQ1.9 inner dot product at compute tier (before SCALE division).
 ///
 /// Returns raw accumulator. Caller divides by SCALE and narrows.
 /// On x86_64 realtime profile, dispatches to AVX2 when available.
 #[inline]
 fn tq19_dot_compute(weights: &[i16], activations: &[BinaryStorage]) -> ComputeStorage {
+    // Past the bound a partial sum could leave i64: sum exactly and check once.
+    #[cfg(table_format = "q16_16")]
+    {
+        if !unchecked_sum_fits(weights.len()) {
+            return tq19_dot_exact(weights, activations);
+        }
+    }
+
     // SIMD dispatch for realtime profile on x86_64
     #[cfg(all(target_arch = "x86_64", table_format = "q16_16"))]
     {
@@ -221,6 +272,7 @@ fn tq19_dot_compute(weights: &[i16], activations: &[BinaryStorage]) -> ComputeSt
 /// Zero-multiply: only add/sub/skip. Returns raw accumulator.
 #[inline]
 fn trit_dot_compute(trits: &[i8], activations: &[BinaryStorage]) -> ComputeStorage {
+    // A trit term is at most 2^31, so i64 holds 2^32 of them: no slice reaches that.
     // SIMD dispatch for realtime profile on x86_64
     #[cfg(all(target_arch = "x86_64", table_format = "q16_16"))]
     {
@@ -246,6 +298,7 @@ fn trit_dot_compute(trits: &[i8], activations: &[BinaryStorage]) -> ComputeStora
 // ============================================================================
 
 /// TQ1.9 dot: `sum(w[i] * a[i]) / SCALE` at compute tier.
+/// Panics if the result exceeds storage.
 pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage {
     debug_assert_eq!(weights.len(), activations.len());
     let acc = tq19_dot_compute(weights, activations);
@@ -263,6 +316,7 @@ pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeSt
 }
 
 /// Zero-multiply trit dot for pre-decoded trits.
+/// Panics if the result exceeds storage.
 pub fn trit_dot(trits: &[i8], activations: &[BinaryStorage]) -> BinaryStorage {
     debug_assert_eq!(trits.len(), activations.len());
     narrow_to_storage(trit_dot_compute(trits, activations))
@@ -270,8 +324,8 @@ pub fn trit_dot(trits: &[i8], activations: &[BinaryStorage]) -> BinaryStorage {
 
 /// Packed trit dot with per-block scale.
 ///
-/// Unpacks 5 trits/byte, accumulates at compute tier, downscales,
-/// then multiplies by `scale` at compute tier.
+/// Unpacks 5 trits/byte, accumulates at compute tier, then applies `scale`
+/// with one rounding to nearest. Panics if the result exceeds storage.
 pub fn packed_trit_dot(
     packed: &[u8],
     count: usize,
@@ -298,9 +352,7 @@ pub fn packed_trit_dot(
         }
     }
 
-    // Narrow accumulated dot, then apply Q-format scale multiply
-    let dot = narrow_to_storage(acc);
-    mul_fixed(dot, scale)
+    scale_dot(acc, scale)
 }
 
 // ============================================================================
@@ -347,6 +399,9 @@ pub fn tq19_matvec_batch(
     cols: usize,
     batch: &[&[BinaryStorage]],
 ) -> Vec<Vec<BinaryStorage>> {
+    if !unchecked_sum_fits(cols) {
+        return batch.iter().map(|x| tq19_matvec(data, rows, cols, &x[..cols])).collect();
+    }
     let batch_size = batch.len();
     let scale = compute_scale();
     let mut results: Vec<Vec<BinaryStorage>> = (0..batch_size)
@@ -480,6 +535,9 @@ pub fn tq19_matvec_q2f_batch_par(
     cols: usize,
     batch: &[&[BinaryStorage]],
 ) -> Vec<Vec<ComputeStorage>> {
+    if !unchecked_sum_fits(cols) {
+        return batch.iter().map(|x| tq19_matvec_q2f_par(data, rows, cols, &x[..cols])).collect();
+    }
     let batch_size = batch.len();
     let row_results: Vec<Vec<ComputeStorage>> = (0..rows)
         .into_par_iter()
@@ -524,6 +582,9 @@ pub fn tq19_matvec_batch_par(
     cols: usize,
     batch: &[&[BinaryStorage]],
 ) -> Vec<Vec<BinaryStorage>> {
+    if !unchecked_sum_fits(cols) {
+        return batch.iter().map(|x| tq19_matvec_par(data, rows, cols, &x[..cols])).collect();
+    }
     let batch_size = batch.len();
     let scale = compute_scale();
 

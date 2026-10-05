@@ -128,6 +128,10 @@ fn try_div_same_tier(a: &UniversalDecimalTiered, b: &UniversalDecimalTiered) -> 
             let b512 = I512::from_i256(b256);
             let (result, rem) = crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(scaled, b512);
             if !rem.is_zero() { return Err(OverflowDetected::PrecisionLoss); }
+            // a * 10^dp / b can pass I256 (small divisor): promote, never keep the low words
+            if !result.fits_in_i256() {
+                return Ok(UniversalDecimalTiered { value: DecimalValueTiered::Tier6(DecimalTier6 { value: i512_to_d512(result), decimal_places: dp }) });
+            }
             Ok(UniversalDecimalTiered { value: DecimalValueTiered::Tier5(DecimalTier5 { value: i256_to_d256(result.as_i256()), decimal_places: dp }) })
         }
         (DecimalValueTiered::Tier6(va), DecimalValueTiered::Tier6(vb)) => {
@@ -155,6 +159,10 @@ fn try_div_same_tier(a: &UniversalDecimalTiered, b: &UniversalDecimalTiered) -> 
             let q_odd = (q.words[0] & 1) == 1;
             if rem2 > b_abs || (rem2 == b_abs && q_odd) {
                 q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
+            }
+            // top of the ladder: a quotient past I512 is a typed overflow
+            if !q.fits_in_i512() {
+                return Err(OverflowDetected::TierOverflow);
             }
             let result = q.as_i512();
             Ok(UniversalDecimalTiered { value: DecimalValueTiered::Tier6(DecimalTier6 { value: i512_to_d512(result), decimal_places: dp }) })

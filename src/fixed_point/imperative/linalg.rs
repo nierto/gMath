@@ -79,6 +79,13 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 /// Panics if the slices have different lengths.
 pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     assert_eq!(a.len(), b.len(), "compute_tier_dot: length mismatch");
+    #[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+    {
+        if a.len() >= BOUNDED_DOT_MIN_LEN {
+            // a tail call: the short-vector path below stays a leaf
+            return FixedPoint::from_raw(round_to_storage(long_dot_acc(FixedPoint::raw_slice(a), FixedPoint::raw_slice(b))));
+        }
+    }
     FixedPoint::from_raw(round_to_storage(compute_tier_dot_acc_pairs(
         a.iter().zip(b).map(|(x, y)| (x.raw(), y.raw())),
     )))
@@ -111,7 +118,70 @@ pub(crate) fn compute_tier_sqrt_dot(a: &[BinaryStorage], b: &[BinaryStorage]) ->
 #[inline]
 pub(crate) fn compute_tier_dot_acc(a: &[BinaryStorage], b: &[BinaryStorage]) -> ComputeStorage {
     assert_eq!(a.len(), b.len(), "compute_tier_dot_raw: length mismatch");
+    #[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+    {
+        if a.len() >= BOUNDED_DOT_MIN_LEN {
+            return long_dot_acc(a, b);
+        }
+    }
     compute_tier_dot_acc_pairs(a.iter().copied().zip(b.iter().copied()))
+}
+
+/// Below this length the per-term check is cheaper than the bound pass
+/// (measured: the two cross between 16 and 32 elements).
+#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+const BOUNDED_DOT_MIN_LEN: usize = 32;
+
+/// The accumulator for long vectors: the bounded sum where AVX2 is present
+/// and the bound holds, the checked loop otherwise. Out of line, so the
+/// short-vector path of the callers stays as small as it was.
+#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[inline(never)]
+fn long_dot_acc(a: &[i32], b: &[i32]) -> i64 {
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 was just detected.
+        if let Some(acc) = unsafe { bounded_dot_avx2(a, b) } {
+            return acc;
+        }
+    }
+    compute_tier_dot_acc_pairs(a.iter().copied().zip(b.iter().copied()))
+}
+
+/// Largest magnitude in a slice (`|i32::MIN|` is `2^31`, hence unsigned).
+#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn max_abs_avx2(x: &[i32]) -> u32 {
+    let mut m = 0u32;
+    for &v in x {
+        m = m.max(v.unsigned_abs());
+    }
+    m
+}
+
+/// `sum a_i * b_i` in i64 with no per-term check, for inputs whose bound
+/// `len * max|a| * max|b| < 2^63` proves that no partial sum can leave i64 in
+/// any order of summation: the same integer as the checked loop, in a form
+/// the compiler vectorises. `None` when the bound does not hold (the caller
+/// then takes the checked loop, which panics where the sum really overflows).
+#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn bounded_dot_avx2(a: &[i32], b: &[i32]) -> Option<i64> {
+    let bound = (a.len() as u128) * (max_abs_avx2(a) as u128) * (max_abs_avx2(b) as u128);
+    if bound >= 1u128 << 63 {
+        return None;
+    }
+    Some(unchecked_dot_avx2(a, b))
+}
+
+/// `sum a_i * b_i` in i64, wrapping adds: the caller has proven the bound.
+#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn unchecked_dot_avx2(a: &[i32], b: &[i32]) -> i64 {
+    let mut acc = 0i64;
+    for (&x, &y) in a.iter().zip(b) {
+        acc = acc.wrapping_add((x as i64) * (y as i64));
+    }
+    acc
 }
 
 /// The checked compute-tier accumulator over (a_i, b_i) pairs.
@@ -282,7 +352,7 @@ pub(crate) const STAGNATION_SWEEPS: usize = 5;
 
 /// Storage fraction bits of the build.
 #[inline]
-fn storage_frac_bits() -> u32 {
+pub(crate) fn storage_frac_bits() -> u32 {
     #[cfg(table_format = "q16_16")]
     { frac_config::FRAC_BITS }
     #[cfg(table_format = "q32_32")]
@@ -478,7 +548,7 @@ pub(crate) fn scale_up_exponent(values: &[ComputeStorage]) -> u32 {
 
 /// Significant bits of `|v|` for a compute raw.
 #[inline]
-fn compute_bit_length(v: ComputeStorage) -> u32 {
+pub(crate) fn compute_bit_length(v: ComputeStorage) -> u32 {
     #[cfg(table_format = "q16_16")]
     { 64 - v.unsigned_abs().leading_zeros() }
     #[cfg(table_format = "q32_32")]
@@ -492,7 +562,7 @@ fn compute_bit_length(v: ComputeStorage) -> u32 {
 
 /// `v << shift` for a compute raw (exact; the caller keeps it in range).
 #[inline]
-fn compute_shl(v: ComputeStorage, shift: u32) -> ComputeStorage {
+pub(crate) fn compute_shl(v: ComputeStorage, shift: u32) -> ComputeStorage {
     #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
     { v << shift }
     #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
@@ -501,7 +571,7 @@ fn compute_shl(v: ComputeStorage, shift: u32) -> ComputeStorage {
 
 /// `v >> shift` (arithmetic) for a compute raw.
 #[inline]
-fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
+pub(crate) fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
     #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
     { v >> shift }
     #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]

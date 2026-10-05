@@ -53,7 +53,8 @@ The build-with surface is five layers; everything beneath them is internal.
   exact decimal-literal parser, for quantities outside the storage tiers.
 - **Compute tier** - `g_math::compute_tier` (feature `inference`): the tier-N+1
   engines over raw compute-tier integers.
-- **TQ1.9** - `g_math::tq19` (feature `inference`): standalone ternary inference.
+- **TQ1.9** - `g_math::tq19` (feature `inference`): standalone ternary inference,
+  with the five-trit row-scaled form and the weight-bit decoders and quantisers.
 - **Internal** - the `universal`/`fasc` evaluator, the domain implementations
   beneath `DecimalFixed` and the ternary types, the wide-integer types, and the
   shadow/router internals are not part of the surface and may change between

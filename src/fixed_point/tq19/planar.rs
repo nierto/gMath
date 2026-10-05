@@ -621,6 +621,7 @@ fn transpose<T: Copy>(results_by_row: Vec<Vec<T>>, batch_len: usize) -> Vec<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(table_format = "q16_16"))]
     use crate::fixed_point::imperative::FixedPoint;
 
     /// Deterministic LCG so tests are reproducible without RNG deps.
@@ -640,10 +641,18 @@ mod tests {
             let b = (self.next() % 2001) as i64 - 1000;
             (a + b) as i16
         }
-        /// Profile-portable activation: integer FixedPoint in ±1000.
+        /// Profile-portable activation: integer FixedPoint in ±1000. On the
+        /// realtime profile the value is n/4096 instead (|x| < 0.25), so a
+        /// 128-column row of full-range weights (|w| <= 1.5) stays inside the
+        /// storage range at every split up to Q8.24. With integers the dot
+        /// left the range from 20 fractional bits up and, until 0.6.5, both
+        /// sides of the comparison wrapped to the same wrong value.
         fn activation(&mut self) -> BinaryStorage {
             let n = (self.next() % 2001) as i32 - 1000;
-            FixedPoint::from_int(n).raw()
+            #[cfg(table_format = "q16_16")]
+            { ((n as i64) << crate::fixed_point::frac_config::FRAC_BITS >> 12) as i32 }
+            #[cfg(not(table_format = "q16_16"))]
+            { FixedPoint::from_int(n).raw() }
         }
     }
 

@@ -43,6 +43,11 @@ jobs:
           GMATH_PROFILE: ${{ matrix.profile }}
         run: cargo test --lib decimal_fixed
 
+      - name: Decimal rounding modes and one-rounding mul_div (${{ matrix.profile }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+        run: cargo test --test decimal_rounding_mode_validation
+
   contract-harness:
     runs-on: ubuntu-latest
     steps:

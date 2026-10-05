@@ -13,10 +13,18 @@
 
 use super::{FixedMatrix, FixedPoint, FixedVector};
 use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
+#[cfg(not(table_format = "q16_16"))]
+use super::interval::exact_product;
 use super::wide_acc::{narrow_triple_nearest, quadratic_form_exact};
+#[cfg(not(table_format = "q16_16"))]
+use super::wide_acc::{narrow_shifted_nearest, widen_product};
+#[cfg(not(table_format = "q16_16"))]
+use super::linalg::{compute_bit_length, compute_shl, compute_shr, storage_frac_bits};
+#[cfg(not(table_format = "q16_16"))]
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_checked_multiply;
 use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
     compute_checked_add, compute_subtract, compute_multiply, compute_divide,
-    compute_negate, compute_is_zero, make_compute_int, compute_div_count, downscale_to_storage,
+    compute_negate, compute_is_zero, compute_is_negative, make_compute_int, compute_div_count, downscale_to_storage,
     sqrt_at_compute_tier, exp_at_compute_tier,
 };
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -209,6 +217,16 @@ pub fn mobius_denominator_sq(p: &[FixedPoint], q: &[FixedPoint]) -> FixedPoint {
 /// All exp() results stay at compute tier. Single downscale per output element.
 ///
 /// **Use case**: Attention weight normalization: O(seq_len²) per forward pass.
+///
+/// # Errors
+/// - `TierOverflow`: the sum of the exponentials leaves the compute tier. Each
+///   term is at most 1, so this needs `n >= 2^(63 - 2 * FRAC_BITS)` scores on
+///   the realtime profile (about 8.8e12 at Q22.10, 2^31 at Q16.16, 32768 at
+///   Q8.24) and cannot happen on wider profiles.
+/// - No other error is reachable: the largest term is `exp(0) = 1`, so the
+///   sum is never zero and every weight is at most 1.
+///
+/// An empty input returns an empty vector.
 pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetected> {
     if scores.is_empty() {
         return Ok(vec![]);
@@ -258,6 +276,10 @@ pub fn softmax(scores: &[FixedPoint]) -> Result<Vec<FixedPoint>, OverflowDetecte
 /// [`rms_norm_factor_eps_wide`] to apply a small epsilon at the compute tier.
 ///
 /// **Use case**: RMSNorm: called once per layer per token in transformer inference.
+///
+/// # Errors
+/// The same conditions as [`rms_norm_factor_eps_wide`], except that a storage
+/// epsilon always fits the compute tier.
 pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPoint, OverflowDetected> {
     rms_norm_factor_at_compute(values, upscale_to_compute(eps.raw()))
 }
@@ -274,9 +296,16 @@ pub fn rms_norm_factor(values: &[FixedPoint], eps: FixedPoint) -> Result<FixedPo
 /// to zero there, and a small epsilon carries the compute tier's resolution
 /// (at Q22.10, `1e-5` becomes `10 / 2^20`).
 ///
-/// `Err(TierOverflow)` if `eps` does not fit the compute tier (realtime
-/// only); `Err(DivisionByZero)` if `values` is empty or `mean + eps` is zero
-/// at the compute tier.
+/// # Errors
+/// - `DivisionByZero`: `values` is empty, or `mean + eps` is zero at the
+///   compute tier (all-zero input with an epsilon that rounds to zero).
+/// - `DomainError`: `mean + eps` is negative (only possible with a negative
+///   epsilon).
+/// - `TierOverflow`: `eps` does not fit the compute tier (realtime only); the
+///   sum of squares or `mean + eps` leaves the compute tier (the sum holds
+///   `n * x^2` with `2 * FRAC_BITS` fractional bits, so on the realtime
+///   profile `n * max|x|^2` must stay below `2^(63 - 2 * FRAC_BITS)`); or the
+///   result `1 / sqrt(mean + eps)` exceeds the storage range.
 ///
 /// `g_math::wide::try_from_str("1e-5", 64)` produces the Q64.64 epsilon
 /// from a config literal without floats.
@@ -326,7 +355,11 @@ fn rms_norm_factor_at_compute(values: &[FixedPoint], eps_compute: ComputeStorage
     // mean + eps
     let mean_eps = compute_checked_add(mean, eps_compute)?;
 
-    // 1 / sqrt(mean + eps)
+    // 1 / sqrt(mean + eps); a negative radicand (negative eps) is a domain
+    // error: the sqrt kernel answers it with a sentinel, not a value
+    if compute_is_negative(&mean_eps) {
+        return Err(OverflowDetected::DomainError);
+    }
     let root = sqrt_at_compute_tier(mean_eps);
     if compute_is_zero(&root) {
         return Err(OverflowDetected::DivisionByZero);
@@ -384,23 +417,83 @@ pub fn silu(x: FixedPoint) -> FixedPoint {
 ///
 /// Returns `(mixed_output[dim], weights[n])`. The returned weights ARE
 /// storage-quantized; they are for observers (attention recording,
-/// diagnostics), not what the mix used.
+/// diagnostics), not what the mix used. [`softmax_mix_values`] skips them
+/// (one division per position saved); [`softmax_mix_flat`] and
+/// [`softmax_mix_flat_values`] take the value rows as one contiguous buffer.
+/// All four return the same mixed output.
 ///
 /// **Use case**: single-query attention `softmax(Q·Kᵀ/√d) · V`: the hot path
 /// of autoregressive transformer inference.
+///
+/// # Errors
+/// - `TierOverflow`: a numerator `sum_j e_j * v[j][d]` leaves the compute
+///   tier. Each term is at most `max|v|`, so the realtime profile is safe
+///   while `n * max|v| < 2^(63 - 2 * FRAC_BITS)` in value terms (in raw
+///   terms `n * max|v_raw| < 2^(63 - FRAC_BITS)`; with full-range values that
+///   is `n < 2^22` at Q22.10 and `n < 2^16` at Q16.16). Also returned if the
+///   sum of exponentials overflows (see [`softmax`]) or a mixed output
+///   exceeds storage, which cannot happen for in-range values because the
+///   output is a convex combination of them.
+///
+/// # Panics
+/// Panics if `scores` and `values` differ in length or the value rows differ
+/// in length. Empty input returns two empty vectors.
 pub fn softmax_mix(
     scores: &[FixedPoint],
     values: &[&[FixedPoint]],
 ) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
-    assert_eq!(
-        scores.len(),
-        values.len(),
-        "softmax_mix: scores/values length mismatch"
-    );
+    assert_eq!(scores.len(), values.len(), "softmax_mix: scores/values length mismatch");
+    let dim = values.first().map_or(0, |v| v.len());
+    softmax_mix_core(scores, dim, true, |j| {
+        let v = values[j];
+        assert_eq!(v.len(), dim, "softmax_mix: value row {j} has length {}, expected {dim}", v.len());
+        v
+    })
+}
+
+/// [`softmax_mix`] without the observer weights: only the mixed output.
+///
+/// Same errors and panics as [`softmax_mix`]; the output is the same value.
+pub fn softmax_mix_values(scores: &[FixedPoint], values: &[&[FixedPoint]]) -> Result<Vec<FixedPoint>, OverflowDetected> {
+    assert_eq!(scores.len(), values.len(), "softmax_mix: scores/values length mismatch");
+    let dim = values.first().map_or(0, |v| v.len());
+    softmax_mix_core(scores, dim, false, |j| {
+        let v = values[j];
+        assert_eq!(v.len(), dim, "softmax_mix: value row {j} has length {}, expected {dim}", v.len());
+        v
+    })
+    .map(|(out, _)| out)
+}
+
+/// [`softmax_mix`] over one contiguous value buffer: row `j` is
+/// `values_flat[j * dim..(j + 1) * dim]`.
+///
+/// # Panics
+/// Panics if `values_flat.len() != scores.len() * dim`.
+pub fn softmax_mix_flat(
+    scores: &[FixedPoint],
+    values_flat: &[FixedPoint],
+    dim: usize,
+) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
+    assert_eq!(values_flat.len(), scores.len() * dim, "softmax_mix_flat: values_flat length is not scores.len() * dim");
+    softmax_mix_core(scores, dim, true, |j| &values_flat[j * dim..(j + 1) * dim])
+}
+
+/// [`softmax_mix_flat`] without the observer weights.
+pub fn softmax_mix_flat_values(scores: &[FixedPoint], values_flat: &[FixedPoint], dim: usize) -> Result<Vec<FixedPoint>, OverflowDetected> {
+    assert_eq!(values_flat.len(), scores.len() * dim, "softmax_mix_flat: values_flat length is not scores.len() * dim");
+    softmax_mix_core(scores, dim, false, |j| &values_flat[j * dim..(j + 1) * dim]).map(|(out, _)| out)
+}
+
+fn softmax_mix_core<'a>(
+    scores: &[FixedPoint],
+    dim: usize,
+    want_weights: bool,
+    row: impl Fn(usize) -> &'a [FixedPoint],
+) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
     if scores.is_empty() {
         return Ok((vec![], vec![]));
     }
-    let dim = values[0].len();
 
     // Phase 1: find max at storage tier
     let mut max_raw = scores[0].raw();
@@ -433,16 +526,16 @@ pub fn softmax_mix(
     // so a long context × large activations can exceed the compute envelope —
     // use checked adds and surface TierOverflow rather than wrap silently.
     let mut num: Vec<ComputeStorage> = vec![compute_zero(); dim];
-    for (j, v) in values.iter().enumerate() {
-        assert_eq!(
-            v.len(),
-            dim,
-            "softmax_mix: value row {j} has length {}, expected {dim}",
-            v.len()
-        );
-        let e = exp_values[j];
-        for d in 0..dim {
-            num[d] = compute_checked_add(num[d], compute_multiply(e, upscale_to_compute(v[d].raw())))?;
+    #[cfg(table_format = "q16_16")]
+    let fast = mix_numerators_i64(&exp_values, &row, &mut num);
+    #[cfg(not(table_format = "q16_16"))]
+    let fast = false;
+    if !fast {
+        for (j, &e) in exp_values.iter().enumerate() {
+            let v = row(j);
+            for d in 0..dim {
+                num[d] = compute_checked_add(num[d], compute_multiply(e, upscale_to_compute(v[d].raw())))?;
+            }
         }
     }
 
@@ -453,12 +546,243 @@ pub fn softmax_mix(
     }
 
     // Phase 5: observer weights (storage-quantized, NOT used by the mix)
-    let mut weights = Vec::with_capacity(scores.len());
-    for e in &exp_values {
-        weights.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*e, sum)?)?));
+    let mut weights = Vec::new();
+    if want_weights {
+        weights.reserve(scores.len());
+        for e in &exp_values {
+            weights.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*e, sum)?)?));
+        }
     }
 
     Ok((out, weights))
+}
+
+/// Realtime numerators in plain i64, where bounds prove that nothing can
+/// overflow: with `F = FRAC_BITS <= 15`, `0 <= e <= 2^(2F)` (the exponent is
+/// never positive) and `|v| <= 2^31`, each product `e * v` is at most
+/// `2^(2F + 31) <= 2^61`, each rounded term at most `2^(F + 31)`, and up to
+/// `2^(31 - F)` positions keep every partial sum within `2^62`.
+///
+/// `(e * v + 2^(F - 1)) >> F` is `compute_multiply(e, v << F)` written
+/// without the 128-bit product: that function returns
+/// `floor(p / 2^(2F)) + bit(2F - 1)` of `p = e * v * 2^F`, which is
+/// `floor(e * v / 2^F) + bit(F - 1)` of `e * v`. Same integers as the checked
+/// loop, in a form the compiler vectorises. Returns `false`, leaving `num`
+/// untouched, when the bounds do not hold.
+#[cfg(table_format = "q16_16")]
+fn mix_numerators_i64<'a>(exps: &[i64], row: &impl Fn(usize) -> &'a [FixedPoint], num: &mut [i64]) -> bool {
+    use crate::fixed_point::frac_config::FRAC_BITS;
+    if FRAC_BITS > 15 || exps.len() > 1usize << (31 - FRAC_BITS) {
+        return false;
+    }
+    let round = 1i64 << (FRAC_BITS - 1);
+    for (j, &e) in exps.iter().enumerate() {
+        let v = FixedPoint::raw_slice(row(j));
+        for (n, &x) in num.iter_mut().zip(v) {
+            *n += (e * x as i64 + round) >> FRAC_BITS;
+        }
+    }
+    true
+}
+
+/// One query against many keys stored in one contiguous buffer: element `k`
+/// of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each
+/// accumulated at the compute tier and rounded to storage once, exactly as
+/// [`dot`] and `FixedVector::dot` round.
+///
+/// On the realtime profile the query is bounded once; when
+/// `dim * max|query| * 2^31 < 2^63` no key can overflow the accumulator and
+/// every key takes the unchecked, vectorised sum.
+///
+/// # Panics
+/// Panics if `dim != query.len()`, if `keys_flat.len()` is not a multiple of
+/// `dim`, or if a result leaves the storage range (as [`dot`] does).
+pub fn dot_many(query: &[FixedPoint], keys_flat: &[FixedPoint], dim: usize) -> Vec<FixedPoint> {
+    assert_eq!(query.len(), dim, "dot_many: query length is not dim");
+    if dim == 0 {
+        assert!(keys_flat.is_empty(), "dot_many: keys_flat must be empty when dim is 0");
+        return Vec::new();
+    }
+    assert_eq!(keys_flat.len() % dim, 0, "dot_many: keys_flat length is not a multiple of dim");
+    #[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+    {
+        use super::linalg::{max_abs_avx2, unchecked_dot_avx2};
+        if std::is_x86_feature_detected!("avx2") {
+            let q = FixedPoint::raw_slice(query);
+            // SAFETY: AVX2 was just detected.
+            let q_max = unsafe { max_abs_avx2(q) };
+            if (dim as u128) * (q_max as u128) * (1u128 << 31) < 1u128 << 63 {
+                return FixedPoint::raw_slice(keys_flat)
+                    .chunks_exact(dim)
+                    // SAFETY: AVX2 detected; the bound above holds for every key.
+                    .map(|key| FixedPoint::from_raw(round_to_storage(unsafe { unchecked_dot_avx2(q, key) })))
+                    .collect();
+            }
+        }
+    }
+    keys_flat.chunks_exact(dim).map(|key| super::linalg::compute_tier_dot(query, key)).collect()
+}
+
+/// RMS normalisation with a learned scale:
+/// `out[i] = x[i] * weight[i] / sqrt(mean(x^2) + eps)`, each element rounded
+/// once (`eps` in Q64.64).
+///
+/// The sum of squares is exact. The reciprocal root is taken once per call on
+/// a radicand scaled by a power of two into `[1, 4)`, so it keeps its full
+/// relative precision whatever the size of the input, and each output is the
+/// exact product `x[i] * weight[i] * reciprocal` rounded to storage once, to
+/// nearest with ties toward positive infinity. No intermediate is rounded to
+/// storage: in particular the factor is not, so this is not
+/// `x[i] * rms_norm_factor_eps_wide(x, eps) * weight[i]` (three storage
+/// roundings; at 10 fraction bits a factor of 0.05 alone is 0.4% off).
+///
+/// Accuracy: the reciprocal carries a relative error below `2^-60` on the
+/// realtime profile (at every `GMATH_FRAC_BITS`) and below `2^-(2F - 2)` on
+/// the wider ones, so an output differs from the correctly rounded value by
+/// at most one unit, and only when the exact value lies that close to a
+/// rounding boundary. On realtime the epsilon enters exactly as given (it is
+/// not first rounded to the compute tier, as in
+/// [`rms_norm_factor_eps_wide`]).
+///
+/// # Errors
+/// - `DivisionByZero`: `x` is empty, or `mean + eps` is zero.
+/// - `DomainError`: `mean + eps` is negative (a negative epsilon).
+/// - `TierOverflow`: an output leaves the storage range, or the sum of
+///   squares leaves the working width (realtime: `sum(x^2) + n * eps` at or
+///   above `2^62`; wider profiles: the compute tier).
+///
+/// # Panics
+/// Panics if `x` and `weight` differ in length.
+pub fn rms_norm(x: &[FixedPoint], weight: &[FixedPoint], eps_q64: i128) -> Result<Vec<FixedPoint>, OverflowDetected> {
+    assert_eq!(x.len(), weight.len(), "rms_norm: x/weight length mismatch");
+    let (inv, shift) = rms_reciprocal(x, eps_q64)?;
+    let mut out = Vec::with_capacity(x.len());
+    for (&v, &w) in x.iter().zip(weight) {
+        out.push(rms_apply(v, w, inv, shift)?);
+    }
+    Ok(out)
+}
+
+/// [`rms_norm`] in place. On `Err` the elements before the failing one have
+/// already been replaced.
+pub fn rms_norm_in_place(x: &mut [FixedPoint], weight: &[FixedPoint], eps_q64: i128) -> Result<(), OverflowDetected> {
+    assert_eq!(x.len(), weight.len(), "rms_norm: x/weight length mismatch");
+    let (inv, shift) = rms_reciprocal(x, eps_q64)?;
+    for (v, &w) in x.iter_mut().zip(weight) {
+        *v = rms_apply(*v, w, inv, shift)?;
+    }
+    Ok(())
+}
+
+/// `x * w * inv / 2^shift`: the exact triple product, rounded once (floor
+/// of the doubled value plus one, halved: nearest, ties toward +infinity).
+/// `shift >= 1` and `|product| < 2^125`, so nothing here can overflow.
+#[cfg(table_format = "q16_16")]
+#[inline(always)]
+fn rms_apply(x: FixedPoint, w: FixedPoint, inv: ComputeStorage, shift: u32) -> Result<FixedPoint, OverflowDetected> {
+    let product = (x.raw() as i64 * w.raw() as i64) as i128 * inv as i128;
+    let rounded = ((product >> (shift - 1)) + 1) >> 1;
+    i32::try_from(rounded).map(FixedPoint::from_raw).map_err(|_| OverflowDetected::TierOverflow)
+}
+
+/// `x * w * inv / 2^shift`: the exact triple product, rounded once.
+#[cfg(not(table_format = "q16_16"))]
+#[inline]
+fn rms_apply(x: FixedPoint, w: FixedPoint, inv: ComputeStorage, shift: u32) -> Result<FixedPoint, OverflowDetected> {
+    let product = widen_product(exact_product(x.raw(), w.raw()), inv);
+    Ok(FixedPoint::from_raw(narrow_shifted_nearest(product, shift)?))
+}
+
+/// `(inv, shift)` with `x_raw * w_raw * inv / 2^shift` the storage raw of
+/// `x * w / sqrt(mean(values^2) + eps)`.
+///
+/// Realtime: everything in 128-bit integers at Q64.64, independent of the
+/// compute tier's `2 * FRAC_BITS`. `T = n * (mean + eps)` is exact; `T / n`
+/// and its root are taken on top-aligned words, so `inv` in `(2^61, 2^62]`
+/// has a relative error below `2^-60`.
+#[cfg(table_format = "q16_16")]
+fn rms_reciprocal(values: &[FixedPoint], eps_q64: i128) -> Result<(ComputeStorage, u32), OverflowDetected> {
+    use crate::fixed_point::frac_config::FRAC_BITS;
+    const OVERFLOW: OverflowDetected = OverflowDetected::TierOverflow;
+    if values.is_empty() {
+        return Err(OverflowDetected::DivisionByZero);
+    }
+    let n = values.len() as u128;
+    let mut sum_sq = 0u128;
+    for v in values {
+        let raw = v.raw() as i64;
+        sum_sq = sum_sq.checked_add((raw * raw) as u128).ok_or(OVERFLOW)?;
+    }
+    // T = n * (mean + eps) at Q64.64: the sum of squares (2F fraction bits)
+    // moved up to 64, plus n * eps
+    let up = 64 - 2 * FRAC_BITS;
+    if sum_sq.leading_zeros() <= up + 1 {
+        return Err(OVERFLOW);
+    }
+    let n_eps = i128::try_from(n).ok().and_then(|n| n.checked_mul(eps_q64)).ok_or(OVERFLOW)?;
+    let total = ((sum_sq << up) as i128).checked_add(n_eps).ok_or(OVERFLOW)?;
+    if total < 0 {
+        return Err(OverflowDetected::DomainError);
+    }
+    if total == 0 {
+        return Err(OverflowDetected::DivisionByZero);
+    }
+    // mean + eps = q / 2^(64 + t_shift); both shifts even so the root's
+    // exponent is whole
+    let total = total as u128;
+    let t_shift = total.leading_zeros() & !1;
+    let q = (total << t_shift) / n;
+    if q == 0 {
+        return Err(OVERFLOW);
+    }
+    let q_shift = q.leading_zeros() & !1;
+    let root = (q << q_shift).isqrt(); // [2^63, 2^64): sqrt(mean + eps) * 2^half
+    let half = (64 + t_shift + q_shift) / 2;
+    let inv = ((1u128 << 125) / root) as i64; // 2^(125 - half) / sqrt(mean + eps)
+    // storage raw = x_raw * w_raw / 2^F * inv / 2^(125 - half)
+    // half <= 111 for any length below 2^32 (shift >= 16); refuse the rest
+    (125 + FRAC_BITS).checked_sub(half).filter(|&shift| shift >= 1).map(|shift| (inv, shift)).ok_or(OVERFLOW)
+}
+
+/// Wider profiles: at the compute tier. `T = n * (mean + eps)` is exact;
+/// it is moved to the top of the tier before the division by `n`, the
+/// quotient brought into `[1, 4)` by an even power of two, and the root and
+/// its reciprocal taken there, where the tier's `2F` fraction bits are all
+/// significant. `inv` in `(1/2, 1]` at `2F`; the product `x * w * inv` is at
+/// `4F`.
+#[cfg(not(table_format = "q16_16"))]
+fn rms_reciprocal(values: &[FixedPoint], eps_q64: i128) -> Result<(ComputeStorage, u32), OverflowDetected> {
+    if values.is_empty() {
+        return Err(OverflowDetected::DivisionByZero);
+    }
+    let f = storage_frac_bits();
+    let n = i64::try_from(values.len()).map_err(|_| OverflowDetected::TierOverflow)?;
+    let mut total = compute_checked_multiply(q64_to_compute(eps_q64)?, make_compute_int(n))?;
+    for v in values {
+        total = compute_checked_add(total, exact_product(v.raw(), v.raw()))?;
+    }
+    if compute_is_negative(&total) {
+        return Err(OverflowDetected::DomainError);
+    }
+    if compute_is_zero(&total) {
+        return Err(OverflowDetected::DivisionByZero);
+    }
+    // even shifts throughout: the root's power of two stays whole
+    let up = (4 * f - 1 - compute_bit_length(total)) & !1;
+    let mean = compute_div_count(compute_shl(total, up), values.len())?;
+    let excess = compute_bit_length(mean) as i64 - (2 * f as i64 + 1);
+    let (normalised, exponent) = if excess >= 0 {
+        let down = (excess & !1) as u32;
+        (compute_shr(mean, down), up as i64 - down as i64)
+    } else {
+        let more = ((1 - excess) & !1) as u32;
+        (compute_shl(mean, more), up as i64 + more as i64)
+    };
+    // normalised = (mean + eps) * 2^exponent in [1, 4)
+    let root = sqrt_at_compute_tier(normalised);
+    let inv = compute_divide(compute_one(), root)?; // 2^(-exponent/2) / sqrt(mean + eps)
+    let shift = 3 * f as i64 - exponent / 2;
+    u32::try_from(shift).map(|shift| (inv, shift)).map_err(|_| OverflowDetected::TierOverflow)
 }
 
 // ============================================================================
@@ -787,5 +1111,251 @@ mod tests {
                 materialized
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 0.6.5: softmax_mix variants, dot_many, rms_norm
+    // ------------------------------------------------------------------
+
+    /// The 0.6.4 body of `softmax_mix` (checked compute-tier accumulation),
+    /// kept verbatim as the reference for the realtime i64 numerator path.
+    fn softmax_mix_reference(
+        scores: &[FixedPoint],
+        values: &[&[FixedPoint]],
+    ) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
+        assert_eq!(
+            scores.len(),
+            values.len(),
+            "softmax_mix: scores/values length mismatch"
+        );
+        if scores.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        let dim = values[0].len();
+
+        // Phase 1: find max at storage tier
+        let mut max_raw = scores[0].raw();
+        for s in &scores[1..] {
+            if s.raw() > max_raw {
+                max_raw = s.raw();
+            }
+        }
+        let max_compute = upscale_to_compute(max_raw);
+
+        // Phase 2: exp(s_i - max) at compute tier, accumulate sum. The sum is
+        // Σ eⱼ (each eⱼ ≤ 1.0 at compute tier), so it only overflows for
+        // astronomically large n — but check it anyway so a wrapped denominator
+        // can never masquerade as a valid divisor.
+        let mut exp_values: Vec<ComputeStorage> = Vec::with_capacity(scores.len());
+        let mut sum = compute_zero();
+        for s in scores {
+            let shifted = compute_subtract(upscale_to_compute(s.raw()), max_compute);
+            let e = exp_at_compute_tier(shifted);
+            sum = compute_checked_add(sum, e)?;
+            exp_values.push(e);
+        }
+        if compute_is_zero(&sum) {
+            return Err(OverflowDetected::DivisionByZero);
+        }
+
+        // Phase 3: accumulate numerators at compute tier, value-row-major for
+        // cache locality: num[d] = Σⱼ eⱼ · v[j][d]. This is the module's largest
+        // accumulation (scaled by |v|, not bounded by 1.0 like the denominator),
+        // so a long context × large activations can exceed the compute envelope —
+        // use checked adds and surface TierOverflow rather than wrap silently.
+        let mut num: Vec<ComputeStorage> = vec![compute_zero(); dim];
+        for (j, v) in values.iter().enumerate() {
+            assert_eq!(
+                v.len(),
+                dim,
+                "softmax_mix: value row {j} has length {}, expected {dim}",
+                v.len()
+            );
+            let e = exp_values[j];
+            for d in 0..dim {
+                num[d] = compute_checked_add(num[d], compute_multiply(e, upscale_to_compute(v[d].raw())))?;
+            }
+        }
+
+        // Phase 4: single downscale per output element
+        let mut out = Vec::with_capacity(dim);
+        for n in &num {
+            out.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*n, sum)?)?));
+        }
+
+        // Phase 5: observer weights (storage-quantized, NOT used by the mix)
+        let mut weights = Vec::with_capacity(scores.len());
+        for e in &exp_values {
+            weights.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*e, sum)?)?));
+        }
+
+        Ok((out, weights))
+    }
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        /// k / 64 with |k| <= amp, built from an integer part below 127 so it
+        /// fits every profile and every realtime split the suite gates
+        /// (Q8.24 holds +-128).
+        fn value(&mut self, amp: i32) -> FixedPoint {
+            assert!(amp <= 8000);
+            let k = (self.next() % (2 * amp as u64 + 1)) as i32 - amp;
+            FixedPoint::from_int(k / 64) + FixedPoint::from_int(k % 64) / FixedPoint::from_int(64)
+        }
+    }
+
+    fn assert_mix_variants_equal_reference(scores: &[FixedPoint], rows: &[Vec<FixedPoint>], dim: usize) {
+        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+        let flat: Vec<FixedPoint> = rows.iter().flat_map(|r| r.iter().copied()).collect();
+        let want = softmax_mix_reference(scores, &refs);
+        assert_eq!(softmax_mix(scores, &refs), want);
+        assert_eq!(softmax_mix_flat(scores, &flat, dim), want);
+        let want_out = want.map(|(out, _)| out);
+        assert_eq!(softmax_mix_values(scores, &refs), want_out);
+        assert_eq!(softmax_mix_flat_values(scores, &flat, dim), want_out);
+    }
+
+    #[test]
+    fn test_softmax_mix_variants_equal_the_checked_reference() {
+        let mut rng = Lcg(17);
+        for &dim in &[1usize, 3, 8, 64] {
+            for &n in &[1usize, 2, 3, 15, 16, 17, 100, 600] {
+                // score spread: ties, moderate, exps flushed to zero
+                for &amp in &[2i32, 200, 6000] {
+                    let scores: Vec<FixedPoint> = (0..n).map(|_| rng.value(amp)).collect();
+                    let rows: Vec<Vec<FixedPoint>> = (0..n).map(|_| (0..dim).map(|_| rng.value(6000)).collect()).collect();
+                    assert_mix_variants_equal_reference(&scores, &rows, dim);
+                }
+            }
+        }
+        // empty
+        assert_eq!(softmax_mix_values(&[], &[]), Ok(vec![]));
+        assert_eq!(softmax_mix_flat(&[], &[], 4), Ok((vec![], vec![])));
+    }
+
+    /// Realtime: raw-level extremes, including full-range values, lengths
+    /// around the fast path's position bound, and inputs where the reference
+    /// reports `TierOverflow` (both must agree on the error too).
+    #[cfg(table_format = "q16_16")]
+    #[test]
+    fn test_softmax_mix_i64_path_equals_reference_at_extremes() {
+        let mut rng = Lcg(99);
+        let mut raw = |amp: i64| FixedPoint::from_raw(((rng.next() as i64) % (2 * amp + 1) - amp) as i32);
+        for &(n, dim, score_amp, value_amp) in &[
+            (1usize, 1usize, 1i64 << 30, i32::MAX as i64),
+            (2, 1, 3, i32::MAX as i64),
+            (17, 5, 1 << 12, i32::MAX as i64),
+            (2049, 1, 1 << 6, i32::MAX as i64 / 4),
+            (2049, 8, 1 << 16, 1 << 20),
+            (4097, 2, 2, i32::MAX as i64),
+            (70_000, 1, 1, 1 << 30),
+        ] {
+            let scores: Vec<FixedPoint> = (0..n).map(|_| raw(score_amp)).collect();
+            let rows: Vec<Vec<FixedPoint>> = (0..n).map(|_| (0..dim).map(|_| raw(value_amp)).collect()).collect();
+            assert_mix_variants_equal_reference(&scores, &rows, dim);
+        }
+        // every value at the storage minimum and every exp at one
+        let n = 300;
+        let scores = vec![FixedPoint::ZERO; n];
+        let rows = vec![vec![FixedPoint::from_raw(i32::MIN); 3]; n];
+        assert_mix_variants_equal_reference(&scores, &rows, 3);
+    }
+
+    #[test]
+    fn test_dot_many_equals_dot_per_key() {
+        let mut rng = Lcg(5);
+        for &dim in &[1usize, 3, 15, 16, 17, 64, 128] {
+            for &keys in &[0usize, 1, 2, 9] {
+                // |v| <= 1: a 128-term dot stays inside the narrowest range
+                let query: Vec<FixedPoint> = (0..dim).map(|_| rng.value(64)).collect();
+                let flat: Vec<FixedPoint> = (0..dim * keys).map(|_| rng.value(64)).collect();
+                let got = dot_many(&query, &flat, dim);
+                assert_eq!(got.len(), keys);
+                for k in 0..keys {
+                    assert_eq!(got[k], dot(&query, &flat[k * dim..(k + 1) * dim]), "dim {dim} key {k}");
+                }
+            }
+        }
+    }
+
+    /// Realtime: the bounded sum equals the checked sum on raw extremes
+    /// (rounding ties in both signs, large operands), and an overflowing
+    /// input panics on both paths.
+    #[cfg(table_format = "q16_16")]
+    #[test]
+    fn test_bounded_dot_equals_checked_dot_on_raws() {
+        use crate::fixed_point::frac_config::FRAC_BITS;
+        let mut rng = Lcg(42);
+        let mut raws = |n: usize, amp: i64| -> Vec<FixedPoint> {
+            (0..n).map(|_| FixedPoint::from_raw(((rng.next() as i64) % (2 * amp + 1) - amp) as i32)).collect()
+        };
+        let exact = |a: &[FixedPoint], b: &[FixedPoint]| -> Option<i32> {
+            let acc: i128 = a.iter().zip(b).map(|(x, y)| x.raw() as i128 * y.raw() as i128).sum();
+            let r = (acc >> FRAC_BITS) + ((acc >> (FRAC_BITS - 1)) & 1);
+            i32::try_from(r).ok()
+        };
+        for case in 0..3000usize {
+            let n = [1usize, 7, 16, 17, 64, 128, 256, 1000][case % 8];
+            let (qa, ka) = (if case % 7 == 0 { 1i64 << 25 } else { 1 << 14 }, if case % 11 == 0 { 1i64 << 20 } else { 1 << 12 });
+            let (q, k) = (raws(n, qa), raws(n, ka));
+            let want = exact(&q, &k);
+            let got = std::panic::catch_unwind(|| dot(&q, &k).raw()).ok();
+            assert_eq!(got, want, "case {case} n {n}");
+            let many = std::panic::catch_unwind(|| dot_many(&q, &k, n)[0].raw()).ok();
+            assert_eq!(many, want, "dot_many case {case} n {n}");
+        }
+        // exact ties at the rounding bit, both signs, long enough for the bounded path
+        let half = 1i32 << (FRAC_BITS - 1);
+        for target in [half, -half, 3 * half, -3 * half, half - 1, -half - 1] {
+            let mut q = vec![FixedPoint::ZERO; 32];
+            let mut k = vec![FixedPoint::ZERO; 32];
+            q[5] = FixedPoint::from_raw(target);
+            k[5] = FixedPoint::from_raw(1);
+            assert_eq!(Some(dot(&q, &k).raw()), exact(&q, &k), "tie {target}");
+        }
+        // full-range operands: the bound fails, the checked loop decides
+        let big = vec![FixedPoint::from_raw(i32::MIN); 64];
+        assert!(std::panic::catch_unwind(|| dot(&big, &big)).is_err());
+        assert!(std::panic::catch_unwind(|| dot_many(&big, &big, 64)).is_err());
+    }
+
+    #[test]
+    fn test_rms_norm_one_rounding() {
+        let one = FixedPoint::one();
+        let half = one / FixedPoint::from_int(2);
+        let two = FixedPoint::from_int(2);
+        // rms 2: the outputs are the weights (exact)
+        let w = [half, -(one + half), two, -one];
+        assert_eq!(rms_norm(&[two, two, -two, two], &w, 0), Ok(vec![half, -(one + half), -two, -one]));
+        // one storage unit among zeros: mean = unit^2 / 4 is a quarter of a
+        // compute unit, yet the output is exactly 2
+        let mut unit = one;
+        for _ in 0..crate::fixed_point::frac_config::FRAC_BITS { unit = unit / two; }
+        let tiny = [unit, FixedPoint::ZERO, FixedPoint::ZERO, FixedPoint::ZERO];
+        assert_eq!(rms_norm(&tiny, &[one; 4], 0), Ok(vec![two, FixedPoint::ZERO, FixedPoint::ZERO, FixedPoint::ZERO]));
+        // in place gives the same values; an all-zero input is zero when eps > 0
+        let mut rng = Lcg(8);
+        let eps = 1i128 << 44; // about 9.5e-7 in Q64.64
+        for &n in &[1usize, 2, 7, 64, 300] {
+            let x: Vec<FixedPoint> = (0..n).map(|_| rng.value(200)).collect();
+            let w: Vec<FixedPoint> = (0..n).map(|_| rng.value(128)).collect();
+            let want = rms_norm(&x, &w, eps).unwrap();
+            let mut y = x.clone();
+            assert_eq!(rms_norm_in_place(&mut y, &w, eps), Ok(()));
+            assert_eq!(y, want);
+        }
+        assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], eps), Ok(vec![FixedPoint::ZERO; 4]));
+        // errors
+        assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], 0), Err(OverflowDetected::DivisionByZero));
+        assert_eq!(rms_norm(&[], &[], eps), Err(OverflowDetected::DivisionByZero));
+        assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], -eps), Err(OverflowDetected::DomainError));
+        // an output beyond storage: 2 times the largest power of two
+        let mut big = one;
+        while let Ok(next) = big.try_add(big) { big = next; }
+        assert_eq!(rms_norm(&tiny, &[big, one, one, one], 0), Err(OverflowDetected::TierOverflow));
     }
 }

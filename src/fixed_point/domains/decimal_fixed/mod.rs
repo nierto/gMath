@@ -29,7 +29,7 @@ pub mod decimal_interval;
 // Re-export the main DecimalFixed types
 pub use decimal_fixed::{
     DecimalFixed, DecimalFixed2, DecimalFixed3, DecimalFixed6, DecimalFixed9,
-    Currency, HighPrecisionCurrency, ParseError, compile_time_power_of_10
+    Currency, HighPrecisionCurrency, DecimalRounding, ParseError, compile_time_power_of_10
 };
 pub use decimal_interval::DecimalInterval;
 

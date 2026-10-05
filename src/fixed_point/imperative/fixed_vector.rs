@@ -4,8 +4,19 @@
 
 use std::ops::{Add, Sub, Neg, Mul, Index, IndexMut};
 use super::FixedPoint;
-use super::linalg::{compute_tier_dot, compute_tier_sqrt_dot};
+use super::interval::exact_product;
+use super::linalg::{compute_tier_dot, compute_tier_sqrt_dot, round_to_storage};
+use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_checked_add, compute_checked_subtract};
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+
+/// `a * b - c * d` (`subtract`) or `a * b + c * d`, rounded once from the
+/// exact value. Panics when the result leaves the storage range.
+#[inline]
+fn rotated(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint, subtract: bool) -> FixedPoint {
+    let (p, q) = (exact_product(a.raw(), b.raw()), exact_product(c.raw(), d.raw()));
+    let sum = if subtract { compute_checked_subtract(p, q) } else { compute_checked_add(p, q) };
+    FixedPoint::from_raw(round_to_storage(sum.expect("FixedVector::rotate_pairs: overflow")))
+}
 
 /// A dynamically-sized vector of fixed-point values.
 ///
@@ -325,5 +336,43 @@ impl FixedVector {
     #[inline]
     pub fn as_slice(&self) -> &[FixedPoint] {
         &self.data
+    }
+
+    /// Mutable access to the underlying data slice.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [FixedPoint] {
+        &mut self.data
+    }
+
+    /// Rotate the pairs `(v[i], v[i + half])`, `half = rotary_dim / 2`, by
+    /// the angles whose sine and cosine are given:
+    ///
+    /// ```text
+    /// v[i]        = v[i] * cos[i] - v[i + half] * sin[i]
+    /// v[i + half] = v[i] * sin[i] + v[i + half] * cos[i]
+    /// ```
+    ///
+    /// Elements from `rotary_dim` on are left unchanged (a partial rotary
+    /// embedding). Each output is rounded once: the two products are exact
+    /// at the compute tier, their sum or difference is exact, and that value
+    /// is rounded to storage (nearest, ties toward positive infinity). The
+    /// result is the correctly rounded value of the expression, within half
+    /// a unit; writing the expression with the operators rounds each product
+    /// first and can be a unit off.
+    ///
+    /// # Panics
+    /// Panics if `rotary_dim` exceeds the vector length, if `sin` or `cos`
+    /// holds fewer than `rotary_dim / 2` values, or on overflow (as the
+    /// operators do).
+    pub fn rotate_pairs(&mut self, sin: &[FixedPoint], cos: &[FixedPoint], rotary_dim: usize) {
+        let half = rotary_dim / 2;
+        assert!(rotary_dim <= self.data.len(), "FixedVector::rotate_pairs: rotary_dim exceeds the vector length");
+        assert!(sin.len() >= half && cos.len() >= half, "FixedVector::rotate_pairs: sin/cos shorter than rotary_dim / 2");
+        let (lo, hi) = self.data.split_at_mut(half);
+        for i in 0..half {
+            let (x0, x1) = (lo[i], hi[i]);
+            lo[i] = rotated(x0, cos[i], x1, sin[i], true);
+            hi[i] = rotated(x0, sin[i], x1, cos[i], false);
+        }
     }
 }

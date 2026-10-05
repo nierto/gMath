@@ -24,6 +24,25 @@ pub struct DecimalFixed<const DECIMALS: u8> {
     value: i128,
 }
 
+/// How a `DecimalFixed` result that falls exactly halfway between two
+/// representable values is rounded. Every other result rounds to the nearest
+/// representable value under both modes.
+///
+/// The tie direction is a policy, not arithmetic: half to even is unbiased
+/// over a long series of independent roundings, while a counterparty that
+/// recomputes one field (a tax amount, an invoice line) usually specifies
+/// half up. The operators and the methods without a mode use `HalfEven`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DecimalRounding {
+    /// A tie goes to the neighbour whose last digit is even (banker's rounding).
+    #[default]
+    HalfEven,
+    /// A tie goes away from zero (commercial rounding): 0.125 becomes 0.13
+    /// and -0.125 becomes -0.13 at two decimals. Applied to the magnitude, so
+    /// `f(-x) == -f(x)`.
+    HalfUp,
+}
+
 /// Parse error for decimal string conversion
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -158,6 +177,9 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         // digits parsed), a second sign was accepted ("--5" gave 5, "1.+5"
         // gave 1.50), and a fraction past i128::MAX wrapped.
         let s = s.trim();
+        if s.is_empty() {
+            return Err(ParseError::EmptyString);
+        }
         let (negative, s) = match s.as_bytes().first() {
             Some(b'-') => (true, &s[1..]),
             Some(b'+') => (false, &s[1..]),
@@ -370,22 +392,41 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     /// `self * other` rounded half to even from the exact product,
     /// `Err(TierOverflow)` when it leaves i128.
     pub fn try_mul(self, other: Self) -> Result<Self, OverflowDetected> {
+        self.try_mul_with(other, DecimalRounding::HalfEven)
+    }
+
+    /// `self * other` rounded once, from the exact product, with the given
+    /// tie rule. `Err(TierOverflow)` when it leaves i128.
+    pub fn try_mul_with(self, other: Self, mode: DecimalRounding) -> Result<Self, OverflowDetected> {
         // UGOD-shaped: try the narrow i128 tier first; on overflow widen the
         // intermediate to 256 bits (a 128x128 product cannot exceed 256 bits).
         // i128 storage is identical on every profile. In the narrow tier
         // |product / SCALE| <= i128::MAX / SCALE, so the rounding step fits.
         if let Some(product) = self.value.checked_mul(other.value) {
-            let rounded = banker_round_decimal_i128(product / Self::SCALE, product % Self::SCALE, Self::SCALE);
+            let rounded = round_decimal_i128(product / Self::SCALE, product % Self::SCALE, Self::SCALE, mode);
             return Ok(Self { value: rounded });
         }
         let product = mul_i128_to_d256(self.value, other.value);
         let negative = product.is_negative();
-        round_half_even_d256(product.abs(), D256::from_i128(Self::SCALE), negative).map(|value| Self { value })
+        round_d256(product.abs(), D256::from_i128(Self::SCALE), negative, mode).map(|value| Self { value })
     }
 
-    /// `self / other` rounded half to even from the exact quotient,
-    /// `Err(DivisionByZero)` or `Err(TierOverflow)` (quotient beyond i128).
+    /// `self / other` rounded half to even, `Err(DivisionByZero)` or
+    /// `Err(TierOverflow)` (quotient beyond i128).
+    ///
+    /// **Contract: one rounding, from the exact quotient.** The result is
+    /// `round(a * 10^DECIMALS / b)` on the raw integers, where the scaled
+    /// dividend is formed exactly (in 256 bits when it does not fit i128) and
+    /// the quotient is rounded a single time. There is no intermediate
+    /// rounding at any precision. Code may rely on this: for raw integers
+    /// `n` and `d`, `from_raw(n).try_div(from_raw(d))` is `round(n * SCALE / d)`.
     pub fn try_div(self, other: Self) -> Result<Self, OverflowDetected> {
+        self.try_div_with(other, DecimalRounding::HalfEven)
+    }
+
+    /// `self / other` rounded once, from the exact quotient, with the given
+    /// tie rule (the same contract as [`try_div`](Self::try_div)).
+    pub fn try_div_with(self, other: Self, mode: DecimalRounding) -> Result<Self, OverflowDetected> {
         if other.value == 0 {
             return Err(OverflowDetected::DivisionByZero);
         }
@@ -401,13 +442,66 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
             if let Some(scaled) = dividend_abs.checked_mul(Self::SCALE) {
                 // divisor_abs >= 2 whenever the remainder is nonzero, so the
                 // rounded quotient stays below `scaled` and fits
-                let rounded = banker_round_decimal_i128(scaled / divisor_abs, scaled % divisor_abs, divisor_abs);
+                let rounded = round_decimal_i128(scaled / divisor_abs, scaled % divisor_abs, divisor_abs, mode);
                 return Ok(Self { value: if result_negative { -rounded } else { rounded } });
             }
         }
         let scaled = mul_i128_to_d256(self.value, Self::SCALE).abs();
         let divisor = D256::from_i128(other.value).abs();
-        round_half_even_d256(scaled, divisor, result_negative).map(|value| Self { value })
+        round_d256(scaled, divisor, result_negative, mode).map(|value| Self { value })
+    }
+
+    /// `self * num / den` with ONE rounding (half to even) from the exact
+    /// value: the product is formed exactly in 256 bits and divided once.
+    ///
+    /// `num` and `den` share a precision of their own, which may differ from
+    /// `self`'s; the result has `self`'s precision. A proportional part such
+    /// as a tax share is one call: `total.try_mul_div(rate, hundred_plus_rate)`.
+    /// Computing the product first and dividing afterwards rounds twice and
+    /// can land one unit away from this result.
+    ///
+    /// `Err(DivisionByZero)` when `den` is zero, `Err(TierOverflow)` when the
+    /// result leaves i128.
+    pub fn try_mul_div<const M: u8>(self, num: DecimalFixed<M>, den: DecimalFixed<M>) -> Result<Self, OverflowDetected> {
+        self.try_mul_div_with(num, den, DecimalRounding::HalfEven)
+    }
+
+    /// [`try_mul_div`](Self::try_mul_div) with the given tie rule.
+    pub fn try_mul_div_with<const M: u8>(
+        self,
+        num: DecimalFixed<M>,
+        den: DecimalFixed<M>,
+        mode: DecimalRounding,
+    ) -> Result<Self, OverflowDetected> {
+        if den.value == 0 {
+            return Err(OverflowDetected::DivisionByZero);
+        }
+        if self.value == 0 || num.value == 0 {
+            return Ok(Self::ZERO);
+        }
+        // The scales of `num` and `den` cancel: raw = self.raw * num.raw / den.raw.
+        // Magnitudes throughout, then the sign.
+        let negative = ((self.value < 0) != (num.value < 0)) != (den.value < 0);
+        if let (Some(a), Some(n), Some(d)) = (self.value.checked_abs(), num.value.checked_abs(), den.value.checked_abs()) {
+            if let Some(product) = a.checked_mul(n) {
+                let rounded = round_decimal_i128(product / d, product % d, d, mode);
+                return Ok(Self { value: if negative { -rounded } else { rounded } });
+            }
+        }
+        let product = mul_i128_to_d256(self.value, num.value).abs();
+        let divisor = D256::from_i128(den.value).abs();
+        round_d256(product, divisor, negative, mode).map(|value| Self { value })
+    }
+
+    /// `self * num / den` with one rounding (half to even); see
+    /// [`try_mul_div`](Self::try_mul_div). Panics on a zero `den` or when the
+    /// result leaves i128.
+    pub fn mul_div<const M: u8>(self, num: DecimalFixed<M>, den: DecimalFixed<M>) -> Self {
+        match self.try_mul_div(num, den) {
+            Ok(v) => v,
+            Err(OverflowDetected::DivisionByZero) => panic!("DecimalFixed::mul_div: division by zero"),
+            Err(_) => panic!("DecimalFixed::mul_div: overflow"),
+        }
     }
     
     /// High-performance multiplication for batch operations
@@ -459,28 +553,48 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     }
     
     /// Force conversion to different decimal precision with rounding
+    /// (half to even when digits are dropped).
     ///
     /// Panics when raising the precision leaves i128.
     pub fn convert_with_rounding<const NEW_DECIMALS: u8>(self) -> DecimalFixed<NEW_DECIMALS> {
+        self.convert_with_rounding_mode(DecimalRounding::HalfEven)
+    }
+
+    /// Conversion to a different decimal precision; dropped digits round with
+    /// the given tie rule.
+    ///
+    /// Panics when raising the precision leaves i128; see
+    /// [`try_convert_with_rounding`](Self::try_convert_with_rounding).
+    pub fn convert_with_rounding_mode<const NEW_DECIMALS: u8>(self, mode: DecimalRounding) -> DecimalFixed<NEW_DECIMALS> {
+        self.try_convert_with_rounding(mode)
+            .expect("DecimalFixed::convert_with_rounding: value outside the i128 range")
+    }
+
+    /// Conversion to a different decimal precision; dropped digits round with
+    /// the given tie rule. `Err(TierOverflow)` when raising the precision
+    /// leaves i128. Lowering the precision never fails.
+    pub fn try_convert_with_rounding<const NEW_DECIMALS: u8>(
+        self,
+        mode: DecimalRounding,
+    ) -> Result<DecimalFixed<NEW_DECIMALS>, OverflowDetected> {
         if NEW_DECIMALS == DECIMALS {
-            return DecimalFixed::<NEW_DECIMALS> { value: self.value };
+            return Ok(DecimalFixed::<NEW_DECIMALS> { value: self.value });
         }
-        
+
         let new_scale = compile_time_power_of_10(NEW_DECIMALS);
-        
+
         if NEW_DECIMALS > DECIMALS {
             // Increasing precision - multiply by scale ratio
             let scale_ratio = new_scale / Self::SCALE;
             // loud, not saturated (it saturated silently before 0.6.4)
-            let new_value = self.value.checked_mul(scale_ratio)
-                .expect("DecimalFixed::convert_with_rounding: value outside the i128 range");
-            DecimalFixed::<NEW_DECIMALS> { value: new_value }
+            let new_value = self.value.checked_mul(scale_ratio).ok_or(OverflowDetected::TierOverflow)?;
+            Ok(DecimalFixed::<NEW_DECIMALS> { value: new_value })
         } else {
             // Decreasing precision - divide by scale ratio with rounding
             let scale_ratio = Self::SCALE / new_scale;
             let (quotient, remainder) = (self.value / scale_ratio, self.value % scale_ratio);
-            let rounded = banker_round_decimal_i128(quotient, remainder, scale_ratio);
-            DecimalFixed::<NEW_DECIMALS> { value: rounded }
+            let rounded = round_decimal_i128(quotient, remainder, scale_ratio, mode);
+            Ok(DecimalFixed::<NEW_DECIMALS> { value: rounded })
         }
     }
 
@@ -1249,15 +1363,36 @@ pub const fn compile_time_power_of_10(exp: u8) -> i128 {
     result
 }
 
-/// `n / d` for `n >= 0`, `d > 0` at 256 bits, rounded half to even, with the
-/// sign applied; `Err(TierOverflow)` when the result leaves i128.
-fn round_half_even_d256(n: D256, d: D256, negative: bool) -> Result<i128, OverflowDetected> {
+/// A truncated quotient and its remainder (signs as Rust's `/` and `%` give
+/// them, `divisor > 0`) rounded to nearest with the given tie rule.
+fn round_decimal_i128(quotient: i128, remainder: i128, divisor: i128, mode: DecimalRounding) -> i128 {
+    match mode {
+        DecimalRounding::HalfEven => banker_round_decimal_i128(quotient, remainder, divisor),
+        DecimalRounding::HalfUp => {
+            // away from zero from the midpoint up: |r| >= d - |r|, no doubling
+            let r = remainder.abs();
+            if r >= divisor - r && r != 0 {
+                if remainder >= 0 { quotient + 1 } else { quotient - 1 }
+            } else {
+                quotient
+            }
+        }
+    }
+}
+
+/// `n / d` for `n >= 0`, `d > 0` at 256 bits, rounded to nearest with the
+/// given tie rule, with the sign applied; `Err(TierOverflow)` when the result
+/// leaves i128.
+fn round_d256(n: D256, d: D256, negative: bool, mode: DecimalRounding) -> Result<i128, OverflowDetected> {
     let (q, r) = divmod_d256_by_d256(n, d);
     let rest = d - r; // compare r with d - r: no doubling, nothing overflows
     let bump = match r.cmp(&rest) {
         std::cmp::Ordering::Less => false,
         std::cmp::Ordering::Greater => true,
-        std::cmp::Ordering::Equal => q.words[0] & 1 == 1,
+        std::cmp::Ordering::Equal => match mode {
+            DecimalRounding::HalfEven => q.words[0] & 1 == 1,
+            DecimalRounding::HalfUp => true,
+        },
     };
     let q = if bump { q + D256::from_i128(1) } else { q };
     let signed = if negative { negate_d256(q) } else { q };

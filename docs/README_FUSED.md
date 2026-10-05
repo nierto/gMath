@@ -41,6 +41,9 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | `euclidean_distance(&a, &b)` | √(Σ (aᵢ−bᵢ)²) |
 | `softmax(&scores)` | numerically stable softmax |
 | `softmax_mix(&scores, &values)` | softmax(scores) · V, weights never materialized to storage |
+| `softmax_mix_values`, `softmax_mix_flat`, `softmax_mix_flat_values` | the same mix without the observer weights, and/or with the value rows in one contiguous buffer (0.6.5) |
+| `dot_many(&query, &keys_flat, dim)` | one query against many keys in one buffer, each rounded as `dot` rounds (0.6.5) |
+| `rms_norm(&x, &weight, eps_q64)`, `rms_norm_in_place` | `x[i] * weight[i] / sqrt(mean(x²)+ε)`, each output rounded ONCE from the exact product with a full-precision reciprocal root; not the same as multiplying by the stored factor below (0.6.5) |
 | `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε), ε a storage value |
 | `rms_norm_factor_eps_wide(&x, eps_q64)` | the same with ε in Q64.64, added at the compute tier (0.6.4) |
 | `silu(x)` | x/(1+e⁻ˣ) |
@@ -55,6 +58,15 @@ the compute tier (`2·FRAC_BITS` fractional bits; nearest, ties toward +∞; exa
 compact and wider). On realtime the compute tier still limits it: at Q22.10,
 `1e-5` becomes `10/2^20` (`9.54e-6`) and an all-zero input gives 323.83, where the
 exact `1/√1e-5` is 316.23.
+
+Error conditions are listed on each function. In short: `softmax` can only
+fail when the number of scores reaches `2^(63 - 2·FRAC_BITS)` on realtime
+(never on wider profiles); `softmax_mix` returns `Err(TierOverflow)` when a
+numerator leaves the compute tier, which on realtime needs
+`n · max|v_raw| ≥ 2^(63 - FRAC_BITS)`; the RMS-norm factors return
+`Err(DivisionByZero)` for empty input or a zero `mean + ε`, `Err(DomainError)`
+for a negative one (0.6.5), and `Err(TierOverflow)` when the sum of squares
+leaves the compute tier or the result leaves storage.
 
 `softmax_mix` exists because materializing softmax weights to storage tier before
 the value mix imposes a 2^−FRAC_BITS resolution floor: under a low-fractional-bit

@@ -48,6 +48,17 @@ let taxed = price * rate;                                // decimal-domain multi
 let root  = "2".parse::<DecimalFixed<9>>().unwrap().sqrt(); // native decimal transcendental
 ```
 
+Money: a proportional part with one rounding and an explicit tie rule (0.6.5):
+
+```rust
+use g_math::fixed_point::{Currency, DecimalRounding};
+
+let total: Currency = "121.00".parse().unwrap();
+let rate:  Currency = "21.00".parse().unwrap();           // percent
+let base:  Currency = "121.00".parse().unwrap();          // 100 + rate
+let vat = total.try_mul_div_with(rate, base, DecimalRounding::HalfUp).unwrap(); // 21.00
+```
+
 ## Public API
 
 - **[PUBLIC_API.md → FixedPoint](../PUBLIC_API.md#fixedpoint)**: `Copy` Q-format
@@ -106,6 +117,17 @@ Live signatures on [docs.rs](https://docs.rs/g_math).
 - Multi-step routines on these types (solvers, decompositions, integrators,
   manifold and Lie-group maps, curvature) carry their state at the compute tier
   and round once; see [the linear algebra guide](README_LINALG.md).
+- `DecimalFixed` rounds half to even by default. `try_mul_with`,
+  `try_div_with`, `try_mul_div_with` and `convert_with_rounding_mode` take a
+  `DecimalRounding` (`HalfEven`, or `HalfUp` for ties away from zero). Division
+  is one rounding from the exact quotient; `mul_div` is one rounding from the
+  exact `a * b / c`, where a product followed by a division would round twice.
+- `FixedPoint` is `#[repr(transparent)]` over its raw integer (0.6.5):
+  `FixedPoint::raw_slice` / `from_raw_slice` (and the `_mut` forms) view a
+  slice as raw integers or back without copying.
+- `FixedVector::rotate_pairs(sin, cos, rotary_dim)` rotates the pairs
+  `(v[i], v[i + rotary_dim / 2])` and leaves the rest of the vector untouched;
+  each output is rounded once from the exact two-product sum.
 - `DecimalFixed` computes natively in the decimal domain (no binary round-trip),
   so its results are correctly rounded *in decimal*; see
   [the precision guide](README_PRECISION.md).

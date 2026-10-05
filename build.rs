@@ -105,38 +105,63 @@ impl PrecisionConfig {
 }
 
 /// Detect deployment profile from environment and features
+///
+/// The profile is one choice for the whole build, so every way of asking for
+/// two different profiles at once is a build error, never a silent pick.
 fn detect_deployment_profile() -> DeploymentProfile {
-    // Check environment variable first (highest priority)
-    if let Ok(profile_str) = env::var("GMATH_PROFILE") {
-        match profile_str.to_lowercase().as_str() {
-            "realtime" => return DeploymentProfile::Realtime,
-            "compact" | "fast" => return DeploymentProfile::Compact,
-            "embedded" => return DeploymentProfile::Embedded,
-            "balanced" => return DeploymentProfile::Balanced,
-            "scientific" => return DeploymentProfile::Scientific,
-            _ => {}
-        }
+    // Cargo sets CARGO_FEATURE_<NAME> for enabled features (cfg!() in build.rs
+    // would test the build script's own features, not the crate's).
+    let requested: Vec<(&str, DeploymentProfile)> = [
+        ("realtime", "CARGO_FEATURE_REALTIME", DeploymentProfile::Realtime),
+        ("compact", "CARGO_FEATURE_COMPACT", DeploymentProfile::Compact),
+        ("embedded", "CARGO_FEATURE_EMBEDDED", DeploymentProfile::Embedded),
+        ("balanced", "CARGO_FEATURE_BALANCED", DeploymentProfile::Balanced),
+        ("scientific", "CARGO_FEATURE_SCIENTIFIC", DeploymentProfile::Scientific),
+    ]
+    .into_iter()
+    .filter(|(_, var, _)| env::var(var).is_ok())
+    .map(|(name, _, profile)| (name, profile))
+    .collect();
+
+    if requested.len() > 1 {
+        let names: Vec<&str> = requested.iter().map(|(n, _)| *n).collect();
+        panic!(
+            "g_math: conflicting profile features enabled: {}. The profile is one choice per build \
+             (Cargo unifies features across every crate that depends on g_math), so two crates \
+             asking for different profiles cannot share a build. Enable exactly one, or none and \
+             set GMATH_PROFILE.",
+            names.join(", ")
+        );
     }
 
-    // Check Cargo features using environment variables
-    // NOTE: cfg!() in build.rs checks build.rs compile-time features, NOT the main crate's features!
-    // Cargo sets CARGO_FEATURE_<NAME> env vars for enabled features at build time.
-    //
-    // IMPORTANT: Check EXPLICIT profile features first, in order of precision (highest to lowest)!
-    // Order: embedded → scientific → balanced → default
-    if env::var("CARGO_FEATURE_REALTIME").is_ok() {
-        DeploymentProfile::Realtime
-    } else if env::var("CARGO_FEATURE_COMPACT").is_ok() || env::var("CARGO_FEATURE_FAST").is_ok() {
-        DeploymentProfile::Compact
-    } else if env::var("CARGO_FEATURE_EMBEDDED_MINIMAL").is_ok() || env::var("CARGO_FEATURE_EMBEDDED").is_ok() {
-        DeploymentProfile::Embedded
-    } else if env::var("CARGO_FEATURE_SCIENTIFIC").is_ok() {
-        DeploymentProfile::Scientific
-    } else if env::var("CARGO_FEATURE_BALANCED").is_ok() {
-        DeploymentProfile::Balanced
-    } else {
+    // Environment variable: highest priority
+    if let Ok(profile_str) = env::var("GMATH_PROFILE") {
+        let from_env = match profile_str.to_lowercase().as_str() {
+            "realtime" => DeploymentProfile::Realtime,
+            "compact" | "fast" => DeploymentProfile::Compact,
+            "embedded" => DeploymentProfile::Embedded,
+            "balanced" => DeploymentProfile::Balanced,
+            "scientific" => DeploymentProfile::Scientific,
+            other => panic!(
+                "g_math: unknown GMATH_PROFILE '{}'. Expected realtime, compact, embedded, balanced or scientific.",
+                other
+            ),
+        };
+        if let Some((name, _)) = requested.first() {
+            if !profile_str.eq_ignore_ascii_case(name) {
+                println!(
+                    "cargo:warning=g_math: GMATH_PROFILE={} overrides the enabled '{}' profile feature",
+                    profile_str, name
+                );
+            }
+        }
+        return from_env;
+    }
+
+    match requested.into_iter().next() {
+        Some((_, profile)) => profile,
         // Default to embedded profile (Q64.64, 19 decimals, fastest)
-        DeploymentProfile::Embedded
+        None => DeploymentProfile::Embedded,
     }
 }
 

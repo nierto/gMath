@@ -399,6 +399,32 @@ In-range `from_f64` / `from_f32` stay bit-identical to 0.6.2 (compared on
 (exact-rational references, `scripts/generate_float_boundary_refs.py`), CI
 `float-boundary` on every profile plus Q22.10.
 
+### v0.6.5: Defect fixes ahead of the width-as-type work
+
+**Release 2026-10-05.** Two downstream notes were checked claim by claim
+against 0.6.4 and a survey of the profile wiring was made for the next major
+piece of work (precision as a type instead of a build setting). The checks
+found defects in the library itself, fixed here with no change to any
+in-range result: the TQ1.9 and packed-trit kernels narrowed with wrapping
+casts (and the AVX2 trit kernel mishandled `i32::MIN`); `rms_norm_factor`
+returned `Ok(0)` for a negative radicand; the serialization tag did not record
+the realtime fractional split; two profile features enabled at once were
+resolved silently; the top of the decimal UGOD ladder truncated oversized
+products and quotients; `Currency` was documented public but not exported.
+The error conditions of the fused softmax and RMS-norm operations are now
+documented per function. Gate `tests/defects_065_validation.rs`.
+
+The requests in the two notes that held up under checking shipped in the same
+release, verified bit-identical to the code they replace downstream (except
+`rms_norm` and `rotate_pairs`, which round once where the downstream loops
+rounded two or three times, and are gated against mpmath instead): a
+tie rule for decimal rounding and a one-rounding `mul_div`; a layout guarantee
+for `FixedPoint` with zero-copy slice views; a faster realtime dot and
+softmax mix with unchanged results; five-trit row-scaled matrices
+(`RowScaledTQ5`), bit-pattern decoders and quantisers; `dot_many`,
+`rms_norm`, `rotate_pairs`. Declined: importing a kernel that is not
+correctly rounded, and a second (truncating) rule for decimal literals.
+
 ### v0.6.4: Wide tier, exact literal parser, compute-tier state, loud operators
 
 **Release 2026-09-25.** A float-free downstream consumer (realtime Q22.10) reported four places it had

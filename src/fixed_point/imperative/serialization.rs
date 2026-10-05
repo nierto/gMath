@@ -10,9 +10,22 @@
 //! - 0x01: Q64.64 (16 bytes payload)
 //! - 0x02: Q128.128 (32 bytes payload)
 //! - 0x03: Q256.256 (64 bytes payload)
+//! - 0x04: Q32.32 (8 bytes payload)
+//! - 0x05: Q16.16 (4 bytes payload)
+//! - 0x80 | F: realtime with `GMATH_FRAC_BITS = F` other than 16 (4 bytes
+//!   payload), for example 0x8A for Q22.10
+//!
+//! Up to 0.6.4 every realtime split wrote 0x05, so Q16.16 bytes were read
+//! back at the wrong scale by a build with another split. A non-default split
+//! now refuses 0x05. Bytes written by such a build before 0.6.5 are read with
+//! `FixedPoint::from_raw_bytes(&bytes[1..])`, which makes the claim about
+//! their scale explicit.
 //!
 //! ## FixedVector format
 //! `[u32 len (big-endian)][FixedPoint × len]` (without per-element profile tags)
+//!
+//! The vector, matrix, tensor and manifold-point formats carry no profile
+//! tag: the reader must know the profile and split they were written with.
 //!
 //! ## FixedMatrix format
 //! `[u32 rows (big-endian)][u32 cols (big-endian)][FixedPoint × rows*cols]`
@@ -50,8 +63,16 @@ const PROFILE_TAG: u8 = 0x02;
 const PROFILE_TAG: u8 = 0x03;
 #[cfg(table_format = "q32_32")]
 const PROFILE_TAG: u8 = 0x04;
+// Realtime: the tag also names the fractional split. Q16.16 keeps 0x05, so
+// bytes written by a default build are unchanged; any other split writes
+// 0x80 | FRAC_BITS (0x82..=0x9E), so Q16.16 bytes are refused by a Q22.10
+// build instead of being read at the wrong scale.
 #[cfg(table_format = "q16_16")]
-const PROFILE_TAG: u8 = 0x05;
+const PROFILE_TAG: u8 = if crate::fixed_point::frac_config::FRAC_BITS == 16 {
+    0x05
+} else {
+    0x80 | crate::fixed_point::frac_config::FRAC_BITS as u8
+};
 
 #[cfg(table_format = "q64_64")]
 const RAW_BYTE_LEN: usize = 16;
@@ -106,7 +127,8 @@ impl FixedPoint {
         Ok(Self::from_raw(be_bytes_to_raw(&bytes[..RAW_BYTE_LEN])))
     }
 
-    /// The profile tag byte for the current compilation profile.
+    /// The profile tag byte for the current compilation profile and, on the
+    /// realtime profile, its fractional split (see the module docs).
     pub fn profile_tag() -> u8 {
         PROFILE_TAG
     }

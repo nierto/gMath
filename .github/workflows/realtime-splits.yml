@@ -3,7 +3,9 @@
 #
 # full-suite: every test at GMATH_FRAC_BITS 8..24, the range the suite gates
 # (owner decision 2026-09-24). Tests derive their values and tolerances from
-# the build's FRAC_BITS.
+# the build's FRAC_BITS. Built with the `inference` feature since 0.6.5: the
+# TQ1.9 and compute-tier suites only compile with it, and without it they
+# were never run at a split other than 16.
 #
 # edge-smoke: the build accepts 2..30; at the edges most tests cannot be
 # meaningful (one unit is 1/16 at F=4, the range is +-2 at F=30), so these
@@ -34,7 +36,7 @@ jobs:
         env:
           GMATH_PROFILE: realtime
           GMATH_FRAC_BITS: ${{ matrix.frac_bits }}
-        run: cargo test --no-fail-fast
+        run: cargo test --features inference --no-fail-fast
 
   edge-smoke:
     strategy:
@@ -57,3 +59,4 @@ jobs:
         run: |
           cargo test --no-fail-fast --test wide_q64_validation --test ugod_promotion_validation --test float_boundary_validation --test operator_overflow_validation
           cargo test --lib literal_parser_tests
+          cargo test --features inference --no-fail-fast --test compute_tier_validation --test defects_065_validation

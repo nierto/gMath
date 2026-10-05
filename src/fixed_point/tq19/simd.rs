@@ -113,6 +113,8 @@ pub(crate) unsafe fn trit_dot_avx2(
 
     let mut acc_lo = _mm256_setzero_si256();  // 4× i64
     let mut acc_hi = _mm256_setzero_si256();  // 4× i64
+    let min = _mm256_set1_epi32(i32::MIN);
+    let mut seen_min = _mm256_setzero_si256();
 
     let t_ptr = trits.as_ptr();
     let a_ptr = activations.as_ptr();
@@ -131,6 +133,11 @@ pub(crate) unsafe fn trit_dot_avx2(
         //   t > 0 → +a,  t == 0 → 0,  t < 0 → -a
         let signed = _mm256_sign_epi32(a, t_i32);
 
+        // A 32-bit sign flip of i32::MIN wraps back to i32::MIN. A lane equal
+        // to i32::MIN is the only way that can have happened: remember it and
+        // redo the (rare) row exactly after the loop.
+        seen_min = _mm256_or_si256(seen_min, _mm256_cmpeq_epi32(signed, min));
+
         // Widen 8× i32 → 2×(4× i64) and accumulate
         let lo_128 = _mm256_castsi256_si128(signed);
         let hi_128 = _mm256_extracti128_si256(signed, 1);
@@ -142,6 +149,17 @@ pub(crate) unsafe fn trit_dot_avx2(
 
     // Horizontal sum of 8× i64
     let acc = _mm256_add_epi64(acc_lo, acc_hi);
+    if _mm256_movemask_epi8(seen_min) != 0 {
+        let mut exact = 0i64;
+        for i in 0..n {
+            match trits[i] {
+                1 => exact += activations[i] as i64,
+                -1 => exact -= activations[i] as i64,
+                _ => {}
+            }
+        }
+        return exact;
+    }
     let mut result = hsum_epi64(acc);
 
     // Scalar remainder

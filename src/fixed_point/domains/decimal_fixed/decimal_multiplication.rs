@@ -93,7 +93,12 @@ fn try_mul_exact(a: &UniversalDecimalTiered, b: &UniversalDecimalTiered, dp_resu
             let a512 = d512_to_i512(va.value);
             let b512 = d512_to_i512(vb.value);
             let product = I1024::from_i512(a512) * I1024::from_i512(b512);
-            // Truncate to I512 — this is the highest tier
+            // Tier 6 is the top of the ladder: a product past I512 is a
+            // typed overflow (callers fall back to exact rational), never
+            // the low words of the I1024
+            if !product.fits_in_i512() {
+                return Err(OverflowDetected::TierOverflow);
+            }
             Ok(UniversalDecimalTiered {
                 value: DecimalValueTiered::Tier6(DecimalTier6 {
                     value: i512_to_d512(product.as_i512()),

@@ -53,6 +53,10 @@ pub mod wide;
 // Decimal domain: `g_math::fixed_point::DecimalFixed` is a supported public type
 // (the `domains` module itself stays doc-hidden — this is the documented path).
 pub use domains::decimal_fixed::DecimalFixed;
+/// `DecimalFixed<2>` and `DecimalFixed<6>`: the money aliases.
+pub use domains::decimal_fixed::{Currency, HighPrecisionCurrency};
+/// Tie rule for `DecimalFixed` rounding (`try_div_with`, `try_mul_div_with`, ...).
+pub use domains::decimal_fixed::DecimalRounding;
 /// Certified decimal enclosures: `g_math::fixed_point::DecimalInterval` is a supported public type.
 pub use domains::decimal_fixed::DecimalInterval;
 

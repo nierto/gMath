@@ -234,7 +234,14 @@ fn direct_atan(x: ComputeStorage) -> ComputeStorage {
 ///
 /// Arithmetic is performed directly on the raw Q-format values.
 /// Transcendentals route through FASC at tier N+1.
+///
+/// **Layout guarantee (0.6.5):** `FixedPoint` is `#[repr(transparent)]` over
+/// its raw storage integer, so a `FixedPoint` and its raw value have the same
+/// size, alignment and bit pattern, and every bit pattern of the raw type is a
+/// valid `FixedPoint`. [`FixedPoint::raw_slice`] and
+/// [`FixedPoint::from_raw_slice`] reinterpret slices without copying.
 #[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct FixedPoint {
     raw: BinaryStorage,
 }
@@ -305,6 +312,35 @@ impl FixedPoint {
     #[inline]
     pub fn raw(self) -> BinaryStorage {
         self.raw
+    }
+
+    /// View a slice of values as their raw storage integers, without copying.
+    #[inline]
+    pub fn raw_slice(values: &[Self]) -> &[BinaryStorage] {
+        // SAFETY: `FixedPoint` is `repr(transparent)` over `BinaryStorage`:
+        // same size, alignment and validity, so the slice layouts are equal.
+        unsafe { std::slice::from_raw_parts(values.as_ptr() as *const BinaryStorage, values.len()) }
+    }
+
+    /// View a slice of raw storage integers as values, without copying.
+    #[inline]
+    pub fn from_raw_slice(raws: &[BinaryStorage]) -> &[Self] {
+        // SAFETY: as in `raw_slice`; every raw bit pattern is a valid value.
+        unsafe { std::slice::from_raw_parts(raws.as_ptr() as *const Self, raws.len()) }
+    }
+
+    /// Mutable form of [`raw_slice`](Self::raw_slice).
+    #[inline]
+    pub fn raw_slice_mut(values: &mut [Self]) -> &mut [BinaryStorage] {
+        // SAFETY: as in `raw_slice`; the borrow is exclusive.
+        unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr() as *mut BinaryStorage, values.len()) }
+    }
+
+    /// Mutable form of [`from_raw_slice`](Self::from_raw_slice).
+    #[inline]
+    pub fn from_raw_slice_mut(raws: &mut [BinaryStorage]) -> &mut [Self] {
+        // SAFETY: as in `raw_slice`; the borrow is exclusive.
+        unsafe { std::slice::from_raw_parts_mut(raws.as_mut_ptr() as *mut Self, raws.len()) }
     }
 
     /// Create from an integer value.

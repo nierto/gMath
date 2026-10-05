@@ -11,6 +11,7 @@
 
 use g_math::fixed_point::imperative::decompose::{cholesky_decompose, eigen_symmetric, lu_decompose, qr_decompose, schur_decompose, svd_decompose};
 use g_math::fixed_point::imperative::derived::frobenius_norm;
+use g_math::fixed_point::imperative::fused::{rms_norm, rms_norm_in_place};
 use g_math::fixed_point::imperative::lie_group::{LieGroup, SO3};
 use g_math::fixed_point::imperative::manifold::{HyperbolicSpace, Manifold};
 use g_math::fixed_point::imperative::matrix_functions::{matrix_exp, matrix_log, matrix_sqrt};
@@ -313,4 +314,48 @@ fn matrix_functions_beyond_small_norms() {
     check("matrix_exp wide", e, 0);
     check("matrix_log wide", l, 0);
     check("matrix_sqrt wide", s, 0);
+}
+
+/// Worst error of `rms_norm` over a table, in units, and the cases that fit
+/// this build (inputs and references inside the storage range). The in-place
+/// form must give the same values.
+fn rms_table(name: &str, table: &[(&[&str], &[&str], i128, &[&str])]) -> (i32, usize) {
+    let parse = |v: &[&str]| -> Option<Vec<FixedPoint>> { v.iter().map(|s| FixedPoint::try_from_str(s).ok()).collect() };
+    let (mut worst, mut ran) = (0, 0);
+    for (x, w, eps, r) in table {
+        let (Some(x), Some(w), Some(r)) = (parse(x), parse(w), parse(r)) else { continue };
+        let got = rms_norm(&x, &w, *eps).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let mut in_place = x.clone();
+        rms_norm_in_place(&mut in_place, &w, *eps).unwrap();
+        assert_eq!(in_place, got, "{name}: in-place differs");
+        for (g, want) in got.iter().zip(&r) {
+            worst = worst.max(units(*g, *want));
+        }
+        ran += 1;
+    }
+    println!("{name}: {ran} of {} cases fit this build", table.len());
+    (worst, ran)
+}
+
+#[test]
+fn rms_norm_rounds_each_output_once() {
+    let (small, ran) = rms_table("rms_norm", refs::RMS_NORM);
+    assert_eq!(ran, refs::RMS_NORM.len(), "every small case fits every gated build");
+    let (wide, _) = rms_table("rms_norm wide", refs::RMS_NORM_WIDE);
+    // exact sum of squares, reciprocal root at full relative precision, one
+    // rounding of the exact triple product: the correctly rounded output
+    check("rms_norm", small, 0);
+    check("rms_norm wide", wide, 0);
+}
+
+#[test]
+fn rotate_pairs_rounds_each_output_once() {
+    let mut worst = 0;
+    for (x0, x1, sin, cos, lo, hi) in refs::ROTATE_PAIRS {
+        let mut v = FixedVector::from_slice(&[fp(x0), fp(x1)]);
+        v.rotate_pairs(&[fp(sin)], &[fp(cos)], 2);
+        worst = worst.max(units(v[0], fp(lo))).max(units(v[1], fp(hi)));
+    }
+    // exact products, exact sum, one rounding
+    check("rotate_pairs", worst, 0);
 }

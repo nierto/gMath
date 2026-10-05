@@ -27,7 +27,8 @@
 //!
 //! ## Parallelism
 //!
-//! With `features = ["parallel"]`, row-parallel variants use rayon:
+//! Row-parallel variants use rayon (always available: the module is behind the
+//! `inference` feature):
 //! - [`TQ19Matrix::matvec_par`], [`TQ19Matrix::matvec_batch_par`]
 //! - [`packed_trit_matvec_par`]
 //!
@@ -40,10 +41,13 @@
 //!
 //! Detection is automatic at runtime with scalar fallback.
 
+pub mod bits;
 mod hybrid;
 mod ops;
 mod planar;
+pub mod quantize;
 mod rowscaled;
+mod tq5;
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod simd;
@@ -52,6 +56,8 @@ pub use hybrid::{HybridTQ19, HYBRID_LOW_TRITS, LOW_BIAS, LOW_MOD};
 pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT};
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 pub use rowscaled::RowScaledTQ19;
+#[cfg(table_format = "q16_16")]
+pub use tq5::{RowScaledTQ5, TQ5_MAX};
 
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]

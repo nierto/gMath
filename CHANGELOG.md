@@ -5,6 +5,214 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-10-05
+
+### Upgrading
+
+Defect fixes and additions. No existing function changes a result in range:
+every in-range value is bit-identical to 0.6.4. What changes is what happens
+outside the range (values that used to wrap or come back plausible-but-wrong
+are now a panic or a typed error), plus new functions.
+
+**Using `DecimalFixed` for money?** Use 0.6.4 or later, and prefer this
+release. Before 0.6.4 a value between -1 and 0 printed without its sign
+(`-0.07` as `0.07`), the parser accepted a doubled sign (`"--5"` gave 5), and
+the operators saturated on overflow and on division by zero instead of
+failing. 0.6.5 adds the tie rule (`DecimalRounding`) and the one-rounding
+`mul_div`.
+
+**Do you need to act?**
+
+- **You use `g_math::tq19` (feature `inference`)** → The dot products and
+  matvecs (`tq19_dot`, `trit_dot`, `packed_trit_dot`, `TQ19Matrix::matvec*`,
+  `PlanarTQ19` / `HybridTQ19` matvecs, `packed_trit_matvec*`) panic with
+  "tq19: result exceeds storage range" where they used to wrap. Nothing to do
+  unless you relied on wrapped outputs.
+- **You serialize `FixedPoint` with `to_bytes` on the realtime profile at a
+  `GMATH_FRAC_BITS` other than 16** → The tag byte is now `0x80 | FRAC_BITS`
+  (0x8A at Q22.10) and `from_bytes` refuses the old `0x05`. Read bytes written
+  by 0.6.4 or earlier with `FixedPoint::from_raw_bytes(&bytes[1..])`. Q16.16
+  and every other profile write and read exactly the bytes they did before.
+- **You enable more than one profile feature, or set `GMATH_PROFILE` to a
+  value the crate does not know** → The build now fails with a message
+  instead of picking a profile for you.
+- **You pass a negative epsilon to `fused::rms_norm_factor`** → A negative
+  `mean + eps` is `Err(DomainError)`; it used to be `Ok(0)`.
+
+### Added
+
+Decimal:
+
+- **`DecimalRounding::{HalfEven, HalfUp}`** and the methods that take it:
+  `DecimalFixed::try_mul_with`, `try_div_with`, `try_mul_div_with`,
+  `convert_with_rounding_mode`, `try_convert_with_rounding`. `HalfUp` sends a
+  tie away from zero (commercial rounding) and is applied to the magnitude, so
+  `f(-x) == -f(x)`. The methods without a mode and the operators keep half to
+  even: no existing result moves. The tie rule is a policy rather than
+  arithmetic: half to even is unbiased over a series, while a counterparty
+  that recomputes one field usually specifies half up. For an included-tax
+  share `t * R / (100 + R)` the two rules differ on 1 amount in 12 at a 20%
+  rate and 1 in 56 at 12%, and never at the other whole-percent rates tested.
+- **`DecimalFixed::mul_div` / `try_mul_div`**: `self * num / den` with one
+  rounding from the exact value (256-bit product, one division). `num` and
+  `den` may carry a precision of their own. Staging the same computation as a
+  product at six decimals, a division and a narrowing to two rounds three
+  times and lands one unit away on 22 of 1,200,000 tax cases, all at rates
+  with two decimal places.
+- **`try_div` contract, documented**: one rounding, from the exact quotient
+  `a * 10^DECIMALS / b`. It always worked this way; it is now a stated
+  guarantee.
+
+Core types:
+
+- **`FixedPoint` is `#[repr(transparent)]`** over its raw storage integer, as
+  a documented guarantee, with zero-copy slice views `FixedPoint::raw_slice`,
+  `from_raw_slice`, `raw_slice_mut`, `from_raw_slice_mut`, and
+  `FixedVector::as_mut_slice`.
+- **`FixedVector::rotate_pairs(sin, cos, rotary_dim)`**: rotates the pairs
+  `(v[i], v[i + rotary_dim / 2])`, leaving the tail untouched. Each output is
+  rounded once from the exact `x0 * cos - x1 * sin` (or `x0 * sin + x1 * cos`):
+  the correctly rounded value, where the operator expression rounds each
+  product first and can be a unit off.
+
+Fused operations:
+
+- **`fused::dot_many(query, keys_flat, dim)`**: one query against many keys in
+  one contiguous buffer, each result rounded as `dot` rounds.
+- **`fused::softmax_mix_values`, `softmax_mix_flat`,
+  `softmax_mix_flat_values`**: `softmax_mix` without the observer weights
+  and/or over one contiguous value buffer. Same mixed output.
+- **`fused::rms_norm` / `rms_norm_in_place`**: RMS normalisation with a
+  learned scale, `x[i] * weight[i] / sqrt(mean(x^2) + eps)`, each output
+  rounded once. The sum of squares is exact, the reciprocal root is taken on a
+  radicand scaled into `[1, 4)` (full relative precision at any input size),
+  and the exact triple product is rounded to storage once. This is not
+  `x[i] * rms_norm_factor_eps_wide(..) * weight[i]`, which rounds the factor
+  and both products to storage (at 10 fraction bits a factor of 0.05 alone is
+  0.4% off). On realtime the work is done in 128-bit integers at Q64.64, so
+  the epsilon enters exactly and the result does not depend on the compute
+  tier's `2 * FRAC_BITS`. Gate: `tests/one_rounding_validation.rs`, mpmath
+  references, 0 units on every profile and every gated realtime split.
+
+Inference (feature `inference`):
+
+- **`tq19::RowScaledTQ5`** (realtime): five-trit row-scaled matrices, one i8
+  code in `[-121, 121]` per weight plus a Q32.32 scale per row. `matvec`,
+  `matvec_par`, `matvec_batch_par`, `matvec_q2f`, `matvec_q2f_par`,
+  `write_to` / `read_from`. AVX2 kernels on 16-bit halves of the activations
+  with a scalar fallback; every path computes the same integer per row.
+- **`tq19::bits`**: binary16 and bfloat16 bit patterns to fixed point by
+  integer shifts (`decompose`, `to_raw` at any fractional width, `to_q64_raw`,
+  `to_storage_raw`, `to_fixed`, `to_tq19_raw`, and the `WeightBits` matrix).
+- **`tq19::quantize`**: `quantize_tq19`, `quantize_tq19_rowscaled`,
+  `quantize_tq5_rowscaled` from `WeightBits`, by exact rational rounding.
+
+### Changed (faster, same results)
+
+- **`FixedVector::dot`** and the dot products inside the matrix operations, on
+  the realtime profile with AVX2: for 32 or more elements the operands are
+  bounded first, and when `len * max|a| * max|b| < 2^63` proves that no
+  partial sum can overflow, the sum runs without the per-term check, which
+  the compiler vectorises. Same integer; an input that does overflow still
+  takes the checked loop and panics as before. Measured against 0.6.4: 1.3x
+  faster at 32 elements, 2x at 128, 2.6x at 1024; unchanged below 32.
+- **`fused::softmax_mix`** on the realtime profile at 15 or fewer fractional
+  bits: the numerators accumulate in plain i64 where bounds prove it exact
+  (`(e * v + 2^(F-1)) >> F` is the compute-tier product without the 128-bit
+  intermediate). Measured: 2x to 4x faster; bit-identical to the 0.6.4 body,
+  which is kept as the test reference.
+
+### Fixed
+
+- **tq19 narrowing wrapped.** The narrowing from the compute tier to storage
+  in the TQ1.9 and packed-trit kernels was an `as` cast, the one place left
+  where an infallible narrowing did not follow the crate's rule (panic, never
+  wrap). On realtime `trit_dot(&[1, 1], &[2^30, 2^30])` returned `-2^31` and
+  `tq19_dot(&[MAX_RAW; 8], &[i32::MAX; 8])` returned `-436426` for a true value
+  of 25,769,367,350. All of them now panic when the result does not fit
+  storage. In range they return the same integers as before.
+- **`packed_trit_dot` narrowed before scaling.** The accumulated dot was
+  narrowed to storage and then multiplied by the block scale, so a dot above
+  the storage range wrapped even when the scaled result fit. On realtime and
+  compact the scale is now applied to the accumulator itself (one exact
+  product, one rounding to nearest); the result is checked.
+- **AVX2 trit kernel and `i32::MIN`.** The realtime AVX2 path applied the trit
+  sign in 32 bits, where negating `i32::MIN` gives `i32::MIN` back, so a row
+  of eight or more elements containing that activation under a `-1` trit
+  differed from the scalar path by `2^32`. The kernel now detects that lane
+  and sums the row exactly; rows without it run the same instructions as
+  before plus two per iteration (measured at parity with 0.6.4).
+- **Realtime TQ1.9 rows longer than 65,536 columns** could overflow the i64
+  accumulator with worst-case weights and activations. Such rows are now
+  summed exactly and checked; shorter rows keep the unchecked SIMD loop
+  (the bound `2^16 * 2^15 * 2^31 < 2^63` makes it safe).
+- **`fused::rms_norm_factor` and `rms_norm_factor_eps_wide` with a negative
+  radicand** returned `Ok(0)`: the square-root kernel answers a negative
+  argument with a sentinel and only zero was checked. Now `Err(DomainError)`.
+  A negative epsilon whose `mean + eps` is still positive stays a value.
+- **Serialization tag did not record the fractional split.** Every realtime
+  build wrote tag `0x05`, so `FixedPoint::from_bytes` in a Q22.10 build
+  accepted Q16.16 bytes and read them at the wrong scale. See Upgrading. The
+  vector, matrix, tensor and manifold-point formats never carried a tag; the
+  module documentation now says so.
+- **Conflicting profile selection was silent.** With two profile features
+  enabled (which Cargo does whenever two crates in a build ask for different
+  ones) `build.rs` picked by a fixed priority, and an unknown `GMATH_PROFILE`
+  value fell through to the default profile. Both are now build errors.
+  `GMATH_PROFILE` overriding a single enabled profile feature stays allowed
+  and prints a build warning.
+- **Top of the decimal UGOD ladder truncated.** A tier-6 product or quotient
+  wider than 512 bits kept its low words, and a tier-5 quotient wider than 256
+  bits kept its low 256. The product and the tier-6 quotient are now
+  `Err(TierOverflow)` (the canonical layer falls back to exact rational), and
+  the tier-5 quotient promotes to tier 6.
+- **`Currency` and `HighPrecisionCurrency`** were listed as public types but
+  reachable only through a hidden module path. They are re-exported at
+  `g_math::fixed_point`.
+- **`DecimalFixed::from_decimal_str_decimal`** reported `InvalidFormat` for a
+  whitespace-only string; it is `EmptyString`, like the empty string.
+
+### Documentation
+
+- Every `Err` condition of `fused::softmax`, `fused::softmax_mix`,
+  `fused::rms_norm_factor` and `fused::rms_norm_factor_eps_wide` is stated on
+  the function, with the input sizes at which the realtime compute tier
+  overflows for a given `GMATH_FRAC_BITS`.
+- Decimal rounding, stated precisely: results are rounded half to even.
+  Inside the decimal transcendentals and inside canonical decimal chains that
+  stay at the compute tier, intermediate products and quotients carry guard
+  digits and round half away from zero before the one half-even narrowing.
+  The 0.6.4 notes said "half to even wherever it occurs", which is true of
+  results and not of those intermediates. No behaviour changed.
+
+### Validation
+
+`tests/defects_065_validation.rs`: one regression per defect with exact
+integer references, the loud path, and the in-range value. Runs on every
+profile and at Q22.10 in the `fused-tq19-precision` workflow. A differential
+probe linking 0.6.4 and 0.6.5 into one realtime Q22.10 binary found no
+differing bit in range (4,160 dot cases against an exact integer reference,
+every matrix form, 2,000 RMS-norm and softmax cases) and no slowdown in the
+TQ1.9 matvec or the trit dot.
+
+New gates for the additions: `tests/decimal_rounding_mode_validation.rs`
+(1.2 million tax cases under both tie rules against an independent integer
+reference, with the tie counts and the 22-case pin from an exact-rational
+model; the 256-bit path), `tests/weight_bits_validation.rs` (every one of the
+65,536 bit patterns of both formats against exact-rational checksums; the
+quantisers against literal expectations), `tests/tq5_validation.rs` (every
+kernel path against an i128 reference), `tests/layout_and_rotation_validation.rs`,
+and in-crate tests holding the faster `dot` and `softmax_mix` paths equal to
+the checked ones at raw extremes.
+
+`tests/compute_tier_validation.rs` now has mpmath references for every
+realtime split (`GMATH_FRAC_BITS` 2 to 30); its tables were Q16.16 only, so
+the suite failed at any other split, and the split workflow never noticed
+because it built without the `inference` feature. Measured at every split:
+primitives 0 compute-tier units, composed forms at most 1, storage results
+exact from 5 fractional bits up (at 2, 3 and 4 the second rounding can land
+one unit away). The `realtime-splits` workflow now builds with `inference`.
+
 ## [0.6.4] - 2026-09-25
 
 ### Upgrading

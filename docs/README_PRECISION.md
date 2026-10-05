@@ -101,7 +101,7 @@ cargo test --release
 | `serde` | `Serialize`/`Deserialize` for FixedPoint, vectors, matrices, tensors |
 | `inference` | TQ1.9 ternary inference ops + rayon parallel matvec |
 | `rebuild-tables` | regenerate lookup tables from `build.rs` |
-| `realtime` / `compact` / `embedded` / `balanced` / `scientific` | select profile via Cargo feature instead of `GMATH_PROFILE` |
+| `realtime` / `compact` / `embedded` / `balanced` / `scientific` | select profile via Cargo feature instead of `GMATH_PROFILE`. The profile is one choice per build: enabling two is a build error (0.6.5), and Cargo enables the union of what every crate in the build asks for, so libraries should leave the choice to the final binary |
 | `legacy-tests` | compile legacy test suites |
 
 No feature gates around core functionality: all domains, transcendentals, wide

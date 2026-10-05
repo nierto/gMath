@@ -495,6 +495,55 @@ def main():
         out.append(f'    ({n}, {vec_lit([x for row in m for x in row])}, {quoted(vals)}),')
     out.append("];\n")
 
+    # rms_norm: x_i w_i / sqrt(mean(x^2) + eps), eps a Q64.64 raw (own
+    # stream). The second table reaches large and outlier magnitudes; a case
+    # that leaves a build's storage range is skipped there by the test.
+    rng = random.Random(SEED + 4)
+    eps_raws = [0, 1 << 44, round(Fraction(1, 10 ** 5) * 2 ** 64), round(Fraction(1, 10 ** 6) * 2 ** 64), 1 << 56, 1 << 62]
+
+    def rms_case(x, w, eps_raw):
+        radicand = m_of(sum(t * t for t in x) / len(x) + Fraction(eps_raw, 2 ** 64))
+        root = sqrt(radicand)
+        return f'    ({vec_lit(x)}, {vec_lit(w)}, {eps_raw}, {quoted([m_of(a * b) / root for a, b in zip(x, w)])}),'
+
+    out.append("/// (x, weight, eps as a Q64.64 raw, x_i w_i / sqrt(mean(x^2) + eps))")
+    out.append("pub const RMS_NORM: &[(&[&str], &[&str], i128, &[&str])] = &[")
+    for i in range(60):
+        n = rng.randint(1, 12)
+        if i % 4 == 3:
+            # a few storage units at 8 fraction bits: the bottom of the range
+            x = [Fraction(rng.randint(-3, 3), 256) for _ in range(n)]
+        else:
+            x = [dy(rng, -8, 8) for _ in range(n)]
+        w = [dy(rng, -4, 4) for _ in range(n)]
+        eps_raw = eps_raws[rng.randrange(len(eps_raws))]
+        if eps_raw == 0 and all(t == 0 for t in x):
+            x[0] = Fraction(1, 256)
+        out.append(rms_case(x, w, eps_raw))
+    out.append("];\n")
+    out.append("/// (x, weight, eps as a Q64.64 raw, outputs): magnitudes to 2000, outliers")
+    out.append("pub const RMS_NORM_WIDE: &[(&[&str], &[&str], i128, &[&str])] = &[")
+    for i in range(40):
+        n = rng.randint(2, 64)
+        scale = [20, 100, 500, 2000][i % 4]
+        if i % 3 == 0:
+            # one outlier among small values
+            x = [dy(rng, -1, 1) for _ in range(n)]
+            x[rng.randrange(n)] = dy(rng, -scale, scale, 4)
+        else:
+            x = [dy(rng, -scale, scale, 4) for _ in range(n)]
+        w = [dy(rng, -16, 16, 6) for _ in range(n)]
+        out.append(rms_case(x, w, eps_raws[rng.randrange(len(eps_raws))]))
+    out.append("];\n")
+
+    # rotate_pairs: one pair, exact dyadic results (16 fraction bits)
+    out.append("/// (x0, x1, sin, cos, x0 cos - x1 sin, x0 sin + x1 cos)")
+    out.append("pub const ROTATE_PAIRS: &[(&str, &str, &str, &str, &str, &str)] = &[")
+    for _ in range(80):
+        x0, x1, sn, cs = dy(rng, -8, 8), dy(rng, -8, 8), dy(rng, -1, 1), dy(rng, -1, 1)
+        out.append(f'    ("{lit(x0)}", "{lit(x1)}", "{lit(sn)}", "{lit(cs)}", "{lit(x0 * cs - x1 * sn)}", "{lit(x0 * sn + x1 * cs)}"),')
+    out.append("];\n")
+
     with open("tests/data/one_rounding_refs.rs", "w") as fh:
         fh.write("\n".join(out))
 

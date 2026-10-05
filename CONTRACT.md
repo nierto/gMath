@@ -63,7 +63,7 @@ constructed exact-tie inputs, per profile):
 | Domain | Rule (everywhere) | Notes |
 | ------ | ----------------- | ----- |
 | Binary | round-to-nearest, ties toward +∞ | multiply, divide, every wide-tier downscale, and decimal→binary coercion; one rule, all five profiles |
-| Decimal | exact when representable; banker's (half-even) where rounding occurs | canonical multiply grows decimal places (no rounding); canonical divide tiers 1–5 are exact-or-rational-fallback (`PrecisionLoss` → symbolic) and never round; `DecimalFixed<D>` and the tier-6 best-effort divide round banker's |
+| Decimal | exact when representable; banker's (half-even) where rounding occurs | canonical multiply grows decimal places (no rounding); canonical divide tiers 1–5 are exact-or-rational-fallback (`PrecisionLoss` → symbolic) and never round; `DecimalFixed<D>` and the tier-6 best-effort divide round banker's; compute-tier intermediates inside the decimal transcendentals and canonical decimal-compute chains carry guard digits and round half away from zero before the one half-even narrowing. `DecimalFixed` division is one rounding from the exact quotient, and `mul_div` one rounding from the exact `a * b / c`. Since 0.6.5 the `_with` methods take the tie rule explicitly (`DecimalRounding::HalfEven` or `HalfUp`, away from zero); the default everywhere is half-even |
 | Balanced ternary | round-to-nearest | tie-free for multiply and `div3` (odd scale, contract theorem); ties toward +∞ where ties exist (divide, conversion in: e.g. `0.5` → raw 29525, `-0.5` → raw −29524 at TQ10.10, the documented +∞ tie asymmetry) |
 
 Exactness-first remains the prior rule everywhere: a result representable

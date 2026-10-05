@@ -53,6 +53,10 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `one` | One (1.0) in Q-format. |
 | `from_raw` | Create from raw Q-format storage. |
 | `raw` | Access the raw Q-format storage. |
+| `raw_slice` | View a slice of values as their raw storage integers, without copying. |
+| `from_raw_slice` | View a slice of raw storage integers as values, without copying. |
+| `raw_slice_mut` | Mutable form of [`raw_slice`](Self::raw_slice). |
+| `from_raw_slice_mut` | Mutable form of [`from_raw_slice`](Self::from_raw_slice). |
 | `from_int` | Create from an integer value. |
 | `try_from_int` | Create from an integer value, `Err(TierOverflow)` outside the range. |
 | `to_int` | Extract the integer part (floor toward negative infinity). |
@@ -147,6 +151,8 @@ A dynamically-sized vector of fixed-point values.
 | `cross` | Cross product (3D vectors only). |
 | `outer_product` | Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j]. |
 | `as_slice` | Access the underlying data slice (for compute-tier operations). |
+| `as_mut_slice` | Mutable access to the underlying data slice. |
+| `rotate_pairs` | Rotate the pairs `(v[i], v[i + half])`, `half = rotary_dim / 2`, by the angles whose sine and cosine are given: |
 
 ## FixedMatrix
 
@@ -184,6 +190,7 @@ Modules: DecimalFixed
 
 | Item | Kind | Summary |
 | --- | --- | --- |
+| `DecimalRounding` | enum | How a `DecimalFixed` result that falls exactly halfway between two representable values is rounded. |
 | `ParseError` | enum | Parse error for decimal string conversion |
 | `compile_time_power_of_10` | fn | Compile-time power of 10 calculation |
 | `DecimalFixed2` | type | Common decimal precision type aliases |
@@ -228,11 +235,18 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `try_sub` | `self - other`, `Err(TierOverflow)` when the difference leaves i128. |
 | `try_neg` | `-self`, `Err(TierOverflow)` for the raw minimum (no positive twin). |
 | `try_mul` | `self * other` rounded half to even from the exact product, `Err(TierOverflow)` when it leaves i128. |
-| `try_div` | `self / other` rounded half to even from the exact quotient, `Err(DivisionByZero)` or `Err(TierOverflow)` (quotient beyond i128). |
+| `try_mul_with` | `self * other` rounded once, from the exact product, with the given tie rule. |
+| `try_div` | `self / other` rounded half to even, `Err(DivisionByZero)` or `Err(TierOverflow)` (quotient beyond i128). |
+| `try_div_with` | `self / other` rounded once, from the exact quotient, with the given tie rule (the same contract as [`try_div`](Self::try_div)). |
+| `try_mul_div` | `self * num / den` with ONE rounding (half to even) from the exact value: the product is formed exactly in 256 bits and divided once. |
+| `try_mul_div_with` | [`try_mul_div`](Self::try_mul_div) with the given tie rule. |
+| `mul_div` | `self * num / den` with one rounding (half to even); see [`try_mul_div`](Self::try_mul_div). |
 | `multiply_batch_decimal` | High-performance multiplication for batch operations |
 | `to_f64_lossy` | Convert to f64 (lossy conversion for display/debugging) |
 | `try_convert` | Convert to different decimal precision |
-| `convert_with_rounding` | Force conversion to different decimal precision with rounding |
+| `convert_with_rounding` | Force conversion to different decimal precision with rounding (half to even when digits are dropped). |
+| `convert_with_rounding_mode` | Conversion to a different decimal precision; dropped digits round with the given tie rule. |
+| `try_convert_with_rounding` | Conversion to a different decimal precision; dropped digits round with the given tie rule. |
 | `to_binary_q256` | Convert DecimalFixed to Q256.256 binary format (I512) |
 | `from_binary_q256` | Create DecimalFixed from Q256.256 binary format (I512) |
 | `try_from_binary_q256` | Create DecimalFixed from Q256.256 binary format (I512), rounded half to even (the decimal rule), `Err(TierOverflow)` when the result leaves i128. |
@@ -292,6 +306,12 @@ Modules: g_math::fixed_point::imperative::fused
 | `rms_norm_factor_eps_wide` | fn | Fused 1/sqrt(mean(x²) + eps) with `eps` given in Q64.64 (`eps * 2^64`). |
 | `silu` | fn | Fused SiLU activation: x / (1 + exp(-x)) entirely at compute tier. |
 | `softmax_mix` | fn | Fused softmax + weighted value mix, entirely at compute tier: |
+| `softmax_mix_values` | fn | [`softmax_mix`] without the observer weights: only the mixed output. |
+| `softmax_mix_flat` | fn | [`softmax_mix`] over one contiguous value buffer: row `j` is `values_flat[j * dim..(j + 1) * dim]`. |
+| `softmax_mix_flat_values` | fn | [`softmax_mix_flat`] without the observer weights. |
+| `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::dot` round. |
+| `rms_norm` | fn | RMS normalisation with a learned scale: `out[i] = x[i] * weight[i] / sqrt(mean(x^2) + eps)`, each element rounded once (`eps` in Q64.64). |
+| `rms_norm_in_place` | fn | [`rms_norm`] in place. |
 
 ## Certified intervals
 
@@ -1072,7 +1092,7 @@ A balanced ternary digit: -1, 0, or +1
 
 ## TQ1.9 inference
 
-Modules: g_math::tq19 _(feature: inference)_
+Modules: g_math::tq19, g_math::tq19::bits, g_math::tq19::quantize _(feature: inference)_
 
 | Item | Kind | Summary |
 | --- | --- | --- |
@@ -1099,12 +1119,17 @@ Modules: g_math::tq19 _(feature: inference)_
 | `HYBRID_LOW_TRITS` | const | Number of low balanced-ternary digits fused into the 12-bit field. |
 | `LOW_MOD` | const | 3^7: modulus of the low part. |
 | `LOW_BIAS` | const | Bias added to the balanced low remainder: biased = lo + 1093 ∈ [0, 2186]. |
-
-**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
-
-| Item | Re-exported from |
-| --- | --- |
-| `RowScaledTQ19` | `rowscaled` |
+| `TQ5_MAX` | const | Largest code: `(3^5 - 1) / 2`. |
+| `HalfKind` | enum | Which 16-bit float format a bit pattern is in. |
+| `decompose` | fn | `\|v\| = m * 2^e` with `m` the integer mantissa (implicit bit included) and the sign separately: `(negative, m, e)`. |
+| `to_raw` | fn | `trunc(v * 2^frac_bits)` toward zero as an i128. |
+| `to_q64_raw` | fn | The value at Q64.64: `trunc(v * 2^64)`. |
+| `to_storage_raw` | fn | The value at the build's storage format: `trunc(v * 2^FRAC_BITS)` toward zero. |
+| `to_fixed` | fn | The value as a `FixedPoint`, truncated toward zero; see [`to_storage_raw`]. |
+| `to_tq19_raw` | fn | TQ1.9 raw value: `round(v * 3^9)`, half away from zero, unclamped (the caller clamps to `MAX_RAW` / `MIN_RAW`). |
+| `quantize_tq19` | fn | Quantise to a `TQ19Matrix` with the global TQ1.9 scale: each element is `round(v * 3^9)`, half away from zero. |
+| `quantize_tq19_rowscaled` | fn | Quantise to a row-scaled TQ1.9 matrix by exact rational rounding: each row quantises against its own largest magnitude, `q = round(v * MAX_RAW / max\|w\|)` (half away from zero), and carries the scale `round(max\|w\| * 3^9 * 2^32 / MAX_RAW)` in unsigned Q32.32. |
+| `quantize_tq5_rowscaled` | fn | Quantise to five trits with a per-row scale by exact rational rounding: `s_r = max\|w\|_r / 121`, `code = round(w / s_r)` (half away from zero), `scale_q32 = round(s_r * 2^32)`. |
 
 ### TQ19Matrix
 
@@ -1179,6 +1204,56 @@ A TQ1.9 weight matrix in hybrid 12-bit + sparse-correction form.
 | `matvec_q2f_par` | Row-parallel wide-output matvec. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
 
+### RowScaledTQ19
+
+TQ1.9 matrix with one quantization scale per row.
+
+| Method | Summary |
+| --- | --- |
+| `from_parts` | Construct from parts. |
+| `rows` |  |
+| `cols` |  |
+| `data` |  |
+| `scales_q32` |  |
+| `size_bytes` | Bytes of weight + scale storage (2 B/weight + 8 B/row). |
+| `matvec` | Row-scaled matvec: `out[r] = tq19_dot(row_r, x) × s_rel[r]`. |
+| `matvec_par` | Row-parallel matvec. |
+| `matvec_q2f` | Wide-output row-scaled matvec: each row at 2·FRAC_BITS precision. |
+| `matvec_q2f_par` | Row-parallel wide-output matvec. |
+| `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
+| `matvec_batch_par` | Row-parallel batch matvec (row weights stay in cache across the batch). |
+
+### RowScaledTQ5
+
+A row-major matrix of five-trit codes with a per-row scale.
+
+| Method | Summary |
+| --- | --- |
+| `from_parts` | Construct from parts; `data.len() == rows * cols`, `scales_q32.len() == rows`, every code in `[-121, 121]` (the kernels' overflow bounds rest on it). |
+| `rows` |  |
+| `cols` |  |
+| `data` |  |
+| `scales_q32` |  |
+| `size_bytes` | Bytes of weight + scale storage (1 B/weight + 8 B/row). |
+| `matvec` | Matvec: `out[r] = floor(sum(code * x) * s_r / 2^32)`. |
+| `matvec_par` | Row-parallel [`matvec`](Self::matvec): the same results. |
+| `matvec_batch_par` | Batched matvec. |
+| `matvec_q2f` | Wide-output matvec at `2 * FRAC_BITS` fractional bits: `floor(sum(code * x) * s_r / 2^(32 - FRAC_BITS))`, one rounding. |
+| `matvec_q2f_par` | Row-parallel [`matvec_q2f`](Self::matvec_q2f): the same results. |
+| `write_to` | Serialize: `rows (u32) \| cols (u32) \| codes (i8 each) \| scales (u64 each)`, little-endian. |
+| `read_from` | Deserialize (inverse of [`write_to`](Self::write_to)). |
+
+### WeightBits
+
+A matrix of weight bit patterns as read from a file: the float-free form projections are quantised from and embeddings are decoded from.
+
+| Method | Summary |
+| --- | --- |
+| `from_le_bytes` | From the file's little-endian bytes. |
+| `storage_raw` | Storage raw of element `i`; see [`to_storage_raw`]. |
+| `tq19_raw` | TQ1.9 raw of element `i`; see [`to_tq19_raw`]. |
+| `decompose` | `(negative, m, e)` of element `i`, for exact rational arithmetic. |
+
 ## Compute-tier transcendentals
 
 Modules: g_math::compute_tier _(feature: inference)_
@@ -1245,7 +1320,7 @@ Modules: g_math::fixed_point::imperative::serialization
 | `from_bytes` | Deserialize from bytes with profile tag prefix. |
 | `to_raw_bytes` | Serialize raw storage only (no profile tag), big-endian. |
 | `from_raw_bytes` | Deserialize raw storage only (no profile tag), big-endian. |
-| `profile_tag` | The profile tag byte for the current compilation profile. |
+| `profile_tag` | The profile tag byte for the current compilation profile and, on the realtime profile, its fractional split (see the module docs). |
 | `raw_byte_len` | Size in bytes of the raw storage (without profile tag). |
 | `to_compact_bytes` | Encode a FixedPoint value in compact format. |
 | `from_compact_bytes` | Decode a FixedPoint value from compact format. |
