@@ -179,4 +179,46 @@ for kind, seed in (("BFloat16", 11), ("Binary16", 12)):
         d, s = q_rowscaled(bits_, kind, ROWS, COLS, 121, 1)
         out.append(arr(f"{k}{tag}_TQ5_DATA", "i8", d))
         out.append(arr(f"{k}{tag}_TQ5_SCALES", "u64", s))
+
+# --- rows with a wide exponent gap (bfloat16) -----------------------------------
+# Real checkpoints hold values near 2^-124 beside ordinary weights. The gap
+# inside one row then exceeds 100 bits, which a comparison or a quotient done
+# by shifting one mantissa by the gap cannot hold in 128 bits.
+def bf16(sign, field, mant):
+    return (sign << 15) | (field << 7) | mant
+
+def make_gap_bits(cols):
+    g = Lcg(31)
+    normal = lambda: bf16(g.next() & 1, 127 - (g.next() % 10), g.next() % 128)
+    rows = []
+    rows.append([0x01d5] + [normal() for _ in range(cols - 1)])            # tiny first
+    rows.append([normal() for _ in range(cols - 1)] + [0x81d5])            # tiny last
+    rows.append([bf16(g.next() & 1, 1 + (g.next() % 4), g.next() % 128) for _ in range(cols)])  # tiny only
+    rows.append([bf16(c & 1, 1 + c * 17, (c * 37) % 128) for c in range(cols)])                 # ascending, 2^-126 .. 2^10
+    rows.append([bf16(c & 1, 137 - c * 17, (c * 53) % 128) for c in range(cols - 1)] + [0x0001])  # descending, then a subnormal
+    rows.append([0x0001, 0x8001, 0x007f, 0x0080, 0x3f80, 0xbf80, 0x0000, 0x01d5, 0x81d5])       # subnormals beside 1.0
+    # random rows over the whole range that still has a 64-bit row scale
+    # (2^-133 .. 2^13), zeros and subnormals mixed in
+    for _ in range(26):
+        row = []
+        for _ in range(cols):
+            k = g.next() % 16
+            if k == 0: row.append(0x8000 if g.next() & 1 else 0x0000)
+            elif k == 1: row.append(bf16(g.next() & 1, 0, g.next() % 128))
+            else: row.append(bf16(g.next() & 1, 1 + (g.next() % 140), g.next() % 128))
+        rows.append(row)
+    return [b for row in rows for b in row]
+
+GAP_ROWS = 32
+gap = make_gap_bits(COLS)
+exps = [binary_exponent(b, "BFloat16") for b in gap if value(b, "BFloat16")[1] != 0]
+assert max(exps) - min(exps) > 120
+out.append(f"pub const GAP_ROWS: usize = {GAP_ROWS};")
+out.append(arr("BFLOAT16_GAP_BITS", "u16", gap))
+d, s = q_rowscaled(gap, "BFloat16", GAP_ROWS, COLS, 29524, 19683)
+out.append(arr("BFLOAT16_GAP_RS19_DATA", "i16", d))
+out.append(arr("BFLOAT16_GAP_RS19_SCALES", "u64", s))
+d, s = q_rowscaled(gap, "BFloat16", GAP_ROWS, COLS, 121, 1)
+out.append(arr("BFLOAT16_GAP_TQ5_DATA", "i8", d))
+out.append(arr("BFLOAT16_GAP_TQ5_SCALES", "u64", s))
 print("\n".join(out))

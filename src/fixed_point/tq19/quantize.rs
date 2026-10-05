@@ -14,6 +14,32 @@ fn half_up(num: i128, den: i128) -> i128 {
     (2 * num + den) / (2 * den)
 }
 
+/// Mantissas are below `2^MANTISSA_BITS` (11 for binary16, 8 for bfloat16).
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+const MANTISSA_BITS: i32 = 11;
+
+/// `m * 2^e > mm * 2^me` for non-zero mantissas below `2^MANTISSA_BITS`.
+///
+/// From an exponent gap of `MANTISSA_BITS` the larger exponent is the larger
+/// value whatever the mantissas are (`m * 2^gap >= 2^11 > mm`), so a mantissa
+/// is only ever shifted by less than that. Shifting by the gap itself left
+/// 128 bits from a gap of a little over 100, which bfloat16 rows reach
+/// (0.6.5).
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[inline]
+fn greater(m: u64, e: i32, mm: u64, me: i32) -> bool {
+    let gap = e - me;
+    if gap >= MANTISSA_BITS {
+        true
+    } else if gap <= -MANTISSA_BITS {
+        false
+    } else if gap >= 0 {
+        (m << gap) > mm
+    } else {
+        m > (mm << -gap)
+    }
+}
+
 /// The largest magnitude in a row as `(m, e)`, value `m * 2^e`; `None` for an
 /// all-zero row, `Err(())` for a non-finite pattern.
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
@@ -27,9 +53,7 @@ fn row_max(w: &WeightBits, base: usize) -> Result<Option<(u64, i32)>, ()> {
         mx = Some(match mx {
             None => (m, e),
             Some((mm, me)) => {
-                // compare m * 2^e with mm * 2^me
-                let (a, b) = if e >= me { ((m as i128) << (e - me), mm as i128) } else { (m as i128, (mm as i128) << (me - e)) };
-                if a > b { (m, e) } else { (mm, me) }
+                if greater(m, e, mm, me) { (m, e) } else { (mm, me) }
             }
         });
     }
@@ -47,6 +71,9 @@ fn row_code(m: u64, e: i32, mm: u64, me: i32, levels: i128) -> i128 {
     if d <= -64 {
         return 0;
     }
+    // (mm, me) is the row maximum, so m * 2^d <= mm < 2^11 and a non-negative
+    // d is below 11: the numerator below is under 2^37.
+    assert!(d < MANTISSA_BITS, "row_code: element above the row maximum");
     let (num, den) = if d >= 0 { ((m as i128) * levels * (1i128 << d), mm as i128) } else { ((m as i128) * levels, (mm as i128) << (-d)) };
     half_up(num, den).min(levels)
 }
