@@ -47,6 +47,9 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε), ε a storage value |
 | `rms_norm_factor_eps_wide(&x, eps_q64)` | the same with ε in Q64.64, added at the compute tier (0.6.4) |
 | `silu(x)` | x/(1+e⁻ˣ) |
+| `sigmoid_mul(x, gate)`, `sigmoid_mul_slice`, `sigmoid_mul_in_place` | `x * sigmoid(gate)`: the sigmoid at the wide tier, the product exact, one rounding; cannot fail (0.6.7) |
+| `entropy(&weights)` | `-Σ w ln w` in nats, terms at the wide tier, the sum rounded once; `Err(DomainError)` for a negative weight (0.6.7) |
+| `dot_many_into`, `softmax_mix_flat_into`, `softmax_mix_flat_values_into` | `dot_many` and the flat mixes writing into caller-provided slices: the same values, no result allocated (0.6.7) |
 | `quadratic_form(&v, &m)` | vᵀMv with ONE rounding: exact triple products at 3·FRAC_BITS, nearest with ties toward +∞; the correctly rounded scalar, always inside `Interval::quadratic_form` (0.6.1) |
 | `try_quadratic_form(&v, &m)` | the same, `Err(TierOverflow)` instead of a panic where the result leaves storage |
 

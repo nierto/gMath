@@ -572,6 +572,96 @@ pub fn tq19_matvec_q2f_batch_par(
 
 /// Row-parallel batch TQ1.9 matvec with tiled accumulation.
 ///
+/// A caller-provided batch output, flat and batch-major: element
+/// `b * rows + r` is row `r` of the result for batch vector `b`. Row-parallel
+/// kernels write one row's results for every batch vector from one task, so
+/// the positions written by different tasks interleave; this hands them out
+/// without a lock.
+pub(crate) struct BatchOut<'a, T> {
+    ptr: *mut T,
+    rows: usize,
+    len: usize,
+    _slice: std::marker::PhantomData<&'a mut [T]>,
+}
+
+// SAFETY: the writer only stores `T` values at positions of an exclusively
+// borrowed slice; `write`'s contract keeps the positions disjoint.
+unsafe impl<T: Send> Send for BatchOut<'_, T> {}
+unsafe impl<T: Send> Sync for BatchOut<'_, T> {}
+
+impl<'a, T: Copy> BatchOut<'a, T> {
+    /// Panics unless `out.len() == batch_len * rows`.
+    pub(crate) fn new(out: &'a mut [T], rows: usize, batch_len: usize, what: &str) -> Self {
+        assert_eq!(out.len(), batch_len * rows, "{what}: out length is not batch.len() * rows");
+        BatchOut { ptr: out.as_mut_ptr(), rows, len: out.len(), _slice: std::marker::PhantomData }
+    }
+
+    /// Store the result for batch vector `b`, row `r`.
+    ///
+    /// # Safety
+    /// No two calls that can run concurrently may name the same `(b, r)`.
+    #[inline(always)]
+    pub(crate) unsafe fn write(&self, b: usize, r: usize, value: T) {
+        let i = b * self.rows + r;
+        assert!(r < self.rows && i < self.len, "BatchOut: position out of range");
+        // SAFETY: `i` is in bounds of the borrowed slice; the caller keeps
+        // concurrent positions distinct.
+        unsafe { self.ptr.add(i).write(value) }
+    }
+}
+
+/// [`tq19_matvec_batch_par`] writing into a caller-provided buffer, flat and
+/// batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`.
+/// The same values; no result vector is allocated.
+///
+/// # Panics
+/// Panics if `out.len() != batch.len() * rows`.
+pub(crate) fn tq19_matvec_batch_par_into(
+    data: &[i16],
+    rows: usize,
+    cols: usize,
+    batch: &[&[BinaryStorage]],
+    out: &mut [BinaryStorage],
+) {
+    let batch_size = batch.len();
+    assert_eq!(out.len(), batch_size * rows, "tq19_matvec_batch_par_into: out length is not batch.len() * rows");
+    if !unchecked_sum_fits(cols) {
+        for (x, o) in batch.iter().zip(out.chunks_exact_mut(rows.max(1))) {
+            o.copy_from_slice(&tq19_matvec_par(data, rows, cols, &x[..cols]));
+        }
+        return;
+    }
+    let scale = compute_scale();
+    let sink = BatchOut::new(out, rows, batch_size, "tq19_matvec_batch_par_into");
+    (0..rows).into_par_iter().for_each_init(
+        || vec![compute_zero(); batch_size],
+        |accs, row| {
+            let row_start = row * cols;
+            accs.iter_mut().for_each(|a| *a = compute_zero());
+
+            let mut tile_start = 0;
+            while tile_start < cols {
+                let tile_end = (tile_start + BATCH_TILE).min(cols);
+                let tile_weights = &data[row_start + tile_start..row_start + tile_end];
+
+                for b in 0..batch_size {
+                    let tile_acts = &batch[b][tile_start..tile_end];
+                    for i in 0..tile_weights.len() {
+                        accs[b] = accs[b] + widen_weight(tile_weights[i]) * widen_activation(tile_acts[i]);
+                    }
+                }
+
+                tile_start = tile_end;
+            }
+
+            for (b, acc) in accs.iter().enumerate() {
+                // SAFETY: this task is the only one writing row `row`.
+                unsafe { sink.write(b, row, narrow_to_storage(*acc / scale)) };
+            }
+        },
+    );
+}
+
 /// Parallelizes across rows via rayon. Each row uses tiled accumulation:
 /// processes BATCH_TILE elements across all batch vectors before advancing,
 /// keeping weight tile + activation tiles in L1 cache together.

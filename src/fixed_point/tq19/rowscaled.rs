@@ -179,6 +179,29 @@ impl RowScaledTQ19 {
             .collect()
     }
 
+    /// [`matvec_batch_par`](Self::matvec_batch_par) writing into a
+    /// caller-provided buffer, flat and batch-major: `out[b * rows + r]` is
+    /// row `r` of the result for `batch[b]`. The same values; no result
+    /// vector is allocated.
+    ///
+    /// # Panics
+    /// Panics on an activation length mismatch or if
+    /// `out.len() != batch.len() * rows`.
+    pub fn matvec_batch_par_into(&self, batch: &[&[BinaryStorage]], out: &mut [BinaryStorage]) {
+        for (i, v) in batch.iter().enumerate() {
+            assert_eq!(v.len(), self.cols, "RowScaledTQ19::matvec_batch_par_into: activation[{i}] length mismatch");
+        }
+        let sink = ops::BatchOut::new(out, self.rows, batch.len(), "RowScaledTQ19::matvec_batch_par_into");
+        (0..self.rows).into_par_iter().for_each(|r| {
+            let row = &self.data[r * self.cols..(r + 1) * self.cols];
+            let s = self.scales_q32[r];
+            for (b, x) in batch.iter().enumerate() {
+                // SAFETY: this task is the only one writing row `r`.
+                unsafe { sink.write(b, r, Self::scale_row(ops::tq19_dot(row, x), s)) };
+            }
+        });
+    }
+
     /// Row-parallel batch matvec (row weights stay in cache across the batch).
     pub fn matvec_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>> {
         for (i, v) in batch.iter().enumerate() {

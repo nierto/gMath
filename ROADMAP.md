@@ -436,6 +436,19 @@ uses the exponents alone from a gap of 11 bits and never shifts further.
 The exact-rational reference set gained a 32-row wide-gap matrix; nothing
 else changed.
 
+### v0.6.7: Gate functions at the wide tier, caller buffers
+
+**Release 2026-10-05.** Additions requested downstream, none changing an
+existing result. `g_math::wide` gains sigmoid, softplus and silu at Q64.64
+(measured 3, 9 and 79 units; the nearest value after one narrowing to 40 or
+20 bits on every tested input), a correctly rounded square root at any
+target precision, full-width `mul_div`, and exact decimal ratios. `fused`
+gains `sigmoid_mul` and `entropy` (0 units from mpmath on every build) and
+buffer-writing forms of `dot_many` and the flat softmax mixes. The five
+ternary matrix types gain `matvec_batch_par_into`. Held for the
+width-as-type line, where a second fixed-point format exists to carry them:
+recurrence arithmetic on a 64-bit state with 40 fractional bits.
+
 ### v0.6.4: Wide tier, exact literal parser, compute-tier state, loud operators
 
 **Release 2026-09-25.** A float-free downstream consumer (realtime Q22.10) reported four places it had
@@ -736,6 +749,34 @@ tooling (e.g. compact-profile analytics over embedded-written data) sound
 rather than accidental.
 
 ## Future: High Priority
+
+### Open defect: `exp` on the compact profile is one unit off for large results
+
+**Found 2026-10-05, not fixed.** On the compact profile (Q32.32) `exp` and
+`try_exp` return a value one storage unit from the nearest on about 1 input
+in 100 when the result is large: 18 of 1,500 random arguments with `|x|` up
+to 21, against mpmath. For `|x| < 2` it is the nearest value on 1,500 of
+1,500. Realtime is not affected (Q22.10 and Q16.16: 1,500 of 1,500 nearest,
+large arguments included).
+
+Cause: the compact compute tier is Q64.64, 32 bits above storage, and the
+Q64.64 engine's error is relative to the result (about 5 units of `2^-64`
+times `e^x`). A result near `2^29` leaves no margin. The canonical evaluator
+calls the same engine through the same rounding, so it is expected to behave
+the same; that path was not measured. The existing gates use small
+arguments, which is why they pass.
+
+To do, as one change that moves results (so its own release, not folded into
+an additive one):
+
+- Measure every profile at the top of its range, and the functions built on
+  `exp` (`sinh`, `cosh`, `tanh`, `pow`), on both the imperative and the
+  canonical path.
+- Compute large results with enough headroom (the next wider engine, or a
+  split of the argument that keeps the error absolute).
+- Extend the reference gates so every transcendental is tested across its
+  whole output range on every profile and split, not only near zero.
+
 
 ### Complete the imperative (non-routed) layer for every domain
 

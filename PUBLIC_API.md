@@ -308,8 +308,15 @@ Modules: g_math::fixed_point::imperative::fused
 | `softmax_mix` | fn | Fused softmax + weighted value mix, entirely at compute tier: |
 | `softmax_mix_values` | fn | [`softmax_mix`] without the observer weights: only the mixed output. |
 | `softmax_mix_flat` | fn | [`softmax_mix`] over one contiguous value buffer: row `j` is `values_flat[j * dim..(j + 1) * dim]`. |
+| `softmax_mix_flat_into` | fn | [`softmax_mix_flat`] writing into caller-provided slices: the mix into `out` and the observer weights into `weights`. |
+| `softmax_mix_flat_values_into` | fn | [`softmax_mix_flat_into`] without the observer weights. |
 | `softmax_mix_flat_values` | fn | [`softmax_mix_flat`] without the observer weights. |
+| `sigmoid_mul` | fn | `x * sigmoid(gate)`: the sigmoid at the wide tier, the product exact, one rounding to storage (nearest, ties toward +infinity). |
+| `sigmoid_mul_slice` | fn | [`sigmoid_mul`] element by element: `out[i] = x[i] * sigmoid(gate[i])`. |
+| `sigmoid_mul_in_place` | fn | [`sigmoid_mul`] in place: `x[i] *= sigmoid(gate[i])`. |
+| `entropy` | fn | Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the wide tier and the sum rounded to storage once. |
 | `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::dot` round. |
+| `dot_many_into` | fn | [`dot_many`] writing into a caller-provided slice: `out[k]` is the dot of the query with key `k`. |
 | `rms_norm` | fn | RMS normalisation with a learned scale: `out[i] = x[i] * weight[i] / sqrt(mean(x^2) + eps)`, each element rounded once (`eps` in Q64.64). |
 | `rms_norm_in_place` | fn | [`rms_norm`] in place. |
 
@@ -1112,7 +1119,7 @@ Modules: g_math::tq19, g_math::tq19::bits, g_math::tq19::quantize _(feature: inf
 | `tq19_matvec_par` | fn | Row-parallel TQ1.9 matvec. |
 | `tq19_matvec_q2f_par` | fn | Row-parallel wide-output TQ1.9 matvec: 2·FRAC_BITS precision, one rounding. |
 | `tq19_matvec_q2f_batch_par` | fn | Row-parallel wide-output batch TQ1.9 matvec with tiled accumulation. |
-| `tq19_matvec_batch_par` | fn | Row-parallel batch TQ1.9 matvec with tiled accumulation. |
+| `tq19_matvec_batch_par` | fn | Parallelizes across rows via rayon. |
 | `NUM_PLANES` | const | Number of balanced-ternary digit planes in a TQ1.9 value. |
 | `POW3` | const | Powers of three, 3^0 .. |
 | `SPARSE_DENSITY_PERCENT` | const | Density below which a plane is stored sparse (CSR) instead of dense packed. |
@@ -1149,6 +1156,7 @@ Row-major TQ1.9 weight matrix.
 | `matvec_fp` | Convenience: matvec returning `FixedPoint` values. |
 | `matvec_par` | Row-parallel matvec. |
 | `matvec_batch_par` | Row-parallel batch matvec. |
+| `matvec_batch_par_into` | [`matvec_batch_par`](Self::matvec_batch_par) writing into a caller-provided buffer, flat and batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`. |
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS fractional precision with exactly one rounding. |
 | `matvec_q2f_par` | Row-parallel wide-output matvec. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
@@ -1178,6 +1186,7 @@ A TQ1.9 weight matrix decomposed into 10 balanced-ternary trit planes.
 | `matvec_par` | Row-parallel matvec (rayon). |
 | `matvec_batch` | Batch matvec: same weights applied to multiple activation vectors. |
 | `matvec_batch_par` | Row-parallel batch matvec: rows in parallel, reconstruction amortized across the batch within each row. |
+| `matvec_batch_par_into` | [`matvec_batch_par`](Self::matvec_batch_par) writing into a caller-provided buffer, flat and batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`. |
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding. |
 | `matvec_q2f_par` | Row-parallel wide-output matvec. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
@@ -1200,6 +1209,7 @@ A TQ1.9 weight matrix in hybrid 12-bit + sparse-correction form.
 | `matvec_par` | Row-parallel matvec (rayon). |
 | `matvec_batch` | Batch matvec: each row reconstructed once, dotted per batch vector. |
 | `matvec_batch_par` | Row-parallel batch matvec. |
+| `matvec_batch_par_into` | [`matvec_batch_par`](Self::matvec_batch_par) writing into a caller-provided buffer, flat and batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`. |
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding. |
 | `matvec_q2f_par` | Row-parallel wide-output matvec. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
@@ -1221,6 +1231,7 @@ TQ1.9 matrix with one quantization scale per row.
 | `matvec_q2f` | Wide-output row-scaled matvec: each row at 2·FRAC_BITS precision. |
 | `matvec_q2f_par` | Row-parallel wide-output matvec. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
+| `matvec_batch_par_into` | [`matvec_batch_par`](Self::matvec_batch_par) writing into a caller-provided buffer, flat and batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`. |
 | `matvec_batch_par` | Row-parallel batch matvec (row weights stay in cache across the batch). |
 
 ### RowScaledTQ5
@@ -1238,6 +1249,7 @@ A row-major matrix of five-trit codes with a per-row scale.
 | `matvec` | Matvec: `out[r] = floor(sum(code * x) * s_r / 2^32)`. |
 | `matvec_par` | Row-parallel [`matvec`](Self::matvec): the same results. |
 | `matvec_batch_par` | Batched matvec. |
+| `matvec_batch_par_into` | [`matvec_batch_par`](Self::matvec_batch_par) writing into a caller-provided buffer, flat and batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`. |
 | `matvec_q2f` | Wide-output matvec at `2 * FRAC_BITS` fractional bits: `floor(sum(code * x) * s_r / 2^(32 - FRAC_BITS))`, one rounding. |
 | `matvec_q2f_par` | Row-parallel [`matvec_q2f`](Self::matvec_q2f): the same results. |
 | `write_to` | Serialize: `rows (u32) \| cols (u32) \| codes (i8 each) \| scales (u64 each)`, little-endian. |
@@ -1299,6 +1311,16 @@ Modules: g_math::wide
 | `cos_q64` | fn | `cos(x)` for an angle `x` in radians, Q64.64. |
 | `sincos_q64` | fn | `(sin(x), cos(x))` with one shared range reduction. |
 | `try_from_str` | fn | Parse a decimal literal to a raw `i128` with `frac_bits` fractional bits. |
+| `sigmoid_q64` | fn | `1 / (1 + e^-x)` for `x` in Q64.64, in `[0, 2^64]`. |
+| `softplus_q64` | fn | `ln(1 + e^x)` for `x` in Q64.64. |
+| `silu_q64` | fn | `x * sigmoid(x)` for `x` in Q64.64: [`sigmoid_q64`] times `x`, the product rounded once to nearest. |
+| `sqrt_q64` | fn | `sqrt(x)` for `x` in Q64.64, correctly rounded: the nearest Q64.64 value to the exact root (an exact root is returned as is). |
+| `sqrt_q64_to` | fn | `sqrt(x)` for `x` in Q64.64, correctly rounded to `frac_bits` fractional bits (`frac_bits <= 64`): the nearest value at that precision to the exact root, in one rounding. |
+| `narrow_q64` | fn | A Q64.64 value rounded to `frac_bits` fractional bits (`frac_bits <= 64`), nearest with ties toward +infinity: the one narrowing after a wide-tier computation. |
+| `mul_div_floor` | fn | `floor(a * b / d)` with the product formed exactly in 256 bits. |
+| `mul_div_nearest` | fn | `a * b / d` rounded to the nearest integer, ties toward +infinity, with the product formed exactly in 256 bits. |
+| `mul_div_floor_u128` | fn | `floor(a * b / d)` for unsigned operands, the product formed exactly. |
+| `try_ratio_from_str` | fn | Parse a decimal literal to the exact fraction it denotes, in lowest terms: `(numerator, denominator)` with `denominator > 0`. |
 
 ## Serialization
 

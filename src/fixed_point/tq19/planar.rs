@@ -551,6 +551,36 @@ impl PlanarTQ19 {
         transpose(results_by_row, batch.len())
     }
 
+    /// [`matvec_batch_par`](Self::matvec_batch_par) writing into a
+    /// caller-provided buffer, flat and batch-major: `out[b * rows + r]` is
+    /// row `r` of the result for `batch[b]`. The same values; no result
+    /// vector is allocated.
+    ///
+    /// # Panics
+    /// Panics on an activation length mismatch or if
+    /// `out.len() != batch.len() * rows`.
+    pub fn matvec_batch_par_into(&self, batch: &[&[BinaryStorage]], out: &mut [BinaryStorage]) {
+        for (i, v) in batch.iter().enumerate() {
+            assert_eq!(
+                v.len(),
+                self.cols,
+                "PlanarTQ19::matvec_batch_par_into: activation[{i}] length mismatch"
+            );
+        }
+        let sink = super::ops::BatchOut::new(out, self.rows, batch.len(), "PlanarTQ19::matvec_batch_par_into");
+        (0..self.rows).into_par_iter().for_each_init(
+            || vec![0i16; self.buf_len()],
+            |buf, row| {
+                self.reconstruct_row_into(row, buf);
+                let w = &buf[..self.cols];
+                for (b, acts) in batch.iter().enumerate() {
+                    // SAFETY: this task is the only one writing row `row`.
+                    unsafe { sink.write(b, row, tq19_dot(w, acts)) };
+                }
+            },
+        );
+    }
+
     // ========================================================================
     // Wide-output (q2f) variants — see TQ19Matrix::matvec_q2f for the contract
     // ========================================================================
