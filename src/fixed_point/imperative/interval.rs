@@ -61,8 +61,6 @@ use crate::fixed_point::universal::fasc::stack_evaluator::{
 #[cfg(table_format = "q16_16")]
 use crate::fixed_point::frac_config;
 #[cfg(table_format = "q64_64")]
-use crate::fixed_point::i256::mul_i128_to_i256;
-#[cfg(table_format = "q64_64")]
 use crate::fixed_point::I256;
 #[cfg(table_format = "q128_128")]
 use crate::fixed_point::I512;
@@ -102,36 +100,7 @@ fn compute_zero() -> ComputeStorage {
 /// `mul_i128_to_i256` is sign-correct by itself.
 #[inline]
 pub(crate) fn exact_product(a: BinaryStorage, b: BinaryStorage) -> ComputeStorage {
-    #[cfg(table_format = "q16_16")]
-    {
-        (a as i64) * (b as i64)
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        (a as i128) * (b as i128)
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        mul_i128_to_i256(a, b)
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        let a_neg = a.is_negative();
-        let b_neg = b.is_negative();
-        let abs_a = if a_neg { -a } else { a };
-        let abs_b = if b_neg { -b } else { b };
-        let product = abs_a.mul_to_i512(abs_b);
-        if a_neg != b_neg { -product } else { product }
-    }
-    #[cfg(table_format = "q256_256")]
-    {
-        let a_neg = a.is_negative();
-        let b_neg = b.is_negative();
-        let abs_a = if a_neg { -a } else { a };
-        let abs_b = if b_neg { -b } else { b };
-        let product = abs_a.mul_to_i1024(abs_b);
-        if a_neg != b_neg { -product } else { product }
-    }
+    crate::fixed_point::width::Storage::mul_wide(a, b)
 }
 
 /// Directed quotient of two storage values: `(floor(a/b), ceil(a/b))` at the

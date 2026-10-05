@@ -66,7 +66,8 @@ include!("../../../../generated_tables/ln_q512_512_tables.rs");
 /// Find the position of the most significant bit (0-indexed from LSB)
 /// Returns None for x == 0
 #[inline(always)]
-fn find_msb_position_i128(x: i128) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i128(x: i128) -> Option<u32> {
     if x <= 0 {
         return None;
     }
@@ -74,9 +75,9 @@ fn find_msb_position_i128(x: i128) -> Option<u32> {
     Some(127 - (x as u128).leading_zeros())
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn find_msb_position_i256(x: &I256) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i256(x: &I256) -> Option<u32> {
     if *x <= I256::zero() {
         return None;
     }
@@ -90,9 +91,9 @@ fn find_msb_position_i256(x: &I256) -> Option<u32> {
     None
 }
 
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 #[inline(always)]
-fn find_msb_position_i512(x: &I512) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i512(x: &I512) -> Option<u32> {
     if *x <= I512::zero() {
         return None;
     }
@@ -106,9 +107,9 @@ fn find_msb_position_i512(x: &I512) -> Option<u32> {
     None
 }
 
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 #[inline(always)]
-fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
     if *x <= I1024::zero() {
         return None;
     }
@@ -134,6 +135,7 @@ fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 /// **TABLES**: Uses Q64.64 tables directly (no conversion)
 /// **DOMAIN**: x > 0 (returns i128::MIN for x <= 0)
 #[inline(always)]
+#[allow(dead_code)]
 pub fn ln_q64_64_native(x: i128) -> i128 {
     use crate::fixed_point::multiply_binary_i128;
     use crate::fixed_point::i256::I256;
@@ -263,7 +265,7 @@ pub fn ln_q64_64_native(x: i128) -> i128 {
 /// 8. Taylor series on final remainder (|r4| < 2^-40, only 5 terms needed)
 /// 9. Add all terms
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
+#[allow(dead_code)]
 pub fn ln_q128_128_native(x: I256) -> I256 {
     // Handle domain error: ln(x) undefined for x <= 0
     if x <= I256::zero() {
@@ -410,7 +412,7 @@ pub fn ln_q128_128_native(x: I256) -> I256 {
 /// 6. Taylor series on final remainder
 /// 7. Add all: ln(1 + k/1024) + ln(1 + j/2^20) + ln(1 + m/2^30) + taylor(remainder)
 #[inline(always)]
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+#[allow(dead_code)]
 pub fn ln_q256_256_native(x: I512) -> I512 {
     use crate::fixed_point::I1024;
 
@@ -571,7 +573,7 @@ pub fn ln_q256_256_native(x: I512) -> I512 {
 /// 5. Add all terms
 ///
 /// **NOTE**: Uses power series for division: 1/(1+x) ≈ 1 - x + x² - x³ + ...
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
+#[allow(dead_code)]
 pub fn ln_q512_512_native(x: I1024) -> I1024 {
     use crate::fixed_point::I2048;
 
@@ -713,9 +715,9 @@ pub fn ln_q512_512_native(x: I1024) -> I1024 {
 // HELPER MULTIPLICATION FUNCTIONS
 // ============================================================================
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
     // Handle signed multiplication: mul_to_i512 does UNSIGNED multiplication,
     // so we need to handle signs explicitly (same pattern as multiply_i512_q256_256)
     let a_negative = a < I256::zero();
@@ -739,8 +741,8 @@ fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
 /// Divide two I256 values in Q128.128 format
 /// Result = (a / b) in Q128.128
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
-fn divide_i256_q128_128(a: I256, b: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn divide_i256_q128_128(a: I256, b: I256) -> I256 {
     if b == I256::zero() {
         return I256::zero();
     }
@@ -758,9 +760,9 @@ fn divide_i256_q128_128(a: I256, b: I256) -> I256 {
 /// **INPUT**: r is the scaled remainder after 4-stage table lookup, |r| < 2^-40
 /// **OUTPUT**: ln(1+r) in Q128.128 format
 /// **PRECISION**: For |r| < 2^-40, 5 terms for 128+ bits (r^5 < 2^-200)
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn taylor_series_ln_i256_q128_128(r: &I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn taylor_series_ln_i256_q128_128(r: &I256) -> I256 {
     if *r == I256::zero() {
         return I256::zero();
     }
@@ -793,9 +795,9 @@ fn taylor_series_ln_i256_q128_128(r: &I256) -> I256 {
     result
 }
 
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 #[inline(always)]
-fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
     use crate::fixed_point::I1024;
 
     // Handle signed multiplication: mul_to_i1024 does unsigned multiplication,
@@ -821,8 +823,8 @@ fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
 /// Divide two I512 values in Q256.256 format
 /// Result = (a / b) in Q256.256
 #[inline(always)]
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-fn divide_i512_q256_256(a: I512, b: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn divide_i512_q256_256(a: I512, b: I512) -> I512 {
     use crate::fixed_point::I1024;
 
     if b == I512::zero() {
@@ -842,7 +844,7 @@ fn divide_i512_q256_256(a: I512, b: I512) -> I512 {
 /// Multiply two I1024 values in Q512.512 format
 /// **CRITICAL**: mul_to_i2048 does UNSIGNED multiplication, so we handle signs explicitly.
 #[inline(always)]
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
+#[allow(dead_code)]
 pub(crate) fn multiply_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
     use crate::fixed_point::I2048;
 
@@ -868,8 +870,8 @@ pub(crate) fn multiply_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
 /// Divide two I1024 values in Q512.512 format
 /// Result = (a / b) in Q512.512
 #[inline(always)]
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
-fn divide_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn divide_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
     use crate::fixed_point::I2048;
     use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
 
@@ -901,9 +903,9 @@ fn divide_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
 /// **NOTE**: The table LN_TAYLOR_COEFFICIENTS_TIER_5 stores UNSIGNED coefficients (1/n).
 /// Signs are applied here: subtract even terms, add odd terms.
 /// This is necessary because I512 multiplication is unsigned.
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 #[inline(always)]
-fn taylor_series_ln_i512_q256_256(r: &I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn taylor_series_ln_i512_q256_256(r: &I512) -> I512 {
     use crate::fixed_point::I1024;
 
     if *r == I512::zero() {
@@ -957,9 +959,9 @@ fn taylor_series_ln_i512_q256_256(r: &I512) -> I512 {
 /// **NOTE**: The table LN_TAYLOR_COEFFICIENTS_TIER_6 stores UNSIGNED coefficients (1/n).
 /// Signs are applied here: subtract even terms, add odd terms.
 /// This is necessary because I1024 multiplication is unsigned.
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 #[inline(always)]
-fn taylor_series_ln_i1024_q512_512(r: &I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn taylor_series_ln_i1024_q512_512(r: &I1024) -> I1024 {
     use crate::fixed_point::I2048;
 
     if *r == I1024::zero() {

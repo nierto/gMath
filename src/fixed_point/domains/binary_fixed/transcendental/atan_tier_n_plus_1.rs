@@ -49,32 +49,32 @@ use atan_trig_consts::*;
 
 #[cfg(table_format = "q64_64")]
 pub fn atan_binary_i128(x: i128) -> i128 {
-    atan_q64_64(x)
+    atan_q64_64_native(x)
 }
 
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute atan at Q128.128 natively
-    atan_q128_128(x)
+    atan_q128_128_native(x)
 }
 
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i512(x: I512) -> I512 {
     // Compute at Q256.256 for Q64.64/Q32.32 profile
     let x_q256 = x;
-    atan_q256_256(x_q256)
+    atan_q256_256_native(x_q256)
 }
 
 /// atan2(y, x): full quadrant arctangent in Q64.64
 #[cfg(table_format = "q64_64")]
 pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
-    atan2_q64_64(y, x)
+    atan2_q64_64_native(y, x)
 }
 
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
     // Tier N+1: compute atan2 at Q128.128 natively
-    atan2_q128_128_for_embedded(y, x)
+    atan2_q128_128_compute(y, x)
 }
 
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
@@ -82,12 +82,12 @@ pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
     // Downscale to Q128.128, compute, upscale back
     let y_q128 = (y >> 128).as_i256();
     let x_q128 = (x >> 128).as_i256();
-    let result_q128 = atan2_q128_128_for_embedded(y_q128, x_q128);
+    let result_q128 = atan2_q128_128_compute(y_q128, x_q128);
     I512::from_i256(result_q128) << 128
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_q64_64(x: i128) -> i128 {
+#[allow(dead_code)]
+pub(crate) fn atan_q64_64_native(x: i128) -> i128 {
     let one_q64: i128 = 1i128 << 64;
 
     if x == 0 {
@@ -98,7 +98,7 @@ fn atan_q64_64(x: i128) -> i128 {
     let abs_x = if is_neg { -x } else { x };
 
     // Reduction 1: if |x| > 1, use atan(x) = π/2 - atan(1/x)
-    // NOTE: Call atan_q64_64 recursively (not atan_core directly) so that
+    // NOTE: Call atan_q64_64_native recursively (not atan_core directly) so that
     // inv_x gets the tan(π/8) reduction too — ensures convergence for all inputs.
     if abs_x > one_q64 {
         // Compute 1/x in Q64.64
@@ -107,7 +107,7 @@ fn atan_q64_64(x: i128) -> i128 {
             let x_wide = I256::from_i128(abs_x);
             (one_wide / x_wide).as_i128()
         };
-        let atan_inv = atan_q64_64(inv_x);
+        let atan_inv = atan_q64_64_native(inv_x);
         let result = PI_HALF_Q64 - atan_inv;
         return if is_neg { -result } else { result };
     }
@@ -132,8 +132,8 @@ fn atan_q64_64(x: i128) -> i128 {
 
 /// Core Taylor series for atan(x), |x| <= tan(π/8) ≈ 0.414
 /// atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_core_q64_64(x: i128) -> i128 {
+#[allow(dead_code)]
+pub(crate) fn atan_core_q64_64(x: i128) -> i128 {
     let x_sq = {
         let x_wide = I256::from_i128(x);
         ((x_wide * x_wide) >> 64).as_i128()
@@ -178,8 +178,8 @@ fn atan_core_q64_64(x: i128) -> i128 {
 }
 
 /// atan2(y, x) in Q64.64: handles all quadrants
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn atan2_q64_64(y: i128, x: i128) -> i128 {
+#[allow(dead_code)]
+pub(crate) fn atan2_q64_64_native(y: i128, x: i128) -> i128 {
     if x == 0 && y == 0 {
         return 0; // undefined, return 0
     }
@@ -191,7 +191,7 @@ fn atan2_q64_64(y: i128, x: i128) -> i128 {
             let x_wide = I256::from_i128(x);
             (y_wide / x_wide).as_i128()
         };
-        return atan_q64_64(ratio);
+        return atan_q64_64_native(ratio);
     }
 
     if x < 0 && y >= 0 {
@@ -201,7 +201,7 @@ fn atan2_q64_64(y: i128, x: i128) -> i128 {
             let x_wide = I256::from_i128(x);
             (y_wide / x_wide).as_i128()
         };
-        return atan_q64_64(ratio) + PI_Q64;
+        return atan_q64_64_native(ratio) + PI_Q64;
     }
 
     if x < 0 && y < 0 {
@@ -211,7 +211,7 @@ fn atan2_q64_64(y: i128, x: i128) -> i128 {
             let x_wide = I256::from_i128(x);
             (y_wide / x_wide).as_i128()
         };
-        return atan_q64_64(ratio) - PI_Q64;
+        return atan_q64_64_native(ratio) - PI_Q64;
     }
 
     // x == 0
@@ -229,27 +229,27 @@ fn atan2_q64_64(y: i128, x: i128) -> i128 {
 #[cfg(table_format = "q128_128")]
 pub fn atan_binary_i128(x: i128) -> i128 {
     let x_q128 = upscale_q64_to_q128(x);
-    downscale_q128_to_q64(atan_q128_128(x_q128))
+    downscale_q128_to_q64(atan_q128_128_native(x_q128))
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn atan_binary_i256(x: I256) -> I256 {
     // UGOD Tier N+1: Q128.128 storage → compute at Q256.256 → downscale
     let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan_q256_256_for_balanced(x_q256))
+    downscale_q256_to_q128(atan_q256_256_compute(x_q256))
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn atan_binary_i512(x: I512) -> I512 {
     // Direct Q256.256 computation (compute tier for balanced profile)
-    atan_q256_256_for_balanced(x)
+    atan_q256_256_compute(x)
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
     let y_q128 = upscale_q64_to_q128(y);
     let x_q128 = upscale_q64_to_q128(x);
-    downscale_q128_to_q64(atan2_q128_128(y_q128, x_q128))
+    downscale_q128_to_q64(atan2_q128_128_native(y_q128, x_q128))
 }
 
 #[cfg(table_format = "q128_128")]
@@ -257,17 +257,17 @@ pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
     // UGOD Tier N+1: Q128.128 storage → compute at Q256.256 → downscale
     let y_q256 = upscale_q128_to_q256(y);
     let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan2_q256_256_for_balanced(y_q256, x_q256))
+    downscale_q256_to_q128(atan2_q256_256_compute(y_q256, x_q256))
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
     // Direct Q256.256 computation (compute tier for balanced profile)
-    atan2_q256_256_for_balanced(y, x)
+    atan2_q256_256_compute(y, x)
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_q128_128(x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn atan_q128_128_native(x: I256) -> I256 {
     let one_q128 = I256::from_i128(1) << 128;
 
     if x == I256::zero() {
@@ -283,7 +283,7 @@ fn atan_q128_128(x: I256) -> I256 {
             let x_wide = I512::from_i256(abs_x);
             (one_wide / x_wide).as_i256()
         };
-        let atan_inv = atan_q128_128(inv_x);
+        let atan_inv = atan_q128_128_native(inv_x);
         let result = I256::from_words(PI_HALF_Q128) - atan_inv;
         return if is_neg { I256::zero() - result } else { result };
     }
@@ -306,8 +306,8 @@ fn atan_q128_128(x: I256) -> I256 {
     if is_neg { I256::zero() - result } else { result }
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_core_q128_128(x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn atan_core_q128_128(x: I256) -> I256 {
     let x_sq = {
         let x_wide = I512::from_i256(x);
         ((x_wide * x_wide) >> 128).as_i256()
@@ -347,8 +347,8 @@ fn atan_core_q128_128(x: I256) -> I256 {
     ((x_wide * poly_wide) >> 128).as_i256()
 }
 
-#[cfg(table_format = "q128_128")]
-fn atan2_q128_128(y: I256, x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn atan2_q128_128_native(y: I256, x: I256) -> I256 {
     let zero = I256::zero();
     if x == zero && y == zero {
         return zero;
@@ -360,7 +360,7 @@ fn atan2_q128_128(y: I256, x: I256) -> I256 {
             let x_wide = I512::from_i256(x);
             (y_wide / x_wide).as_i256()
         };
-        return atan_q128_128(ratio);
+        return atan_q128_128_native(ratio);
     }
 
     let pi = I256::from_words(PI_Q128);
@@ -370,7 +370,7 @@ fn atan2_q128_128(y: I256, x: I256) -> I256 {
             let x_wide = I512::from_i256(x);
             (y_wide / x_wide).as_i256()
         };
-        return atan_q128_128(ratio) + pi;
+        return atan_q128_128_native(ratio) + pi;
     }
 
     if x < zero && y < zero {
@@ -379,7 +379,7 @@ fn atan2_q128_128(y: I256, x: I256) -> I256 {
             let x_wide = I512::from_i256(x);
             (y_wide / x_wide).as_i256()
         };
-        return atan_q128_128(ratio) - pi;
+        return atan_q128_128_native(ratio) - pi;
     }
 
     let pi_half = I256::from_words(PI_HALF_Q128);
@@ -393,41 +393,41 @@ fn atan2_q128_128(y: I256, x: I256) -> I256 {
 #[cfg(table_format = "q256_256")]
 pub fn atan_binary_i128(x: i128) -> i128 {
     let x_q256 = upscale_q64_to_q256(x);
-    downscale_q256_to_q64(atan_q256_256(x_q256))
+    downscale_q256_to_q64(atan_q256_256_native(x_q256))
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn atan_binary_i256(x: I256) -> I256 {
     let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan_q256_256(x_q256))
+    downscale_q256_to_q128(atan_q256_256_native(x_q256))
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn atan_binary_i512(x: I512) -> I512 {
-    atan_q256_256(x)
+    atan_q256_256_native(x)
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
     let y_q256 = upscale_q64_to_q256(y);
     let x_q256 = upscale_q64_to_q256(x);
-    downscale_q256_to_q64(atan2_q256_256(y_q256, x_q256))
+    downscale_q256_to_q64(atan2_q256_256_native(y_q256, x_q256))
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
     let y_q256 = upscale_q128_to_q256(y);
     let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan2_q256_256(y_q256, x_q256))
+    downscale_q256_to_q128(atan2_q256_256_native(y_q256, x_q256))
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
-    atan2_q256_256(y, x)
+    atan2_q256_256_native(y, x)
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_q256_256(x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn atan_q256_256_native(x: I512) -> I512 {
     let one_q256 = I512::from_i128(1) << 256;
 
     if x == I512::zero() {
@@ -444,7 +444,7 @@ fn atan_q256_256(x: I512) -> I512 {
             (one_wide / x_wide).as_i512()
         };
         // Recurse through full reduction (inv_x < 1, so won't re-enter this branch)
-        let atan_inv = atan_q256_256(inv_x);
+        let atan_inv = atan_q256_256_native(inv_x);
         let result = I512::from_words(PI_HALF_Q256) - atan_inv;
         return if is_neg { I512::zero() - result } else { result };
     }
@@ -467,8 +467,8 @@ fn atan_q256_256(x: I512) -> I512 {
     if is_neg { I512::zero() - result } else { result }
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_core_q256_256(x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn atan_core_q256_256(x: I512) -> I512 {
     let x_sq = {
         let x_wide = I1024::from_i512(x);
         ((x_wide * x_wide) >> 256).as_i512()
@@ -508,8 +508,8 @@ fn atan_core_q256_256(x: I512) -> I512 {
     ((x_wide * poly_wide) >> 256).as_i512()
 }
 
-#[cfg(table_format = "q256_256")]
-fn atan2_q256_256(y: I512, x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn atan2_q256_256_native(y: I512, x: I512) -> I512 {
     let zero = I512::zero();
     if x == zero && y == zero {
         return zero;
@@ -521,7 +521,7 @@ fn atan2_q256_256(y: I512, x: I512) -> I512 {
             let x_wide = I1024::from_i512(x);
             (y_wide / x_wide).as_i512()
         };
-        return atan_q256_256(ratio);
+        return atan_q256_256_native(ratio);
     }
 
     let pi = I512::from_words(PI_Q256);
@@ -531,7 +531,7 @@ fn atan2_q256_256(y: I512, x: I512) -> I512 {
             let x_wide = I1024::from_i512(x);
             (y_wide / x_wide).as_i512()
         };
-        return atan_q256_256(ratio) + pi;
+        return atan_q256_256_native(ratio) + pi;
     }
 
     if x < zero && y < zero {
@@ -540,7 +540,7 @@ fn atan2_q256_256(y: I512, x: I512) -> I512 {
             let x_wide = I1024::from_i512(x);
             (y_wide / x_wide).as_i512()
         };
-        return atan_q256_256(ratio) - pi;
+        return atan_q256_256_native(ratio) - pi;
     }
 
     let pi_half = I512::from_words(PI_HALF_Q256);
@@ -553,16 +553,16 @@ fn atan2_q256_256(y: I512, x: I512) -> I512 {
 
 #[cfg(table_format = "q256_256")]
 pub fn atan_binary_i1024(x: I1024) -> I1024 {
-    atan_q512_512(x)
+    atan_q512_512_native(x)
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn atan2_binary_i1024(y: I1024, x: I1024) -> I1024 {
-    atan2_q512_512(y, x)
+    atan2_q512_512_native(y, x)
 }
 
-#[cfg(table_format = "q256_256")]
-fn atan_q512_512(x: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn atan_q512_512_native(x: I1024) -> I1024 {
     let one_q512 = I1024::from_i128(1) << 512;
 
     let is_neg = (x.words[15] & 0x8000_0000_0000_0000) != 0;
@@ -577,7 +577,7 @@ fn atan_q512_512(x: I1024) -> I1024 {
             i2048_div(one_wide, x_wide).as_i1024()
         };
         // Recurse through full reduction (inv_x < 1, so won't re-enter this branch)
-        let atan_inv = atan_q512_512(inv_x);
+        let atan_inv = atan_q512_512_native(inv_x);
         let result = I1024::from_words(PI_HALF_Q512) - atan_inv;
         return if is_neg { I1024::zero() - result } else { result };
     }
@@ -603,11 +603,11 @@ fn atan_q512_512(x: I1024) -> I1024 {
     if is_neg { I1024::zero() - result } else { result }
 }
 
-#[cfg(table_format = "q256_256")]
-fn atan_core_q512_512(x: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn atan_core_q512_512(x: I1024) -> I1024 {
     use super::ln_tier_n_plus_1::multiply_i1024_q512_512;
 
-    // x is abs(input) from atan_q512_512, should be positive,
+    // x is abs(input) from atan_q512_512_native, should be positive,
     // but use signed multiply for safety (Horner intermediate results can be negative)
     let x_sq = multiply_i1024_q512_512(x, x);
 
@@ -641,8 +641,8 @@ fn atan_core_q512_512(x: I1024) -> I1024 {
     multiply_i1024_q512_512(x, poly)
 }
 
-#[cfg(table_format = "q256_256")]
-fn atan2_q512_512(y: I1024, x: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn atan2_q512_512_native(y: I1024, x: I1024) -> I1024 {
     let zero = I1024::zero();
     if x == zero && y == zero {
         return zero;
@@ -655,7 +655,7 @@ fn atan2_q512_512(y: I1024, x: I1024) -> I1024 {
             let x_wide = I2048::from_i1024(x);
             i2048_div(y_wide, x_wide).as_i1024()
         };
-        return atan_q512_512(ratio);
+        return atan_q512_512_native(ratio);
     }
 
     let pi = I1024::from_words(PI_Q512);
@@ -669,7 +669,7 @@ fn atan2_q512_512(y: I1024, x: I1024) -> I1024 {
             let x_wide = I2048::from_i1024(x);
             i2048_div(y_wide, x_wide).as_i1024()
         };
-        return atan_q512_512(ratio) + pi;
+        return atan_q512_512_native(ratio) + pi;
     }
 
     if x_is_neg && y_is_neg {
@@ -679,7 +679,7 @@ fn atan2_q512_512(y: I1024, x: I1024) -> I1024 {
             let x_wide = I2048::from_i1024(x);
             i2048_div(y_wide, x_wide).as_i1024()
         };
-        return atan_q512_512(ratio) - pi;
+        return atan_q512_512_native(ratio) - pi;
     }
 
     let pi_half = I1024::from_words(PI_HALF_Q512);
@@ -705,25 +705,25 @@ pub fn atan2_compute_tier_i1024(y: I1024, x: I1024) -> I1024 {
 /// Compute atan at compute tier for balanced profile (Q256.256 on I512)
 #[cfg(table_format = "q128_128")]
 pub fn atan_compute_tier_i512(x: I512) -> I512 {
-    atan_q256_256_for_balanced(x)
+    atan_q256_256_compute(x)
 }
 
 /// Compute atan2 at compute tier for balanced profile
 #[cfg(table_format = "q128_128")]
 pub fn atan2_compute_tier_i512(y: I512, x: I512) -> I512 {
-    atan2_q256_256_for_balanced(y, x)
+    atan2_q256_256_compute(y, x)
 }
 
 /// Compute atan at compute tier for embedded/performance profile (Q128.128 on I256)
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_compute_tier_i256(x: I256) -> I256 {
-    atan_q128_128_for_embedded(x)
+    atan_q128_128_compute(x)
 }
 
 /// Compute atan2 at compute tier for embedded/performance profile
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_compute_tier_i256(y: I256, x: I256) -> I256 {
-    atan2_q128_128_for_embedded(y, x)
+    atan2_q128_128_compute(y, x)
 }
 
 // ============================================================================
@@ -732,8 +732,8 @@ pub fn atan2_compute_tier_i256(y: I256, x: I256) -> I256 {
 
 // Q128.128 atan available under q64_64 for tier N+1
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_q128_128_for_embedded(x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn atan_q128_128_compute(x: I256) -> I256 {
     let one_q128 = I256::from_i128(1) << 128;
 
     let is_neg = x < I256::zero();
@@ -745,7 +745,7 @@ fn atan_q128_128_for_embedded(x: I256) -> I256 {
             let x_wide = I512::from_i256(abs_x);
             (one_wide / x_wide).as_i256()
         };
-        let atan_inv = atan_q128_128_for_embedded(inv_x);
+        let atan_inv = atan_q128_128_compute(inv_x);
         let result = I256::from_words(PI_HALF_Q128) - atan_inv;
         return if is_neg { I256::zero() - result } else { result };
     }
@@ -759,17 +759,17 @@ fn atan_q128_128_for_embedded(x: I256) -> I256 {
             let den_wide = I512::from_i256(den);
             (num_wide / den_wide).as_i256()
         };
-        let atan_reduced = atan_core_q128_128_impl(reduced);
+        let atan_reduced = atan_core_q128_128_compute(reduced);
         let result = I256::from_words(PI_QUARTER_Q128) + atan_reduced;
         return if is_neg { I256::zero() - result } else { result };
     }
 
-    let result = atan_core_q128_128_impl(abs_x);
+    let result = atan_core_q128_128_compute(abs_x);
     if is_neg { I256::zero() - result } else { result }
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn atan_core_q128_128_impl(x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn atan_core_q128_128_compute(x: I256) -> I256 {
     let x_sq = {
         let x_wide = I512::from_i256(x);
         ((x_wide * x_wide) >> 128).as_i256()
@@ -806,8 +806,8 @@ fn atan_core_q128_128_impl(x: I256) -> I256 {
     ((x_wide * poly_wide) >> 128).as_i256()
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn atan2_q128_128_for_embedded(y: I256, x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn atan2_q128_128_compute(y: I256, x: I256) -> I256 {
     let zero = I256::zero();
     if x == zero && y == zero { return zero; }
     if x > zero {
@@ -816,7 +816,7 @@ fn atan2_q128_128_for_embedded(y: I256, x: I256) -> I256 {
             let x_wide = I512::from_i256(x);
             (y_wide / x_wide).as_i256()
         };
-        return atan_q128_128_for_embedded(ratio);
+        return atan_q128_128_compute(ratio);
     }
     let pi = I256::from_words(PI_Q128);
     if x < zero && y >= zero {
@@ -825,7 +825,7 @@ fn atan2_q128_128_for_embedded(y: I256, x: I256) -> I256 {
             let x_wide = I512::from_i256(x);
             (y_wide / x_wide).as_i256()
         };
-        return atan_q128_128_for_embedded(ratio) + pi;
+        return atan_q128_128_compute(ratio) + pi;
     }
     if x < zero && y < zero {
         let ratio = {
@@ -833,7 +833,7 @@ fn atan2_q128_128_for_embedded(y: I256, x: I256) -> I256 {
             let x_wide = I512::from_i256(x);
             (y_wide / x_wide).as_i256()
         };
-        return atan_q128_128_for_embedded(ratio) - pi;
+        return atan_q128_128_compute(ratio) - pi;
     }
     let pi_half = I256::from_words(PI_HALF_Q128);
     if y > zero { pi_half } else { zero - pi_half }
@@ -841,8 +841,8 @@ fn atan2_q128_128_for_embedded(y: I256, x: I256) -> I256 {
 
 // Q256.256 atan available under q128_128 for tier N+1
 
-#[cfg(table_format = "q128_128")]
-fn atan_q256_256_for_balanced(x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn atan_q256_256_compute(x: I512) -> I512 {
     let one_q256 = I512::from_i128(1) << 256;
 
     if x == I512::zero() { return I512::zero(); }
@@ -857,7 +857,7 @@ fn atan_q256_256_for_balanced(x: I512) -> I512 {
             (one_wide / x_wide).as_i512()
         };
         // Recurse through full reduction (inv_x < 1, so won't re-enter this branch)
-        let atan_inv = atan_q256_256_for_balanced(inv_x);
+        let atan_inv = atan_q256_256_compute(inv_x);
         let result = I512::from_words(PI_HALF_Q256) - atan_inv;
         return if is_neg { I512::zero() - result } else { result };
     }
@@ -871,17 +871,17 @@ fn atan_q256_256_for_balanced(x: I512) -> I512 {
             let den_wide = I1024::from_i512(den);
             (num_wide / den_wide).as_i512()
         };
-        let atan_reduced = atan_core_q256_256_impl(reduced);
+        let atan_reduced = atan_core_q256_256_compute(reduced);
         let result = I512::from_words(PI_QUARTER_Q256) + atan_reduced;
         return if is_neg { I512::zero() - result } else { result };
     }
 
-    let result = atan_core_q256_256_impl(abs_x);
+    let result = atan_core_q256_256_compute(abs_x);
     if is_neg { I512::zero() - result } else { result }
 }
 
-#[cfg(table_format = "q128_128")]
-fn atan_core_q256_256_impl(x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn atan_core_q256_256_compute(x: I512) -> I512 {
     let x_sq = {
         let x_wide = I1024::from_i512(x);
         ((x_wide * x_wide) >> 256).as_i512()
@@ -918,8 +918,8 @@ fn atan_core_q256_256_impl(x: I512) -> I512 {
     ((x_wide * poly_wide) >> 256).as_i512()
 }
 
-#[cfg(table_format = "q128_128")]
-fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn atan2_q256_256_compute(y: I512, x: I512) -> I512 {
     let zero = I512::zero();
     if x == zero && y == zero { return zero; }
     if x > zero {
@@ -928,7 +928,7 @@ fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
             let x_wide = I1024::from_i512(x);
             (y_wide / x_wide).as_i512()
         };
-        return atan_q256_256_for_balanced(ratio);
+        return atan_q256_256_compute(ratio);
     }
     let pi = I512::from_words(PI_Q256);
     if x < zero && y >= zero {
@@ -937,7 +937,7 @@ fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
             let x_wide = I1024::from_i512(x);
             (y_wide / x_wide).as_i512()
         };
-        return atan_q256_256_for_balanced(ratio) + pi;
+        return atan_q256_256_compute(ratio) + pi;
     }
     if x < zero && y < zero {
         let ratio = {
@@ -945,7 +945,7 @@ fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
             let x_wide = I1024::from_i512(x);
             (y_wide / x_wide).as_i512()
         };
-        return atan_q256_256_for_balanced(ratio) - pi;
+        return atan_q256_256_compute(ratio) - pi;
     }
     let pi_half = I512::from_words(PI_HALF_Q256);
     if y > zero { pi_half } else { zero - pi_half }
@@ -960,7 +960,7 @@ fn atan2_q256_256_for_balanced(y: I512, x: I512) -> I512 {
 pub fn atan_binary_i64(x: i64) -> i64 {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
     let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = atan_q64_64(x_q64);
+    let result_q64 = atan_q64_64_native(x_q64);
     downscale_q64_to_q32(result_q64)
 }
 
@@ -969,7 +969,7 @@ pub fn atan_binary_i64(x: i64) -> i64 {
 pub fn atan_compute_tier_i64(x: i64) -> i64 {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
     let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = atan_q64_64(x_q64);
+    let result_q64 = atan_q64_64_native(x_q64);
     downscale_q64_to_q32(result_q64)
 }
 
@@ -979,18 +979,18 @@ pub fn atan2_compute_tier_i64(y: i64, x: i64) -> i64 {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
     let y_q64 = upscale_q32_to_q64(y);
     let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = atan2_q64_64(y_q64, x_q64);
+    let result_q64 = atan2_q64_64_native(y_q64, x_q64);
     downscale_q64_to_q32(result_q64)
 }
 
 /// atan() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan_binary_i128(x: i128) -> i128 {
-    atan_q64_64(x)
+    atan_q64_64_native(x)
 }
 
 /// atan2() for Q32.32 profile: i128 is the compute tier (Q64.64)
 #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
 pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
-    atan2_q64_64(y, x)
+    atan2_q64_64_native(y, x)
 }

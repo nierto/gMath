@@ -42,7 +42,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::domains::binary_fixed::transcendental::{
     exp_tier_n_plus_1::exp_q64_64_native,
     ln_tier_n_plus_1::ln_q64_64_native,
-    sin_cos_tier_n_plus_1::{self as sincos, sincos_q64_64},
+    sin_cos_tier_n_plus_1::{self as sincos, sincos_q64_64_native},
 };
 use crate::fixed_point::imperative::decimal_literal;
 
@@ -83,13 +83,13 @@ pub fn ln_q64(x: i128) -> Option<i128> {
 /// `sin(x)` for an angle `x` in radians, Q64.64.
 #[inline]
 pub fn sin_q64(x: i128) -> i128 {
-    sincos_q64_64(x).0
+    sincos_q64_64_native(x).0
 }
 
 /// `cos(x)` for an angle `x` in radians, Q64.64.
 #[inline]
 pub fn cos_q64(x: i128) -> i128 {
-    sincos_q64_64(x).1
+    sincos_q64_64_native(x).1
 }
 
 /// `(sin(x), cos(x))` with one shared range reduction.
@@ -97,7 +97,7 @@ pub fn cos_q64(x: i128) -> i128 {
 /// Equal to `(sin_q64(x), cos_q64(x))`.
 #[inline]
 pub fn sincos_q64(x: i128) -> (i128, i128) {
-    sincos_q64_64(x)
+    sincos_q64_64_native(x)
 }
 
 /// Parse a decimal literal to a raw `i128` with `frac_bits` fractional bits.

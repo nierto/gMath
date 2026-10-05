@@ -54,6 +54,39 @@ impl I2048 {
         }
     }
 
+    /// True for a negative value (sign bit of the top word).
+    #[inline(always)]
+    pub fn is_negative(self) -> bool {
+        (self.words[31] as i64) < 0
+    }
+
+    /// Checked subtraction - returns None on signed overflow.
+    #[inline(always)]
+    pub fn checked_sub(self, rhs: I2048) -> Option<I2048> {
+        let result = self - rhs;
+
+        // Overflow: operands differ in sign and the result's sign differs from self.
+        let self_negative = (self.words[31] as i64) < 0;
+        let rhs_negative = (rhs.words[31] as i64) < 0;
+        let result_negative = (result.words[31] as i64) < 0;
+
+        if (self_negative != rhs_negative) && (self_negative != result_negative) {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Checked negation - returns None for the most negative value.
+    #[inline(always)]
+    pub fn checked_neg(self) -> Option<I2048> {
+        if self == I2048::min_value() {
+            None
+        } else {
+            Some(-self)
+        }
+    }
+
     /// Maximum value for signed 2048-bit integer (2^2047 - 1)
     #[inline(always)]
     pub const fn max_value() -> Self {

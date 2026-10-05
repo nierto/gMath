@@ -25,6 +25,10 @@ pub mod compute_tier;
 /// for quantities outside the storage and compute tiers. Every profile.
 pub mod wide;
 
+/// Width traits: the integer words and, per storage word, its compute word
+/// and exact accumulators.
+pub(crate) mod width;
+
 /// Build-time Q-format configuration (FRAC_BITS and derived constants).
 #[doc(hidden)] pub mod frac_config;
 

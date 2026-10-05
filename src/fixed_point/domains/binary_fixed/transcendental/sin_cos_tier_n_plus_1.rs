@@ -68,20 +68,20 @@ pub fn cos_binary_i128(x: i128) -> i128 {
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute sin at Q128.128 natively
-    sin_q128_128_for_embedded(x)
+    sin_q128_128(x)
 }
 
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_binary_i256(x: I256) -> I256 {
     // Tier N+1: compute cos at Q128.128 natively
-    cos_q128_128_for_embedded(x)
+    cos_q128_128(x)
 }
 
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_binary_i512(x: I512) -> I512 {
     // Downscale to Q128.128, compute, upscale back to Q256.256
     let x_q128 = (x >> 128).as_i256();
-    let result_q128 = sin_q128_128_for_embedded(x_q128);
+    let result_q128 = sin_q128_128(x_q128);
     I512::from_i256(result_q128) << 128
 }
 
@@ -89,25 +89,26 @@ pub fn sin_binary_i512(x: I512) -> I512 {
 pub fn cos_binary_i512(x: I512) -> I512 {
     // Downscale to Q128.128, compute, upscale back to Q256.256
     let x_q128 = (x >> 128).as_i256();
-    let result_q128 = cos_q128_128_for_embedded(x_q128);
+    let result_q128 = cos_q128_128(x_q128);
     I512::from_i256(result_q128) << 128
 }
 
 /// Core Q64.64 sin/cos implementation
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn sin_q64_64(x: i128) -> i128 {
-    let (sin_val, _cos_val) = sincos_q64_64(x);
+#[allow(dead_code)]
+pub(crate) fn sin_q64_64(x: i128) -> i128 {
+    let (sin_val, _cos_val) = sincos_q64_64_native(x);
     sin_val
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn cos_q64_64(x: i128) -> i128 {
-    let (_sin_val, cos_val) = sincos_q64_64(x);
+#[allow(dead_code)]
+pub(crate) fn cos_q64_64(x: i128) -> i128 {
+    let (_sin_val, cos_val) = sincos_q64_64_native(x);
     cos_val
 }
 
 /// Compute both sin and cos simultaneously (shared range reduction)
-pub(crate) fn sincos_q64_64(x: i128) -> (i128, i128) {
+#[allow(dead_code)]
+pub(crate) fn sincos_q64_64_native(x: i128) -> (i128, i128) {
     let one_q64: i128 = 1i128 << 64;
 
     // Handle x = 0
@@ -160,7 +161,8 @@ pub(crate) fn sincos_q64_64(x: i128) -> (i128, i128) {
 
 /// Taylor series for sin(r) in Q64.64 format
 /// sin(r) = Σ (-1)^k * r^(2k+1) / (2k+1)!
-fn taylor_sin_q64_64(r: i128) -> i128 {
+#[allow(dead_code)]
+pub(crate) fn taylor_sin_q64_64(r: i128) -> i128 {
     // Horner form: sin(r) = r * (1 - r²/6 * (1 - r²/20 * (1 - r²/42 * ...)))
     let r_sq = {
         let r_wide = I256::from_i128(r);
@@ -208,7 +210,8 @@ fn taylor_sin_q64_64(r: i128) -> i128 {
 
 /// Taylor series for cos(r) in Q64.64 format
 /// cos(r) = Σ (-1)^k * r^(2k) / (2k)!
-fn taylor_cos_q64_64(r: i128) -> i128 {
+#[allow(dead_code)]
+pub(crate) fn taylor_cos_q64_64(r: i128) -> i128 {
     let r_sq = {
         let r_wide = I256::from_i128(r);
         ((r_wide * r_wide) >> 64).as_i128()
@@ -257,42 +260,42 @@ pub fn cos_binary_i128(x: i128) -> i128 {
 pub fn sin_binary_i256(x: I256) -> I256 {
     // UGOD Tier N+1: Q128.128 storage → compute at Q256.256 → downscale
     let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(sin_q256_256_for_balanced(x_q256))
+    downscale_q256_to_q128(sin_q256_256(x_q256))
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn cos_binary_i256(x: I256) -> I256 {
     // UGOD Tier N+1: Q128.128 storage → compute at Q256.256 → downscale
     let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(cos_q256_256_for_balanced(x_q256))
+    downscale_q256_to_q128(cos_q256_256(x_q256))
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn sin_binary_i512(x: I512) -> I512 {
     // Direct Q256.256 computation (compute tier for balanced profile)
-    sin_q256_256_for_balanced(x)
+    sin_q256_256(x)
 }
 
 #[cfg(table_format = "q128_128")]
 pub fn cos_binary_i512(x: I512) -> I512 {
     // Direct Q256.256 computation (compute tier for balanced profile)
-    cos_q256_256_for_balanced(x)
+    cos_q256_256(x)
 }
 
-#[cfg(table_format = "q128_128")]
-fn sin_q128_128(x: I256) -> I256 {
-    let (sin_val, _) = sincos_q128_128(x);
+#[allow(dead_code)]
+pub(crate) fn sin_q128_128(x: I256) -> I256 {
+    let (sin_val, _) = sincos_q128_128_native(x);
     sin_val
 }
 
-#[cfg(table_format = "q128_128")]
-fn cos_q128_128(x: I256) -> I256 {
-    let (_, cos_val) = sincos_q128_128(x);
+#[allow(dead_code)]
+pub(crate) fn cos_q128_128(x: I256) -> I256 {
+    let (_, cos_val) = sincos_q128_128_native(x);
     cos_val
 }
 
-#[cfg(table_format = "q128_128")]
-fn sincos_q128_128(x: I256) -> (I256, I256) {
+#[allow(dead_code)]
+pub(crate) fn sincos_q128_128_native(x: I256) -> (I256, I256) {
     let one_q128 = I256::from_i128(1) << 128;
 
     if x == I256::zero() {
@@ -336,8 +339,8 @@ fn sincos_q128_128(x: I256) -> (I256, I256) {
     }
 }
 
-#[cfg(table_format = "q128_128")]
-fn taylor_sin_q128_128(r: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn taylor_sin_q128_128(r: I256) -> I256 {
     let r_sq = {
         let r_wide = I512::from_i256(r);
         ((r_wide * r_wide) >> 128).as_i256()
@@ -368,8 +371,8 @@ fn taylor_sin_q128_128(r: I256) -> I256 {
     ((r_wide * poly_wide) >> 128).as_i256()
 }
 
-#[cfg(table_format = "q128_128")]
-fn taylor_cos_q128_128(r: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn taylor_cos_q128_128(r: I256) -> I256 {
     let r_sq = {
         let r_wide = I512::from_i256(r);
         ((r_wide * r_wide) >> 128).as_i256()
@@ -434,20 +437,20 @@ pub fn cos_binary_i512(x: I512) -> I512 {
     cos_q256_256(x)
 }
 
-#[cfg(table_format = "q256_256")]
-fn sin_q256_256(x: I512) -> I512 {
-    let (sin_val, _) = sincos_q256_256(x);
+#[allow(dead_code)]
+pub(crate) fn sin_q256_256(x: I512) -> I512 {
+    let (sin_val, _) = sincos_q256_256_native(x);
     sin_val
 }
 
-#[cfg(table_format = "q256_256")]
-fn cos_q256_256(x: I512) -> I512 {
-    let (_, cos_val) = sincos_q256_256(x);
+#[allow(dead_code)]
+pub(crate) fn cos_q256_256(x: I512) -> I512 {
+    let (_, cos_val) = sincos_q256_256_native(x);
     cos_val
 }
 
-#[cfg(table_format = "q256_256")]
-fn sincos_q256_256(x: I512) -> (I512, I512) {
+#[allow(dead_code)]
+pub(crate) fn sincos_q256_256_native(x: I512) -> (I512, I512) {
     let one_q256 = I512::from_i128(1) << 256;
 
     if x == I512::zero() {
@@ -491,8 +494,8 @@ fn sincos_q256_256(x: I512) -> (I512, I512) {
     }
 }
 
-#[cfg(table_format = "q256_256")]
-fn taylor_sin_q256_256(r: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn taylor_sin_q256_256(r: I512) -> I512 {
     let r_sq = {
         let r_wide = I1024::from_i512(r);
         ((r_wide * r_wide) >> 256).as_i512()
@@ -523,8 +526,8 @@ fn taylor_sin_q256_256(r: I512) -> I512 {
     ((r_wide * poly_wide) >> 256).as_i512()
 }
 
-#[cfg(table_format = "q256_256")]
-fn taylor_cos_q256_256(r: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn taylor_cos_q256_256(r: I512) -> I512 {
     let r_sq = {
         let r_wide = I1024::from_i512(r);
         ((r_wide * r_wide) >> 256).as_i512()
@@ -588,16 +591,16 @@ pub fn pi_half_i1024() -> I1024 {
 
 #[cfg(table_format = "q256_256")]
 pub fn sin_binary_i1024(x: I1024) -> I1024 {
-    sincos_q512_512(x).0
+    sincos_q512_512_native(x).0
 }
 
 #[cfg(table_format = "q256_256")]
 pub fn cos_binary_i1024(x: I1024) -> I1024 {
-    sincos_q512_512(x).1
+    sincos_q512_512_native(x).1
 }
 
-#[cfg(table_format = "q256_256")]
-fn sincos_q512_512(x: I1024) -> (I1024, I1024) {
+#[allow(dead_code)]
+pub(crate) fn sincos_q512_512_native(x: I1024) -> (I1024, I1024) {
     use super::ln_tier_n_plus_1::multiply_i1024_q512_512;
 
     let one_q512 = I1024::from_i128(1) << 512;
@@ -636,8 +639,8 @@ fn sincos_q512_512(x: I1024) -> (I1024, I1024) {
     }
 }
 
-#[cfg(table_format = "q256_256")]
-fn taylor_sin_q512_512(r: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn taylor_sin_q512_512(r: I1024) -> I1024 {
     use super::ln_tier_n_plus_1::multiply_i1024_q512_512;
 
     // SIGNED multiply: r can be negative, r_sq must be positive
@@ -660,8 +663,8 @@ fn taylor_sin_q512_512(r: I1024) -> I1024 {
     multiply_i1024_q512_512(r, poly)
 }
 
-#[cfg(table_format = "q256_256")]
-fn taylor_cos_q512_512(r: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn taylor_cos_q512_512(r: I1024) -> I1024 {
     use super::ln_tier_n_plus_1::multiply_i1024_q512_512;
 
     // SIGNED multiply: r can be negative, r_sq must be positive
@@ -703,44 +706,44 @@ pub fn cos_compute_tier_i1024(x: I1024) -> I1024 {
 /// Compute sin at compute tier for balanced profile (Q256.256 on I512)
 #[cfg(table_format = "q128_128")]
 pub fn sin_compute_tier_i512(x: I512) -> I512 {
-    sin_q256_256_for_balanced(x)
+    sin_q256_256(x)
 }
 
 /// Compute cos at compute tier for balanced profile (Q256.256 on I512)
 #[cfg(table_format = "q128_128")]
 pub fn cos_compute_tier_i512(x: I512) -> I512 {
-    cos_q256_256_for_balanced(x)
+    cos_q256_256(x)
 }
 
 /// Compute sin at compute tier for embedded/performance profile (Q128.128 on I256)
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sin_compute_tier_i256(x: I256) -> I256 {
-    sin_q128_128_for_embedded(x)
+    sin_q128_128(x)
 }
 
 /// Compute cos at compute tier for embedded/performance profile (Q128.128 on I256)
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn cos_compute_tier_i256(x: I256) -> I256 {
-    cos_q128_128_for_embedded(x)
+    cos_q128_128(x)
 }
 
 /// Fused sin+cos at compute tier (single shared range reduction).
 /// Returns (sin, cos): saves one range reduction vs calling sin + cos separately.
 #[cfg(table_format = "q256_256")]
 pub fn sincos_compute_tier_i1024(x: I1024) -> (I1024, I1024) {
-    sincos_q512_512(x)
+    sincos_q512_512_native(x)
 }
 
 /// Fused sin+cos at compute tier for balanced profile (Q256.256 on I512).
 #[cfg(table_format = "q128_128")]
 pub fn sincos_compute_tier_i512(x: I512) -> (I512, I512) {
-    sincos_q256_256_impl(x)
+    sincos_q256_256_native(x)
 }
 
 /// Fused sin+cos at compute tier for embedded profile (Q128.128 on I256).
 #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 pub fn sincos_compute_tier_i256(x: I256) -> (I256, I256) {
-    sincos_q128_128_impl(x)
+    sincos_q128_128_native(x)
 }
 
 // ============================================================================
@@ -749,233 +752,7 @@ pub fn sincos_compute_tier_i256(x: I256) -> (I256, I256) {
 //
 // Q128.128 sin/cos available under q64_64 for tier N+1 computation
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn sin_q128_128_for_embedded(x: I256) -> I256 {
-    sincos_q128_128_impl(x).0
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn cos_q128_128_for_embedded(x: I256) -> I256 {
-    sincos_q128_128_impl(x).1
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn sincos_q128_128_impl(x: I256) -> (I256, I256) {
-    let one_q128 = I256::from_i128(1) << 128;
-
-    if x == I256::zero() {
-        return (I256::zero(), one_q128);
-    }
-
-    // Range reduction: k = round(x * 2/π)
-    let two_over_pi = I256::from_words(TWO_OVER_PI_Q128);
-    let product = {
-        let x_wide = I512::from_i256(x);
-        let twopi_wide = I512::from_i256(two_over_pi);
-        let prod = x_wide * twopi_wide;
-        (prod >> 128).as_i256()
-    };
-
-    let half_q128 = I256::from_i128(1) << 127;
-    let k_i256 = (product + half_q128) >> 128;
-    let k = k_i256.as_i128();
-
-    // Remainder: r = x - k * π/2
-    let pi_half = I256::from_words(PI_HALF_Q128);
-    let k_times_pi_half = {
-        let k_wide = I512::from_i256(I256::from_i128(k));
-        let pi_half_wide = I512::from_i256(pi_half);
-        (k_wide * pi_half_wide).as_i256()
-    };
-    let r = x - k_times_pi_half;
-
-    let sin_r = taylor_sin_q128_128_impl(r);
-    let cos_r = taylor_cos_q128_128_impl(r);
-
-    let quadrant = ((k % 4) + 4) % 4;
-    match quadrant {
-        0 => (sin_r, cos_r),
-        1 => (cos_r, I256::zero() - sin_r),
-        2 => (I256::zero() - sin_r, I256::zero() - cos_r),
-        3 => (I256::zero() - cos_r, sin_r),
-        _ => unreachable!(),
-    }
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn taylor_sin_q128_128_impl(r: I256) -> I256 {
-    let r_sq = {
-        let r_wide = I512::from_i256(r);
-        ((r_wide * r_wide) >> 128).as_i256()
-    };
-
-    let num_terms = 21;
-    let mut result = I256::zero();
-
-    for k in (1..num_terms).rev() {
-        let coeff = I256::from_words(SIN_COEFFS_Q128[k]);
-        let term = {
-            let r_sq_wide = I512::from_i256(r_sq);
-            let result_wide = I512::from_i256(result);
-            ((r_sq_wide * result_wide) >> 128).as_i256()
-        };
-        result = coeff - term;
-    }
-
-    let inner = {
-        let r_sq_wide = I512::from_i256(r_sq);
-        let result_wide = I512::from_i256(result);
-        ((r_sq_wide * result_wide) >> 128).as_i256()
-    };
-    let poly = I256::from_words(SIN_COEFFS_Q128[0]) - inner;
-
-    let r_wide = I512::from_i256(r);
-    let poly_wide = I512::from_i256(poly);
-    ((r_wide * poly_wide) >> 128).as_i256()
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn taylor_cos_q128_128_impl(r: I256) -> I256 {
-    let r_sq = {
-        let r_wide = I512::from_i256(r);
-        ((r_wide * r_wide) >> 128).as_i256()
-    };
-
-    let num_terms = 21;
-    let mut result = I256::zero();
-
-    for k in (1..num_terms).rev() {
-        let coeff = I256::from_words(COS_COEFFS_Q128[k]);
-        let term = {
-            let r_sq_wide = I512::from_i256(r_sq);
-            let result_wide = I512::from_i256(result);
-            ((r_sq_wide * result_wide) >> 128).as_i256()
-        };
-        result = coeff - term;
-    }
-
-    let inner = {
-        let r_sq_wide = I512::from_i256(r_sq);
-        let result_wide = I512::from_i256(result);
-        ((r_sq_wide * result_wide) >> 128).as_i256()
-    };
-    I256::from_words(COS_COEFFS_Q128[0]) - inner
-}
-
 // Q256.256 sin/cos available under q128_128 for tier N+1 computation
-
-#[cfg(table_format = "q128_128")]
-fn sin_q256_256_for_balanced(x: I512) -> I512 {
-    sincos_q256_256_impl(x).0
-}
-
-#[cfg(table_format = "q128_128")]
-fn cos_q256_256_for_balanced(x: I512) -> I512 {
-    sincos_q256_256_impl(x).1
-}
-
-#[cfg(table_format = "q128_128")]
-fn sincos_q256_256_impl(x: I512) -> (I512, I512) {
-    let one_q256 = I512::from_i128(1) << 256;
-
-    if x == I512::zero() {
-        return (I512::zero(), one_q256);
-    }
-
-    // Range reduction: k = round(x * 2/π)
-    let two_over_pi = I512::from_words(TWO_OVER_PI_Q256);
-    let product = {
-        let x_wide = I1024::from_i512(x);
-        let twopi_wide = I1024::from_i512(two_over_pi);
-        let prod = x_wide * twopi_wide;
-        (prod >> 256).as_i512()
-    };
-
-    let half_q256 = I512::from_i128(1) << 255;
-    let k_i512 = (product + half_q256) >> 256;
-    let k = k_i512.as_i256().as_i128();
-
-    // Remainder: r = x - k * π/2
-    let pi_half = I512::from_words(PI_HALF_Q256);
-    let k_times_pi_half = {
-        let k_wide = I1024::from_i512(I512::from_i128(k));
-        let pi_half_wide = I1024::from_i512(pi_half);
-        (k_wide * pi_half_wide).as_i512()
-    };
-    let r = x - k_times_pi_half;
-
-    let sin_r = taylor_sin_q256_256_impl(r);
-    let cos_r = taylor_cos_q256_256_impl(r);
-
-    let quadrant = ((k % 4) + 4) % 4;
-    match quadrant {
-        0 => (sin_r, cos_r),
-        1 => (cos_r, I512::zero() - sin_r),
-        2 => (I512::zero() - sin_r, I512::zero() - cos_r),
-        3 => (I512::zero() - cos_r, sin_r),
-        _ => unreachable!(),
-    }
-}
-
-#[cfg(table_format = "q128_128")]
-fn taylor_sin_q256_256_impl(r: I512) -> I512 {
-    let r_sq = {
-        let r_wide = I1024::from_i512(r);
-        ((r_wide * r_wide) >> 256).as_i512()
-    };
-
-    let num_terms = 41;
-    let mut result = I512::zero();
-
-    for k in (1..num_terms).rev() {
-        let coeff = I512::from_words(SIN_COEFFS_Q256[k]);
-        let term = {
-            let r_sq_wide = I1024::from_i512(r_sq);
-            let result_wide = I1024::from_i512(result);
-            ((r_sq_wide * result_wide) >> 256).as_i512()
-        };
-        result = coeff - term;
-    }
-
-    let inner = {
-        let r_sq_wide = I1024::from_i512(r_sq);
-        let result_wide = I1024::from_i512(result);
-        ((r_sq_wide * result_wide) >> 256).as_i512()
-    };
-    let poly = I512::from_words(SIN_COEFFS_Q256[0]) - inner;
-
-    let r_wide = I1024::from_i512(r);
-    let poly_wide = I1024::from_i512(poly);
-    ((r_wide * poly_wide) >> 256).as_i512()
-}
-
-#[cfg(table_format = "q128_128")]
-fn taylor_cos_q256_256_impl(r: I512) -> I512 {
-    let r_sq = {
-        let r_wide = I1024::from_i512(r);
-        ((r_wide * r_wide) >> 256).as_i512()
-    };
-
-    let num_terms = 41;
-    let mut result = I512::zero();
-
-    for k in (1..num_terms).rev() {
-        let coeff = I512::from_words(COS_COEFFS_Q256[k]);
-        let term = {
-            let r_sq_wide = I1024::from_i512(r_sq);
-            let result_wide = I1024::from_i512(result);
-            ((r_sq_wide * result_wide) >> 256).as_i512()
-        };
-        result = coeff - term;
-    }
-
-    let inner = {
-        let r_sq_wide = I1024::from_i512(r_sq);
-        let result_wide = I1024::from_i512(result);
-        ((r_sq_wide * result_wide) >> 256).as_i512()
-    };
-    I512::from_words(COS_COEFFS_Q256[0]) - inner
-}
 
 // ============================================================================
 // Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
@@ -1022,7 +799,7 @@ pub fn cos_compute_tier_i64(x: i64) -> i64 {
 pub fn sincos_compute_tier_i64(x: i64) -> (i64, i64) {
     use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
     let x_q64 = upscale_q32_to_q64(x);
-    let (sin_val, cos_val) = sincos_q64_64(x_q64);
+    let (sin_val, cos_val) = sincos_q64_64_native(x_q64);
     (downscale_q64_to_q32(sin_val), downscale_q64_to_q32(cos_val))
 }
 

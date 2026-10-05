@@ -23,148 +23,39 @@ use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, Comput
 #[cfg(table_format = "q16_16")]
 use crate::fixed_point::frac_config;
 #[cfg(table_format = "q32_32")]
-use crate::fixed_point::i256::mul_i128_to_i256;
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 use crate::fixed_point::I256;
-#[cfg(any(table_format = "q32_32", table_format = "q64_64"))]
+#[cfg(table_format = "q64_64")]
 use crate::fixed_point::I512;
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
+#[cfg(table_format = "q128_128")]
 use crate::fixed_point::I1024;
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+#[cfg(table_format = "q256_256")]
 use crate::fixed_point::I2048;
 
 // ============================================================================
 // Exact accumulator arithmetic
 // ============================================================================
 
-/// Exact signed integer arithmetic on a fixed-width accumulator.
-///
-/// Products are formed on magnitudes and the sign reapplied, so the wide
-/// types' `Mul` implementations are only ever entered with non-negative
-/// operands (a schoolbook or a truncated unsigned product, both exact there).
-/// Each product first asserts that the operands' bit lengths fit the type,
-/// which is the width budget made loud. Sums are checked: a running sum that
-/// leaves the accumulator is a typed `TierOverflow`, never a wrap.
-pub(crate) trait Wide:
-    Copy + PartialEq + std::ops::Add<Output = Self> + std::ops::Sub<Output = Self> + std::ops::Mul<Output = Self> + std::ops::Neg<Output = Self>
-{
-    const BITS: u32;
-    fn zero() -> Self;
-    fn is_negative(self) -> bool;
-    /// Significant bits of a NON-NEGATIVE value.
-    fn bit_length(self) -> u32;
-    /// Checked signed addition on the accumulator (`None` on overflow).
-    fn checked_add_wide(self, rhs: Self) -> Option<Self>;
-
-    #[inline]
-    fn mul_exact(self, rhs: Self) -> Self {
-        let neg = self.is_negative() != rhs.is_negative();
-        let a = if self.is_negative() { -self } else { self };
-        let b = if rhs.is_negative() { -rhs } else { rhs };
-        assert!(
-            a.bit_length() + b.bit_length() <= Self::BITS - 1,
-            "exact predicate: accumulator width budget violated"
-        );
-        let p = a * b;
-        if neg { -p } else { p }
-    }
-
-    #[inline]
-    fn add_exact(self, rhs: Self) -> Result<Self, OverflowDetected> {
-        self.checked_add_wide(rhs).ok_or(OverflowDetected::TierOverflow)
-    }
-}
-
-#[inline]
-fn words_bit_length(words: &[u64]) -> u32 {
-    for i in (0..words.len()).rev() {
-        if words[i] != 0 {
-            return i as u32 * 64 + (64 - words[i].leading_zeros());
-        }
-    }
-    0
-}
-
-impl Wide for i128 {
-    const BITS: u32 = 128;
-    #[inline] fn zero() -> Self { 0 }
-    #[inline] fn is_negative(self) -> bool { self < 0 }
-    #[inline] fn bit_length(self) -> u32 { 128 - self.leading_zeros() }
-    #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { i128::checked_add(self, rhs) }
-}
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-impl Wide for I256 {
-    const BITS: u32 = 256;
-    #[inline] fn zero() -> Self { I256::zero() }
-    #[inline] fn is_negative(self) -> bool { I256::is_negative(self) }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-    #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { I256::checked_add(self, rhs) }
-}
-
-#[cfg(any(table_format = "q32_32", table_format = "q64_64"))]
-impl Wide for I512 {
-    const BITS: u32 = 512;
-    #[inline] fn zero() -> Self { I512::zero() }
-    #[inline] fn is_negative(self) -> bool { I512::is_negative(self) }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-    #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { I512::checked_add(self, rhs) }
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q128_128"))]
-impl Wide for I1024 {
-    const BITS: u32 = 1024;
-    #[inline] fn zero() -> Self { I1024::zero() }
-    #[inline] fn is_negative(self) -> bool { (self.words[15] as i64) < 0 }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-    #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { I1024::checked_add(self, rhs) }
-}
-
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-impl Wide for I2048 {
-    const BITS: u32 = 2048;
-    #[inline] fn zero() -> Self { I2048::zero() }
-    #[inline] fn is_negative(self) -> bool { (self.words[31] as i64) < 0 }
-    #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-    #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { I2048::checked_add(self, rhs) }
-}
+// The arithmetic lives in `width`: one integer surface over every word, and
+// per storage word the compute word and the accumulators.
+pub(crate) use crate::fixed_point::width::WideInt as Wide;
+use crate::fixed_point::width::Storage;
 
 // Per-profile accumulator selection, from the storage width W:
 //   orient2d 2W+2, orient3d 3W+3, quadratic form 3W-2+2log2(n) -> Orient;
-//   incircle 4W+5, insphere 5W+6 -> Circle.
-// `orient` widens a storage value exactly.
-#[cfg(table_format = "q16_16")]
+//   incircle 4W+5, insphere 5W+6 -> Circle (no such word at W = 512).
+// `orient` and `circle` widen a storage value exactly.
 pub(crate) mod acc {
-    pub type Orient = i128; // W = 32: 66 / 99 bits
-    pub type Circle = super::I256; // 133 / 166 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { v as i128 }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I256::from_i128(v as i128) }
-}
-#[cfg(table_format = "q32_32")]
-pub(crate) mod acc {
-    pub type Orient = super::I256; // W = 64: 130 / 195 bits
-    pub type Circle = super::I512; // 261 / 326 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I256::from_i128(v as i128) }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I512::from_i128(v as i128) }
-}
-#[cfg(table_format = "q64_64")]
-pub(crate) mod acc {
-    pub type Orient = super::I512; // W = 128: 258 / 387 bits
-    pub type Circle = super::I1024; // 517 / 646 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I512::from_i128(v) }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I1024::from_i128(v) }
-}
-#[cfg(table_format = "q128_128")]
-pub(crate) mod acc {
-    pub type Orient = super::I1024; // W = 256: 514 / 771 bits
-    pub type Circle = super::I2048; // 1029 / 1286 bits
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I1024::from_i256(v) }
-    #[inline] pub fn circle(v: super::BinaryStorage) -> Circle { super::I2048::from_i256(v) }
-}
-#[cfg(table_format = "q256_256")]
-pub(crate) mod acc {
-    pub type Orient = super::I2048; // W = 512: 1026 / 1539 bits; circle predicates exceed 2048
-    #[inline] pub fn orient(v: super::BinaryStorage) -> Orient { super::I2048::from_i512(v) }
+    use super::BinaryStorage;
+    use crate::fixed_point::width::Storage;
+    #[cfg(not(table_format = "q256_256"))]
+    use crate::fixed_point::width::CircleStorage;
+
+    pub type Orient = <BinaryStorage as Storage>::Orient;
+    #[cfg(not(table_format = "q256_256"))]
+    pub type Circle = <BinaryStorage as CircleStorage>::Circle;
+    #[inline] pub fn orient(v: BinaryStorage) -> Orient { Storage::orient(v) }
+    #[cfg(not(table_format = "q256_256"))]
+    #[inline] pub fn circle(v: BinaryStorage) -> Circle { CircleStorage::circle(v) }
 }
 
 // ============================================================================
@@ -174,70 +65,15 @@ pub(crate) mod acc {
 /// A storage value sign-extended to the compute width (no shift; exact).
 #[inline]
 pub(crate) fn widen_storage(v: BinaryStorage) -> ComputeStorage {
-    #[cfg(table_format = "q16_16")]
-    {
-        v as i64
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        v as i128
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        crate::fixed_point::I256::from_i128(v)
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        crate::fixed_point::I512::from_i256(v)
-    }
-    #[cfg(table_format = "q256_256")]
-    {
-        crate::fixed_point::I1024::from_i512(v)
-    }
-}
-
-/// Sign of a compute-width value (the compute types do not all expose
-/// `is_negative`; the top word's sign bit is the definition).
-#[inline]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-fn compute_is_negative(v: ComputeStorage) -> bool {
-    (v.words[v.words.len() - 1] as i64) < 0
+    Storage::widen(v)
 }
 
 /// Exact product of two compute-width values on the accumulator (compute
-/// width doubled). The wide `mul_to_*` family is UNSIGNED by convention, so
-/// it is applied to magnitudes and the sign reapplied; the magnitudes'
-/// bit lengths are asserted against the accumulator first (the width budget
-/// made loud, as in [`Wide::mul_exact`]).
+/// width doubled). The magnitudes' bit lengths are asserted against the
+/// accumulator first (the width budget made loud, as in [`Wide::mul_exact`]).
 #[inline]
 pub(crate) fn widen_product(a: ComputeStorage, b: ComputeStorage) -> acc::Orient {
-    #[cfg(table_format = "q16_16")]
-    {
-        (a as i128) * (b as i128)
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        // sign-correct by itself
-        mul_i128_to_i256(a, b)
-    }
-    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-    {
-        let (a_neg, b_neg) = (compute_is_negative(a), compute_is_negative(b));
-        let neg = a_neg != b_neg;
-        let abs_a = if a_neg { -a } else { a };
-        let abs_b = if b_neg { -b } else { b };
-        assert!(
-            words_bit_length(&abs_a.words) + words_bit_length(&abs_b.words) <= acc::Orient::BITS - 1,
-            "exact predicate: accumulator width budget violated"
-        );
-        #[cfg(table_format = "q64_64")]
-        let p = abs_a.mul_to_i512(abs_b);
-        #[cfg(table_format = "q128_128")]
-        let p = abs_a.mul_to_i1024(abs_b);
-        #[cfg(table_format = "q256_256")]
-        let p = abs_a.mul_to_i2048(abs_b);
-        if neg { -p } else { p }
-    }
+    <BinaryStorage as Storage>::widen_product(a, b)
 }
 
 /// Exact `v^T M v` at `3F` fractional bits on the orientation accumulator.

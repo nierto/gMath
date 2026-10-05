@@ -1,8 +1,9 @@
 # Width as a type: one crate, every precision, no build profile
 
-**STATUS: SPECIFICATION, branch `width-types` (2026-10-05). Nothing implemented.**
-Target release: 0.7.0. `main` keeps shipping 0.6.x until this branch passes the
-acceptance gates in section 11.
+**STATUS: IN PROGRESS, branch `width-types`, built on 0.6.5 (c81d3f0).**
+Phase 0 done (0.6.5 published). Phase 1 implemented: see the phase table in
+section 10. Target release: 0.7.0. `main` keeps shipping 0.6.x until this
+branch passes the acceptance gates in section 11.
 
 ## 1. Problem
 
@@ -75,34 +76,69 @@ The fallible surface is unchanged in shape: operators panic on overflow,
 
 ## 4. The width traits
 
-### 4.1 `Storage` (sealed): what a raw word can do
+### 4.1 `WideInt`, `Storage`, `CircleStorage` (sealed): what a word can do
 
-Implemented for `i32, i64, i128, I256, I512` (and internally for the compute
-and accumulator words `I1024, I2048`). It absorbs what is today spread over
-`BinaryStorage` / `ComputeStorage` aliases, the `Wide` trait in
-`imperative/wide_acc.rs`, and the near-uniform method surface of the wide
-integers.
+Three traits in `src/fixed_point/width.rs` (crate-private until phase 2 makes
+the surface public). They absorb what was spread over the `BinaryStorage` /
+`ComputeStorage` aliases, the `Wide` trait in `imperative/wide_acc.rs` and the
+near-uniform method surface of the wide integers.
 
 ```rust
-pub trait Storage: Copy + Eq + Ord + Send + Sync + 'static + sealed::Sealed {
+// every integer word: i32, i64, i128, I256, I512, I1024, I2048
+pub trait WideInt: Copy + Eq + Ord + Send + Sync + 'static
+    + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Neg<Output = Self>
+    + sealed::Sealed
+{
     const BITS: u32;
-    type Compute: Storage;          // i32->i64, i64->i128, i128->I256, I256->I512, I512->I1024
-    type Orient: Storage;           // exact predicate accumulators (wide_acc::acc today)
-    type Circle;                    // () where the width has no circle accumulator
-    fn checked_add(self, o: Self) -> Option<Self>;
-    fn checked_sub(self, o: Self) -> Option<Self>;
-    fn checked_neg(self) -> Option<Self>;
-    fn widen(self) -> Self::Compute;
-    fn mul_exact(self, o: Self) -> Self::Compute;
-    fn narrow(c: Self::Compute) -> Option<Self>;
+    fn zero() -> Self;
+    fn one() -> Self;
+    fn from_i64(v: i64) -> Self;
     fn is_negative(self) -> bool;
     fn bit_length(self) -> u32;
-    // ... the rest of today's Wide surface
+    fn checked_add_wide(self, o: Self) -> Option<Self>;
+    fn checked_sub_wide(self, o: Self) -> Option<Self>;
+    fn checked_neg_wide(self) -> Option<Self>;
+    fn shl_bits(self, n: u32) -> Self;
+    fn shr_bits(self, n: u32) -> Self;
+    fn mul_exact(self, o: Self) -> Self;                       // budget asserted
+    fn add_exact(self, o: Self) -> Result<Self, OverflowDetected>;
+}
+
+// the five words a value can be stored in: i32, i64, i128, I256, I512
+pub trait Storage: WideInt {
+    type Compute: WideInt;   // i32->i64, i64->i128, i128->I256, I256->I512, I512->I1024
+    type Orient: WideInt;    // exact accumulator: i128, I256, I512, I1024, I2048
+    fn widen(self) -> Self::Compute;
+    fn mul_wide(self, o: Self) -> Self::Compute;               // exact product
+    fn narrow(c: Self::Compute) -> Option<Self>;               // checked
+    fn orient(self) -> Self::Orient;
+    fn widen_product(a: Self::Compute, b: Self::Compute) -> Self::Orient;
+}
+
+// the four storage words with a second accumulator (not I512)
+pub trait CircleStorage: Storage {
+    type Circle: WideInt;
+    fn circle(self) -> Self::Circle;
 }
 ```
 
-The wide integer types get one uniform surface as part of this work
-(`Shr<u32>` vs `Shr<usize>` today; `is_negative` missing on I1024/I2048).
+Two deviations from the first draft of this section, both forced by the
+type chain ending at `I2048`:
+
+- The integer surface (`WideInt`) is separate from `Storage`. `I1024` and
+  `I2048` are compute and accumulator words only; they have no wider word, so
+  they cannot implement a trait with `type Compute`.
+- The circle accumulator is its own trait instead of `type Circle = ()` on the
+  512-bit word. A bound `S: CircleStorage` states the requirement and the
+  compiler names it when it is not met.
+
+`Wide` in `wide_acc.rs` is now a re-export of `WideInt`; `exact_product`,
+`widen_storage`, `widen_product` and the `acc` aliases delegate to `Storage`,
+so the existing suite exercises the trait impls on every profile. The wide
+integers gained the missing methods (`is_negative`, `checked_sub`,
+`checked_neg` on `I1024` and `I2048`); the shift operators keep their
+historical argument types (`I256 >> u32`, the others `usize`) and
+`shl_bits` / `shr_bits` are the uniform form.
 
 ### 4.2 `FixedNum` (sealed): what a width can compute
 
@@ -177,6 +213,20 @@ Q128.128 on the Q128.128 profile). Under types, a function name has one meaning.
   `Q256_256` uses Q512.512. That is today's routing, written down once.
 - The lookup tables are already compiled for every tier in every profile. With
   width features (section 9) they are included only for enabled widths.
+
+Phase 1 result. All 28 engines compile on every profile under one name each:
+exp, ln, sqrt, sincos, atan and atan2 at Q64.64, Q128.128, Q256.256 and
+Q512.512 (`*_native`), plus `atan_q128_128_compute`, `atan2_q128_128_compute`,
+`atan_q256_256_compute` and `atan2_q256_256_compute`. The atan engines really
+are two per format: `_native` carries the series terms for the format's own
+precision (55 at Q128.128, 105 at Q256.256), `_compute` carries the terms
+needed when that format is the compute tier of the storage format half its
+width (33 and 65). They return different integers at the compute tier, so
+they stay separate functions and each width keeps the one it uses today. The
+sin/cos engines had the same duplication but with identical bodies; those
+were merged. `engine_identity_tests` (in `transcendental/mod.rs`) pins a
+digest of every engine's output on a fixed input set, and the same digests
+hold on all five profiles.
 
 ## 6. Constants that depend on F
 
@@ -268,8 +318,8 @@ generic code, while new tests exercise all widths in one build.
 
 | Phase | Work | Exit gate |
 |---|---|---|
-| 0 | Fixes that belong on `main` regardless (section 12), merged into the branch | main CI green |
-| 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen | full sweep, 5 profiles + F = 8..24, unchanged |
+| 0 | Fixes that belong on `main` regardless (section 12), merged into the branch. DONE: 0.6.5 | main CI green |
+| 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions | differential gate on linear algebra |
 | 4 | Geometry layers, ODE, tensors, fused ops, compute_tier, Interval, predicates, tq19 | differential gate, certified-geometry gates |
@@ -282,8 +332,8 @@ generic code, while new tests exercise all widths in one build.
 
 ### 11.1 Differential bit-identity (R-BIT)
 
-`g_math 0.6.4` from crates.io is a renamed dev-dependency (`g_math_064`).
-`0.6.4` still reads `GMATH_PROFILE` / `GMATH_FRAC_BITS`; the branch crate
+`g_math 0.6.5` from crates.io is a renamed dev-dependency (`g_math_065`).
+`0.6.5` still reads `GMATH_PROFILE` / `GMATH_FRAC_BITS`; the branch crate
 ignores them. So one test binary built with `GMATH_PROFILE=p` compares the old
 crate at profile `p` against the new crate's matching type on the same inputs:
 every public scalar function, the linear algebra and geometry surface, FASC
@@ -301,13 +351,13 @@ over width and run for every width in one build.
 
 Criterion benches for the scalar operators, the 18 transcendentals, dot,
 matvec, LU, SVD, softmax, tq19 matvec, FASC evaluate, per width, run against
-`g_math_064` in the matching profile on the same machine. Any regression beyond
+`g_math_065` in the matching profile on the same machine. Any regression beyond
 2 percent blocks the phase.
 
 ### 11.4 Size
 
 The 2026-10-05 probe (`sizeprobe`, `allprobe`) rerun on the new crate: per-width
-cost at most the 0.6.4 profile cost, all-widths cost at most the five-copy
+cost at most the 0.6.5 profile cost, all-widths cost at most the five-copy
 measurement.
 
 ## 12. What changes on `main` before the branch lands

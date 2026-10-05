@@ -48,9 +48,9 @@ use super::exp_tier_n_plus_1::{
 // HELPER: Find MSB position (floor of log2) for initial seed
 // ============================================================================
 
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn find_msb_position_i256(x: &I256) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i256(x: &I256) -> Option<u32> {
     if *x <= I256::zero() {
         return None;
     }
@@ -63,9 +63,9 @@ fn find_msb_position_i256(x: &I256) -> Option<u32> {
     None
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn find_msb_position_i512(x: &I512) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i512(x: &I512) -> Option<u32> {
     if *x <= I512::zero() {
         return None;
     }
@@ -78,9 +78,9 @@ fn find_msb_position_i512(x: &I512) -> Option<u32> {
     None
 }
 
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q512_512", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
+#[allow(dead_code)]
+pub(crate) fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
     if *x <= I1024::zero() {
         return None;
     }
@@ -104,8 +104,8 @@ fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 /// **PRECISION**: 19 correct decimal digits (all 64 fractional bits exact)
 /// **ALGORITHM**: Newton-Raphson in I256 (Q128.128) with 7 iterations
 /// **DOMAIN**: x >= 0 (returns i128::MIN for x < 0)
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-fn sqrt_q64_64_native(x: i128) -> i128 {
+#[allow(dead_code)]
+pub(crate) fn sqrt_q64_64_native(x: i128) -> i128 {
     // Domain: sqrt(x) undefined for x < 0
     if x < 0 {
         return i128::MIN;
@@ -160,8 +160,8 @@ fn sqrt_q64_64_native(x: i128) -> i128 {
 /// **PRECISION**: 38 correct decimal digits (all 128 fractional bits exact)
 /// **ALGORITHM**: Newton-Raphson in I512 (Q256.256) with 9 iterations
 /// **DOMAIN**: x >= 0 (returns I256::min_value() for x < 0)
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
-fn sqrt_q128_128_native(x: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn sqrt_q128_128_native(x: I256) -> I256 {
     if x < I256::zero() {
         return I256::min_value();
     }
@@ -204,8 +204,8 @@ fn sqrt_q128_128_native(x: I256) -> I256 {
 /// **PRECISION**: 77 correct decimal digits (all 256 fractional bits exact)
 /// **ALGORITHM**: Newton-Raphson in I1024 (Q512.512) with 10 iterations
 /// **DOMAIN**: x >= 0 (returns I512::min_value() for x < 0)
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256", table_format = "q32_32", table_format = "q16_16"))]
-fn sqrt_q256_256_native(x: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn sqrt_q256_256_native(x: I512) -> I512 {
     if x < I512::zero() {
         return I512::min_value();
     }
@@ -254,8 +254,8 @@ fn sqrt_q256_256_native(x: I512) -> I512 {
 /// fixed point of the truncated map (about 2^-259 relative precision at
 /// x = 2^254). With m in [1, 4) every intermediate keeps its full precision.
 /// **DOMAIN**: x >= 0
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
-fn sqrt_q512_512_native(x: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn sqrt_q512_512_native(x: I1024) -> I1024 {
     if x < I1024::zero() {
         return I1024::min_value();
     }
@@ -348,9 +348,9 @@ fn sqrt_q512_512_native(x: I1024) -> I1024 {
 /// path for overshooting inputs. Now sign-wrapped. Magnitude truncation
 /// is kept (identical to the old behavior for the positive common case,
 /// so the validated Newton trajectory is unchanged there).
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 #[inline(always)]
-fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
+#[allow(dead_code)]
+pub(crate) fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
     let a_neg = a < I1024::zero();
     let b_neg = b < I1024::zero();
     let abs_a = if a_neg { -a } else { a };

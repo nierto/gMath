@@ -64,6 +64,7 @@ include!("../../../../generated_tables/q512_512_tables.rs");
 /// **PRECISION**: ~10-13 correct digits (baseline implementation)
 /// **TABLES**: Uses Q64.64 tables directly (no conversion)
 #[inline(always)]
+#[allow(dead_code)]
 pub fn exp_q64_64_native(x: i128) -> i128 {
     // Tables are included directly at module level, use them without super::
     // Note: Q64.64 tables use TIER_3 naming (NOT Q64_64)
@@ -134,7 +135,7 @@ pub fn exp_q64_64_native(x: i128) -> i128 {
 /// **PRECISION**: ~16-20 correct digits (exceeds f64)
 /// **TABLES**: Uses Q128.128 tables directly (TIER_4 tables with (I256, i128) format)
 #[inline(always)]
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
+#[allow(dead_code)]
 pub fn exp_q128_128_native(x: I256) -> I256 {
     // Tables are included directly at module level
     // Q128.128 tables use TIER_4 naming with (I256, i128) format
@@ -230,7 +231,7 @@ pub fn exp_q128_128_native(x: I256) -> I256 {
 /// **PRECISION**: ~30+ correct digits (far exceeds f64)
 /// **TABLES**: Uses Q256.256 tables directly (no conversion)
 #[inline(always)]
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
+#[allow(dead_code)]
 pub fn exp_q256_256_native(x: I512) -> I512 {
     // Use tier 5 tables (Q256.256 format)
     // Tables are already included at module level
@@ -441,9 +442,9 @@ pub fn upscale_q64_to_q256(value: i128) -> I512 {
 // ============================================================================
 
 /// Multiply two I256 values in Q128.128 format
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q32_32", table_format = "q16_16"))]
 #[inline(always)]
-fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
+#[allow(dead_code)]
+pub(crate) fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
     // I256 × I256 in Q128.128 format — NON-NEGATIVE operands only:
     // mul_to_i512 is unsigned (0.5.0 audit; exp internals are positive
     // by construction — tables, reduced remainders, e^x > 0).
@@ -457,9 +458,9 @@ fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
 /// **PRECISION**: Native I1024 multiplication - ZERO precision loss
 /// **STRATEGY**: I512 × I512 → I1024 (tier N+1), then shift to Q256.256
 /// Enables 65-75/77 decimals for scientific profile
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 #[inline(always)]
-fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
     use crate::fixed_point::I1024;
 
     // Native multiplication using I1024 - exact, zero loss
@@ -552,9 +553,9 @@ pub fn exp_binary_i512(x: I512) -> I512 {
 /// **OUTPUT**: I512 value in Q256.256 format
 /// **PRECISION**: 35 terms for 77-decimal precision
 /// **FORMULA**: exp(r) = 1 + r + r²/2! + r³/3! + ... + r³⁴/34!
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 #[inline(always)]
-fn taylor_series_q256_256(remainder: (u128, u128)) -> I512 {
+#[allow(dead_code)]
+pub(crate) fn taylor_series_q256_256(remainder: (u128, u128)) -> I512 {
     let (remainder_high, remainder_low) = remainder;
 
     // Handle exp(0) = 1
@@ -610,8 +611,8 @@ fn taylor_series_q256_256(remainder: (u128, u128)) -> I512 {
 /// only correct for non-negative operands. Every exp-internal caller is
 /// positive-by-construction (e^x tables, reduced remainders); the
 /// debug_asserts make that invariant loud in every test build.
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
-fn multiply_i1024_q512_512_nonneg(a: crate::fixed_point::I1024, b: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
+#[allow(dead_code)]
+pub(crate) fn multiply_i1024_q512_512_nonneg(a: crate::fixed_point::I1024, b: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
     use crate::fixed_point::I2048;
     debug_assert!(!(a < crate::fixed_point::I1024::zero()), "unsigned widening mul fed a negative LHS");
     debug_assert!(!(b < crate::fixed_point::I1024::zero()), "unsigned widening mul fed a negative RHS");
@@ -624,7 +625,7 @@ fn multiply_i1024_q512_512_nonneg(a: crate::fixed_point::I1024, b: crate::fixed_
 /// **PRECISION**: ~154 correct decimal digits
 /// **TABLES**: Uses Q512.512 tables directly (TIER_6)
 /// **PURPOSE**: Enables 70+ decimal precision for non-binary-exact inputs like 2.7
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
+#[allow(dead_code)]
 pub fn exp_q512_512_native(x: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
     use crate::fixed_point::{I1024, I2048};
 
@@ -760,9 +761,9 @@ pub fn exp_q512_512_native(x: crate::fixed_point::I1024) -> crate::fixed_point::
 /// **OUTPUT**: I1024 value in Q512.512 format
 /// **PRECISION**: 50 terms for 154-decimal precision
 /// **FORMULA**: exp(r) = 1 + r + r²/2! + r³/3! + ... + r⁴⁹/49!
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
 #[inline(always)]
-fn taylor_series_q512_512(r: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
+#[allow(dead_code)]
+pub(crate) fn taylor_series_q512_512(r: crate::fixed_point::I1024) -> crate::fixed_point::I1024 {
     use crate::fixed_point::{I1024, I2048};
 
     // Handle exp(0) = 1
