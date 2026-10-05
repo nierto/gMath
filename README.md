@@ -16,6 +16,19 @@ Built by **Niels Erik Toren** · published as `g_math` on [crates.io](https://cr
 > all additive. **0.5.1** carries only the three defect fixes that work found
 > in 0.5.0 (two on the scientific profile, one in the wide decimal integers);
 > every `^0.5` user receives them without adopting any new API.
+>
+> **0.6.4 to 0.6.7**: the operators and every narrowing fail loudly instead of
+> wrapping, and each multi-step computation rounds once (0.6.4). The decimal
+> type has an explicit tie rule and a one-rounding `mul_div` (0.6.5). The wide
+> tier gains gate functions, a correctly rounded square root, a full-width
+> integer `mul_div` and exact decimal ratios, and the batch kernels can write
+> into caller-provided buffers (0.6.7). 0.6.5 to 0.6.7 change no in-range
+> result. Details per release: [CHANGELOG.md](CHANGELOG.md).
+>
+> **Known issue**: on the compact profile `exp` is one unit from the nearest
+> value on about 1 input in 100 when the result is large. Small arguments and
+> the realtime profile are not affected. See "Open defect" in
+> [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -45,16 +58,22 @@ The build-with surface is five layers; everything beneath them is internal.
   and `DecimalFixed<DECIMALS>`: direct `Copy` types, one call is one engine
   invocation.
 - **Fused** - `g_math::fixed_point::imperative::fused`: whole accumulation patterns
-  at the wide compute tier.
+  at the wide compute tier (norms, softmax and its mixes, `rms_norm`,
+  `sigmoid_mul`, `entropy`, the correctly rounded quadratic form), several with
+  forms that write into caller-provided slices.
 - **Geometric** - `imperative::{decompose, derived, matrix_functions, manifold,
   lie_group, curvature, projective, fiber_bundle, ode, tensor, tensor_decompose,
   serialization}`.
-- **Wide** - `g_math::wide`: Q64.64 `exp`/`ln`/`sin`/`cos`, π constants and an
-  exact decimal-literal parser, for quantities outside the storage tiers.
+- **Wide** - `g_math::wide`: Q64.64 `exp`/`ln`/`sin`/`cos`, `sigmoid`/`softplus`/
+  `silu`, a correctly rounded square root, π constants, an exact
+  decimal-literal parser, exact decimal ratios and a full-width integer
+  `mul_div`, for quantities outside the storage tiers. Each function's
+  measured error is in the module documentation.
 - **Compute tier** - `g_math::compute_tier` (feature `inference`): the tier-N+1
   engines over raw compute-tier integers.
 - **TQ1.9** - `g_math::tq19` (feature `inference`): standalone ternary inference,
-  with the five-trit row-scaled form and the weight-bit decoders and quantisers.
+  with the five-trit row-scaled form, the weight-bit decoders and quantisers,
+  and batch matvecs that write into one caller-provided buffer.
 - **Internal** - the `universal`/`fasc` evaluator, the domain implementations
   beneath `DecimalFixed` and the ternary types, the wide-integer types, and the
   shadow/router internals are not part of the surface and may change between
