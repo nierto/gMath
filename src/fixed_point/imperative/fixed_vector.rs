@@ -1,48 +1,54 @@
-//! FixedVector: dynamically-sized vector of FixedPoint values.
+//! FixedVector: dynamically-sized vector of fixed-point values of one format.
 //!
-//! All operations delegate to FixedPoint arithmetic.
+//! All operations delegate to the element type's arithmetic. The element
+//! type defaults to `FixedPoint`, the build profile's format.
 
 use std::ops::{Add, Sub, Neg, Mul, Index, IndexMut};
+use super::kernels;
 use super::FixedPoint;
-use super::interval::exact_product;
-use super::linalg::{compute_tier_dot, compute_tier_sqrt_dot, round_to_storage};
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_checked_add, compute_checked_subtract};
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::width::Storage;
 
 /// `a * b - c * d` (`subtract`) or `a * b + c * d`, rounded once from the
 /// exact value. Panics when the result leaves the storage range.
 #[inline]
-fn rotated(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint, subtract: bool) -> FixedPoint {
-    let (p, q) = (exact_product(a.raw(), b.raw()), exact_product(c.raw(), d.raw()));
-    let sum = if subtract { compute_checked_subtract(p, q) } else { compute_checked_add(p, q) };
-    FixedPoint::from_raw(round_to_storage(sum.expect("FixedVector::rotate_pairs: overflow")))
+fn rotated<S: Storage, const F: u32>(a: Fixed<S, F>, b: Fixed<S, F>, c: Fixed<S, F>, d: Fixed<S, F>, subtract: bool) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let (p, q) = (a.raw().mul_wide(b.raw()), c.raw().mul_wide(d.raw()));
+    let sum = if subtract { Fixed::<S, F>::compute_checked_subtract(p, q) } else { Fixed::<S, F>::compute_checked_add(p, q) };
+    Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(sum.expect("FixedVector::rotate_pairs: overflow")))
 }
 
 /// A dynamically-sized vector of fixed-point values.
 ///
-/// Backed by `Vec<FixedPoint>`. Not `Copy` due to heap allocation.
+/// Backed by `Vec<T>`. Not `Copy` due to heap allocation.
 #[derive(Clone, Debug, PartialEq)]
-pub struct FixedVector {
-    data: Vec<FixedPoint>,
+pub struct FixedVector<T = FixedPoint> {
+    data: Vec<T>,
 }
 
-impl FixedVector {
+impl<S: Storage, const F: u32> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Create a zero-filled vector of the given dimension.
     pub fn new(dim: usize) -> Self {
         Self {
-            data: vec![FixedPoint::ZERO; dim],
+            data: vec![Fixed::ZERO; dim],
         }
     }
 
     /// Create from a slice of f32 values.
     pub fn from_f32_slice(values: &[f32]) -> Self {
         Self {
-            data: values.iter().map(|&v| FixedPoint::from_f32(v)).collect(),
+            data: values.iter().map(|&v| Fixed::from_f32(v)).collect(),
         }
     }
 
     /// Create from a slice of FixedPoint values.
-    pub fn from_slice(values: &[FixedPoint]) -> Self {
+    pub fn from_slice(values: &[Fixed<S, F>]) -> Self {
         Self {
             data: values.to_vec(),
         }
@@ -70,24 +76,83 @@ impl FixedVector {
     ///
     /// Accumulates at double width, single downscale at end → 1 ULP.
     /// Panics if dimensions differ.
-    pub fn dot(&self, other: &FixedVector) -> FixedPoint {
+    pub fn dot(&self, other: &Self) -> Fixed<S, F> {
         assert_eq!(self.len(), other.len(), "FixedVector::dot: dimension mismatch");
-        compute_tier_dot(&self.data, &other.data)
+        kernels::dot(&self.data, &other.data)
     }
 
     /// Squared length (self . self).
-    pub fn length_squared(&self) -> FixedPoint {
+    pub fn length_squared(&self) -> Fixed<S, F> {
         self.dot(self)
     }
 
     /// Length (Euclidean norm): the sum of squares and the root at the
     /// compute tier, one rounding (was `length_squared().sqrt()`: two roundings,
     /// and an overflow once the squared length left storage).
-    pub fn length(&self) -> FixedPoint {
-        let raw: Vec<BinaryStorage> = self.data.iter().map(|x| x.raw()).collect();
-        FixedPoint::from_raw(compute_tier_sqrt_dot(&raw, &raw).expect("FixedVector::length exceeds storage"))
+    pub fn length(&self) -> Fixed<S, F> {
+        let raw = Fixed::raw_slice(&self.data);
+        Fixed::from_raw(kernels::sqrt_dot::<Fixed<S, F>>(raw, raw).expect("FixedVector::length exceeds storage"))
     }
 
+    /// Normalize in place (divide each component by length).
+    ///
+    /// The sum of squares is exact and its root is taken at the compute tier;
+    /// each component is divided by that compute-tier length and rounded to
+    /// storage once (the length is never rounded to storage, so a short
+    /// nonzero vector normalizes instead of dividing by zero).
+    ///
+    /// Panics if the vector is zero or its squared length exceeds the compute
+    /// tier.
+    pub fn normalize(&mut self) {
+        let raw = Fixed::raw_slice(&self.data);
+        let sum_sq = kernels::exact_dot::<Fixed<S, F>>(raw, raw).expect("FixedVector::normalize: squared length exceeds the compute tier");
+        assert!(!Fixed::<S, F>::compute_is_zero(&sum_sq), "FixedVector::normalize: zero vector");
+        let len = Fixed::<S, F>::sqrt_at_compute_tier(sum_sq);
+        let one = Fixed::<S, F>::one().raw().widen();
+        for v in &mut self.data {
+            // v at 3F over the length at 2F: |v / len| <= 1, never overflows
+            let numer = S::widen_product(Fixed::<S, F>::upscale_to_compute(v.raw()), one);
+            *v = Fixed::from_raw(kernels::divide_to_storage_nearest::<Fixed<S, F>>(numer, len).expect("FixedVector::normalize: zero length"));
+        }
+    }
+
+    /// Return a normalized copy.
+    pub fn normalized(&self) -> Self {
+        let mut result = self.clone();
+        result.normalize();
+        result
+    }
+
+    /// Apply a function to each component, returning a new vector.
+    pub fn map(&self, f: impl Fn(Fixed<S, F>) -> Fixed<S, F>) -> Self {
+        Self {
+            data: self.data.iter().map(|&v| f(v)).collect(),
+        }
+    }
+
+    /// Iterator over components.
+    pub fn iter(&self) -> std::slice::Iter<'_, Fixed<S, F>> {
+        self.data.iter()
+    }
+
+    /// Mutable iterator over components.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Fixed<S, F>> {
+        self.data.iter_mut()
+    }
+
+    /// Metric distance between two vectors (Euclidean) at compute tier.
+    ///
+    /// sum-of-squared-differences accumulated at tier N+1, single downscale → 1 ULP.
+    pub fn metric_distance_safe(&self, other: &Self) -> Fixed<S, F> {
+        assert_eq!(self.len(), other.len(), "FixedVector::metric_distance_safe: dimension mismatch");
+        let diff_raw: Vec<S> = (0..self.len())
+            .map(|i| (self.data[i] - other.data[i]).raw())
+            .collect();
+        Fixed::from_raw(kernels::sqrt_dot::<Fixed<S, F>>(&diff_raw, &diff_raw).expect("metric distance exceeds storage"))
+    }
+}
+
+impl FixedVector<FixedPoint> {
     /// Fused length: sqrt(Σ x_i²) entirely at compute tier.
     ///
     /// More precise than `length()` which materializes the dot product
@@ -101,88 +166,28 @@ impl FixedVector {
     /// entirely at compute tier.
     ///
     /// Saves 2 materializations vs `(self - other).length()`.
-    pub fn distance_to(&self, other: &FixedVector) -> FixedPoint {
+    pub fn distance_to(&self, other: &Self) -> FixedPoint {
         assert_eq!(self.len(), other.len(), "FixedVector::distance_to: dimension mismatch");
         super::fused::euclidean_distance(&self.data, &other.data)
     }
-
-    /// Normalize in place (divide each component by length).
-    ///
-    /// The sum of squares is exact and its root is taken at the compute tier;
-    /// each component is divided by that compute-tier length and rounded to
-    /// storage once (the length is never rounded to storage, so a short
-    /// nonzero vector normalizes instead of dividing by zero).
-    ///
-    /// Panics if the vector is zero or its squared length exceeds the compute
-    /// tier.
-    pub fn normalize(&mut self) {
-        use super::linalg::{exact_dot, upscale_to_compute};
-        use super::wide_acc::{divide_to_storage_nearest, widen_product, widen_storage};
-        use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_is_zero, sqrt_at_compute_tier};
-        let raw: Vec<BinaryStorage> = self.data.iter().map(|x| x.raw()).collect();
-        let sum_sq = exact_dot(&raw, &raw).expect("FixedVector::normalize: squared length exceeds the compute tier");
-        assert!(!compute_is_zero(&sum_sq), "FixedVector::normalize: zero vector");
-        let len = sqrt_at_compute_tier(sum_sq);
-        let one = widen_storage(FixedPoint::one().raw());
-        for v in &mut self.data {
-            // v at 3F over the length at 2F: |v / len| <= 1, never overflows
-            let numer = widen_product(upscale_to_compute(v.raw()), one);
-            *v = FixedPoint::from_raw(divide_to_storage_nearest(numer, len).expect("FixedVector::normalize: zero length"));
-        }
-    }
-
-    /// Return a normalized copy.
-    pub fn normalized(&self) -> Self {
-        let mut result = self.clone();
-        result.normalize();
-        result
-    }
-
-    /// Apply a function to each component, returning a new vector.
-    pub fn map(&self, f: impl Fn(FixedPoint) -> FixedPoint) -> Self {
-        Self {
-            data: self.data.iter().map(|&v| f(v)).collect(),
-        }
-    }
-
-    /// Iterator over components.
-    pub fn iter(&self) -> std::slice::Iter<'_, FixedPoint> {
-        self.data.iter()
-    }
-
-    /// Mutable iterator over components.
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, FixedPoint> {
-        self.data.iter_mut()
-    }
-
-    /// Metric distance between two vectors (Euclidean) at compute tier.
-    ///
-    /// sum-of-squared-differences accumulated at tier N+1, single downscale → 1 ULP.
-    pub fn metric_distance_safe(&self, other: &FixedVector) -> FixedPoint {
-        assert_eq!(self.len(), other.len(), "FixedVector::metric_distance_safe: dimension mismatch");
-        let diff_raw: Vec<BinaryStorage> = (0..self.len())
-            .map(|i| (self.data[i] - other.data[i]).raw())
-            .collect();
-        FixedPoint::from_raw(compute_tier_sqrt_dot(&diff_raw, &diff_raw).expect("metric distance exceeds storage"))
-    }
 }
 
-impl Index<usize> for FixedVector {
-    type Output = FixedPoint;
+impl<T> Index<usize> for FixedVector<T> {
+    type Output = T;
     #[inline]
-    fn index(&self, idx: usize) -> &FixedPoint {
+    fn index(&self, idx: usize) -> &T {
         &self.data[idx]
     }
 }
 
-impl IndexMut<usize> for FixedVector {
+impl<T> IndexMut<usize> for FixedVector<T> {
     #[inline]
-    fn index_mut(&mut self, idx: usize) -> &mut FixedPoint {
+    fn index_mut(&mut self, idx: usize) -> &mut T {
         &mut self.data[idx]
     }
 }
 
-impl Default for FixedVector {
+impl<T> Default for FixedVector<T> {
     fn default() -> Self {
         Self { data: Vec::new() }
     }
@@ -192,7 +197,10 @@ impl Default for FixedVector {
 // L1A: Arithmetic operators
 // ============================================================================
 
-impl Add for FixedVector {
+impl<S: Storage, const F: u32> Add for FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         assert_eq!(self.len(), rhs.len(), "FixedVector::add: dimension mismatch");
@@ -203,9 +211,12 @@ impl Add for FixedVector {
     }
 }
 
-impl<'a, 'b> Add<&'b FixedVector> for &'a FixedVector {
-    type Output = FixedVector;
-    fn add(self, rhs: &'b FixedVector) -> FixedVector {
+impl<'a, 'b, S: Storage, const F: u32> Add<&'b FixedVector<Fixed<S, F>>> for &'a FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedVector<Fixed<S, F>>;
+    fn add(self, rhs: &'b FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
         assert_eq!(self.len(), rhs.len(), "FixedVector::add: dimension mismatch");
         FixedVector {
             data: self.data.iter().zip(rhs.data.iter())
@@ -214,7 +225,10 @@ impl<'a, 'b> Add<&'b FixedVector> for &'a FixedVector {
     }
 }
 
-impl Sub for FixedVector {
+impl<S: Storage, const F: u32> Sub for FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
         assert_eq!(self.len(), rhs.len(), "FixedVector::sub: dimension mismatch");
@@ -225,9 +239,12 @@ impl Sub for FixedVector {
     }
 }
 
-impl<'a, 'b> Sub<&'b FixedVector> for &'a FixedVector {
-    type Output = FixedVector;
-    fn sub(self, rhs: &'b FixedVector) -> FixedVector {
+impl<'a, 'b, S: Storage, const F: u32> Sub<&'b FixedVector<Fixed<S, F>>> for &'a FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedVector<Fixed<S, F>>;
+    fn sub(self, rhs: &'b FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
         assert_eq!(self.len(), rhs.len(), "FixedVector::sub: dimension mismatch");
         FixedVector {
             data: self.data.iter().zip(rhs.data.iter())
@@ -236,7 +253,10 @@ impl<'a, 'b> Sub<&'b FixedVector> for &'a FixedVector {
     }
 }
 
-impl Neg for FixedVector {
+impl<S: Storage, const F: u32> Neg for FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     fn neg(self) -> Self {
         Self {
@@ -245,9 +265,12 @@ impl Neg for FixedVector {
     }
 }
 
-impl Neg for &FixedVector {
-    type Output = FixedVector;
-    fn neg(self) -> FixedVector {
+impl<S: Storage, const F: u32> Neg for &FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedVector<Fixed<S, F>>;
+    fn neg(self) -> FixedVector<Fixed<S, F>> {
         FixedVector {
             data: self.data.iter().map(|&v| -v).collect(),
         }
@@ -255,9 +278,12 @@ impl Neg for &FixedVector {
 }
 
 /// Scalar * Vector
-impl Mul<FixedVector> for FixedPoint {
-    type Output = FixedVector;
-    fn mul(self, rhs: FixedVector) -> FixedVector {
+impl<S: Storage, const F: u32> Mul<FixedVector<Fixed<S, F>>> for Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedVector<Fixed<S, F>>;
+    fn mul(self, rhs: FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
         FixedVector {
             data: rhs.data.iter().map(|&v| self * v).collect(),
         }
@@ -265,9 +291,12 @@ impl Mul<FixedVector> for FixedPoint {
 }
 
 /// Vector * Scalar
-impl Mul<FixedPoint> for FixedVector {
+impl<S: Storage, const F: u32> Mul<Fixed<S, F>> for FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
-    fn mul(self, rhs: FixedPoint) -> Self {
+    fn mul(self, rhs: Fixed<S, F>) -> Self {
         Self {
             data: self.data.iter().map(|&v| v * rhs).collect(),
         }
@@ -275,9 +304,12 @@ impl Mul<FixedPoint> for FixedVector {
 }
 
 /// &Vector * Scalar
-impl Mul<FixedPoint> for &FixedVector {
-    type Output = FixedVector;
-    fn mul(self, rhs: FixedPoint) -> FixedVector {
+impl<S: Storage, const F: u32> Mul<Fixed<S, F>> for &FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedVector<Fixed<S, F>>;
+    fn mul(self, rhs: Fixed<S, F>) -> FixedVector<Fixed<S, F>> {
         FixedVector {
             data: self.data.iter().map(|&v| v * rhs).collect(),
         }
@@ -288,15 +320,18 @@ impl Mul<FixedPoint> for &FixedVector {
 // L1A: Additional vector operations
 // ============================================================================
 
-impl FixedVector {
+impl<S: Storage, const F: u32> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Compute-tier precise dot product.
     ///
     /// Accumulates at tier N+1 (double width) and rounds once at the end.
     /// For an n-element vector, this gives 1 ULP of rounding error instead
     /// of the n ULP that the standard `dot()` method may accumulate.
-    pub fn dot_precise(&self, other: &FixedVector) -> FixedPoint {
+    pub fn dot_precise(&self, other: &Self) -> Fixed<S, F> {
         assert_eq!(self.len(), other.len(), "FixedVector::dot_precise: dimension mismatch");
-        compute_tier_dot(&self.data, &other.data)
+        kernels::dot(&self.data, &other.data)
     }
 
     /// Cross product (3D vectors only).
@@ -306,24 +341,22 @@ impl FixedVector {
     ///
     /// Panics if either vector is not 3-dimensional or a component exceeds
     /// storage.
-    pub fn cross(&self, other: &FixedVector) -> FixedVector {
-        use super::linalg::{exact_dot, round_to_storage};
-        use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_subtract;
+    pub fn cross(&self, other: &Self) -> Self {
         assert_eq!(self.len(), 3, "FixedVector::cross: self must be 3D");
         assert_eq!(other.len(), 3, "FixedVector::cross: other must be 3D");
         let (u, v) = (&self.data, &other.data);
         let component = |i: usize, j: usize| {
             // u_i v_j - u_j v_i; each product of two storage values is exact at 2F
-            let first = exact_dot(&[u[i].raw()], &[v[j].raw()]).expect("FixedVector::cross: product");
-            let second = exact_dot(&[u[j].raw()], &[v[i].raw()]).expect("FixedVector::cross: product");
-            FixedPoint::from_raw(round_to_storage(compute_subtract(first, second)))
+            let first = kernels::exact_dot::<Fixed<S, F>>(&[u[i].raw()], &[v[j].raw()]).expect("FixedVector::cross: product");
+            let second = kernels::exact_dot::<Fixed<S, F>>(&[u[j].raw()], &[v[i].raw()]).expect("FixedVector::cross: product");
+            Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(Fixed::<S, F>::compute_subtract(first, second)))
         };
-        FixedVector::from_slice(&[component(1, 2), component(2, 0), component(0, 1)])
+        Self::from_slice(&[component(1, 2), component(2, 0), component(0, 1)])
     }
 
     /// Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j].
-    pub fn outer_product(&self, other: &FixedVector) -> super::FixedMatrix {
-        let mut m = super::FixedMatrix::new(self.len(), other.len());
+    pub fn outer_product(&self, other: &Self) -> super::FixedMatrix<Fixed<S, F>> {
+        let mut m = super::FixedMatrix::<Fixed<S, F>>::new(self.len(), other.len());
         for i in 0..self.len() {
             for j in 0..other.len() {
                 m.set(i, j, self.data[i] * other.data[j]);
@@ -334,13 +367,13 @@ impl FixedVector {
 
     /// Access the underlying data slice (for compute-tier operations).
     #[inline]
-    pub fn as_slice(&self) -> &[FixedPoint] {
+    pub fn as_slice(&self) -> &[Fixed<S, F>] {
         &self.data
     }
 
     /// Mutable access to the underlying data slice.
     #[inline]
-    pub fn as_mut_slice(&mut self) -> &mut [FixedPoint] {
+    pub fn as_mut_slice(&mut self) -> &mut [Fixed<S, F>] {
         &mut self.data
     }
 
@@ -364,7 +397,7 @@ impl FixedVector {
     /// Panics if `rotary_dim` exceeds the vector length, if `sin` or `cos`
     /// holds fewer than `rotary_dim / 2` values, or on overflow (as the
     /// operators do).
-    pub fn rotate_pairs(&mut self, sin: &[FixedPoint], cos: &[FixedPoint], rotary_dim: usize) {
+    pub fn rotate_pairs(&mut self, sin: &[Fixed<S, F>], cos: &[Fixed<S, F>], rotary_dim: usize) {
         let half = rotary_dim / 2;
         assert!(rotary_dim <= self.data.len(), "FixedVector::rotate_pairs: rotary_dim exceeds the vector length");
         assert!(sin.len() >= half && cos.len() >= half, "FixedVector::rotate_pairs: sin/cos shorter than rotary_dim / 2");

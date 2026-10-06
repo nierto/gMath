@@ -382,3 +382,45 @@ pub(crate) fn reflect_compute<T: FixedNum>(
     }
     Ok(())
 }
+
+// ============================================================================
+// Value-level forms used by the containers
+// ============================================================================
+
+/// A compute-tier accumulator rounded to the nearest storage value. Panics
+/// if the result exceeds the storage tier's range, matching the infallible
+/// imperative transcendentals.
+#[inline]
+pub(crate) fn round_to_storage<T: FixedNum>(acc: Compute<T>) -> T::Storage {
+    T::downscale_to_storage(acc).expect("round_to_storage: result exceeds storage tier range")
+}
+
+/// The dot product of two slices of values: accumulated at the compute tier
+/// and rounded to storage once (nearest, ties toward +infinity).
+///
+/// Panics if the slices have different lengths or the result leaves storage.
+#[inline]
+pub(crate) fn dot<S: Storage, const F: u32>(a: &[Fixed<S, F>], b: &[Fixed<S, F>]) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    assert_eq!(a.len(), b.len(), "compute_tier_dot: length mismatch");
+    let acc = dot_acc::<Fixed<S, F>>(Fixed::raw_slice(a), Fixed::raw_slice(b));
+    Fixed::from_raw(round_to_storage::<Fixed<S, F>>(acc))
+}
+
+/// `sqrt(sum a_i b_i)` with the sum and the root at the compute tier and one
+/// rounding to storage. `Err(DomainError)` for a negative sum.
+pub(crate) fn sqrt_dot<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> Result<T::Storage, OverflowDetected> {
+    let acc = dot_acc::<T>(a, b);
+    if acc.is_negative() {
+        return Err(OverflowDetected::DomainError);
+    }
+    T::downscale_to_storage(T::sqrt_at_compute_tier(acc))
+}
+
+/// [`dot`] on raw slices.
+#[inline]
+pub(crate) fn dot_raw<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> T::Storage {
+    round_to_storage::<T>(dot_acc::<T>(a, b))
+}

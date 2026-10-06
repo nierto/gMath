@@ -207,3 +207,66 @@ fn widths_coexist_in_one_expression_chain() {
     assert_eq!(std::mem::size_of_val(&b), 16);
     assert_eq!(std::mem::size_of::<Q256_256>(), 64);
 }
+
+// ============================================================================
+// Containers: the same generic code at every width
+// ============================================================================
+
+use g_math::fixed_point::{FixedMatrix, FixedVector};
+
+/// Vector and matrix identities that hold exactly in every format.
+fn container_identities<S: Storage, const F: u32>()
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    let a = FixedVector::from_slice(&[v(1), v(2), v(3)]);
+    let b = FixedVector::from_slice(&[v(4), v(-5), v(6)]);
+    assert_eq!(a.dot(&b), v(12));
+    assert_eq!(a.length_squared(), v(14));
+    assert_eq!(FixedVector::from_slice(&[v(3), v(4)]).length(), v(5));
+    assert_eq!((&a + &b)[1], v(-3));
+    assert_eq!((&a - &b)[2], v(-3));
+    assert_eq!((-&a)[0], v(-1));
+    assert_eq!((a.clone() * v(2))[2], v(6));
+    assert_eq!(a.cross(&b), FixedVector::from_slice(&[v(27), v(6), v(-13)]));
+    assert_eq!(a.metric_distance_safe(&FixedVector::from_slice(&[v(1), v(2), v(7)])), v(4));
+    let mut unit = FixedVector::from_slice(&[v(0), v(-3), v(4)]);
+    unit.normalize();
+    let (e3, e4) = (v(3) / v(5), v(4) / v(5));
+    assert_eq!(unit, FixedVector::from_slice(&[v(0), -e3, e4]));
+    // rotation by a quarter turn, exact
+    let mut r = FixedVector::from_slice(&[v(1), v(2), v(3), v(4)]);
+    r.rotate_pairs(&[v(1), v(1)], &[v(0), v(0)], 4);
+    assert_eq!(r, FixedVector::from_slice(&[v(-3), v(-4), v(1), v(2)]));
+
+    let m = FixedMatrix::from_slice(2, 2, &[v(1), v(2), v(3), v(4)]);
+    let n = FixedMatrix::from_slice(2, 2, &[v(0), v(1), v(-1), v(0)]);
+    assert_eq!(&m * &n, FixedMatrix::from_slice(2, 2, &[v(-2), v(1), v(-4), v(3)]));
+    assert_eq!(m.mul_vector(&FixedVector::from_slice(&[v(1), v(-1)])), FixedVector::from_slice(&[v(-1), v(-1)]));
+    assert_eq!(m.transpose().get(0, 1), v(3));
+    assert_eq!(m.trace(), v(5));
+    assert_eq!((&m + &n).get(1, 0), v(2));
+    assert_eq!((&m - &n).get(0, 1), v(1));
+    assert_eq!((m.clone() * v(2)).get(1, 1), v(8));
+    assert_eq!(FixedMatrix::<Fixed<S, F>>::identity(3).trace(), v(3));
+    assert_eq!(a.outer_product(&b).get(2, 1), v(-15));
+    assert_eq!(m.kronecker(&n).get(1, 2), v(-2));
+    // a half-unit tie in a dot product rounds toward +infinity
+    let ulp = Fixed::<S, F>::from_raw(S::one());
+    let half = Fixed::<S, F>::one() / v(2);
+    assert_eq!(FixedVector::from_slice(&[ulp]).dot(&FixedVector::from_slice(&[half])), ulp);
+    assert_eq!(FixedVector::from_slice(&[-ulp]).dot(&FixedVector::from_slice(&[half])), Fixed::ZERO);
+}
+
+#[test]
+fn containers_are_exact_at_every_width() {
+    container_identities::<i32, 8>();
+    container_identities::<i32, 10>();
+    container_identities::<i32, 16>();
+    container_identities::<i32, 24>();
+    container_identities::<i64, 32>();
+    container_identities::<i128, 64>();
+    container_identities::<I256, 128>();
+    container_identities::<I512, 256>();
+}

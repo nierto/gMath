@@ -5,32 +5,37 @@
 //! round once at the end.
 
 use std::ops::{Add, Sub, Neg, Mul};
+use super::kernels;
 use super::FixedPoint;
 use super::FixedVector;
-use super::linalg::compute_tier_dot_raw;
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::width::Storage;
 
-/// A row-major matrix of fixed-point values.
+/// A row-major matrix of fixed-point values of one format.
 ///
-/// Backed by a flat `Vec<FixedPoint>`. Not `Copy` due to heap allocation.
+/// Backed by a flat `Vec<T>`. Not `Copy` due to heap allocation. The element
+/// type defaults to `FixedPoint`, the build profile's format.
 #[derive(Clone, Debug)]
-pub struct FixedMatrix {
+pub struct FixedMatrix<T = FixedPoint> {
     rows: usize,
     cols: usize,
-    data: Vec<FixedPoint>,
+    data: Vec<T>,
 }
 
 // ============================================================================
 // Core constructors and accessors (existing API preserved exactly)
 // ============================================================================
 
-impl FixedMatrix {
+impl<S: Storage, const F: u32> FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Create a zero-filled matrix.
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
             rows,
             cols,
-            data: vec![FixedPoint::ZERO; rows * cols],
+            data: vec![Fixed::ZERO; rows * cols],
         }
     }
 
@@ -50,8 +55,8 @@ impl FixedMatrix {
     ///
     /// Panics if out of bounds.
     #[inline]
-    pub fn get(&self, row: usize, col: usize) -> FixedPoint {
-        assert!(row < self.rows && col < self.cols, "FixedMatrix: index out of bounds");
+    pub fn get(&self, row: usize, col: usize) -> Fixed<S, F> {
+        assert!(row < self.rows && col < self.cols, "FixedMatrix<Fixed<S, F>>: index out of bounds");
         self.data[row * self.cols + col]
     }
 
@@ -59,8 +64,8 @@ impl FixedMatrix {
     ///
     /// Panics if out of bounds.
     #[inline]
-    pub fn set(&mut self, row: usize, col: usize, value: FixedPoint) {
-        assert!(row < self.rows && col < self.cols, "FixedMatrix: index out of bounds");
+    pub fn set(&mut self, row: usize, col: usize, value: Fixed<S, F>) {
+        assert!(row < self.rows && col < self.cols, "FixedMatrix<Fixed<S, F>>: index out of bounds");
         self.data[row * self.cols + col] = value;
     }
 }
@@ -69,13 +74,16 @@ impl FixedMatrix {
 // L1A: New constructors
 // ============================================================================
 
-impl FixedMatrix {
+impl<S: Storage, const F: u32> FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Create from a flat slice of values in row-major order.
     ///
     /// Panics if `values.len() != rows * cols`.
-    pub fn from_slice(rows: usize, cols: usize, values: &[FixedPoint]) -> Self {
+    pub fn from_slice(rows: usize, cols: usize, values: &[Fixed<S, F>]) -> Self {
         assert_eq!(values.len(), rows * cols,
-            "FixedMatrix::from_slice: expected {} elements, got {}", rows * cols, values.len());
+            "FixedMatrix::<Fixed<S, F>>::from_slice: expected {} elements, got {}", rows * cols, values.len());
         Self {
             rows,
             cols,
@@ -84,7 +92,7 @@ impl FixedMatrix {
     }
 
     /// Create from a function: M[i][j] = f(i, j).
-    pub fn from_fn(rows: usize, cols: usize, f: impl Fn(usize, usize) -> FixedPoint) -> Self {
+    pub fn from_fn(rows: usize, cols: usize, f: impl Fn(usize, usize) -> Fixed<S, F>) -> Self {
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
@@ -97,15 +105,15 @@ impl FixedMatrix {
     /// Identity matrix of size n×n.
     pub fn identity(n: usize) -> Self {
         Self::from_fn(n, n, |r, c| {
-            if r == c { FixedPoint::one() } else { FixedPoint::ZERO }
+            if r == c { Fixed::one() } else { Fixed::ZERO }
         })
     }
 
     /// Diagonal matrix from a vector.
-    pub fn diagonal(v: &FixedVector) -> Self {
+    pub fn diagonal(v: &FixedVector<Fixed<S, F>>) -> Self {
         let n = v.len();
         Self::from_fn(n, n, |r, c| {
-            if r == c { v[r] } else { FixedPoint::ZERO }
+            if r == c { v[r] } else { Fixed::ZERO }
         })
     }
 }
@@ -114,7 +122,10 @@ impl FixedMatrix {
 // L1A: Matrix properties
 // ============================================================================
 
-impl FixedMatrix {
+impl<S: Storage, const F: u32> FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Transpose: Aᵀ[i][j] = A[j][i].
     pub fn transpose(&self) -> Self {
         Self::from_fn(self.cols, self.rows, |r, c| self.get(c, r))
@@ -123,9 +134,9 @@ impl FixedMatrix {
     /// Trace: sum of diagonal elements.
     ///
     /// Panics if matrix is not square.
-    pub fn trace(&self) -> FixedPoint {
-        assert_eq!(self.rows, self.cols, "FixedMatrix::trace: matrix must be square");
-        let mut sum = FixedPoint::ZERO;
+    pub fn trace(&self) -> Fixed<S, F> {
+        assert_eq!(self.rows, self.cols, "FixedMatrix::<Fixed<S, F>>::trace: matrix must be square");
+        let mut sum = Fixed::ZERO;
         for i in 0..self.rows {
             sum += self.get(i, i);
         }
@@ -138,17 +149,17 @@ impl FixedMatrix {
         self.rows == self.cols
     }
 
-    /// Extract a row as a FixedVector.
-    pub fn row(&self, r: usize) -> FixedVector {
-        assert!(r < self.rows, "FixedMatrix::row: index out of bounds");
+    /// Extract a row as a FixedVector<Fixed<S, F>>.
+    pub fn row(&self, r: usize) -> FixedVector<Fixed<S, F>> {
+        assert!(r < self.rows, "FixedMatrix::<Fixed<S, F>>::row: index out of bounds");
         let start = r * self.cols;
-        FixedVector::from_slice(&self.data[start..start + self.cols])
+        FixedVector::<Fixed<S, F>>::from_slice(&self.data[start..start + self.cols])
     }
 
-    /// Extract a column as a FixedVector.
-    pub fn col(&self, c: usize) -> FixedVector {
-        assert!(c < self.cols, "FixedMatrix::col: index out of bounds");
-        let mut v = FixedVector::new(self.rows);
+    /// Extract a column as a FixedVector<Fixed<S, F>>.
+    pub fn col(&self, c: usize) -> FixedVector<Fixed<S, F>> {
+        assert!(c < self.cols, "FixedMatrix::<Fixed<S, F>>::col: index out of bounds");
+        let mut v = FixedVector::<Fixed<S, F>>::new(self.rows);
         for r in 0..self.rows {
             v[r] = self.get(r, c);
         }
@@ -160,23 +171,26 @@ impl FixedMatrix {
 // L1A: Matrix-vector multiply (compute-tier accumulated)
 // ============================================================================
 
-impl FixedMatrix {
+impl<S: Storage, const F: u32> FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Matrix-vector multiply: y = A * x.
     ///
     /// Uses compute-tier accumulation: each row dot product is computed
     /// at tier N+1 precision and rounded once.
     ///
     /// Panics if `self.cols() != v.len()`.
-    pub fn mul_vector(&self, v: &FixedVector) -> FixedVector {
+    pub fn mul_vector(&self, v: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
         assert_eq!(self.cols, v.len(),
-            "FixedMatrix::mul_vector: cols ({}) != vector len ({})", self.cols, v.len());
-        let v_raw: Vec<BinaryStorage> = v.as_slice().iter().map(|fp| fp.raw()).collect();
-        let mut result = FixedVector::new(self.rows);
+            "FixedMatrix::<Fixed<S, F>>::mul_vector: cols ({}) != vector len ({})", self.cols, v.len());
+        let v_raw: Vec<S> = v.as_slice().iter().map(|fp| fp.raw()).collect();
+        let mut result = FixedVector::<Fixed<S, F>>::new(self.rows);
         for r in 0..self.rows {
             let row_start = r * self.cols;
-            let row_raw: Vec<BinaryStorage> = self.data[row_start..row_start + self.cols]
+            let row_raw: Vec<S> = self.data[row_start..row_start + self.cols]
                 .iter().map(|fp| fp.raw()).collect();
-            result[r] = FixedPoint::from_raw(compute_tier_dot_raw(&row_raw, &v_raw));
+            result[r] = Fixed::from_raw(kernels::dot_raw::<Fixed<S, F>>(&row_raw, &v_raw));
         }
         result
     }
@@ -186,7 +200,10 @@ impl FixedMatrix {
 // L1A: Matrix-matrix multiply (compute-tier accumulated)
 // ============================================================================
 
-impl Mul for FixedMatrix {
+impl<S: Storage, const F: u32> Mul for FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     /// Matrix multiply: C = A * B.
     ///
@@ -197,31 +214,37 @@ impl Mul for FixedMatrix {
     }
 }
 
-impl Mul for &FixedMatrix {
-    type Output = FixedMatrix;
-    fn mul(self, rhs: &FixedMatrix) -> FixedMatrix {
+impl<S: Storage, const F: u32> Mul for &FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedMatrix<Fixed<S, F>>;
+    fn mul(self, rhs: &FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>> {
         mat_mul(self, rhs)
     }
 }
 
 
-fn mat_mul(a: &FixedMatrix, b: &FixedMatrix) -> FixedMatrix {
+fn mat_mul<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>, b: &FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert_eq!(a.cols, b.rows,
-        "FixedMatrix::mul: A.cols ({}) != B.rows ({})", a.cols, b.rows);
+        "FixedMatrix::<Fixed<S, F>>::mul: A.cols ({}) != B.rows ({})", a.cols, b.rows);
     let k = a.cols;
     // Pre-extract B columns as raw storage for efficient repeated access
-    let b_cols_raw: Vec<Vec<BinaryStorage>> = (0..b.cols)
+    let b_cols_raw: Vec<Vec<S>> = (0..b.cols)
         .map(|c| (0..b.rows).map(|r| b.data[r * b.cols + c].raw()).collect())
         .collect();
 
-    let mut result = FixedMatrix::new(a.rows, b.cols);
+    let mut result = FixedMatrix::<Fixed<S, F>>::new(a.rows, b.cols);
     for r in 0..a.rows {
         let row_start = r * k;
-        let a_row_raw: Vec<BinaryStorage> = a.data[row_start..row_start + k]
+        let a_row_raw: Vec<S> = a.data[row_start..row_start + k]
             .iter().map(|fp| fp.raw()).collect();
         for c in 0..b.cols {
-            let dot = compute_tier_dot_raw(&a_row_raw, &b_cols_raw[c]);
-            result.data[r * b.cols + c] = FixedPoint::from_raw(dot);
+            let dot = kernels::dot_raw::<Fixed<S, F>>(&a_row_raw, &b_cols_raw[c]);
+            result.data[r * b.cols + c] = Fixed::from_raw(dot);
         }
     }
     result
@@ -231,11 +254,14 @@ fn mat_mul(a: &FixedMatrix, b: &FixedMatrix) -> FixedMatrix {
 // L1A: Element-wise arithmetic
 // ============================================================================
 
-impl Add for FixedMatrix {
+impl<S: Storage, const F: u32> Add for FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::add: dimension mismatch");
+            "FixedMatrix::<Fixed<S, F>>::add: dimension mismatch");
         Self {
             rows: self.rows,
             cols: self.cols,
@@ -245,12 +271,15 @@ impl Add for FixedMatrix {
     }
 }
 
-impl<'a, 'b> Add<&'b FixedMatrix> for &'a FixedMatrix {
-    type Output = FixedMatrix;
-    fn add(self, rhs: &'b FixedMatrix) -> FixedMatrix {
+impl<'a, 'b, S: Storage, const F: u32> Add<&'b FixedMatrix<Fixed<S, F>>> for &'a FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedMatrix<Fixed<S, F>>;
+    fn add(self, rhs: &'b FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>> {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::add: dimension mismatch");
-        FixedMatrix {
+            "FixedMatrix::<Fixed<S, F>>::add: dimension mismatch");
+        FixedMatrix::<Fixed<S, F>> {
             rows: self.rows,
             cols: self.cols,
             data: self.data.iter().zip(rhs.data.iter())
@@ -259,11 +288,14 @@ impl<'a, 'b> Add<&'b FixedMatrix> for &'a FixedMatrix {
     }
 }
 
-impl Sub for FixedMatrix {
+impl<S: Storage, const F: u32> Sub for FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::sub: dimension mismatch");
+            "FixedMatrix::<Fixed<S, F>>::sub: dimension mismatch");
         Self {
             rows: self.rows,
             cols: self.cols,
@@ -273,12 +305,15 @@ impl Sub for FixedMatrix {
     }
 }
 
-impl<'a, 'b> Sub<&'b FixedMatrix> for &'a FixedMatrix {
-    type Output = FixedMatrix;
-    fn sub(self, rhs: &'b FixedMatrix) -> FixedMatrix {
+impl<'a, 'b, S: Storage, const F: u32> Sub<&'b FixedMatrix<Fixed<S, F>>> for &'a FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedMatrix<Fixed<S, F>>;
+    fn sub(self, rhs: &'b FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>> {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::sub: dimension mismatch");
-        FixedMatrix {
+            "FixedMatrix::<Fixed<S, F>>::sub: dimension mismatch");
+        FixedMatrix::<Fixed<S, F>> {
             rows: self.rows,
             cols: self.cols,
             data: self.data.iter().zip(rhs.data.iter())
@@ -287,7 +322,10 @@ impl<'a, 'b> Sub<&'b FixedMatrix> for &'a FixedMatrix {
     }
 }
 
-impl Neg for FixedMatrix {
+impl<S: Storage, const F: u32> Neg for FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
     fn neg(self) -> Self {
         Self {
@@ -298,10 +336,13 @@ impl Neg for FixedMatrix {
     }
 }
 
-impl Neg for &FixedMatrix {
-    type Output = FixedMatrix;
-    fn neg(self) -> FixedMatrix {
-        FixedMatrix {
+impl<S: Storage, const F: u32> Neg for &FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedMatrix<Fixed<S, F>>;
+    fn neg(self) -> FixedMatrix<Fixed<S, F>> {
+        FixedMatrix::<Fixed<S, F>> {
             rows: self.rows,
             cols: self.cols,
             data: self.data.iter().map(|&v| -v).collect(),
@@ -310,10 +351,13 @@ impl Neg for &FixedMatrix {
 }
 
 /// Scalar * Matrix
-impl Mul<FixedMatrix> for FixedPoint {
-    type Output = FixedMatrix;
-    fn mul(self, rhs: FixedMatrix) -> FixedMatrix {
-        FixedMatrix {
+impl<S: Storage, const F: u32> Mul<FixedMatrix<Fixed<S, F>>> for Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedMatrix<Fixed<S, F>>;
+    fn mul(self, rhs: FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>> {
+        FixedMatrix::<Fixed<S, F>> {
             rows: rhs.rows,
             cols: rhs.cols,
             data: rhs.data.iter().map(|&v| self * v).collect(),
@@ -322,9 +366,12 @@ impl Mul<FixedMatrix> for FixedPoint {
 }
 
 /// Matrix * Scalar
-impl Mul<FixedPoint> for FixedMatrix {
+impl<S: Storage, const F: u32> Mul<Fixed<S, F>> for FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     type Output = Self;
-    fn mul(self, rhs: FixedPoint) -> Self {
+    fn mul(self, rhs: Fixed<S, F>) -> Self {
         Self {
             rows: self.rows,
             cols: self.cols,
@@ -334,10 +381,13 @@ impl Mul<FixedPoint> for FixedMatrix {
 }
 
 /// &Matrix * Scalar
-impl Mul<FixedPoint> for &FixedMatrix {
-    type Output = FixedMatrix;
-    fn mul(self, rhs: FixedPoint) -> FixedMatrix {
-        FixedMatrix {
+impl<S: Storage, const F: u32> Mul<Fixed<S, F>> for &FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    type Output = FixedMatrix<Fixed<S, F>>;
+    fn mul(self, rhs: Fixed<S, F>) -> FixedMatrix<Fixed<S, F>> {
+        FixedMatrix::<Fixed<S, F>> {
             rows: self.rows,
             cols: self.cols,
             data: self.data.iter().map(|&v| v * rhs).collect(),
@@ -349,22 +399,25 @@ impl Mul<FixedPoint> for &FixedMatrix {
 // L1A: Block operations
 // ============================================================================
 
-impl FixedMatrix {
+impl<S: Storage, const F: u32> FixedMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Extract a submatrix starting at (row, col) with given dimensions.
     ///
     /// Panics if the submatrix extends beyond the matrix bounds.
     pub fn submatrix(&self, row: usize, col: usize, rows: usize, cols: usize) -> Self {
         assert!(row + rows <= self.rows && col + cols <= self.cols,
-            "FixedMatrix::submatrix: extends beyond bounds");
+            "FixedMatrix::<Fixed<S, F>>::submatrix: extends beyond bounds");
         Self::from_fn(rows, cols, |r, c| self.get(row + r, col + c))
     }
 
     /// Insert a submatrix at position (row, col).
     ///
     /// Panics if the submatrix extends beyond the matrix bounds.
-    pub fn set_submatrix(&mut self, row: usize, col: usize, sub: &FixedMatrix) {
+    pub fn set_submatrix(&mut self, row: usize, col: usize, sub: &FixedMatrix<Fixed<S, F>>) {
         assert!(row + sub.rows <= self.rows && col + sub.cols <= self.cols,
-            "FixedMatrix::set_submatrix: extends beyond bounds");
+            "FixedMatrix::<Fixed<S, F>>::set_submatrix: extends beyond bounds");
         for r in 0..sub.rows {
             for c in 0..sub.cols {
                 self.set(row + r, col + c, sub.get(r, c));
@@ -375,7 +428,7 @@ impl FixedMatrix {
     /// Kronecker product: A ⊗ B.
     ///
     /// Result is (A.rows * B.rows) × (A.cols * B.cols).
-    pub fn kronecker(&self, other: &FixedMatrix) -> Self {
+    pub fn kronecker(&self, other: &FixedMatrix<Fixed<S, F>>) -> Self {
         let out_rows = self.rows * other.rows;
         let out_cols = self.cols * other.cols;
         Self::from_fn(out_rows, out_cols, |r, c| {
@@ -389,21 +442,21 @@ impl FixedMatrix {
 
     /// Access the underlying data slice.
     #[inline]
-    pub(crate) fn data_slice(&self) -> &[FixedPoint] {
+    pub(crate) fn data_slice(&self) -> &[Fixed<S, F>] {
         &self.data
     }
 
     /// Swap rows `i` and `j` in place. O(cols) time, zero allocation.
     pub fn swap_rows(&mut self, i: usize, j: usize) {
         if i == j { return; }
-        assert!(i < self.rows && j < self.rows, "FixedMatrix::swap_rows: index out of bounds");
+        assert!(i < self.rows && j < self.rows, "FixedMatrix::<Fixed<S, F>>::swap_rows: index out of bounds");
         for c in 0..self.cols {
             self.data.swap(i * self.cols + c, j * self.cols + c);
         }
     }
 
-    /// Extract raw BinaryStorage values for row `r`, columns `col_start..col_end`.
-    pub(crate) fn row_raw_range(&self, r: usize, col_start: usize, col_end: usize) -> Vec<BinaryStorage> {
+    /// Extract raw S values for row `r`, columns `col_start..col_end`.
+    pub(crate) fn row_raw_range(&self, r: usize, col_start: usize, col_end: usize) -> Vec<S> {
         self.data[r * self.cols + col_start..r * self.cols + col_end]
             .iter().map(|fp| fp.raw()).collect()
     }
@@ -413,13 +466,13 @@ impl FixedMatrix {
 // PartialEq (not in original — needed for testing and correctness)
 // ============================================================================
 
-impl PartialEq for FixedMatrix {
+impl<T: PartialEq> PartialEq for FixedMatrix<T> {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows && self.cols == other.cols && self.data == other.data
     }
 }
 
-impl Default for FixedMatrix {
+impl<T> Default for FixedMatrix<T> {
     fn default() -> Self {
         Self {
             rows: 0,

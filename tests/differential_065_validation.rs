@@ -503,3 +503,88 @@ fn transcendentals_are_bit_identical_to_0_6_5() {
     }
     println!("{total} transcendental comparisons at {WIDTH}-bit storage, {FRAC} fractional bits: 0 differences");
 }
+
+
+// ---- vectors and matrices ---------------------------------------------------
+
+use g_math::fixed_point::{FixedMatrix as NewMatrix, FixedVector as NewVector};
+use g_math_065::fixed_point::{FixedMatrix as OldMatrix, FixedVector as OldVector};
+
+fn old_vec(raws: &[Raw]) -> OldVector { OldVector::from_slice(&raws.iter().map(|&r| raw::old(r)).collect::<Vec<_>>()) }
+fn new_vec(raws: &[Raw]) -> NewVector { NewVector::from_slice(&raws.iter().map(|&r| raw::new(r)).collect::<Vec<_>>()) }
+fn old_raws(v: &OldVector) -> Vec<Raw> { v.as_slice().iter().map(|&x| raw::old_raw(x)).collect() }
+fn new_raws(v: &NewVector) -> Vec<Raw> { v.as_slice().iter().map(|&x| raw::new_raw(x)).collect() }
+fn old_mat(r: usize, c: usize, raws: &[Raw]) -> OldMatrix { OldMatrix::from_slice(r, c, &raws.iter().map(|&x| raw::old(x)).collect::<Vec<_>>()) }
+fn new_mat(r: usize, c: usize, raws: &[Raw]) -> NewMatrix { NewMatrix::from_slice(r, c, &raws.iter().map(|&x| raw::new(x)).collect::<Vec<_>>()) }
+fn old_mraws(m: &OldMatrix) -> Vec<Raw> { (0..m.rows()).flat_map(|i| (0..m.cols()).map(move |j| (i, j))).map(|(i, j)| raw::old_raw(m.get(i, j))).collect() }
+fn new_mraws(m: &NewMatrix) -> Vec<Raw> { (0..m.rows()).flat_map(|i| (0..m.cols()).map(move |j| (i, j))).map(|(i, j)| raw::new_raw(m.get(i, j))).collect() }
+
+#[test]
+fn vectors_and_matrices_are_bit_identical_to_0_6_5() {
+    silence_panics();
+    let n = count(600);
+    let mut rng = Rng(0x7EC7_0001);
+    let mut dot = Tally::new("vector dot/length");
+    let mut norm = Tally::new("normalize");
+    let mut cross = Tally::new("cross/rotate_pairs");
+    let mut ops = Tally::new("vector operators");
+    let mut matvec = Tally::new("matvec/matmul");
+    let mut mops = Tally::new("matrix operators");
+    for i in 0..n {
+        // vectors of 1..=40 elements, elements a few units in magnitude; every
+        // tenth case long (up to 200, past the realtime AVX2 bound) and every
+        // seventh at the full storage range (overflow paths)
+        let len = if i % 10 == 9 { 33 + (rng.next() % 168) as usize } else { 1 + (rng.next() % 40) as usize };
+        let bits = if i % 7 == 6 { WIDTH - 1 } else { FRAC + 3 };
+        let a: Vec<Raw> = (0..len).map(|_| rng.raw(bits)).collect();
+        let b: Vec<Raw> = (0..len).map(|_| rng.raw(bits)).collect();
+        let (oa, ob, na, nb) = (old_vec(&a), old_vec(&b), new_vec(&a), new_vec(&b));
+        dot.check(
+            value(|| (raw::old_raw(oa.dot(&ob)), raw::old_raw(oa.length_squared()), raw::old_raw(oa.length()), raw::old_raw(oa.metric_distance_safe(&ob)))),
+            value(|| (raw::new_raw(na.dot(&nb)), raw::new_raw(na.length_squared()), raw::new_raw(na.length()), raw::new_raw(na.metric_distance_safe(&nb)))),
+            &(&a, &b),
+        );
+        norm.check(value(|| old_raws(&oa.normalized())), value(|| new_raws(&na.normalized())), &a);
+        ops.check(
+            value(|| (old_raws(&(&oa + &ob)), old_raws(&(&oa - &ob)), old_raws(&(-&oa)), old_raws(&(oa.clone() * ob[0])))),
+            value(|| (new_raws(&(&na + &nb)), new_raws(&(&na - &nb)), new_raws(&(-&na)), new_raws(&(na.clone() * nb[0])))),
+            &(&a, &b),
+        );
+        if len >= 4 {
+            let half = len / 2 * 2 / 2;
+            let rot = |v: &[Raw]| v[..half].to_vec();
+            let (s, c) = (rot(&a), rot(&b));
+            cross.check(
+                value(|| { let mut v = oa.clone(); v.rotate_pairs(&old_vec(&s).as_slice(), &old_vec(&c).as_slice(), half * 2); old_raws(&v) }),
+                value(|| { let mut v = na.clone(); v.rotate_pairs(&new_vec(&s).as_slice(), &new_vec(&c).as_slice(), half * 2); new_raws(&v) }),
+                &(&a, &s, &c),
+            );
+        }
+        if len == 3 {
+            cross.check(value(|| old_raws(&oa.cross(&ob))), value(|| new_raws(&na.cross(&nb))), &(&a, &b));
+        }
+        // matrices up to 6 x 6 from the same raws
+        let (r, c) = (1 + (rng.next() % 6) as usize, 1 + (rng.next() % 6) as usize);
+        let m: Vec<Raw> = (0..r * c).map(|_| rng.raw(bits)).collect();
+        let k: Vec<Raw> = (0..c * r).map(|_| rng.raw(bits)).collect();
+        let x: Vec<Raw> = (0..c).map(|_| rng.raw(bits)).collect();
+        let (om, ok, onm, nk) = (old_mat(r, c, &m), old_mat(c, r, &k), new_mat(r, c, &m), new_mat(c, r, &k));
+        matvec.check(
+            value(|| (old_raws(&om.mul_vector(&old_vec(&x))), old_mraws(&(&om * &ok)), old_raws(&om.row(0)), old_raws(&om.col(0)))),
+            value(|| (new_raws(&onm.mul_vector(&new_vec(&x))), new_mraws(&(&onm * &nk)), new_raws(&onm.row(0)), new_raws(&onm.col(0)))),
+            &(&m, &k, &x),
+        );
+        let (om2, nm2) = (old_mat(r, c, &k[..r * c]), new_mat(r, c, &k[..r * c]));
+        mops.check(
+            value(|| (old_mraws(&(&om + &om2)), old_mraws(&(&om - &om2)), old_mraws(&(-&om)), old_mraws(&(om.clone() * om2.get(0, 0))), old_mraws(&om.transpose()), old_mraws(&om.kronecker(&om2)))),
+            value(|| (new_mraws(&(&onm + &nm2)), new_mraws(&(&onm - &nm2)), new_mraws(&(-&onm)), new_mraws(&(onm.clone() * nm2.get(0, 0))), new_mraws(&onm.transpose()), new_mraws(&onm.kronecker(&nm2)))),
+            &(&m, &k),
+        );
+        if r == c {
+            mops.check(value(|| raw::old_raw(om.trace())), value(|| raw::new_raw(onm.trace())), &m);
+        }
+    }
+    for t in [&dot, &norm, &cross, &ops, &matvec, &mops] {
+        t.report();
+    }
+}

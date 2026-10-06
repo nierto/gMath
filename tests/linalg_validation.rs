@@ -574,7 +574,7 @@ fn test_matrix_row_col() {
 #[test]
 fn test_large_identity_multiply() {
     // 16×16 identity * 16×16 identity = 16×16 identity
-    let id = FixedMatrix::identity(16);
+    let id: FixedMatrix = FixedMatrix::identity(16);
     let result = &id * &id;
     assert_eq!(result, id);
 }
