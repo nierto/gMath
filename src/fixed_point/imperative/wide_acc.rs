@@ -20,16 +20,6 @@ use super::{FixedMatrix, FixedVector};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
 
-#[cfg(table_format = "q16_16")]
-use crate::fixed_point::frac_config;
-#[cfg(table_format = "q32_32")]
-use crate::fixed_point::I256;
-#[cfg(table_format = "q64_64")]
-use crate::fixed_point::I512;
-#[cfg(table_format = "q128_128")]
-use crate::fixed_point::I1024;
-#[cfg(table_format = "q256_256")]
-use crate::fixed_point::I2048;
 
 // ============================================================================
 // Exact accumulator arithmetic
@@ -110,80 +100,7 @@ pub(crate) fn quadratic_form_exact(v: &FixedVector, m: &FixedMatrix) -> Result<a
     Ok(sum)
 }
 
-/// Split a `3F`-scaled accumulator into its floor at the storage scale, the
-/// "any discarded bit set" flag and the round bit (bit `2F-1`).
-///
-/// The arithmetic right shift is floor in two's complement. The floor is
-/// fits-checked against the storage tier; a value beyond it is a
-/// `TierOverflow`.
-#[inline]
-fn split_triple(a: acc::Orient) -> Result<(BinaryStorage, bool, bool), OverflowDetected> {
-    #[cfg(table_format = "q16_16")]
-    {
-        let shift = 2 * frac_config::FRAC_BITS;
-        let mask = (1i128 << shift) - 1;
-        let inexact = (a & mask) != 0;
-        let round_bit = ((a >> (shift - 1)) & 1) == 1;
-        let shifted = a >> shift;
-        if shifted > i32::MAX as i128 || shifted < i32::MIN as i128 {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        Ok((shifted as i32, inexact, round_bit))
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        // I256 >> 64: the discarded bits are exactly words[0]
-        let inexact = a.words[0] != 0;
-        let round_bit = (a.words[0] >> 63) == 1;
-        let shifted = a >> 64u32;
-        if !shifted.fits_in_i128() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        let s = shifted.as_i128();
-        if s > i64::MAX as i128 || s < i64::MIN as i128 {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        Ok((s as i64, inexact, round_bit))
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        // I512 >> 128: the discarded bits are words[0..2]
-        let inexact = (a.words[0] | a.words[1]) != 0;
-        let round_bit = (a.words[1] >> 63) == 1;
-        let shifted = a >> 128usize;
-        if !shifted.fits_in_i128() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        Ok((shifted.as_i128(), inexact, round_bit))
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        // I1024 >> 256: the discarded bits are words[0..4]
-        let inexact = (a.words[0] | a.words[1] | a.words[2] | a.words[3]) != 0;
-        let round_bit = (a.words[3] >> 63) == 1;
-        let shifted = a >> 256usize;
-        if !shifted.fits_in_i256() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        Ok((shifted.as_i256(), inexact, round_bit))
-    }
-    #[cfg(table_format = "q256_256")]
-    {
-        // I2048 >> 512: the discarded bits are words[0..8]
-        let mut low = 0u64;
-        for w in &a.words[0..8] {
-            low |= *w;
-        }
-        let inexact = low != 0;
-        let round_bit = (a.words[7] >> 63) == 1;
-        let shifted = a >> 512usize;
-        if !shifted.fits_in_i512() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        Ok((shifted.as_i512(), inexact, round_bit))
-    }
-}
-
+#[cfg(test)]
 #[inline]
 fn storage_one() -> BinaryStorage {
     #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
@@ -204,8 +121,7 @@ fn storage_one() -> BinaryStorage {
 /// negative infinity. Fits-checked; never wraps.
 #[inline]
 pub(crate) fn narrow_triple_floor(a: acc::Orient) -> Result<BinaryStorage, OverflowDetected> {
-    let (floor, _, _) = split_triple(a)?;
-    Ok(floor)
+    super::kernels::narrow_triple_floor::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
 
 /// Narrow a `3F`-scaled exact value to the storage scale, rounding toward
@@ -213,12 +129,7 @@ pub(crate) fn narrow_triple_floor(a: acc::Orient) -> Result<BinaryStorage, Overf
 /// storage maximum has no ceiling in storage, and that is a `TierOverflow`.
 #[inline]
 pub(crate) fn narrow_triple_ceil(a: acc::Orient) -> Result<BinaryStorage, OverflowDetected> {
-    let (floor, inexact, _) = split_triple(a)?;
-    if inexact {
-        floor.checked_add(storage_one()).ok_or(OverflowDetected::TierOverflow)
-    } else {
-        Ok(floor)
-    }
+    super::kernels::narrow_triple_ceil::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
 
 /// Narrow a `3F`-scaled exact value to the storage scale, rounding to nearest
@@ -226,12 +137,7 @@ pub(crate) fn narrow_triple_ceil(a: acc::Orient) -> Result<BinaryStorage, Overfl
 /// house rule, on every profile. The bump is checked.
 #[inline]
 pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, OverflowDetected> {
-    let (floor, _, round_bit) = split_triple(a)?;
-    if round_bit {
-        floor.checked_add(storage_one()).ok_or(OverflowDetected::TierOverflow)
-    } else {
-        Ok(floor)
-    }
+    super::kernels::narrow_triple_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
 
 /// `a / 2^shift` rounded to nearest with ties toward positive infinity (floor
@@ -241,20 +147,7 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
 /// `fused`.)
 #[cfg(not(table_format = "q16_16"))]
 pub(crate) fn narrow_shifted_nearest(a: acc::Orient, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
-    if shift == 0 {
-        return narrow_orient_to_storage(a).ok_or(OverflowDetected::TierOverflow);
-    }
-    let round_bit = (a.words[((shift - 1) / 64) as usize] >> ((shift - 1) % 64)) & 1 == 1;
-    #[cfg(table_format = "q32_32")]
-    let floor = a >> shift;
-    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-    let floor = a >> shift as usize;
-    let floor = narrow_orient_to_storage(floor).ok_or(OverflowDetected::TierOverflow)?;
-    if round_bit {
-        floor.checked_add(storage_one()).ok_or(OverflowDetected::TierOverflow)
-    } else {
-        Ok(floor)
-    }
+    super::kernels::narrow_shifted_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(a, shift)
 }
 
 /// `num / den` rounded to nearest, ties toward positive infinity, narrowed
@@ -263,7 +156,7 @@ pub(crate) fn narrow_shifted_nearest(a: acc::Orient, shift: u32) -> Result<Binar
 /// at the storage scale. Lets a caller divide an exact product by a compute
 /// value without forming a quotient that may exceed the compute tier.
 pub(crate) fn divide_to_storage_nearest(num: acc::Orient, den: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    narrow_orient_to_storage(divide_nearest(num, den)?).ok_or(OverflowDetected::TierOverflow)
+    super::kernels::divide_to_storage_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(num, den)
 }
 
 /// `num / den` rounded to nearest, ties toward positive infinity, narrowed to
@@ -272,17 +165,12 @@ pub(crate) fn divide_to_storage_nearest(num: acc::Orient, den: ComputeStorage) -
 /// [`divide_to_storage_nearest`], for algorithms that keep their state at the
 /// compute tier between steps.
 pub(crate) fn divide_to_compute_nearest(num: acc::Orient, den: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    narrow_orient_to_compute(divide_nearest(num, den)?).ok_or(OverflowDetected::TierOverflow)
+    super::kernels::divide_to_compute_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(num, den)
 }
 
 /// Exact `sum a_i b_i` of compute raws at `4F` fractional bits (checked).
 pub(crate) fn exact_dot_compute(a: &[ComputeStorage], b: &[ComputeStorage]) -> Result<acc::Orient, OverflowDetected> {
-    assert_eq!(a.len(), b.len(), "exact_dot_compute: length mismatch");
-    let mut sum = <acc::Orient as Wide>::zero();
-    for (x, y) in a.iter().zip(b) {
-        sum = sum.add_exact(widen_product(*x, *y))?;
-    }
-    Ok(sum)
+    super::kernels::exact_dot_compute::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
 }
 
 /// `init - sum a_i b_i` of compute raws: the sum exact at `4F`, `init`
@@ -292,95 +180,7 @@ pub(crate) fn exact_dot_compute(a: &[ComputeStorage], b: &[ComputeStorage]) -> R
 pub(crate) fn exact_sub_dot_compute(
     init: ComputeStorage, a: &[ComputeStorage], b: &[ComputeStorage],
 ) -> Result<ComputeStorage, OverflowDetected> {
-    let one = crate::fixed_point::universal::fasc::stack_evaluator::compute::make_compute_int(1);
-    let dot = exact_dot_compute(a, b)?;
-    narrow_product_to_compute(widen_product(init, one).add_exact(-dot)?)
-}
-
-/// `num / den` in the accumulator type, nearest with ties toward +infinity.
-fn divide_nearest(num: acc::Orient, den: ComputeStorage) -> Result<acc::Orient, OverflowDetected> {
-    #[cfg(table_format = "q16_16")]
-    let (q, r, d) = {
-        let d = den as i128;
-        if d == 0 { return Err(OverflowDetected::DivisionByZero); }
-        (num / d, num % d, d)
-    };
-    #[cfg(table_format = "q32_32")]
-    let (q, r, d) = {
-        let d = I256::from_i128(den);
-        if d == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
-        (num / d, num % d, d)
-    };
-    #[cfg(table_format = "q64_64")]
-    let (q, r, d) = {
-        let d = I512::from_i256(den);
-        if d == I512::zero() { return Err(OverflowDetected::DivisionByZero); }
-        (num / d, num % d, d)
-    };
-    #[cfg(table_format = "q128_128")]
-    let (q, r, d) = {
-        let d = I1024::from_i512(den);
-        if d == I1024::zero() { return Err(OverflowDetected::DivisionByZero); }
-        (num / d, num % d, d)
-    };
-    #[cfg(table_format = "q256_256")]
-    let (q, r, d) = {
-        let d = I2048::from_i1024(den);
-        if d == I2048::zero() { return Err(OverflowDetected::DivisionByZero); }
-        let (q, r) = crate::fixed_point::domains::binary_fixed::i2048::i2048_divmod(num, d);
-        (q, r, d)
-    };
-    // truncated quotient; move one unit away from zero past the half (at the
-    // half only for a positive quotient: ties toward +infinity)
-    let positive = num.is_negative() == d.is_negative();
-    let r_abs = if r.is_negative() { -r } else { r };
-    let d_abs = if d.is_negative() { -d } else { d };
-    let twice = r_abs + r_abs;
-    let bump = if positive { twice >= d_abs } else { twice > d_abs };
-    let q = if bump { if positive { q + unit_orient() } else { q - unit_orient() } } else { q };
-    Ok(q)
-}
-
-#[inline]
-fn unit_orient() -> acc::Orient {
-    #[cfg(table_format = "q16_16")]
-    { 1i128 }
-    #[cfg(table_format = "q32_32")]
-    { I256::from_i128(1) }
-    #[cfg(table_format = "q64_64")]
-    { I512::from_i128(1) }
-    #[cfg(table_format = "q128_128")]
-    { I1024::from_i128(1) }
-    #[cfg(table_format = "q256_256")]
-    { I2048::from_i128(1) }
-}
-
-/// An `Orient` value as a compute raw, `None` if it does not fit.
-fn narrow_orient_to_compute(q: acc::Orient) -> Option<ComputeStorage> {
-    #[cfg(table_format = "q16_16")]
-    { i64::try_from(q).ok() }
-    #[cfg(table_format = "q32_32")]
-    { if q.fits_in_i128() { Some(q.as_i128()) } else { None } }
-    #[cfg(table_format = "q64_64")]
-    { if q.fits_in_i256() { Some(q.as_i256()) } else { None } }
-    #[cfg(table_format = "q128_128")]
-    { if q.fits_in_i512() { Some(q.as_i512()) } else { None } }
-    #[cfg(table_format = "q256_256")]
-    { if q.fits_in_i1024() { Some(q.as_i1024()) } else { None } }
-}
-
-/// An `Orient` value as storage, `None` if it does not fit.
-fn narrow_orient_to_storage(q: acc::Orient) -> Option<BinaryStorage> {
-    #[cfg(table_format = "q16_16")]
-    { i32::try_from(q).ok() }
-    #[cfg(table_format = "q32_32")]
-    { if q.fits_in_i128() { i64::try_from(q.as_i128()).ok() } else { None } }
-    #[cfg(table_format = "q64_64")]
-    { if q.fits_in_i128() { Some(q.as_i128()) } else { None } }
-    #[cfg(table_format = "q128_128")]
-    { if q.fits_in_i256() { Some(q.as_i256()) } else { None } }
-    #[cfg(table_format = "q256_256")]
-    { if q.fits_in_i512() { Some(crate::fixed_point::I512::from_words([q.words[0], q.words[1], q.words[2], q.words[3], q.words[4], q.words[5], q.words[6], q.words[7]])) } else { None } }
+    super::kernels::exact_sub_dot_compute::<crate::fixed_point::fixed_num::ProfileFormat>(init, a, b)
 }
 
 /// Narrow an exact product of two compute raws (`4F` fractional bits, from
@@ -389,61 +189,7 @@ fn narrow_orient_to_storage(q: acc::Orient) -> Option<BinaryStorage> {
 /// compute width; a value beyond it is a `TierOverflow`, never a wrap.
 #[inline]
 pub(crate) fn narrow_product_to_compute(a: acc::Orient) -> Result<ComputeStorage, OverflowDetected> {
-    #[cfg(table_format = "q16_16")]
-    let (floor, round_bit, unit) = {
-        let shift = 2 * frac_config::FRAC_BITS;
-        let round_bit = ((a >> (shift - 1)) & 1) == 1;
-        let shifted = a >> shift;
-        if shifted > i64::MAX as i128 || shifted < i64::MIN as i128 {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        (shifted as i64, round_bit, 1i64)
-    };
-    #[cfg(table_format = "q32_32")]
-    let (floor, round_bit, unit) = {
-        // I256 >> 64: the discarded bits are exactly words[0]
-        let round_bit = (a.words[0] >> 63) == 1;
-        let shifted = a >> 64u32;
-        if !shifted.fits_in_i128() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        (shifted.as_i128(), round_bit, 1i128)
-    };
-    #[cfg(table_format = "q64_64")]
-    let (floor, round_bit, unit) = {
-        // I512 >> 128: the discarded bits are words[0..2]
-        let round_bit = (a.words[1] >> 63) == 1;
-        let shifted = a >> 128usize;
-        if !shifted.fits_in_i256() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        (shifted.as_i256(), round_bit, crate::fixed_point::I256::from_i128(1))
-    };
-    #[cfg(table_format = "q128_128")]
-    let (floor, round_bit, unit) = {
-        // I1024 >> 256: the discarded bits are words[0..4]
-        let round_bit = (a.words[3] >> 63) == 1;
-        let shifted = a >> 256usize;
-        if !shifted.fits_in_i512() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        (shifted.as_i512(), round_bit, crate::fixed_point::I512::from_i128(1))
-    };
-    #[cfg(table_format = "q256_256")]
-    let (floor, round_bit, unit) = {
-        // I2048 >> 512: the discarded bits are words[0..8]
-        let round_bit = (a.words[7] >> 63) == 1;
-        let shifted = a >> 512usize;
-        if !shifted.fits_in_i1024() {
-            return Err(OverflowDetected::TierOverflow);
-        }
-        (shifted.as_i1024(), round_bit, crate::fixed_point::I1024::from_i128(1))
-    };
-    if round_bit {
-        floor.checked_add(unit).ok_or(OverflowDetected::TierOverflow)
-    } else {
-        Ok(floor)
-    }
+    super::kernels::narrow_product_to_compute::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
 
 

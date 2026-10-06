@@ -1,0 +1,384 @@
+//! Width-generic kernels shared by the vectors, matrices, decompositions,
+//! predicates, intervals and fused operations: dot products and exact
+//! accumulations, the narrowings from the accumulator and the compute tier,
+//! nearest division, rotations and Householder reflections, and the
+//! convergence thresholds of the iterative decompositions.
+//!
+//! Every function here is generic over a format `T: FixedNum` and works on
+//! raw words: `T::Storage`, the compute word `Compute<T>` (twice as wide, `2F`
+//! fractional bits) and the accumulator `Orient<T>` (twice as wide again).
+//! Each body is the code the profile-bound functions in `linalg` and
+//! `wide_acc` carried per profile, written once; those functions now
+//! delegate here with the profile's format, so each width returns the
+//! integers it always did.
+
+use crate::fixed_point::core_types::errors::OverflowDetected;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
+use crate::fixed_point::width::{Storage, WideInt};
+
+/// The exact accumulator of a format: the orientation accumulator of its
+/// storage word.
+pub(crate) type Orient<T> = <<T as FixedNum>::Storage as Storage>::Orient;
+
+// ============================================================================
+// Storage-level dot products at the compute tier
+// ============================================================================
+
+/// `sum a_i b_i` at the compute tier, unrounded. Checked: a sum beyond the
+/// compute tier panics instead of wrapping. Takes the width's fast path when
+/// it has one and its bound holds.
+#[inline]
+pub(crate) fn dot_acc<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> Compute<T> {
+    assert_eq!(a.len(), b.len(), "compute_tier_dot_raw: length mismatch");
+    if let Some(acc) = T::Storage::dot_acc_fast(a, b) {
+        return acc;
+    }
+    dot_acc_checked::<T>(a.iter().copied().zip(b.iter().copied()))
+}
+
+/// The checked compute-tier accumulator over `(a_i, b_i)` pairs.
+#[inline]
+pub(crate) fn dot_acc_checked<T: FixedNum>(pairs: impl Iterator<Item = (T::Storage, T::Storage)>) -> Compute<T> {
+    const OVERFLOW: &str = "compute_tier_dot: sum exceeds the compute tier";
+    let mut acc = Compute::<T>::zero();
+    for (x, y) in pairs {
+        acc = acc.checked_add_wide(x.mul_wide(y)).expect(OVERFLOW);
+    }
+    acc
+}
+
+/// `init - sum a_i b_i` at the compute tier, unrounded (the products are
+/// exact there). Checked like [`dot_acc`].
+pub(crate) fn sub_dot_compute<T: FixedNum>(init: T::Storage, a: &[T::Storage], b: &[T::Storage]) -> Compute<T> {
+    const OVERFLOW: &str = "compute_tier_sub_dot: sum exceeds the compute tier";
+    assert_eq!(a.len(), b.len(), "compute_tier_sub_dot_compute: length mismatch");
+    let mut acc = T::upscale_to_compute(init);
+    for (x, y) in a.iter().zip(b) {
+        acc = acc.checked_sub_wide(x.mul_wide(*y)).expect(OVERFLOW);
+    }
+    acc
+}
+
+/// `sum a_i b_i` at the compute tier; `Err(TierOverflow)` instead of a panic.
+pub(crate) fn exact_dot<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> Result<Compute<T>, OverflowDetected> {
+    assert_eq!(a.len(), b.len(), "exact_dot: length mismatch");
+    let mut acc = Compute::<T>::zero();
+    for (x, y) in a.iter().zip(b) {
+        acc = acc.checked_add_wide(x.mul_wide(*y)).ok_or(OverflowDetected::TierOverflow)?;
+    }
+    Ok(acc)
+}
+
+// ============================================================================
+// Narrowing from the accumulator (3F or 4F fractional bits)
+// ============================================================================
+
+/// Split a `3F`-scaled accumulator into its floor at the storage scale, the
+/// "any discarded bit set" flag and the round bit (bit `2F-1`). The floor is
+/// fits-checked against the storage tier.
+#[inline]
+fn split_triple<T: FixedNum>(a: Orient<T>) -> Result<(T::Storage, bool, bool), OverflowDetected> {
+    let shift = 2 * T::FRAC_BITS;
+    let inexact = a.low_bits_any(shift);
+    let round_bit = a.bit(shift - 1);
+    let floor = T::Storage::narrow_orient(a.shr_bits(shift)).ok_or(OverflowDetected::TierOverflow)?;
+    Ok((floor, inexact, round_bit))
+}
+
+/// Floor of a `3F`-scaled accumulator at the storage scale.
+#[inline]
+pub(crate) fn narrow_triple_floor<T: FixedNum>(a: Orient<T>) -> Result<T::Storage, OverflowDetected> {
+    Ok(split_triple::<T>(a)?.0)
+}
+
+/// Ceiling of a `3F`-scaled accumulator at the storage scale.
+#[inline]
+pub(crate) fn narrow_triple_ceil<T: FixedNum>(a: Orient<T>) -> Result<T::Storage, OverflowDetected> {
+    let (floor, inexact, _) = split_triple::<T>(a)?;
+    if inexact { floor.checked_add_wide(T::Storage::one()).ok_or(OverflowDetected::TierOverflow) } else { Ok(floor) }
+}
+
+/// Nearest storage value to a `3F`-scaled accumulator, ties toward +infinity.
+#[inline]
+pub(crate) fn narrow_triple_nearest<T: FixedNum>(a: Orient<T>) -> Result<T::Storage, OverflowDetected> {
+    let (floor, _, round_bit) = split_triple::<T>(a)?;
+    if round_bit { floor.checked_add_wide(T::Storage::one()).ok_or(OverflowDetected::TierOverflow) } else { Ok(floor) }
+}
+
+/// Nearest storage value to an accumulator shifted right by `shift` bits,
+/// ties toward +infinity; `shift == 0` is the checked narrowing itself.
+#[allow(dead_code)] // its profile-bound caller is compiled on the wider profiles only
+pub(crate) fn narrow_shifted_nearest<T: FixedNum>(a: Orient<T>, shift: u32) -> Result<T::Storage, OverflowDetected> {
+    if shift == 0 {
+        return T::Storage::narrow_orient(a).ok_or(OverflowDetected::TierOverflow);
+    }
+    let round_bit = a.bit(shift - 1);
+    let floor = T::Storage::narrow_orient(a.shr_bits(shift)).ok_or(OverflowDetected::TierOverflow)?;
+    if round_bit { floor.checked_add_wide(T::Storage::one()).ok_or(OverflowDetected::TierOverflow) } else { Ok(floor) }
+}
+
+/// An exact product of two compute values (`4F` fractional bits) rounded
+/// to the compute tier, nearest with ties toward +infinity; checked.
+#[inline]
+pub(crate) fn narrow_product_to_compute<T: FixedNum>(a: Orient<T>) -> Result<Compute<T>, OverflowDetected> {
+    let shift = 2 * T::FRAC_BITS;
+    let round_bit = a.bit(shift - 1);
+    let floor = T::Storage::narrow_orient_to_compute(a.shr_bits(shift)).ok_or(OverflowDetected::TierOverflow)?;
+    if round_bit { floor.checked_add_wide(Compute::<T>::one()).ok_or(OverflowDetected::TierOverflow) } else { Ok(floor) }
+}
+
+// ============================================================================
+// Division of an accumulator by a compute value, one rounding
+// ============================================================================
+
+/// `num / den` rounded to nearest, ties toward +infinity, on the accumulator.
+fn divide_nearest<T: FixedNum>(num: Orient<T>, den: Compute<T>) -> Result<Orient<T>, OverflowDetected> {
+    let d = T::Storage::widen_compute(den);
+    if d == Orient::<T>::zero() {
+        return Err(OverflowDetected::DivisionByZero);
+    }
+    let (q, r) = num.divmod(d);
+    let positive = num.is_negative() == d.is_negative();
+    let r_abs = if r.is_negative() { -r } else { r };
+    let d_abs = if d.is_negative() { -d } else { d };
+    let twice = r_abs + r_abs;
+    let bump = if positive { twice >= d_abs } else { twice > d_abs };
+    let one = Orient::<T>::one();
+    Ok(if bump { if positive { q + one } else { q - one } } else { q })
+}
+
+/// `num / den` rounded once to the nearest storage value.
+pub(crate) fn divide_to_storage_nearest<T: FixedNum>(num: Orient<T>, den: Compute<T>) -> Result<T::Storage, OverflowDetected> {
+    T::Storage::narrow_orient(divide_nearest::<T>(num, den)?).ok_or(OverflowDetected::TierOverflow)
+}
+
+/// `num / den` rounded once to the nearest compute value.
+pub(crate) fn divide_to_compute_nearest<T: FixedNum>(num: Orient<T>, den: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+    T::Storage::narrow_orient_to_compute(divide_nearest::<T>(num, den)?).ok_or(OverflowDetected::TierOverflow)
+}
+
+// ============================================================================
+// Compute-level dot products on the accumulator
+// ============================================================================
+
+/// The exact `sum a_i b_i` of compute values on the accumulator.
+pub(crate) fn exact_dot_compute<T: FixedNum>(a: &[Compute<T>], b: &[Compute<T>]) -> Result<Orient<T>, OverflowDetected> {
+    assert_eq!(a.len(), b.len(), "exact_dot_compute: length mismatch");
+    let mut sum = Orient::<T>::zero();
+    for (x, y) in a.iter().zip(b) {
+        sum = sum.add_exact(T::Storage::widen_product(*x, *y))?;
+    }
+    Ok(sum)
+}
+
+/// `init - sum a_i b_i` of compute values, the difference formed exactly on
+/// the accumulator and rounded once to the compute tier.
+pub(crate) fn exact_sub_dot_compute<T: FixedNum>(init: Compute<T>, a: &[Compute<T>], b: &[Compute<T>]) -> Result<Compute<T>, OverflowDetected> {
+    let one = T::make_compute_int(1);
+    let dot = exact_dot_compute::<T>(a, b)?;
+    narrow_product_to_compute::<T>(T::Storage::widen_product(init, one).add_exact(-dot)?)
+}
+
+/// `a * b` of compute values rounded once to the compute tier.
+#[inline]
+pub(crate) fn compute_product<T: FixedNum>(a: Compute<T>, b: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+    narrow_product_to_compute::<T>(T::Storage::widen_product(a, b))
+}
+
+// ============================================================================
+// Compute-tier helpers of the decompositions
+// ============================================================================
+
+#[inline]
+pub(crate) fn compute_abs<T: FixedNum>(v: Compute<T>) -> Compute<T> {
+    if v.is_negative() { T::compute_negate(v) } else { v }
+}
+
+#[inline]
+pub(crate) fn compute_abs_shr<T: FixedNum>(v: Compute<T>, shift: u32) -> Compute<T> {
+    compute_abs::<T>(v).shr_bits(shift)
+}
+
+/// `2^shift` as a compute raw.
+#[inline]
+pub(crate) fn compute_quanta<T: FixedNum>(shift: u32) -> Compute<T> {
+    Compute::<T>::one().shl_bits(shift)
+}
+
+/// Deflation threshold of the iterative decompositions: `2^-(3F/2)` of the
+/// magnitude, at least `2^(F/2)` compute quanta.
+#[inline]
+pub(crate) fn compute_deflation_threshold<T: FixedNum>(magnitude: Compute<T>) -> Compute<T> {
+    let f = T::FRAC_BITS;
+    compute_abs_shr::<T>(magnitude, f * 3 / 2).max(compute_quanta::<T>(f / 2))
+}
+
+#[inline]
+pub(crate) fn compute_noise_floor<T: FixedNum>() -> Compute<T> {
+    compute_quanta::<T>(T::FRAC_BITS / 2)
+}
+
+#[inline]
+pub(crate) fn compute_stagnation_threshold<T: FixedNum>(magnitude: Compute<T>) -> Compute<T> {
+    let f = T::FRAC_BITS;
+    compute_abs_shr::<T>(magnitude, f).max(compute_quanta::<T>(f / 2))
+}
+
+/// Significant bits of a compute value's magnitude.
+#[inline]
+pub(crate) fn compute_bit_length<T: FixedNum>(v: Compute<T>) -> u32 {
+    v.magnitude_bit_length()
+}
+
+/// The shift that brings the largest of `values` up to the compute unit's
+/// bit length (0 if any already reaches it).
+pub(crate) fn scale_up_exponent<T: FixedNum>(values: &[Compute<T>]) -> u32 {
+    let bits = values.iter().map(|&v| compute_bit_length::<T>(v)).max().unwrap_or(0);
+    let unit_bits = 2 * T::FRAC_BITS;
+    if bits == 0 || bits >= unit_bits { 0 } else { unit_bits - bits }
+}
+
+/// A compute value scaled by `2^-shift`, rounded once to the nearest storage
+/// value (ties toward +infinity).
+pub(crate) fn downscale_shifted_to_storage<T: FixedNum>(v: Compute<T>, shift: u32) -> Result<T::Storage, OverflowDetected> {
+    if shift == 0 {
+        return T::downscale_to_storage(v);
+    }
+    let f = T::FRAC_BITS;
+    let half = compute_quanta::<T>(f + shift - 1);
+    let q = T::compute_checked_add(v, half)?.shr_bits(f + shift);
+    T::downscale_to_storage(q.shl_bits(f))
+}
+
+/// The convergence threshold of the iterative decompositions for a value of
+/// this magnitude: `|magnitude| >> CONVERGENCE_SHIFT`, at least one quantum.
+pub(crate) fn convergence_threshold<S: Storage, const F: u32>(magnitude: Fixed<S, F>) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let shifted = magnitude.abs().raw().shr_bits(<Fixed<S, F> as FixedNum>::CONVERGENCE_SHIFT);
+    if shifted == S::zero() { Fixed::from_raw(S::one()) } else { Fixed::from_raw(shifted) }
+}
+
+// ============================================================================
+// Rotations and reflections on compute-tier state
+// ============================================================================
+
+/// A Givens rotation held at the compute tier.
+#[derive(Clone, Copy)]
+pub(crate) struct Rotation<T: FixedNum> {
+    cs: Compute<T>,
+    sn: Compute<T>,
+}
+
+impl<T: FixedNum> Rotation<T> {
+    #[inline]
+    pub(crate) fn from_parts(cs: Compute<T>, sn: Compute<T>) -> Self {
+        Rotation { cs, sn }
+    }
+
+    /// The rotation that zeroes `b` against `a`, from compute-tier values.
+    pub(crate) fn zeroing_compute(a: Compute<T>, b: Compute<T>) -> Result<Self, OverflowDetected> {
+        let one = T::make_compute_int(1);
+        let zero = T::make_compute_int(0);
+        if T::compute_is_zero(&b) {
+            return Ok(Rotation { cs: one, sn: zero });
+        }
+        if T::compute_is_zero(&a) {
+            let sn = if b.is_negative() { T::compute_negate(one) } else { one };
+            return Ok(Rotation { cs: zero, sn });
+        }
+        if compute_abs::<T>(b) > compute_abs::<T>(a) {
+            let tau = T::compute_divide(a, b)?;
+            let inv = T::compute_divide(one, T::sqrt_at_compute_tier(T::compute_add(one, T::compute_multiply(tau, tau))))?;
+            let sn = if b.is_negative() { T::compute_negate(inv) } else { inv };
+            Ok(Rotation { cs: T::compute_multiply(sn, tau), sn })
+        } else {
+            let tau = T::compute_divide(b, a)?;
+            let inv = T::compute_divide(one, T::sqrt_at_compute_tier(T::compute_add(one, T::compute_multiply(tau, tau))))?;
+            let cs = if a.is_negative() { T::compute_negate(inv) } else { inv };
+            Ok(Rotation { cs, sn: T::compute_multiply(cs, tau) })
+        }
+    }
+
+    /// `(cs x + sn y, -sn x + cs y)`, each formed exactly and rounded once.
+    pub(crate) fn apply_compute(&self, x: Compute<T>, y: Compute<T>) -> Result<(Compute<T>, Compute<T>), OverflowDetected> {
+        let first = T::Storage::widen_product(self.cs, x).add_exact(T::Storage::widen_product(self.sn, y))?;
+        let second = T::Storage::widen_product(T::compute_negate(self.sn), x).add_exact(T::Storage::widen_product(self.cs, y))?;
+        Ok((narrow_product_to_compute::<T>(first)?, narrow_product_to_compute::<T>(second)?))
+    }
+
+    /// `cs x + sn y`, formed exactly and rounded once.
+    pub(crate) fn combine_compute(&self, x: Compute<T>, y: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+        narrow_product_to_compute::<T>(T::Storage::widen_product(self.cs, x).add_exact(T::Storage::widen_product(self.sn, y))?)
+    }
+
+    #[inline]
+    pub(crate) fn cos_times_compute(&self, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+        compute_product::<T>(self.cs, x)
+    }
+
+    #[inline]
+    pub(crate) fn sin_times_compute(&self, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+        compute_product::<T>(self.sn, x)
+    }
+
+    #[inline]
+    pub(crate) fn neg_sin_times_compute(&self, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+        compute_product::<T>(T::compute_negate(self.sn), x)
+    }
+}
+
+/// The Householder vector of `x` at the compute tier, with `v . v`, after a
+/// power-of-two normalisation of `x` to the compute unit's bit length (so
+/// the squared norm neither overflows nor underflows). `None` for a zero
+/// vector or when the reflection would be the identity.
+pub(crate) fn householder_vector_compute<T: FixedNum>(
+    x: &[Compute<T>],
+) -> Result<Option<(Vec<Compute<T>>, Compute<T>)>, OverflowDetected> {
+    let bits = x.iter().map(|&xi| compute_bit_length::<T>(xi)).max().unwrap_or(0);
+    if bits == 0 {
+        return Ok(None);
+    }
+    let unit_bits = 2 * T::FRAC_BITS;
+    let scaled: Vec<Compute<T>>;
+    let x = if bits < unit_bits {
+        scaled = x.iter().map(|&xi| xi.shl_bits(unit_bits - bits)).collect();
+        &scaled[..]
+    } else if bits > unit_bits {
+        scaled = x.iter().map(|&xi| xi.shr_bits(bits - unit_bits)).collect();
+        &scaled[..]
+    } else {
+        x
+    };
+    let xx = narrow_product_to_compute::<T>(exact_dot_compute::<T>(x, x)?)?;
+    if T::compute_is_zero(&xx) {
+        return Ok(None);
+    }
+    let norm = T::sqrt_at_compute_tier(xx);
+    let alpha = if x[0].is_negative() { norm } else { T::compute_negate(norm) };
+    let mut v = x.to_vec();
+    v[0] = T::compute_checked_add(x[0], T::compute_negate(alpha))?;
+    let vv = narrow_product_to_compute::<T>(exact_dot_compute::<T>(&v, &v)?)?;
+    if T::compute_is_zero(&vv) {
+        return Ok(None);
+    }
+    Ok(Some((v, vv)))
+}
+
+/// `w -= 2 (v . w) / (v . v) v` at the compute tier: the dot exact, each
+/// update one exact quotient rounded once.
+pub(crate) fn reflect_compute<T: FixedNum>(
+    w: &mut [Compute<T>], v: &[Compute<T>], v_dot_v: Compute<T>,
+) -> Result<(), OverflowDetected> {
+    let vw = narrow_product_to_compute::<T>(exact_dot_compute::<T>(v, w)?)?;
+    if T::compute_is_zero(&vw) {
+        return Ok(());
+    }
+    let two_vw = T::compute_checked_add(vw, vw)?;
+    for (wk, vk) in w.iter_mut().zip(v) {
+        let update = divide_to_compute_nearest::<T>(T::Storage::widen_product(two_vw, *vk), v_dot_v)?;
+        *wk = T::compute_checked_add(*wk, T::compute_negate(update))?;
+    }
+    Ok(())
+}

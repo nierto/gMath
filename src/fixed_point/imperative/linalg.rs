@@ -17,10 +17,10 @@ use crate::fixed_point::frac_config;
 use crate::fixed_point::I256;
 
 #[cfg(table_format = "q128_128")]
-use crate::fixed_point::{I256, I512};
+use crate::fixed_point::I512;
 
 #[cfg(table_format = "q256_256")]
-use crate::fixed_point::{I512, I1024};
+use crate::fixed_point::I1024;
 
 // Q32.32 and Q16.16 use native integer types only — no I256/I512/I1024 imports needed.
 // BinaryStorage = i64 / i32, ComputeStorage = i128 / i64 (already native).
@@ -78,17 +78,7 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 ///
 /// Panics if the slices have different lengths.
 pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
-    assert_eq!(a.len(), b.len(), "compute_tier_dot: length mismatch");
-    #[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
-    {
-        if a.len() >= BOUNDED_DOT_MIN_LEN {
-            // a tail call: the short-vector path below stays a leaf
-            return FixedPoint::from_raw(round_to_storage(long_dot_acc(FixedPoint::raw_slice(a), FixedPoint::raw_slice(b))));
-        }
-    }
-    FixedPoint::from_raw(round_to_storage(compute_tier_dot_acc_pairs(
-        a.iter().zip(b).map(|(x, y)| (x.raw(), y.raw())),
-    )))
+    FixedPoint::from_raw(round_to_storage(compute_tier_dot_acc(FixedPoint::raw_slice(a), FixedPoint::raw_slice(b))))
 }
 
 /// Compute-tier multiply-accumulate: acc += a_i * b_i for matrix operations.
@@ -117,38 +107,33 @@ pub(crate) fn compute_tier_sqrt_dot(a: &[BinaryStorage], b: &[BinaryStorage]) ->
 /// additions wrapped silently in release builds before 0.6.4).
 #[inline]
 pub(crate) fn compute_tier_dot_acc(a: &[BinaryStorage], b: &[BinaryStorage]) -> ComputeStorage {
-    assert_eq!(a.len(), b.len(), "compute_tier_dot_raw: length mismatch");
-    #[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
-    {
-        if a.len() >= BOUNDED_DOT_MIN_LEN {
-            return long_dot_acc(a, b);
-        }
-    }
-    compute_tier_dot_acc_pairs(a.iter().copied().zip(b.iter().copied()))
+    super::kernels::dot_acc::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
 }
 
 /// Below this length the per-term check is cheaper than the bound pass
-/// (measured: the two cross between 16 and 32 elements).
-#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
-const BOUNDED_DOT_MIN_LEN: usize = 32;
+/// (measured: the two cross between 16 and 32 elements). The length test
+/// is made inline by `Storage::dot_acc_fast`; only longer vectors reach the
+/// out-of-line [`long_dot_acc_i32`].
+#[cfg(target_arch = "x86_64")]
+pub(crate) const BOUNDED_DOT_MIN_LEN: usize = 32;
 
-/// The accumulator for long vectors: the bounded sum where AVX2 is present
-/// and the bound holds, the checked loop otherwise. Out of line, so the
-/// short-vector path of the callers stays as small as it was.
-#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+/// The 32-bit word's fast dot accumulator for `BOUNDED_DOT_MIN_LEN` or more
+/// elements: the bounded unchecked AVX2 sum where AVX2 is present and the
+/// bound holds, `None` otherwise (the generic checked loop then runs; it
+/// panics where the sum really overflows). Out of line, so the short-vector
+/// path of the callers stays as small as it was.
+#[cfg(target_arch = "x86_64")]
 #[inline(never)]
-fn long_dot_acc(a: &[i32], b: &[i32]) -> i64 {
-    if std::is_x86_feature_detected!("avx2") {
-        // SAFETY: AVX2 was just detected.
-        if let Some(acc) = unsafe { bounded_dot_avx2(a, b) } {
-            return acc;
-        }
+pub(crate) fn long_dot_acc_i32(a: &[i32], b: &[i32]) -> Option<i64> {
+    if !std::is_x86_feature_detected!("avx2") {
+        return None;
     }
-    compute_tier_dot_acc_pairs(a.iter().copied().zip(b.iter().copied()))
+    // SAFETY: AVX2 was just detected.
+    unsafe { bounded_dot_avx2(a, b) }
 }
 
 /// Largest magnitude in a slice (`|i32::MIN|` is `2^31`, hence unsigned).
-#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn max_abs_avx2(x: &[i32]) -> u32 {
     let mut m = 0u32;
@@ -163,7 +148,7 @@ pub(crate) unsafe fn max_abs_avx2(x: &[i32]) -> u32 {
 /// any order of summation: the same integer as the checked loop, in a form
 /// the compiler vectorises. `None` when the bound does not hold (the caller
 /// then takes the checked loop, which panics where the sum really overflows).
-#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn bounded_dot_avx2(a: &[i32], b: &[i32]) -> Option<i64> {
     let bound = (a.len() as u128) * (max_abs_avx2(a) as u128) * (max_abs_avx2(b) as u128);
@@ -174,7 +159,7 @@ unsafe fn bounded_dot_avx2(a: &[i32], b: &[i32]) -> Option<i64> {
 }
 
 /// `sum a_i * b_i` in i64, wrapping adds: the caller has proven the bound.
-#[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn unchecked_dot_avx2(a: &[i32], b: &[i32]) -> i64 {
     let mut acc = 0i64;
@@ -182,75 +167,6 @@ pub(crate) unsafe fn unchecked_dot_avx2(a: &[i32], b: &[i32]) -> i64 {
         acc = acc.wrapping_add((x as i64) * (y as i64));
     }
     acc
-}
-
-/// The checked compute-tier accumulator over (a_i, b_i) pairs.
-#[inline]
-fn compute_tier_dot_acc_pairs(pairs: impl Iterator<Item = (BinaryStorage, BinaryStorage)>) -> ComputeStorage {
-    const OVERFLOW: &str = "compute_tier_dot: sum exceeds the compute tier";
-
-    #[cfg(table_format = "q64_64")]
-    {
-        let mut acc = I256::zero();
-        for (x, y) in pairs {
-            acc = acc.checked_add(I256::from_i128(x) * I256::from_i128(y)).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q32_32")]
-    {
-        let mut acc: i128 = 0;
-        for (x, y) in pairs {
-            acc = acc.checked_add((x as i128) * (y as i128)).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q16_16")]
-    {
-        let mut acc: i64 = 0;
-        for (x, y) in pairs {
-            acc = acc.checked_add((x as i64) * (y as i64)).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q128_128")]
-    {
-        let mut acc = I512::zero();
-        for (x, y) in pairs {
-            let a_neg = x.is_negative();
-            let b_neg = y.is_negative();
-            let result_neg = a_neg != b_neg;
-            // `-MIN` is MIN again, whose bit pattern read unsigned by the
-            // word-wise `mul_to_i512` is 2^(W-1), the true magnitude: the
-            // product (at most 2^(2W-2)) stays exact and non-negative
-            let abs_a = if a_neg { -x } else { x };
-            let abs_b = if b_neg { -y } else { y };
-            let product = abs_a.mul_to_i512(abs_b);
-            acc = acc.checked_add(if result_neg { -product } else { product }).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q256_256")]
-    {
-        let mut acc = I1024::zero();
-        for (x, y) in pairs {
-            let a_neg = x.is_negative();
-            let b_neg = y.is_negative();
-            let result_neg = a_neg != b_neg;
-            // `-MIN` is MIN again, whose bit pattern read unsigned by the
-            // word-wise `mul_to_i1024` is 2^(W-1), the true magnitude: the
-            // product (at most 2^(2W-2)) stays exact and non-negative
-            let abs_a = if a_neg { -x } else { x };
-            let abs_b = if b_neg { -y } else { y };
-            let product = abs_a.mul_to_i1024(abs_b);
-            acc = acc.checked_add(if result_neg { -product } else { product }).expect(OVERFLOW);
-        }
-        acc
-    }
 }
 
 
@@ -262,67 +178,7 @@ pub(crate) fn compute_tier_sub_dot_compute(
     a: &[BinaryStorage],
     b: &[BinaryStorage],
 ) -> ComputeStorage {
-    const OVERFLOW: &str = "compute_tier_sub_dot: sum exceeds the compute tier";
-    assert_eq!(a.len(), b.len(), "compute_tier_sub_dot_compute: length mismatch");
-
-    #[cfg(table_format = "q64_64")]
-    {
-        let mut acc = I256::from_i128(init) << 64usize;
-        for i in 0..a.len() {
-            acc = acc.checked_sub(I256::from_i128(a[i]) * I256::from_i128(b[i])).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q32_32")]
-    {
-        // i64 upscaled to i128, then subtract i64×i64→i128 products
-        let mut acc: i128 = (init as i128) << 32;
-        for i in 0..a.len() {
-            acc = acc.checked_sub((a[i] as i128) * (b[i] as i128)).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q16_16")]
-    {
-        // i32 upscaled to i64, then subtract i32×i32→i64 products
-        let mut acc: i64 = (init as i64) << frac_config::FRAC_BITS;
-        for i in 0..a.len() {
-            acc = acc.checked_sub((a[i] as i64) * (b[i] as i64)).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q128_128")]
-    {
-        let mut acc = I512::from_i256(init) << 128usize;
-        for i in 0..a.len() {
-            let a_neg = a[i].is_negative();
-            let b_neg = b[i].is_negative();
-            let result_neg = a_neg != b_neg;
-            let abs_a = if a_neg { -a[i] } else { a[i] };
-            let abs_b = if b_neg { -b[i] } else { b[i] };
-            let product = abs_a.mul_to_i512(abs_b);
-            acc = acc.checked_add(if result_neg { product } else { -product }).expect(OVERFLOW);
-        }
-        acc
-    }
-
-    #[cfg(table_format = "q256_256")]
-    {
-        let mut acc = I1024::from_i512(init) << 256usize;
-        for i in 0..a.len() {
-            let a_neg = a[i].is_negative();
-            let b_neg = b[i].is_negative();
-            let result_neg = a_neg != b_neg;
-            let abs_a = if a_neg { -a[i] } else { a[i] };
-            let abs_b = if b_neg { -b[i] } else { b[i] };
-            let product = abs_a.mul_to_i1024(abs_b);
-            acc = acc.checked_add(if result_neg { product } else { -product }).expect(OVERFLOW);
-        }
-        acc
-    }
+    super::kernels::sub_dot_compute::<crate::fixed_point::fixed_num::ProfileFormat>(init, a, b)
 }
 
 // ============================================================================
@@ -338,58 +194,27 @@ pub(crate) fn compute_tier_sub_dot_compute(
 // transform adds at most about half an ulp per entry. Every step is checked:
 // leaving the storage range is a `TierOverflow`, never a wrap.
 
-use super::interval::exact_product;
-use super::wide_acc::{divide_to_compute_nearest, exact_dot_compute, narrow_product_to_compute, widen_product, Wide};
 use crate::fixed_point::core_types::errors::OverflowDetected;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_checked_add, compute_divide, compute_is_negative,
-    compute_is_zero, compute_multiply, compute_negate, make_compute_int, sqrt_at_compute_tier,
-};
 
 /// Consecutive non-improving iterations after which an iterative decomposition
 /// is taken to sit at its precision floor.
 pub(crate) const STAGNATION_SWEEPS: usize = 5;
 
 /// Storage fraction bits of the build.
+// used by the fused kernels on the wider profiles
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn storage_frac_bits() -> u32 {
-    #[cfg(table_format = "q16_16")]
-    { frac_config::FRAC_BITS }
-    #[cfg(table_format = "q32_32")]
-    { 32 }
-    #[cfg(table_format = "q64_64")]
-    { 64 }
-    #[cfg(table_format = "q128_128")]
-    { 128 }
-    #[cfg(table_format = "q256_256")]
-    { 256 }
+    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::FRAC_BITS
 }
 
 /// `|v| >> shift` for a compute raw.
 #[inline]
 pub(crate) fn compute_abs_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
-    let v = compute_abs(v);
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-    { v >> shift }
-    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-    { v >> shift as usize }
+    super::kernels::compute_abs_shr::<crate::fixed_point::fixed_num::ProfileFormat>(v, shift)
 }
 
 /// `2^shift` compute quanta.
-#[inline]
-fn compute_quanta(shift: u32) -> ComputeStorage {
-    #[cfg(table_format = "q16_16")]
-    { 1i64 << shift }
-    #[cfg(table_format = "q32_32")]
-    { 1i128 << shift }
-    #[cfg(table_format = "q64_64")]
-    { I256::from_i128(1) << shift as usize }
-    #[cfg(table_format = "q128_128")]
-    { I512::from_i128(1) << shift as usize }
-    #[cfg(table_format = "q256_256")]
-    { I1024::from_i128(1) << shift as usize }
-}
-
 /// Deflation bound of the iterations that keep their state at the compute
 /// tier: `magnitude * 2^-(3F/2)`, floored at `2^-(3F/2)` absolute.
 ///
@@ -399,15 +224,14 @@ fn compute_quanta(shift: u32) -> ComputeStorage {
 /// quadratically less for a symmetric matrix), below the final rounding.
 #[inline]
 pub(crate) fn compute_deflation_threshold(magnitude: ComputeStorage) -> ComputeStorage {
-    let shift = storage_frac_bits() * 3 / 2;
-    compute_abs_shr(magnitude, shift).max(compute_quanta(storage_frac_bits() / 2))
+    super::kernels::compute_deflation_threshold::<crate::fixed_point::fixed_num::ProfileFormat>(magnitude)
 }
 
 /// Absolute noise floor of the compute-tier iterations, `2^-(3F/2)`: a
 /// diagonal entry at or below it is an exact zero computed as rounding noise.
 #[inline]
 pub(crate) fn compute_noise_floor() -> ComputeStorage {
-    compute_quanta(storage_frac_bits() / 2)
+    super::kernels::compute_noise_floor::<crate::fixed_point::fixed_num::ProfileFormat>()
 }
 
 /// The looser bound accepted once a compute-tier iteration has stopped
@@ -415,121 +239,38 @@ pub(crate) fn compute_noise_floor() -> ComputeStorage {
 /// absolute floor as [`compute_deflation_threshold`].
 #[inline]
 pub(crate) fn compute_stagnation_threshold(magnitude: ComputeStorage) -> ComputeStorage {
-    compute_abs_shr(magnitude, storage_frac_bits()).max(compute_quanta(storage_frac_bits() / 2))
+    super::kernels::compute_stagnation_threshold::<crate::fixed_point::fixed_num::ProfileFormat>(magnitude)
 }
 
 /// Magnitude of a compute-tier value.
 #[inline]
 pub(crate) fn compute_abs(v: ComputeStorage) -> ComputeStorage {
-    if compute_is_negative(&v) { compute_negate(v) } else { v }
+    super::kernels::compute_abs::<crate::fixed_point::fixed_num::ProfileFormat>(v)
 }
 
 /// A plane rotation `[cs sn; -sn cs]` whose coefficients stay at the compute
 /// tier (`2 * FRAC_BITS` fractional bits).
-#[derive(Clone, Copy)]
-pub(crate) struct Rotation {
-    cs: ComputeStorage,
-    sn: ComputeStorage,
-}
-
-impl Rotation {
-    /// A rotation from coefficients already at the compute tier.
-    #[inline]
-    pub(crate) fn from_parts(cs: ComputeStorage, sn: ComputeStorage) -> Self {
-        Rotation { cs, sn }
-    }
-
-    /// The rotation taking `(a, b)` to `(r, 0)`: `cs = a / |r|`, `sn = b / |r|`
-    /// (`cs = 1`, `sn = 0` when `b` is zero). `a` and `b` are compute raws at a
-    /// common scale. Ratio form with one square root; neither input is squared,
-    /// and no trig function is involved.
-    pub(crate) fn zeroing_compute(a: ComputeStorage, b: ComputeStorage) -> Result<Self, OverflowDetected> {
-        let one = make_compute_int(1);
-        let zero = make_compute_int(0);
-        if compute_is_zero(&b) {
-            return Ok(Rotation { cs: one, sn: zero });
-        }
-        if compute_is_zero(&a) {
-            let sn = if compute_is_negative(&b) { compute_negate(one) } else { one };
-            return Ok(Rotation { cs: zero, sn });
-        }
-        if compute_abs(b) > compute_abs(a) {
-            let tau = compute_divide(a, b)?;
-            let inv = compute_divide(one, sqrt_at_compute_tier(compute_add(one, compute_multiply(tau, tau))))?;
-            let sn = if compute_is_negative(&b) { compute_negate(inv) } else { inv };
-            Ok(Rotation { cs: compute_multiply(sn, tau), sn })
-        } else {
-            let tau = compute_divide(b, a)?;
-            let inv = compute_divide(one, sqrt_at_compute_tier(compute_add(one, compute_multiply(tau, tau))))?;
-            let cs = if compute_is_negative(&a) { compute_negate(inv) } else { inv };
-            Ok(Rotation { cs, sn: compute_multiply(cs, tau) })
-        }
-    }
-
-    /// `(cs x + sn y, -sn x + cs y)` on compute raws, each rounded once at the
-    /// compute tier from its exact value.
-    pub(crate) fn apply_compute(
-        &self, x: ComputeStorage, y: ComputeStorage,
-    ) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
-        let first = widen_product(self.cs, x).add_exact(widen_product(self.sn, y))?;
-        let second = widen_product(compute_negate(self.sn), x).add_exact(widen_product(self.cs, y))?;
-        Ok((narrow_product_to_compute(first)?, narrow_product_to_compute(second)?))
-    }
-
-    /// `cs x + sn y` alone, on compute raws.
-    pub(crate) fn combine_compute(&self, x: ComputeStorage, y: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-        narrow_product_to_compute(widen_product(self.cs, x).add_exact(widen_product(self.sn, y))?)
-    }
-
-    /// `cs x` on a compute raw.
-    #[inline]
-    pub(crate) fn cos_times_compute(&self, x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-        compute_product(self.cs, x)
-    }
-
-    /// `sn x` on a compute raw.
-    #[inline]
-    pub(crate) fn sin_times_compute(&self, x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-        compute_product(self.sn, x)
-    }
-
-    /// `-sn x` on a compute raw.
-    #[inline]
-    pub(crate) fn neg_sin_times_compute(&self, x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-        compute_product(compute_negate(self.sn), x)
-    }
-}
+/// A Givens rotation at the compute tier of the profile's format.
+pub(crate) type Rotation = super::kernels::Rotation<crate::fixed_point::fixed_num::ProfileFormat>;
 
 /// `a b` of two compute raws, rounded once at the compute tier from the exact
 /// product. A product beyond the compute tier is a `TierOverflow`.
 #[inline]
 pub(crate) fn compute_product(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    narrow_product_to_compute(widen_product(a, b))
+    super::kernels::compute_product::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
 }
 
 /// Exact `sum a_i b_i` of storage values as a compute raw (`2 * FRAC_BITS`
 /// fractional bits). A sum beyond the compute tier is a `TierOverflow`.
 pub(crate) fn exact_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<ComputeStorage, OverflowDetected> {
-    assert_eq!(a.len(), b.len(), "exact_dot: length mismatch");
-    let mut acc = make_compute_int(0);
-    for i in 0..a.len() {
-        acc = compute_checked_add(acc, exact_product(a[i], b[i]))?;
-    }
-    Ok(acc)
+    super::kernels::exact_dot::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
 }
 
 /// A compute raw scaled by `2^-shift`, rounded once to storage (nearest,
 /// ties toward +infinity, checked): for iterations that scaled a block up by
 /// a power of two to keep relative precision.
 pub(crate) fn downscale_shifted_to_storage(v: ComputeStorage, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
-    if shift == 0 {
-        return downscale_to_storage(v);
-    }
-    let f = storage_frac_bits();
-    let half = compute_quanta(f + shift - 1);
-    let q = compute_shr(compute_checked_add(v, half)?, f + shift);
-    // a multiple of 2^F at the compute scale: the downscale is exact
-    downscale_to_storage(compute_shl(q, f))
+    super::kernels::downscale_shifted_to_storage::<crate::fixed_point::fixed_num::ProfileFormat>(v, shift)
 }
 
 /// `v * 2^shift` for a compute raw (exact; the caller keeps it in range).
@@ -541,41 +282,29 @@ pub(crate) fn compute_scale_up(v: ComputeStorage, shift: u32) -> ComputeStorage 
 /// The power-of-two exponent that brings the largest of `values` into
 /// `[1/2, 1)` at the compute scale when it is below `1/2`, else 0.
 pub(crate) fn scale_up_exponent(values: &[ComputeStorage]) -> u32 {
-    let bits = values.iter().map(|&v| compute_bit_length(v)).max().unwrap_or(0);
-    let unit_bits = 2 * storage_frac_bits();
-    if bits == 0 || bits >= unit_bits { 0 } else { unit_bits - bits }
+    super::kernels::scale_up_exponent::<crate::fixed_point::fixed_num::ProfileFormat>(values)
 }
 
 /// Significant bits of `|v|` for a compute raw.
+// used by the fused kernels on the wider profiles
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn compute_bit_length(v: ComputeStorage) -> u32 {
-    #[cfg(table_format = "q16_16")]
-    { 64 - v.unsigned_abs().leading_zeros() }
-    #[cfg(table_format = "q32_32")]
-    { 128 - v.unsigned_abs().leading_zeros() }
-    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-    {
-        let words = compute_abs(v).words;
-        (0..words.len()).rev().find(|&i| words[i] != 0).map_or(0, |i| i as u32 * 64 + (64 - words[i].leading_zeros()))
-    }
+    super::kernels::compute_bit_length::<crate::fixed_point::fixed_num::ProfileFormat>(v)
 }
 
 /// `v << shift` for a compute raw (exact; the caller keeps it in range).
 #[inline]
 pub(crate) fn compute_shl(v: ComputeStorage, shift: u32) -> ComputeStorage {
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    { v << shift }
-    #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-    { v << shift as usize }
+    crate::fixed_point::width::WideInt::shl_bits(v, shift)
 }
 
 /// `v >> shift` (arithmetic) for a compute raw.
+// used by the fused kernels on the wider profiles
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-    { v >> shift }
-    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-    { v >> shift as usize }
+    crate::fixed_point::width::WideInt::shr_bits(v, shift)
 }
 
 /// Householder direction for a column held at the compute tier: `v = x -
@@ -595,34 +324,7 @@ pub(crate) fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
 pub(crate) fn householder_vector_compute(
     x: &[ComputeStorage],
 ) -> Result<Option<(Vec<ComputeStorage>, ComputeStorage)>, OverflowDetected> {
-    let bits = x.iter().map(|&xi| compute_bit_length(xi)).max().unwrap_or(0);
-    if bits == 0 {
-        return Ok(None);
-    }
-    let unit_bits = 2 * storage_frac_bits();
-    let scaled: Vec<ComputeStorage>;
-    let x = if bits < unit_bits {
-        scaled = x.iter().map(|&xi| compute_shl(xi, unit_bits - bits)).collect();
-        &scaled[..]
-    } else if bits > unit_bits {
-        scaled = x.iter().map(|&xi| compute_shr(xi, bits - unit_bits)).collect();
-        &scaled[..]
-    } else {
-        x
-    };
-    let xx = narrow_product_to_compute(exact_dot_compute(x, x)?)?;
-    if compute_is_zero(&xx) {
-        return Ok(None);
-    }
-    let norm = sqrt_at_compute_tier(xx);
-    let alpha = if compute_is_negative(&x[0]) { norm } else { compute_negate(norm) };
-    let mut v = x.to_vec();
-    v[0] = compute_checked_add(x[0], compute_negate(alpha))?;
-    let vv = narrow_product_to_compute(exact_dot_compute(&v, &v)?)?;
-    if compute_is_zero(&vv) {
-        return Ok(None);
-    }
-    Ok(Some((v, vv)))
+    super::kernels::householder_vector_compute::<crate::fixed_point::fixed_num::ProfileFormat>(x)
 }
 
 /// Reflect a compute-tier vector `w` in the hyperplane orthogonal to `v`:
@@ -632,16 +334,7 @@ pub(crate) fn householder_vector_compute(
 pub(crate) fn reflect_compute(
     w: &mut [ComputeStorage], v: &[ComputeStorage], v_dot_v: ComputeStorage,
 ) -> Result<(), OverflowDetected> {
-    let vw = narrow_product_to_compute(exact_dot_compute(v, w)?)?;
-    if compute_is_zero(&vw) {
-        return Ok(());
-    }
-    let two_vw = compute_checked_add(vw, vw)?;
-    for (wk, vk) in w.iter_mut().zip(v) {
-        let update = divide_to_compute_nearest(widen_product(two_vw, *vk), v_dot_v)?;
-        *wk = compute_checked_add(*wk, compute_negate(update))?;
-    }
-    Ok(())
+    super::kernels::reflect_compute::<crate::fixed_point::fixed_num::ProfileFormat>(w, v, v_dot_v)
 }
 
 // ============================================================================
@@ -662,33 +355,8 @@ pub(crate) fn reflect_compute(
 /// - Q128.128: ~2^-64 relative (~19 decimal digits)
 /// - Q256.256: ~2^-128 relative (~38 decimal digits)
 pub(crate) fn convergence_threshold(magnitude: FixedPoint) -> FixedPoint {
-    let quantum = FixedPoint::from_raw(quantum_raw());
-    let shifted = magnitude.abs().raw() >> half_frac_bits();
-    let result = FixedPoint::from_raw(shifted);
-    if result.is_zero() { quantum } else { result }
+    super::kernels::convergence_threshold(magnitude)
 }
-
-#[cfg(table_format = "q64_64")]
-fn half_frac_bits() -> u32 { 32 }
-#[cfg(table_format = "q32_32")]
-fn half_frac_bits() -> u32 { 16 }
-#[cfg(table_format = "q16_16")]
-fn half_frac_bits() -> u32 { 8 }
-#[cfg(table_format = "q128_128")]
-fn half_frac_bits() -> u32 { 64 }
-#[cfg(table_format = "q256_256")]
-fn half_frac_bits() -> usize { 128 }
-
-#[cfg(table_format = "q64_64")]
-fn quantum_raw() -> BinaryStorage { 1i128 }
-#[cfg(table_format = "q32_32")]
-fn quantum_raw() -> BinaryStorage { 1i64 }
-#[cfg(table_format = "q16_16")]
-fn quantum_raw() -> BinaryStorage { 1i32 }
-#[cfg(table_format = "q128_128")]
-fn quantum_raw() -> BinaryStorage { I256::from_i128(1) }
-#[cfg(table_format = "q256_256")]
-fn quantum_raw() -> BinaryStorage { I512::from_i128(1) }
 
 // ============================================================================
 // Compute-tier trit-weighted operations (zero-multiply dot product)

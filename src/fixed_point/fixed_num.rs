@@ -110,6 +110,11 @@ pub trait FixedNum: Copy + sealed::Sealed {
     const FRAC_BITS: u32;
     /// The storage word's tier in the canonical layer's binary ladder.
     const STORAGE_TIER: u8;
+    /// The shift of a magnitude that gives the decompositions' convergence
+    /// threshold (`linalg::convergence_threshold`): half the storage word's
+    /// fractional bits at its standard split, fixed per word (8 on the
+    /// 32-bit word at every split, as calibrated in 0.6.2).
+    const CONVERGENCE_SHIFT: u32;
 
     // ---- between the storage and compute tiers -------------------------
     /// A storage value at the compute tier (exact).
@@ -407,6 +412,7 @@ impl<const F: u32> FixedNum for Fixed<i32, F> {
         F
     };
     const STORAGE_TIER: u8 = 1;
+    const CONVERGENCE_SHIFT: u32 = 8;
     #[inline]
     fn upscale_to_compute(val: i32) -> i64 {
         // i32 → i64, shift left by FRAC_BITS (storage → compute tier)
@@ -606,6 +612,7 @@ impl FixedNum for Fixed<i64, 32> {
     type Storage = i64;
     const FRAC_BITS: u32 = 32;
     const STORAGE_TIER: u8 = 2;
+    const CONVERGENCE_SHIFT: u32 = 16;
     #[inline]
     fn upscale_to_compute(val: i64) -> i128 {
         // i64 → i128, shift left 32 (Q32.32 → Q64.64)
@@ -796,6 +803,7 @@ impl FixedNum for Fixed<i128, 64> {
     type Storage = i128;
     const FRAC_BITS: u32 = 64;
     const STORAGE_TIER: u8 = 3;
+    const CONVERGENCE_SHIFT: u32 = 32;
     #[inline]
     fn upscale_to_compute(val: i128) -> I256 {
         // i128 → I256, shift left 64
@@ -1002,6 +1010,7 @@ impl FixedNum for Fixed<I256, 128> {
     type Storage = I256;
     const FRAC_BITS: u32 = 128;
     const STORAGE_TIER: u8 = 4;
+    const CONVERGENCE_SHIFT: u32 = 64;
     #[inline]
     fn upscale_to_compute(val: I256) -> I512 {
         // I256 → I512, shift left 128
@@ -1229,6 +1238,7 @@ impl FixedNum for Fixed<I512, 256> {
     type Storage = I512;
     const FRAC_BITS: u32 = 256;
     const STORAGE_TIER: u8 = 5;
+    const CONVERGENCE_SHIFT: u32 = 128;
     #[inline]
     fn upscale_to_compute(val: I512) -> I1024 {
         // I512 → I1024, shift left 256

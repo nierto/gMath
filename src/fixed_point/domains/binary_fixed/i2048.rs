@@ -222,7 +222,9 @@ impl I2048 {
     /// Check if value fits in I1024
     #[inline(always)]
     pub fn fits_in_i1024(self) -> bool {
-        let is_negative = (self.words[31] as i64) < 0;
+        // the sign of the I1024 candidate is bit 1023, word 15 (before 0.6.8
+        // this read word 31, so 2^1023 .. 2^1024 - 1 passed as fitting)
+        let is_negative = (self.words[15] as i64) < 0;
         let expected_high = if is_negative { u64::MAX } else { 0 };
 
         (16..32).all(|i| self.words[i] == expected_high)

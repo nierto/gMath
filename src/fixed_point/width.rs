@@ -67,6 +67,16 @@ pub trait WideInt:
     fn shl_bits(self, n: u32) -> Self;
     /// Arithmetic right shift by `n < BITS` bits (floor).
     fn shr_bits(self, n: u32) -> Self;
+    /// Bit `i` of the two's complement representation (`i < BITS`).
+    fn bit(self, i: u32) -> bool;
+    /// Any of the lowest `n` bits set (`n < BITS`).
+    fn low_bits_any(self, n: u32) -> bool;
+    /// Significant bits of the magnitude (`BITS` for the minimum).
+    fn magnitude_bit_length(self) -> u32;
+    /// Truncating division with remainder, as `/` and `%` on the native
+    /// integers: the quotient toward zero, the remainder with the dividend's
+    /// sign. Panics on a zero divisor.
+    fn divmod(self, d: Self) -> (Self, Self);
 
     #[inline]
     fn mul_exact(self, rhs: Self) -> Self {
@@ -98,7 +108,7 @@ pub(crate) fn words_bit_length(words: &[u64]) -> u32 {
 }
 
 macro_rules! native_wide_int {
-    ($t:ty, $bits:expr) => {
+    ($t:ty, $u:ty, $bits:expr) => {
         impl sealed::Sealed for $t {}
         impl WideInt for $t {
             const BITS: u32 = $bits;
@@ -113,15 +123,19 @@ macro_rules! native_wide_int {
             #[inline] fn checked_neg_wide(self) -> Option<Self> { <$t>::checked_neg(self) }
             #[inline] fn shl_bits(self, n: u32) -> Self { self << n }
             #[inline] fn shr_bits(self, n: u32) -> Self { self >> n }
+            #[inline] fn bit(self, i: u32) -> bool { (self >> i) & 1 == 1 }
+            #[inline] fn low_bits_any(self, n: u32) -> bool { n > 0 && (self as $u) & (<$u>::MAX >> ($bits - n)) != 0 }
+            #[inline] fn magnitude_bit_length(self) -> u32 { $bits - self.unsigned_abs().leading_zeros() }
+            #[inline] fn divmod(self, d: Self) -> (Self, Self) { (self / d, self % d) }
         }
     };
 }
-native_wide_int!(i32, 32);
-native_wide_int!(i64, 64);
-native_wide_int!(i128, 128);
+native_wide_int!(i32, u32, 32);
+native_wide_int!(i64, u64, 64);
+native_wide_int!(i128, u128, 128);
 
 macro_rules! word_wide_int {
-    ($t:ident, $bits:expr, $shr:ty) => {
+    ($t:ident, $bits:expr, $shr:ty, $divmod:path) => {
         impl sealed::Sealed for $t {}
         impl WideInt for $t {
             const BITS: u32 = $bits;
@@ -136,13 +150,27 @@ macro_rules! word_wide_int {
             #[inline] fn checked_neg_wide(self) -> Option<Self> { $t::checked_neg(self) }
             #[inline] fn shl_bits(self, n: u32) -> Self { self << n as usize }
             #[inline] fn shr_bits(self, n: u32) -> Self { self >> n as $shr }
+            #[inline] fn bit(self, i: u32) -> bool { (self.words[(i / 64) as usize] >> (i % 64)) & 1 == 1 }
+            #[inline]
+            fn low_bits_any(self, n: u32) -> bool {
+                let (w, b) = ((n / 64) as usize, n % 64);
+                self.words[..w].iter().any(|&x| x != 0) || (b > 0 && self.words[w] & ((1u64 << b) - 1) != 0)
+            }
+            #[inline]
+            fn magnitude_bit_length(self) -> u32 {
+                // -MIN wraps to MIN, whose words read as the magnitude 2^(BITS-1)
+                let m = if self.is_negative() { -self } else { self };
+                words_bit_length(&m.words)
+            }
+            #[inline] fn divmod(self, d: Self) -> (Self, Self) { $divmod(self, d) }
         }
     };
 }
-word_wide_int!(I256, 256, u32);
-word_wide_int!(I512, 512, usize);
-word_wide_int!(I1024, 1024, usize);
-word_wide_int!(I2048, 2048, usize);
+#[inline] fn divmod_by_ops<T: std::ops::Div<Output = T> + std::ops::Rem<Output = T> + Copy>(a: T, d: T) -> (T, T) { (a / d, a % d) }
+word_wide_int!(I256, 256, u32, divmod_by_ops);
+word_wide_int!(I512, 512, usize, divmod_by_ops);
+word_wide_int!(I1024, 1024, usize, divmod_by_ops);
+word_wide_int!(I2048, 2048, usize, crate::fixed_point::domains::binary_fixed::i2048::i2048_divmod);
 
 /// A word a fixed-point value is stored in, with the wider words that belong
 /// to it.
@@ -167,6 +195,19 @@ pub trait Storage: WideInt {
     /// Panics if the operands' bit lengths exceed the accumulator (the width
     /// budget made loud).
     fn widen_product(a: Self::Compute, b: Self::Compute) -> Self::Orient;
+    /// Sign extension of a compute value to the accumulator (exact).
+    fn widen_compute(c: Self::Compute) -> Self::Orient;
+    /// The accumulator value as a storage value if it fits, `None` otherwise.
+    fn narrow_orient(o: Self::Orient) -> Option<Self>;
+    /// The accumulator value as a compute value if it fits, `None` otherwise.
+    fn narrow_orient_to_compute(o: Self::Orient) -> Option<Self::Compute>;
+    /// `sum a_i * b_i` on the compute word by a width-specific fast path,
+    /// `None` when there is none or its preconditions fail. The same integer
+    /// as the checked loop; the caller takes the checked loop on `None`.
+    #[inline]
+    fn dot_acc_fast(_a: &[Self], _b: &[Self]) -> Option<Self::Compute> {
+        None
+    }
 }
 
 /// Storage words with a second exact accumulator, wide enough for the circle
@@ -218,6 +259,15 @@ impl Storage for i32 {
     #[inline] fn narrow(c: i64) -> Option<Self> { i32::try_from(c).ok() }
     #[inline] fn orient(self) -> i128 { self as i128 }
     #[inline] fn widen_product(a: i64, b: i64) -> i128 { (a as i128) * (b as i128) }
+    #[inline] fn widen_compute(c: i64) -> i128 { c as i128 }
+    #[inline] fn narrow_orient(o: i128) -> Option<Self> { i32::try_from(o).ok() }
+    #[inline] fn narrow_orient_to_compute(o: i128) -> Option<i64> { i64::try_from(o).ok() }
+    #[cfg(target_arch = "x86_64")]
+    #[inline]
+    fn dot_acc_fast(a: &[i32], b: &[i32]) -> Option<i64> {
+        use crate::fixed_point::imperative::linalg::{long_dot_acc_i32, BOUNDED_DOT_MIN_LEN};
+        if a.len() < BOUNDED_DOT_MIN_LEN { None } else { long_dot_acc_i32(a, b) }
+    }
 }
 impl CircleStorage for i32 {
     type Circle = I256; // 133 / 166 bits
@@ -233,6 +283,15 @@ impl Storage for i64 {
     #[inline] fn orient(self) -> I256 { I256::from_i128(self as i128) }
     // sign-correct by itself
     #[inline] fn widen_product(a: i128, b: i128) -> I256 { mul_i128_to_i256(a, b) }
+    #[inline] fn widen_compute(c: i128) -> I256 { I256::from_i128(c) }
+    #[inline]
+    fn narrow_orient(o: I256) -> Option<Self> {
+        if o.fits_in_i128() { i64::try_from(o.as_i128()).ok() } else { None }
+    }
+    #[inline]
+    fn narrow_orient_to_compute(o: I256) -> Option<i128> {
+        if o.fits_in_i128() { Some(o.as_i128()) } else { None }
+    }
 }
 impl CircleStorage for i64 {
     type Circle = I512; // 261 / 326 bits
@@ -252,6 +311,15 @@ impl Storage for i128 {
     #[inline]
     fn widen_product(a: I256, b: I256) -> I512 {
         budgeted_widening_product!(a, b, mul_to_i512, I512)
+    }
+    #[inline] fn widen_compute(c: I256) -> I512 { I512::from_i256(c) }
+    #[inline]
+    fn narrow_orient(o: I512) -> Option<Self> {
+        if o.fits_in_i128() { Some(o.as_i128()) } else { None }
+    }
+    #[inline]
+    fn narrow_orient_to_compute(o: I512) -> Option<I256> {
+        if o.fits_in_i256() { Some(o.as_i256()) } else { None }
     }
 }
 impl CircleStorage for i128 {
@@ -273,6 +341,15 @@ impl Storage for I256 {
     fn widen_product(a: I512, b: I512) -> I1024 {
         budgeted_widening_product!(a, b, mul_to_i1024, I1024)
     }
+    #[inline] fn widen_compute(c: I512) -> I1024 { I1024::from_i512(c) }
+    #[inline]
+    fn narrow_orient(o: I1024) -> Option<Self> {
+        if o.fits_in_i256() { Some(o.as_i256()) } else { None }
+    }
+    #[inline]
+    fn narrow_orient_to_compute(o: I1024) -> Option<I512> {
+        if o.fits_in_i512() { Some(o.as_i512()) } else { None }
+    }
 }
 impl CircleStorage for I256 {
     type Circle = I2048; // 1029 / 1286 bits
@@ -292,6 +369,15 @@ impl Storage for I512 {
     #[inline]
     fn widen_product(a: I1024, b: I1024) -> I2048 {
         budgeted_widening_product!(a, b, mul_to_i2048, I2048)
+    }
+    #[inline] fn widen_compute(c: I1024) -> I2048 { I2048::from_i1024(c) }
+    #[inline]
+    fn narrow_orient(o: I2048) -> Option<Self> {
+        if o.fits_in_i512() { Some(o.as_i512()) } else { None }
+    }
+    #[inline]
+    fn narrow_orient_to_compute(o: I2048) -> Option<I1024> {
+        if o.fits_in_i1024() { Some(o.as_i1024()) } else { None }
     }
 }
 
@@ -318,6 +404,14 @@ mod tests {
         assert_eq!(v(9).checked_neg_wide(), Some(v(-9)));
         assert_eq!(v(-1234).mul_exact(v(567)), v(-1234 * 567));
         assert_eq!(v(-1234).mul_exact(v(-567)), v(1234 * 567));
+        assert!(v(5).bit(0) && v(5).bit(2) && !v(5).bit(1));
+        assert!(v(-1).bit(T::BITS - 1) && !v(1).bit(T::BITS - 1));
+        assert!(v(8).low_bits_any(4) && !v(8).low_bits_any(3) && v(-8).low_bits_any(4) && !v(0).low_bits_any(T::BITS - 1));
+        assert_eq!(v(-255).magnitude_bit_length(), 8);
+        assert_eq!(v(0).magnitude_bit_length(), 0);
+        for &(a, d) in &[(7i64, 2i64), (-7, 2), (7, -2), (-7, -2), (0, 3), (6, 3), (-6, -3), (1, 1 << 20)] {
+            assert_eq!(v(a).divmod(v(d)), (v(a / d), v(a % d)), "{a} / {d}");
+        }
 
         // The extremes: max = 2^(BITS-1) - 1, min = -max - 1.
         let max = v(1).shl_bits(T::BITS - 2) - v(1) + v(1).shl_bits(T::BITS - 2);
@@ -330,6 +424,11 @@ mod tests {
         assert_eq!(max.checked_sub_wide(v(-1)), None);
         assert_eq!(min.checked_neg_wide(), None);
         assert_eq!(max.checked_neg_wide(), Some(min + v(1)));
+        assert_eq!(min.magnitude_bit_length(), T::BITS);
+        assert_eq!(max.magnitude_bit_length(), T::BITS - 1);
+        let (q, r) = max.divmod(v(7));
+        assert_eq!(q.shl_bits(2) + q.shl_bits(1) + q + r, max); // 7q + r, without a product near the budget
+        assert!(!r.is_negative() && r < v(7));
         assert_eq!(max.checked_add_wide(min), Some(v(-1)));
         assert_eq!(v(0).checked_sub_wide(min), None);
         assert!(max.add_exact(v(1)).is_err());
@@ -377,6 +476,15 @@ mod tests {
         // And of two compute values of that size on the accumulator.
         let big = c(1).shl_bits(2 * S::BITS - 2);
         assert_eq!(S::widen_product(big, -big), -o(1).shl_bits(4 * S::BITS - 4));
+        // widening a compute value and narrowing back are exact and checked
+        assert_eq!(S::widen_compute(-big), -o(1).shl_bits(2 * S::BITS - 2));
+        assert_eq!(S::narrow_orient_to_compute(S::widen_compute(-big)), Some(-big));
+        assert_eq!(S::narrow_orient_to_compute(o(1).shl_bits(2 * S::BITS - 1)), None);
+        assert_eq!(S::narrow_orient_to_compute(-o(1).shl_bits(2 * S::BITS - 1)), Some(c(1).shl_bits(2 * S::BITS - 1)));
+        assert_eq!(S::narrow_orient(o(-77)), Some(s(-77)));
+        assert_eq!(S::narrow_orient(o(1).shl_bits(S::BITS - 1)), None);
+        assert_eq!(S::narrow_orient(-o(1).shl_bits(S::BITS - 1)), Some(min));
+        assert_eq!(S::narrow_orient(-o(1).shl_bits(S::BITS - 1) - o(1)), None);
     }
 
     #[test]
@@ -386,6 +494,19 @@ mod tests {
         check_storage::<i128>();
         check_storage::<I256>();
         check_storage::<I512>();
+    }
+
+    /// 2^1023 does not fit an I1024 (it is one above the maximum); before
+    /// 0.6.8 `I2048::fits_in_i1024` read the sign from the wrong word and
+    /// accepted every value in [2^1023, 2^1024).
+    #[test]
+    fn the_fits_checks_refuse_the_value_one_above_the_maximum() {
+        assert!(!I2048::from_i64(1).shl_bits(1023).fits_in_i1024());
+        assert!(I2048::from_i64(1).shl_bits(1022).fits_in_i1024());
+        assert!((-I2048::from_i64(1).shl_bits(1023)).fits_in_i1024());
+        assert!(!I1024::from_i64(1).shl_bits(511).fits_in_i512());
+        assert!(!I512::from_i64(1).shl_bits(255).fits_in_i256());
+        assert!(!I256::from_i64(1).shl_bits(127).fits_in_i128());
     }
 
     #[test]

@@ -67,7 +67,9 @@ mod raw {
 
 use raw::{Raw, WORDS};
 
+#[allow(dead_code)]
 const BITS: u32 = WORDS as u32 * 64;
+
 #[cfg(table_format = "q16_16")]
 const WIDTH: u32 = 32;
 #[cfg(not(table_format = "q16_16"))]
