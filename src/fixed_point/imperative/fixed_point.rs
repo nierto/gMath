@@ -862,7 +862,12 @@ where
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        self.try_add(rhs).expect("FixedPoint: addition overflow")
+        // Branch on the checked word directly: building the `Result` here
+        // cost a materialised enum per element in vector loops.
+        match self.raw.checked_add_wide(rhs.raw) {
+            Some(raw) => Self { raw },
+            None => panic!("FixedPoint: addition overflow"),
+        }
     }
 }
 
@@ -873,7 +878,12 @@ where
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        self.try_sub(rhs).expect("FixedPoint: subtraction overflow")
+        // Branch on the checked word directly: building the `Result` here
+        // cost a materialised enum per element in vector loops.
+        match self.raw.checked_sub_wide(rhs.raw) {
+            Some(raw) => Self { raw },
+            None => panic!("FixedPoint: subtraction overflow"),
+        }
     }
 }
 

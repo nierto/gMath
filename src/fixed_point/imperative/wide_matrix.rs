@@ -1,7 +1,7 @@
 //! Q64.64 matrices for the realtime profile's matrix functions.
 //!
 //! On realtime the compute tier holds `2F` fractional bits in an i64 (16 at
-//! `GMATH_FRAC_BITS = 8`), and scaling and squaring amplifies that resolution:
+//! `GMATH_F = 8`), and scaling and squaring amplifies that resolution:
 //! `expm` of a norm-7 matrix was 8 units off at 8 fraction bits. The matrix
 //! functions therefore run on i128 values with 64 fractional bits there
 //! (40 to 56 guard bits over the compute tier across the gated splits), the
@@ -13,12 +13,11 @@
 //! of an exact sum by an entry is one rounding of the exact quotient. Every
 //! narrowing is checked: leaving the range is a `TierOverflow`, never a wrap.
 
-use super::linalg::ComputeStorage;
 use super::compute_matrix::ComputeMatrix;
-use super::{FixedMatrix, FixedPoint};
+use super::FixedMatrix;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::domains::binary_fixed::i256::{divmod_i256_by_i256, mul_i128_to_i256};
-use crate::fixed_point::frac_config::FRAC_BITS;
 use crate::fixed_point::I256;
 
 const OVERFLOW: OverflowDetected = OverflowDetected::TierOverflow;
@@ -109,54 +108,66 @@ impl WideMatrix {
     pub(crate) fn set(&mut self, r: usize, c: usize, v: i128) { self.data[r * self.cols + c] = v; }
 
     /// A storage matrix widened exactly.
-    pub(crate) fn from_fixed_matrix(m: &FixedMatrix) -> Self {
+    pub(crate) fn from_fixed_matrix<const F: u32>(m: &FixedMatrix<Fixed<i32, F>>) -> Self
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
         let mut w = Self::new(m.rows(), m.cols());
         for r in 0..m.rows() {
             for c in 0..m.cols() {
-                w.set(r, c, (m.get(r, c).raw() as i128) << (WIDE_FRAC - FRAC_BITS));
+                w.set(r, c, (m.get(r, c).raw() as i128) << (WIDE_FRAC - F));
             }
         }
         w
     }
 
     /// A compute-tier matrix (`2F` fractional bits) widened exactly.
-    pub(crate) fn from_compute(m: &ComputeMatrix) -> Self {
+    pub(crate) fn from_compute<const F: u32>(m: &ComputeMatrix<Fixed<i32, F>>) -> Self
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
         let mut w = Self::new(m.rows(), m.cols());
         for r in 0..m.rows() {
             for c in 0..m.cols() {
-                w.set(r, c, (m.get(r, c) as i128) << (WIDE_FRAC - 2 * FRAC_BITS));
+                w.set(r, c, (m.get(r, c) as i128) << (WIDE_FRAC - 2 * F));
             }
         }
         w
     }
 
     /// Rounded once to storage (checked).
-    pub(crate) fn to_fixed_matrix(&self) -> Result<FixedMatrix, OverflowDetected> {
+    pub(crate) fn to_fixed_matrix<const F: u32>(&self) -> Result<FixedMatrix<Fixed<i32, F>>, OverflowDetected>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
         let mut out = FixedMatrix::new(self.rows, self.cols);
         for r in 0..self.rows {
             for c in 0..self.cols {
-                let v = round_shift(self.get(r, c), WIDE_FRAC - FRAC_BITS);
-                out.set(r, c, FixedPoint::from_raw(i32::try_from(v).map_err(|_| OVERFLOW)?));
+                let v = round_shift(self.get(r, c), WIDE_FRAC - F);
+                out.set(r, c, Fixed::from_raw(i32::try_from(v).map_err(|_| OVERFLOW)?));
             }
         }
         Ok(out)
     }
 
     /// Rounded once to the compute tier (checked).
-    pub(crate) fn to_compute(&self) -> Result<ComputeMatrix, OverflowDetected> {
+    pub(crate) fn to_compute<const F: u32>(&self) -> Result<ComputeMatrix<Fixed<i32, F>>, OverflowDetected>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
         let mut out = ComputeMatrix::new(self.rows, self.cols);
         for r in 0..self.rows {
             for c in 0..self.cols {
-                let v = round_shift(self.get(r, c), WIDE_FRAC - 2 * FRAC_BITS);
-                out.set(r, c, ComputeStorage::try_from(v).map_err(|_| OVERFLOW)?);
+                let v = round_shift(self.get(r, c), WIDE_FRAC - 2 * F);
+                out.set(r, c, i64::try_from(v).map_err(|_| OVERFLOW)?);
             }
         }
         Ok(out)
     }
 
     /// A storage scalar as a wide value (exact).
-    pub(crate) fn scalar_from_storage(x: FixedPoint) -> i128 {
-        (x.raw() as i128) << (WIDE_FRAC - FRAC_BITS)
+    pub(crate) fn scalar_from_storage<const F: u32>(x: Fixed<i32, F>) -> i128 {
+        (x.raw() as i128) << (WIDE_FRAC - F)
     }
 
     /// `num / den` as a wide value, rounded once (`den > 0`).
@@ -206,7 +217,7 @@ impl WideMatrix {
 
     /// `||M||_1` rounded to storage (for step counts only; saturates at the
     /// storage maximum, which only ever means "large").
-    pub(crate) fn norm_1(&self) -> FixedPoint {
+    pub(crate) fn norm_1<const F: u32>(&self) -> Fixed<i32, F> {
         let mut best: i128 = 0;
         for c in 0..self.cols {
             let mut sum: i128 = 0;
@@ -215,13 +226,13 @@ impl WideMatrix {
             }
             best = best.max(sum);
         }
-        let v = round_shift(best, WIDE_FRAC - FRAC_BITS);
-        FixedPoint::from_raw(v.min(i32::MAX as i128) as i32)
+        let v = round_shift(best, WIDE_FRAC - F);
+        Fixed::from_raw(v.min(i32::MAX as i128) as i32)
     }
 
     /// `||M||_F` below the storage value `t`: an exact comparison of the sum
     /// of squares with `t^2`.
-    pub(crate) fn frobenius_below(&self, t: FixedPoint) -> bool {
+    pub(crate) fn frobenius_below<const F: u32>(&self, t: Fixed<i32, F>) -> bool {
         let mut sum = I256::zero();
         for v in &self.data {
             match sum.checked_add(mul_i128_to_i256(*v, *v)) {
@@ -229,7 +240,7 @@ impl WideMatrix {
                 None => return false,
             }
         }
-        let tw = Self::scalar_from_storage(t);
+        let tw = Self::scalar_from_storage::<F>(t);
         sum < mul_i128_to_i256(tw, tw)
     }
 
@@ -362,7 +373,7 @@ mod tests {
         assert_eq!(sq.get(0, 1), 2 * third);
         let inv = m.lu().unwrap().inverse().unwrap();
         assert_eq!(inv.get(0, 1), -third);
-        let f = FixedMatrix::identity(2);
+        let f: FixedMatrix<Fixed<i32, 16>> = FixedMatrix::identity(2);
         assert_eq!(WideMatrix::from_fixed_matrix(&f).to_fixed_matrix().unwrap(), f);
     }
 }

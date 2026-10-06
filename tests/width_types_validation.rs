@@ -326,3 +326,39 @@ fn decompositions_run_at_every_width() {
     decomposition_identities::<I256, 128>();
     decomposition_identities::<I512, 256>();
 }
+
+use g_math::fixed_point::imperative::matrix_functions::{matrix_exp, matrix_log, matrix_pow, matrix_sqrt};
+
+/// exp(0) = I, sqrt(diag(4, 9)) = diag(2, 3), log(I) = 0, A^1 = A, A^-1 = inverse.
+fn matrix_function_identities<S: Storage, const F: u32>()
+where
+    Fixed<S, F>: g_math::fixed_point::imperative::matrix_functions::MatrixFunctions<Storage = S>,
+{
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    let z = FixedMatrix::<Fixed<S, F>>::new(2, 2);
+    assert_eq!(matrix_exp(&z).unwrap(), FixedMatrix::identity(2));
+    let d = FixedMatrix::from_slice(2, 2, &[v(4), v(0), v(0), v(9)]);
+    let s = matrix_sqrt(&d).unwrap();
+    let ulp = Fixed::<S, F>::from_raw(S::one());
+    for (i, j, want) in [(0, 0, v(2)), (1, 1, v(3)), (0, 1, v(0)), (1, 0, v(0))] {
+        assert!((s.get(i, j) - want).abs() <= ulp * v(2), "sqrt at F={F}: ({i},{j}) = {:?}", s.get(i, j).raw());
+    }
+    assert_eq!(matrix_log(&FixedMatrix::<Fixed<S, F>>::identity(2)).unwrap(), FixedMatrix::new(2, 2));
+    let a = FixedMatrix::from_slice(2, 2, &[v(2), v(1), v(0), v(3)]);
+    assert_eq!(matrix_pow(&a, v(1)).unwrap(), a);
+    let inv = matrix_pow(&a, v(-1)).unwrap();
+    let half = Fixed::<S, F>::one() / v(2);
+    let third = Fixed::<S, F>::one() / v(3);
+    assert_eq!(inv, FixedMatrix::from_slice(2, 2, &[half, -(half * third), v(0), third]));
+}
+
+#[test]
+fn matrix_functions_run_at_every_width() {
+    matrix_function_identities::<i32, 10>();
+    matrix_function_identities::<i32, 16>();
+    matrix_function_identities::<i32, 24>();
+    matrix_function_identities::<i64, 32>();
+    matrix_function_identities::<i128, 64>();
+    matrix_function_identities::<I256, 128>();
+    matrix_function_identities::<I512, 256>();
+}

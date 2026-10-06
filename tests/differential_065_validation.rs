@@ -493,7 +493,26 @@ fn transcendentals_are_bit_identical_to_0_6_5() {
             &x,
         );
         pow.check(fallible(|| ox.try_pow(oy).map(raw::old_raw)), fallible(|| nx.try_pow(ny).map(raw::new_raw)), &(x, y));
-        pow.check(value(|| raw::old_raw(ox.pow(oy))), value(|| raw::new_raw(nx.pow(ny))), &(x, y));
+        // pow with a non-positive base: ln's sentinel times the exponent
+        // overflows the compute tier and `pow` panics on every profile. On
+        // Q256.256 the published crate's I2048 fits check read the wrong sign
+        // word (fixed in width-types phase 3a), so it wrapped the product and
+        // returned a plausible value (pow(-1, -1) = 1.0); there the panic is
+        // the corrected outcome and the published value is not compared.
+        // Whether the product overflows depends on the exponent (pow(-1, 0) is
+        // 1.0 everywhere), so only the pair (published value, tree panic) is
+        // the accepted divergence; every other outcome must still agree.
+        let base_non_positive = nx <= g_math::fixed_point::FixedPoint::ZERO;
+        let (old_pow, new_pow) = (value(|| raw::old_raw(ox.pow(oy))), value(|| raw::new_raw(nx.pow(ny))));
+        let wrapped_in_published = cfg!(table_format = "q256_256")
+            && base_non_positive
+            && matches!(old_pow, Outcome::Value(_))
+            && matches!(new_pow, Outcome::Panic);
+        if wrapped_in_published {
+            pow.check(Outcome::Panic, new_pow, &(x, y));
+        } else {
+            pow.check(old_pow, new_pow, &(x, y));
+        }
         atan2.check(fallible(|| oy.try_atan2(ox).map(raw::old_raw)), fallible(|| ny.try_atan2(nx).map(raw::new_raw)), &(y, x));
         atan2.check(value(|| raw::old_raw(oy.atan2(ox))), value(|| raw::new_raw(ny.atan2(nx))), &(y, x));
     }
@@ -681,6 +700,38 @@ fn decompositions_are_bit_identical_to_0_6_5() {
         );
     }
     for t in [&lu, &qr, &chol, &eig, &svd, &schur, &norms] {
+        t.report();
+    }
+}
+
+
+// ---- matrix functions ---------------------------------------------------------
+
+#[test]
+fn matrix_functions_are_bit_identical_to_0_6_5() {
+    use g_math::fixed_point::imperative::matrix_functions as nf;
+    use g_math_065::fixed_point::imperative::matrix_functions as of;
+    silence_panics();
+    let n = count(120);
+    let mut rng = Rng(0xF00D_0001);
+    let mut exp = Tally::new("matrix_exp");
+    let mut sqrt = Tally::new("matrix_sqrt");
+    let mut log = Tally::new("matrix_log");
+    let mut pow = Tally::new("matrix_pow");
+    for _ in 0..n {
+        let d = 1 + (rng.next() % 4) as usize;
+        // entries below one in magnitude: the functions converge and stay in range
+        let m: Vec<Raw> = (0..d * d).map(|_| rng.raw(FRAC - 1)).collect();
+        let (om, nm) = (old_mat(d, d, &m), new_mat(d, d, &m));
+        // I + M for the square root and the logarithm (near the identity)
+        let (oi, ni) = (&OldMatrix::identity(d) + &om, &NewMatrix::<g_math::fixed_point::FixedPoint>::identity(d) + &nm);
+        exp.check(fallible(|| of::matrix_exp(&om).map(|x| old_mraws(&x))), fallible(|| nf::matrix_exp(&nm).map(|x| new_mraws(&x))), &m);
+        sqrt.check(fallible(|| of::matrix_sqrt(&oi).map(|x| old_mraws(&x))), fallible(|| nf::matrix_sqrt(&ni).map(|x| new_mraws(&x))), &m);
+        log.check(fallible(|| of::matrix_log(&oi).map(|x| old_mraws(&x))), fallible(|| nf::matrix_log(&ni).map(|x| new_mraws(&x))), &m);
+        let p = rng.raw(FRAC + 1);
+        pow.check(fallible(|| of::matrix_pow(&oi, raw::old(p)).map(|x| old_mraws(&x))), fallible(|| nf::matrix_pow(&ni, raw::new(p)).map(|x| new_mraws(&x))), &(&m, p));
+    }
+    for t in [&exp, &sqrt, &log, &pow] {
         t.report();
     }
 }

@@ -203,11 +203,16 @@ through the canonical layer: `from_str` / `try_from_str`, `Display`,
 `try_pow`, `try_atan2`. `sincos_wide` and `sincos_wide_q64` exist on
 `Fixed<i32, F>` and `Fixed<i64, 32>`, as before.
 
-Open design point for phase 3: the methods are inherent on `Fixed<S, F>`,
-so generic user code is bounded by
-`Fixed<S, F>: FixedNum<Storage = S>`. The containers (`FixedVector<T>`)
-need a bound on one type parameter, which means either moving the
-user-facing operations onto a trait or keeping two parameters.
+Resolved in phase 3: the containers keep ONE type parameter with the
+scalar as its default, `FixedVector<T = FixedPoint>` and
+`FixedMatrix<T = FixedPoint>`, and every impl is written on the concrete
+scalar, `impl<S: Storage, const F: u32> FixedVector<Fixed<S, F>> where
+Fixed<S, F>: FixedNum<Storage = S>`. User code names a width as
+`FixedVector<Q22_10>` and the methods come from that impl; nothing moved
+onto a trait. Expression-position constructors whose type is not fixed by
+an argument need an annotation (`let id: FixedMatrix = FixedMatrix::identity(n)`),
+which a handful of tests needed. The compute-tier state uses
+`ComputeMatrix<T: FixedNum = FixedPoint>` the same way.
 
 ### 4.3 Admitted fractional splits
 
@@ -359,7 +364,7 @@ generic code, while new tests exercise all widths in one build.
 | 0 | Fixes that belong on `main` regardless (section 12), merged into the branch. DONE: 0.6.5 | main CI green |
 | 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
-| 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions | differential gate on linear algebra |
+| 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
 | 4 | Geometry layers, ODE, tensors, fused ops, compute_tier, Interval, predicates, tq19 | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
@@ -421,8 +426,32 @@ embedded (sqrt, atan, asin 9 to 18 percent faster on the narrow profiles;
 compact `sincos` 47 percent faster, it now uses the fused engine);
 `to_f64` at parity or 11 to 27 percent faster; `mul`, `div`, `add`, `sub` at
 parity; `from_int` / `to_int` within one cycle per call in either direction.
-The containers, linear algebra and the inference kernels are measured when
-their phases land.
+The inference kernels are measured when their phase lands.
+
+Measured for the containers and linear algebra after phase 3 (2026-10-06,
+realtime Q22.10, same method, scratch `perf3/src/bin/lin.rs`): dot of 3,
+32 and 1024 elements 7, 13 and 0 percent faster; 64x64 matvec within 1.4
+percent; 16x16 matmul 20 percent faster (the generic dot kernel); LU, QR,
+Cholesky, Jacobi eigen, SVD, matrix exp and sqrt all within 2 percent
+(LU 8x8 read +3.2 percent plain and -0.8 percent under LTO, the
+measurement band). Two real costs were found and removed:
+
+- The generic `Add`/`Sub` operators called `try_add(...).expect(...)`; in
+  0.6.7 LLVM folded the `Result` to a single overflow branch, in the
+  generic instantiation it materialised the enum per element (shift, cmov,
+  compare, shift back: 64-element vector add +47 percent under LTO). The
+  operators now match on the checked word directly; vector add is at
+  parity under LTO and 38 percent faster without it.
+- `transpose` through `from_fn` + `get` kept one bounds check per element
+  that 0.6.7's codegen had hoisted; written with explicit indexing it is
+  25 percent faster without LTO and at parity under LTO. Under LTO the
+  harness first read +22 percent, which vanished once the call was
+  isolated behind a never-inlined wrapper: inlining context inside the
+  harness, not the library.
+
+Phase 3 changed no scalar kernel; the scalar `div` re-read +7.7 percent at
+Q22.10 without LTO, +2.8 under LTO, +1.6 at Q16.16 and -0.8 on compact,
+which is the band of a 14 ns operation in this method.
 
 ### 11.4 Size
 

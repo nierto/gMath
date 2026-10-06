@@ -8,7 +8,6 @@ mod fixed_vector;
 mod fixed_matrix;
 pub(crate) mod linalg;
 pub(crate) mod compute_matrix;
-#[cfg(table_format = "q16_16")]
 pub(crate) mod wide_matrix;
 pub mod fused;
 pub mod decompose;

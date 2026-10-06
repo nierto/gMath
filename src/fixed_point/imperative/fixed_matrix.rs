@@ -128,7 +128,13 @@ where
 {
     /// Transpose: Aᵀ[i][j] = A[j][i].
     pub fn transpose(&self) -> Self {
-        Self::from_fn(self.cols, self.rows, |r, c| self.get(c, r))
+        let mut data = Vec::with_capacity(self.rows * self.cols);
+        for c in 0..self.cols {
+            for r in 0..self.rows {
+                data.push(self.data[r * self.cols + c]);
+            }
+        }
+        Self { rows: self.cols, cols: self.rows, data }
     }
 
     /// Trace: sum of diagonal elements.
