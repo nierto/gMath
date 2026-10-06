@@ -402,6 +402,28 @@ matvec, LU, SVD, softmax, tq19 matvec, FASC evaluate, per width, run against
 `g_math_065` in the matching profile on the same machine. Any regression beyond
 2 percent blocks the phase.
 
+Measured for the scalar layer after phase 2 (2026-10-06, against crates.io
+0.6.7). Method that works: one binary per crate with the same harness, best
+of 25 rounds, five alternating process runs, minimum per op. A harness that
+links both crates into one binary is unusable at this resolution: code
+alignment moved 0.6.7's own numbers by 20 to 60 percent between builds in
+which 0.6.7 did not change, and sub-nanosecond operations quantise to whole
+cycles. Two real costs were found and removed before parity was reached:
+
+- The 32-bit engine wrappers had become generic functions instantiated in
+  the consumer crate with a runtime shift; made generic over the split
+  again so the upshift is an immediate (`fixed_num::c32`).
+- The IEEE bit assembler and `float_bits` were private and inlined in 0.6.5
+  and became cross-crate calls; marked inline (`to_f64` was 2x slower).
+
+Result: transcendentals at parity or faster on realtime, compact and
+embedded (sqrt, atan, asin 9 to 18 percent faster on the narrow profiles;
+compact `sincos` 47 percent faster, it now uses the fused engine);
+`to_f64` at parity or 11 to 27 percent faster; `mul`, `div`, `add`, `sub` at
+parity; `from_int` / `to_int` within one cycle per call in either direction.
+The containers, linear algebra and the inference kernels are measured when
+their phases land.
+
 ### 11.4 Size
 
 The 2026-10-05 probe (`sizeprobe`, `allprobe`) rerun on the new crate: per-width
