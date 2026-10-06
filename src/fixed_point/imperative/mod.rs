@@ -7,7 +7,8 @@ mod fixed_point;
 mod fixed_vector;
 mod fixed_matrix;
 pub(crate) mod linalg;
-pub(crate) mod compute_matrix;
+#[doc(hidden)]
+pub mod compute_matrix;
 pub(crate) mod wide_matrix;
 pub mod fused;
 pub mod decompose;
@@ -27,12 +28,14 @@ mod wide_acc;
 pub(crate) mod kernels;
 pub(crate) mod decimal_literal;
 mod serialization;
+mod scalar;
 
 pub use fixed_point::FixedPoint;
 pub use fixed_point::OverflowDetected;
 pub use fixed_vector::FixedVector;
 pub use fixed_matrix::FixedMatrix;
 pub use interval::Interval;
+pub use scalar::Scalar;
 
 // Re-export the underlying storage type for from_raw()/raw() interop
 pub use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;

@@ -214,6 +214,27 @@ an argument need an annotation (`let id: FixedMatrix = FixedMatrix::identity(n)`
 which a handful of tests needed. The compute-tier state uses
 `ComputeMatrix<T: FixedNum = FixedPoint>` the same way.
 
+Phase 4a settled the second half of the question, the user-implemented
+traits. `Manifold`, `LieGroup`, `MetricProvider`, `OdeSystem`,
+`HamiltonianSystem`, `FiberBundle` and `BundleConnection` take the scalar
+as a type parameter with the profile's format as its default,
+`pub trait Manifold<T: Scalar = FixedPoint>`, so `impl OdeSystem for Mine`
+still compiles and `impl OdeSystem<Q22_10> for Mine` names a width. The
+library's own types implement them for every format at once
+(`impl<S, const F> Manifold<Fixed<S, F>> for Sphere`). `Scalar` is a sealed
+trait implemented by every `Fixed<S, F>`: it carries the operators and
+comparisons and, hidden, the three operations the traits' default methods
+need (a square root, a matrix inverse, a vector difference), which is what
+lets a default body be written against `T` while every inherent method
+stays on `Fixed<S, F>`. A method with no scalar in its arguments, such as
+`dimension()` on a non-generic manifold, needs the trait named at the call
+site (`<Sphere as Manifold>::dimension(&s)`); a handful of tests did.
+Per-format constants became functions of the storage width and the split:
+the Rodrigues small-angle threshold is 2^F / 10^k rounded to nearest for k
+chosen by the word (3, 5, 10, 20), identical to what `from_str` made of
+the literals, and the curvature differentiation step is 2^-((F + 1) / 3)
+on every format (the five profile arms were that formula).
+
 ### 4.3 Admitted fractional splits
 
 `F` is checked at compile time with an inline const in every constructor path:
@@ -320,6 +341,11 @@ let v = evaluate::<Q64_64>(&e)?;          // or: let v: StackValue<Q64_64> = eva
   `D` with today's guard digits. Results are correctly rounded today, so for
   every D that some profile serves, the D-selected tier reproduces that
   profile's output; the gate checks it.
+- **Geometry, dynamics, tensors** (phase 4a, done): traits generic over
+  `T: Scalar`, structs that hold scalars generic with the default
+  (`Tensor<T = FixedPoint>`, `OdePoint<T>`, `Moebius<T>`, `VectorBundle<T>`,
+  ...), structs that hold only dimensions unchanged (`Sphere`, `SO3`, ...)
+  with width-generic methods.
 - **Interval, predicates**: generic over `T`. `incircle`/`insphere` require
   `T::Storage: Storage<Circle = Acc>`; on Q256.256 they are absent by trait bound
   (a compile error naming the reason) instead of by cfg.
@@ -365,7 +391,7 @@ generic code, while new tests exercise all widths in one build.
 | 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
-| 4 | Geometry layers, ODE, tensors, fused ops, compute_tier, Interval, predicates, tq19 | differential gate, certified-geometry gates |
+| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b), Interval, predicates (4c), tq19 (4d) | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |

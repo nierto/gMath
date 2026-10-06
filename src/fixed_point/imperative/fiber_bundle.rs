@@ -3,8 +3,8 @@
 //! Provides:
 //! - `FiberBundle` trait: project, fiber_at, lift, local_trivialization
 //! - `TrivialBundle`: M × F with flat connection (test baseline)
-//! - `VectorBundle`: fiber = R^k, sections are vector fields
-//! - `PrincipalBundle`: fiber = Lie group, transition functions, right action
+//! - `VectorBundle<Fixed<S, F>>`: fiber = R^k, sections are vector fields
+//! - `PrincipalBundle<Fixed<S, F>>`: fiber = Lie group, transition functions, right action
 //! - `Connection` trait: horizontal_lift, parallel transport along base curve
 //! - `bundle_curvature`: Ω = dω + ω∧ω (structure equation)
 //!
@@ -13,17 +13,16 @@
 //! to an ODE solved by L2A integrators. Connection curvature uses numerical
 //! differentiation from L3B with compute-tier accumulation.
 
-use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
-use super::linalg::{exact_dot, upscale_to_compute, downscale_to_storage, ComputeStorage};
 use super::compute_matrix::{ComputeMatrix, compute_lu_decompose};
-use super::wide_acc::{acc, exact_sub_dot_compute, narrow_triple_nearest, widen_product, widen_storage, Wide};
+use super::kernels;
+use super::kernels::Orient;
+use super::FixedPoint;
+use super::Scalar;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
+use crate::fixed_point::width::{Storage, WideInt};
 use crate::fixed_point::core_types::errors::OverflowDetected;
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_checked_add, compute_multiply, compute_subtract, make_compute_int,
-};
 
 // ============================================================================
 // FiberBundle trait
@@ -33,9 +32,9 @@ use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
 ///
 /// Total space E, base space B, fiber F. The projection π maps each point
 /// in E to a point in B, and each fiber π⁻¹(b) is diffeomorphic to F.
-pub trait FiberBundle {
+pub trait FiberBundle<T: Scalar = FixedPoint> {
     /// Project from total space to base space: π(e) → b.
-    fn project(&self, total_point: &FixedVector) -> FixedVector;
+    fn project(&self, total_point: &FixedVector<T>) -> FixedVector<T>;
 
     /// Dimension of the base space.
     fn base_dim(&self) -> usize;
@@ -49,10 +48,10 @@ pub trait FiberBundle {
     }
 
     /// Lift: given a base point b and fiber element f, construct a total space point.
-    fn lift(&self, base: &FixedVector, fiber: &FixedVector) -> FixedVector;
+    fn lift(&self, base: &FixedVector<T>, fiber: &FixedVector<T>) -> FixedVector<T>;
 
     /// Local trivialization: decompose a total space point into (base, fiber).
-    fn local_trivialization(&self, total_point: &FixedVector) -> (FixedVector, FixedVector);
+    fn local_trivialization(&self, total_point: &FixedVector<T>) -> (FixedVector<T>, FixedVector<T>);
 }
 
 // ============================================================================
@@ -63,7 +62,7 @@ pub trait FiberBundle {
 ///
 /// A connection provides a notion of "horizontal" in the tangent bundle of E,
 /// enabling parallel transport along curves in the base.
-pub trait BundleConnection: FiberBundle {
+pub trait BundleConnection<T: Scalar = FixedPoint>: FiberBundle<T> {
     /// Horizontal lift: given a tangent vector v at base point b,
     /// produce the horizontal tangent vector at total point e above b.
     ///
@@ -72,27 +71,27 @@ pub trait BundleConnection: FiberBundle {
     /// 2. Lies in the horizontal subspace H_e
     fn horizontal_lift(
         &self,
-        total_point: &FixedVector,
-        base_tangent: &FixedVector,
-    ) -> Result<FixedVector, OverflowDetected>;
+        total_point: &FixedVector<T>,
+        base_tangent: &FixedVector<T>,
+    ) -> Result<FixedVector<T>, OverflowDetected>;
 
     /// Vertical component of a tangent vector at a total space point.
     ///
     /// V_e = ker(dπ): the tangent vectors that project to zero in the base.
     fn vertical_component(
         &self,
-        total_point: &FixedVector,
-        total_tangent: &FixedVector,
-    ) -> FixedVector;
+        total_point: &FixedVector<T>,
+        total_tangent: &FixedVector<T>,
+    ) -> FixedVector<T>;
 
     /// Horizontal component of a tangent vector at a total space point.
     fn horizontal_component(
         &self,
-        total_point: &FixedVector,
-        total_tangent: &FixedVector,
-    ) -> FixedVector {
+        total_point: &FixedVector<T>,
+        total_tangent: &FixedVector<T>,
+    ) -> FixedVector<T> {
         let vert = self.vertical_component(total_point, total_tangent);
-        total_tangent - &vert
+        T::sub_vectors(total_tangent, &vert)
     }
 
     /// Parallel transport a fiber element along a base curve.
@@ -105,9 +104,9 @@ pub trait BundleConnection: FiberBundle {
     /// where ω is the connection form and γ is the base curve.
     fn parallel_transport_along(
         &self,
-        base_path: &[FixedVector],
-        initial_fiber: &FixedVector,
-    ) -> Result<FixedVector, OverflowDetected>;
+        base_path: &[FixedVector<T>],
+        initial_fiber: &FixedVector<T>,
+    ) -> Result<FixedVector<T>, OverflowDetected>;
 }
 
 // ============================================================================
@@ -123,9 +122,12 @@ pub struct TrivialBundle {
     pub fiber_dimension: usize,
 }
 
-impl FiberBundle for TrivialBundle {
-    fn project(&self, total_point: &FixedVector) -> FixedVector {
-        let mut base = FixedVector::new(self.base_dimension);
+impl<S: Storage, const F: u32> FiberBundle<Fixed<S, F>> for TrivialBundle
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    fn project(&self, total_point: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
+        let mut base = FixedVector::<Fixed<S, F>>::new(self.base_dimension);
         for i in 0..self.base_dimension {
             base[i] = total_point[i];
         }
@@ -135,8 +137,8 @@ impl FiberBundle for TrivialBundle {
     fn base_dim(&self) -> usize { self.base_dimension }
     fn fiber_dim(&self) -> usize { self.fiber_dimension }
 
-    fn lift(&self, base: &FixedVector, fiber: &FixedVector) -> FixedVector {
-        let mut total = FixedVector::new(self.base_dimension + self.fiber_dimension);
+    fn lift(&self, base: &FixedVector<Fixed<S, F>>, fiber: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
+        let mut total = FixedVector::<Fixed<S, F>>::new(self.base_dimension + self.fiber_dimension);
         for i in 0..self.base_dimension {
             total[i] = base[i];
         }
@@ -146,9 +148,9 @@ impl FiberBundle for TrivialBundle {
         total
     }
 
-    fn local_trivialization(&self, total_point: &FixedVector) -> (FixedVector, FixedVector) {
-        let mut base = FixedVector::new(self.base_dimension);
-        let mut fiber = FixedVector::new(self.fiber_dimension);
+    fn local_trivialization(&self, total_point: &FixedVector<Fixed<S, F>>) -> (FixedVector<Fixed<S, F>>, FixedVector<Fixed<S, F>>) {
+        let mut base = FixedVector::<Fixed<S, F>>::new(self.base_dimension);
+        let mut fiber = FixedVector::<Fixed<S, F>>::new(self.fiber_dimension);
         for i in 0..self.base_dimension {
             base[i] = total_point[i];
         }
@@ -159,14 +161,17 @@ impl FiberBundle for TrivialBundle {
     }
 }
 
-impl BundleConnection for TrivialBundle {
+impl<S: Storage, const F: u32> BundleConnection<Fixed<S, F>> for TrivialBundle
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     fn horizontal_lift(
         &self,
-        _total_point: &FixedVector,
-        base_tangent: &FixedVector,
-    ) -> Result<FixedVector, OverflowDetected> {
+        _total_point: &FixedVector<Fixed<S, F>>,
+        base_tangent: &FixedVector<Fixed<S, F>>,
+    ) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         // Flat connection: horizontal lift = (v, 0)
-        let mut total_tangent = FixedVector::new(self.total_dim());
+        let mut total_tangent = FixedVector::<Fixed<S, F>>::new(self.total_dim());
         for i in 0..self.base_dimension {
             total_tangent[i] = base_tangent[i];
         }
@@ -175,11 +180,11 @@ impl BundleConnection for TrivialBundle {
 
     fn vertical_component(
         &self,
-        _total_point: &FixedVector,
-        total_tangent: &FixedVector,
-    ) -> FixedVector {
+        _total_point: &FixedVector<Fixed<S, F>>,
+        total_tangent: &FixedVector<Fixed<S, F>>,
+    ) -> FixedVector<Fixed<S, F>> {
         // Vertical = fiber components (last fiber_dim entries)
-        let mut vert = FixedVector::new(self.total_dim());
+        let mut vert = FixedVector::<Fixed<S, F>>::new(self.total_dim());
         for i in 0..self.fiber_dimension {
             vert[self.base_dimension + i] = total_tangent[self.base_dimension + i];
         }
@@ -188,16 +193,16 @@ impl BundleConnection for TrivialBundle {
 
     fn parallel_transport_along(
         &self,
-        _base_path: &[FixedVector],
-        initial_fiber: &FixedVector,
-    ) -> Result<FixedVector, OverflowDetected> {
+        _base_path: &[FixedVector<Fixed<S, F>>],
+        initial_fiber: &FixedVector<Fixed<S, F>>,
+    ) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         // Flat connection: fiber element doesn't change
         Ok(initial_fiber.clone())
     }
 }
 
 // ============================================================================
-// VectorBundle: fiber = R^k
+// VectorBundle<Fixed<S, F>>: fiber = R^k
 // ============================================================================
 
 /// A vector bundle with fiber R^k over a base manifold of dimension n.
@@ -208,16 +213,19 @@ impl BundleConnection for TrivialBundle {
 /// **Connection coefficients:** A^a_{bi} where a,b are fiber indices (0..k)
 /// and i is a base index (0..n). The parallel transport equation is:
 ///   ∇_i ξ^a = ∂_i ξ^a + A^a_{bi} ξ^b
-pub struct VectorBundle {
+pub struct VectorBundle<T = FixedPoint> {
     pub base_dim_val: usize,
     pub fiber_dim_val: usize,
     /// Connection coefficients A^a_{bi} as a rank-3 tensor [k, k, n].
     /// Entry [a, b, i] = A^a_{bi}.
     /// If None, the connection is flat (A = 0).
-    pub connection_coeffs: Option<Vec<FixedPoint>>,
+    pub connection_coeffs: Option<Vec<T>>,
 }
 
-impl VectorBundle {
+impl<S: Storage, const F: u32> VectorBundle<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Create a vector bundle with flat connection.
     pub fn flat(base_dim: usize, fiber_dim: usize) -> Self {
         Self {
@@ -230,7 +238,7 @@ impl VectorBundle {
     /// Create a vector bundle with given connection coefficients.
     ///
     /// `coeffs` is a flat array of size k * k * n in row-major order [a, b, i].
-    pub fn with_connection(base_dim: usize, fiber_dim: usize, coeffs: Vec<FixedPoint>) -> Self {
+    pub fn with_connection(base_dim: usize, fiber_dim: usize, coeffs: Vec<Fixed<S, F>>) -> Self {
         assert_eq!(coeffs.len(), fiber_dim * fiber_dim * base_dim,
             "Connection coefficients must have size fiber_dim² × base_dim");
         Self {
@@ -241,9 +249,9 @@ impl VectorBundle {
     }
 
     /// Get connection coefficient A^a_{bi}.
-    fn get_coeff(&self, a: usize, b: usize, i: usize) -> FixedPoint {
+    fn get_coeff(&self, a: usize, b: usize, i: usize) -> Fixed<S, F> {
         match &self.connection_coeffs {
-            None => FixedPoint::ZERO,
+            None => Fixed::ZERO,
             Some(coeffs) => {
                 let k = self.fiber_dim_val;
                 let n = self.base_dim_val;
@@ -253,14 +261,17 @@ impl VectorBundle {
     }
 
     /// The raws A^a_{b0..n} of one (a, b) pair.
-    fn coeff_row(&self, a: usize, b: usize) -> Vec<BinaryStorage> {
+    fn coeff_row(&self, a: usize, b: usize) -> Vec<S> {
         (0..self.base_dim_val).map(|i| self.get_coeff(a, b, i).raw()).collect()
     }
 }
 
-impl FiberBundle for VectorBundle {
-    fn project(&self, total_point: &FixedVector) -> FixedVector {
-        let mut base = FixedVector::new(self.base_dim_val);
+impl<S: Storage, const F: u32> FiberBundle<Fixed<S, F>> for VectorBundle<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    fn project(&self, total_point: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
+        let mut base = FixedVector::<Fixed<S, F>>::new(self.base_dim_val);
         for i in 0..self.base_dim_val {
             base[i] = total_point[i];
         }
@@ -270,8 +281,8 @@ impl FiberBundle for VectorBundle {
     fn base_dim(&self) -> usize { self.base_dim_val }
     fn fiber_dim(&self) -> usize { self.fiber_dim_val }
 
-    fn lift(&self, base: &FixedVector, fiber: &FixedVector) -> FixedVector {
-        let mut total = FixedVector::new(self.base_dim_val + self.fiber_dim_val);
+    fn lift(&self, base: &FixedVector<Fixed<S, F>>, fiber: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
+        let mut total = FixedVector::<Fixed<S, F>>::new(self.base_dim_val + self.fiber_dim_val);
         for i in 0..self.base_dim_val {
             total[i] = base[i];
         }
@@ -281,9 +292,9 @@ impl FiberBundle for VectorBundle {
         total
     }
 
-    fn local_trivialization(&self, total_point: &FixedVector) -> (FixedVector, FixedVector) {
-        let mut base = FixedVector::new(self.base_dim_val);
-        let mut fiber = FixedVector::new(self.fiber_dim_val);
+    fn local_trivialization(&self, total_point: &FixedVector<Fixed<S, F>>) -> (FixedVector<Fixed<S, F>>, FixedVector<Fixed<S, F>>) {
+        let mut base = FixedVector::<Fixed<S, F>>::new(self.base_dim_val);
+        let mut fiber = FixedVector::<Fixed<S, F>>::new(self.fiber_dim_val);
         for i in 0..self.base_dim_val {
             base[i] = total_point[i];
         }
@@ -294,21 +305,24 @@ impl FiberBundle for VectorBundle {
     }
 }
 
-impl BundleConnection for VectorBundle {
+impl<S: Storage, const F: u32> BundleConnection<Fixed<S, F>> for VectorBundle<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     fn horizontal_lift(
         &self,
-        total_point: &FixedVector,
-        base_tangent: &FixedVector,
-    ) -> Result<FixedVector, OverflowDetected> {
+        total_point: &FixedVector<Fixed<S, F>>,
+        base_tangent: &FixedVector<Fixed<S, F>>,
+    ) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         let k = self.fiber_dim_val;
         let n = self.base_dim_val;
 
         // fiber part of total_point
-        let fiber: Vec<FixedPoint> = (0..k)
+        let fiber: Vec<Fixed<S, F>> = (0..k)
             .map(|a| total_point[n + a])
             .collect();
 
-        let mut total_tangent = FixedVector::new(n + k);
+        let mut total_tangent = FixedVector::<Fixed<S, F>>::new(n + k);
         // Base part: just the base tangent
         for i in 0..n {
             total_tangent[i] = base_tangent[i];
@@ -317,26 +331,26 @@ impl BundleConnection for VectorBundle {
         // sums over i are exact at the compute tier, each times ξ^b exact at
         // 3F, the whole sum negated and rounded once (before 0.6.4 every
         // triple product was rounded to storage twice before the sum).
-        let v_raw: Vec<BinaryStorage> = (0..n).map(|i| base_tangent[i].raw()).collect();
+        let v_raw: Vec<S> = (0..n).map(|i| base_tangent[i].raw()).collect();
         for a in 0..k {
-            let mut sum = <acc::Orient as Wide>::zero();
+            let mut sum = <Orient<Fixed<S, F>> as WideInt>::zero();
             for b in 0..k {
-                let a_dot_v = exact_dot(&self.coeff_row(a, b), &v_raw)?;
-                sum = sum.add_exact(widen_product(a_dot_v, widen_storage(fiber[b].raw())))?;
+                let a_dot_v = kernels::exact_dot::<Fixed<S, F>>(&self.coeff_row(a, b), &v_raw)?;
+                sum = sum.add_exact(S::widen_product(a_dot_v, S::widen(fiber[b].raw())))?;
             }
-            total_tangent[n + a] = FixedPoint::from_raw(narrow_triple_nearest(-sum)?);
+            total_tangent[n + a] = Fixed::from_raw(kernels::narrow_triple_nearest::<Fixed<S, F>>(-sum)?);
         }
         Ok(total_tangent)
     }
 
     fn vertical_component(
         &self,
-        _total_point: &FixedVector,
-        total_tangent: &FixedVector,
-    ) -> FixedVector {
+        _total_point: &FixedVector<Fixed<S, F>>,
+        total_tangent: &FixedVector<Fixed<S, F>>,
+    ) -> FixedVector<Fixed<S, F>> {
         let n = self.base_dim_val;
         let k = self.fiber_dim_val;
-        let mut vert = FixedVector::new(n + k);
+        let mut vert = FixedVector::<Fixed<S, F>>::new(n + k);
         for a in 0..k {
             vert[n + a] = total_tangent[n + a];
         }
@@ -345,16 +359,16 @@ impl BundleConnection for VectorBundle {
 
     fn parallel_transport_along(
         &self,
-        base_path: &[FixedVector],
-        initial_fiber: &FixedVector,
-    ) -> Result<FixedVector, OverflowDetected> {
+        base_path: &[FixedVector<Fixed<S, F>>],
+        initial_fiber: &FixedVector<Fixed<S, F>>,
+    ) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         if base_path.len() < 2 {
             return Ok(initial_fiber.clone());
         }
 
         let k = self.fiber_dim_val;
         let n = self.base_dim_val;
-        let up = |x: FixedPoint| upscale_to_compute(x.raw());
+        let up = |x: Fixed<S, F>| Fixed::<S, F>::upscale_to_compute(x.raw());
 
         // Discrete parallel transport: at each step
         //   ξ^a_{n+1} = ξ^a_n - A^a_{bi} ξ^b_n Δx^i
@@ -362,35 +376,35 @@ impl BundleConnection for VectorBundle {
         // the compute tier across all steps (Δx and sum_i A^a_{bi} Δx^i exact,
         // each update one compute-tier rounding) and is rounded to storage
         // once at the end (before 0.6.4 it was rounded after every step).
-        let mut fiber: Vec<ComputeStorage> = (0..k).map(|a| up(initial_fiber[a])).collect();
+        let mut fiber: Vec<Compute<Fixed<S, F>>> = (0..k).map(|a| up(initial_fiber[a])).collect();
         for step in 0..base_path.len() - 1 {
-            let dx: Vec<ComputeStorage> = (0..n)
-                .map(|i| compute_subtract(up(base_path[step + 1][i]), up(base_path[step][i])))
+            let dx: Vec<Compute<Fixed<S, F>>> = (0..n)
+                .map(|i| Fixed::<S, F>::compute_subtract(up(base_path[step + 1][i]), up(base_path[step][i])))
                 .collect();
             let mut new_fiber = Vec::with_capacity(k);
             for a in 0..k {
                 let mut coeff_dx = Vec::with_capacity(k);
                 for b in 0..k {
-                    let mut acc = make_compute_int(0);
+                    let mut acc = Fixed::<S, F>::make_compute_int(0);
                     for i in 0..n {
                         // both factors have zero low FRAC_BITS: the product is exact
-                        acc = compute_checked_add(acc, compute_multiply(up(self.get_coeff(a, b, i)), dx[i]))?;
+                        acc = Fixed::<S, F>::compute_checked_add(acc, Fixed::<S, F>::compute_multiply(up(self.get_coeff(a, b, i)), dx[i]))?;
                     }
                     coeff_dx.push(acc);
                 }
-                new_fiber.push(exact_sub_dot_compute(fiber[a], &coeff_dx, &fiber)?);
+                new_fiber.push(kernels::exact_sub_dot_compute::<Fixed<S, F>>(fiber[a], &coeff_dx, &fiber)?);
             }
             fiber = new_fiber;
         }
 
-        let mut out = FixedVector::new(k);
-        for a in 0..k { out[a] = FixedPoint::from_raw(downscale_to_storage(fiber[a])?); }
+        let mut out = FixedVector::<Fixed<S, F>>::new(k);
+        for a in 0..k { out[a] = Fixed::from_raw(Fixed::<S, F>::downscale_to_storage(fiber[a])?); }
         Ok(out)
     }
 }
 
 // ============================================================================
-// PrincipalBundle: fiber = Lie group G
+// PrincipalBundle<Fixed<S, F>>: fiber = Lie group G
 // ============================================================================
 
 /// A principal G-bundle where the fiber is a Lie group.
@@ -400,21 +414,24 @@ impl BundleConnection for VectorBundle {
 ///
 /// This implementation uses a discrete representation with N open sets (charts)
 /// and transition functions stored as matrices (Lie group elements).
-pub struct PrincipalBundle {
+pub struct PrincipalBundle<T = FixedPoint> {
     pub base_dim_val: usize,
     pub group_dim: usize,   // dimension of the Lie algebra (= fiber_dim)
     pub matrix_dim: usize,  // dimension of the matrix representation
     pub num_charts: usize,
-    /// Transition functions g_{αβ} stored as FixedMatrix values.
+    /// Transition functions g_{αβ} stored as FixedMatrix<T> values.
     /// Index: transitions[α * num_charts + β] = g_{αβ}.
     /// Only defined for α ≠ β. g_{αα} = identity.
-    pub transitions: Vec<FixedMatrix>,
+    pub transitions: Vec<FixedMatrix<T>>,
 }
 
-impl PrincipalBundle {
+impl<S: Storage, const F: u32> PrincipalBundle<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Create a trivial principal bundle (all transitions are identity).
     pub fn trivial(base_dim: usize, group_dim: usize, matrix_dim: usize, num_charts: usize) -> Self {
-        let id = FixedMatrix::identity(matrix_dim);
+        let id = FixedMatrix::<Fixed<S, F>>::identity(matrix_dim);
         let transitions = vec![id; num_charts * num_charts];
         Self {
             base_dim_val: base_dim,
@@ -426,7 +443,7 @@ impl PrincipalBundle {
     }
 
     /// Get the transition function g_{αβ}.
-    pub fn transition(&self, alpha: usize, beta: usize) -> &FixedMatrix {
+    pub fn transition(&self, alpha: usize, beta: usize) -> &FixedMatrix<Fixed<S, F>> {
         &self.transitions[alpha * self.num_charts + beta]
     }
 
@@ -438,13 +455,13 @@ impl PrincipalBundle {
         &mut self,
         alpha: usize,
         beta: usize,
-        g: FixedMatrix,
+        g: FixedMatrix<Fixed<S, F>>,
     ) -> Result<(), OverflowDetected> {
-        let inv_c = compute_lu_decompose(&ComputeMatrix::from_fixed_matrix(&g))?.inverse()?;
-        let mut g_inv = FixedMatrix::new(g.rows(), g.cols());
+        let inv_c = compute_lu_decompose(&ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(&g))?.inverse()?;
+        let mut g_inv = FixedMatrix::<Fixed<S, F>>::new(g.rows(), g.cols());
         for i in 0..g.rows() {
             for j in 0..g.cols() {
-                g_inv.set(i, j, FixedPoint::from_raw(downscale_to_storage(inv_c.get(i, j))?));
+                g_inv.set(i, j, Fixed::from_raw(Fixed::<S, F>::downscale_to_storage(inv_c.get(i, j))?));
             }
         }
         self.transitions[alpha * self.num_charts + beta] = g;
@@ -455,8 +472,8 @@ impl PrincipalBundle {
     /// Verify the cocycle condition: g_{αβ} · g_{βγ} = g_{αγ} for all triples.
     ///
     /// Returns the maximum entry-wise deviation from the cocycle condition.
-    pub fn verify_cocycle(&self, tol: FixedPoint) -> (bool, FixedPoint) {
-        let mut max_err = FixedPoint::ZERO;
+    pub fn verify_cocycle(&self, tol: Fixed<S, F>) -> (bool, Fixed<S, F>) {
+        let mut max_err = Fixed::ZERO;
         let mut ok = true;
 
         for alpha in 0..self.num_charts {
@@ -483,9 +500,12 @@ impl PrincipalBundle {
     }
 }
 
-impl FiberBundle for PrincipalBundle {
-    fn project(&self, total_point: &FixedVector) -> FixedVector {
-        let mut base = FixedVector::new(self.base_dim_val);
+impl<S: Storage, const F: u32> FiberBundle<Fixed<S, F>> for PrincipalBundle<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    fn project(&self, total_point: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
+        let mut base = FixedVector::<Fixed<S, F>>::new(self.base_dim_val);
         for i in 0..self.base_dim_val {
             base[i] = total_point[i];
         }
@@ -495,8 +515,8 @@ impl FiberBundle for PrincipalBundle {
     fn base_dim(&self) -> usize { self.base_dim_val }
     fn fiber_dim(&self) -> usize { self.group_dim }
 
-    fn lift(&self, base: &FixedVector, fiber: &FixedVector) -> FixedVector {
-        let mut total = FixedVector::new(self.base_dim_val + self.group_dim);
+    fn lift(&self, base: &FixedVector<Fixed<S, F>>, fiber: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
+        let mut total = FixedVector::<Fixed<S, F>>::new(self.base_dim_val + self.group_dim);
         for i in 0..self.base_dim_val {
             total[i] = base[i];
         }
@@ -506,9 +526,9 @@ impl FiberBundle for PrincipalBundle {
         total
     }
 
-    fn local_trivialization(&self, total_point: &FixedVector) -> (FixedVector, FixedVector) {
-        let mut base = FixedVector::new(self.base_dim_val);
-        let mut fiber = FixedVector::new(self.group_dim);
+    fn local_trivialization(&self, total_point: &FixedVector<Fixed<S, F>>) -> (FixedVector<Fixed<S, F>>, FixedVector<Fixed<S, F>>) {
+        let mut base = FixedVector::<Fixed<S, F>>::new(self.base_dim_val);
+        let mut fiber = FixedVector::<Fixed<S, F>>::new(self.group_dim);
         for i in 0..self.base_dim_val {
             base[i] = total_point[i];
         }
@@ -528,22 +548,28 @@ impl FiberBundle for PrincipalBundle {
 ///
 /// For a principal bundle P with group G and representation ρ: G → GL(V),
 /// the associated bundle P ×_ρ V has fibers transformed by ρ(g).
-pub fn apply_representation(
-    group_element: &FixedMatrix,
-    fiber_element: &FixedVector,
-) -> FixedVector {
+pub fn apply_representation<S: Storage, const F: u32>(
+    group_element: &FixedMatrix<Fixed<S, F>>,
+    fiber_element: &FixedVector<Fixed<S, F>>,
+) -> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     group_element.mul_vector(fiber_element)
 }
 
 /// Change of chart for a section: ξ_β = g_{αβ} · ξ_α.
 ///
 /// Given a fiber element in chart α, compute the corresponding element in chart β.
-pub fn change_chart(
-    bundle: &PrincipalBundle,
+pub fn change_chart<S: Storage, const F: u32>(
+    bundle: &PrincipalBundle<Fixed<S, F>>,
     alpha: usize,
     beta: usize,
-    fiber_alpha: &FixedVector,
-) -> FixedVector {
+    fiber_alpha: &FixedVector<Fixed<S, F>>,
+) -> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let g = bundle.transition(alpha, beta);
     g.mul_vector(fiber_alpha)
 }
@@ -561,22 +587,25 @@ pub fn change_chart(
 ///
 /// The ∂A terms vanish (the stored coefficients are constant); each
 /// quadratic A·A contraction is one rounding of its exact value.
-pub fn vector_bundle_curvature(
-    bundle: &VectorBundle,
-    _base_point: &FixedVector,
-) -> Result<super::tensor::Tensor, OverflowDetected> {
+pub fn vector_bundle_curvature<S: Storage, const F: u32>(
+    bundle: &VectorBundle<Fixed<S, F>>,
+    _base_point: &FixedVector<Fixed<S, F>>,
+) -> Result<super::tensor::Tensor<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let k = bundle.fiber_dim_val;
     let n = bundle.base_dim_val;
-    let _h = super::curvature::differentiation_step();
+    let _h = super::curvature::differentiation_step::<S, F>();
 
     // For flat connections, curvature is zero
     if bundle.connection_coeffs.is_none() {
-        return Ok(super::tensor::Tensor::new(&[k, k, n, n]));
+        return Ok(super::tensor::Tensor::<Fixed<S, F>>::new(&[k, k, n, n]));
     }
 
     // Compute derivatives of connection coefficients via central differences
     // and the quadratic terms A·A
-    let mut curv = super::tensor::Tensor::new(&[k, k, n, n]);
+    let mut curv = super::tensor::Tensor::<Fixed<S, F>>::new(&[k, k, n, n]);
 
     for a in 0..k {
         for b in 0..k {
@@ -586,19 +615,19 @@ pub fn vector_bundle_curvature(
                     // We need A^a_{bj} at (point + h*e_i) and (point - h*e_i)
                     // For simplicity, we evaluate the stored coefficients
                     // (which are constant for linear connections)
-                    let d_i_a_bj = FixedPoint::ZERO; // constant coefficients
-                    let d_j_a_bi = FixedPoint::ZERO;
+                    let d_i_a_bj = Fixed::ZERO; // constant coefficients
+                    let d_j_a_bi = Fixed::ZERO;
 
                     // Quadratic terms: A^a_{ci} A^c_{bj} - A^a_{cj} A^c_{bi}, both
                     // sums exact at the compute tier and their difference
                     // rounded once (before 0.6.4 each sum was rounded, then
                     // subtracted)
-                    let a_ci: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(a, c, i).raw()).collect();
-                    let c_bj: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(c, b, j).raw()).collect();
-                    let a_cj: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(a, c, j).raw()).collect();
-                    let c_bi: Vec<BinaryStorage> = (0..k).map(|c| bundle.get_coeff(c, b, i).raw()).collect();
-                    let quad = compute_subtract(exact_dot(&a_ci, &c_bj)?, exact_dot(&a_cj, &c_bi)?);
-                    let quad = FixedPoint::from_raw(downscale_to_storage(quad)?);
+                    let a_ci: Vec<S> = (0..k).map(|c| bundle.get_coeff(a, c, i).raw()).collect();
+                    let c_bj: Vec<S> = (0..k).map(|c| bundle.get_coeff(c, b, j).raw()).collect();
+                    let a_cj: Vec<S> = (0..k).map(|c| bundle.get_coeff(a, c, j).raw()).collect();
+                    let c_bi: Vec<S> = (0..k).map(|c| bundle.get_coeff(c, b, i).raw()).collect();
+                    let quad = Fixed::<S, F>::compute_subtract(kernels::exact_dot::<Fixed<S, F>>(&a_ci, &c_bj)?, kernels::exact_dot::<Fixed<S, F>>(&a_cj, &c_bi)?);
+                    let quad = Fixed::from_raw(Fixed::<S, F>::downscale_to_storage(quad)?);
 
                     curv.set(&[a, b, i, j], d_i_a_bj - d_j_a_bi + quad);
                 }

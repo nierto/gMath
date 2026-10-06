@@ -22,7 +22,8 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// intermediate operations at double width. Downscale once at the end
 /// via `to_fixed_matrix()` for 0-1 ULP final precision.
 #[derive(Clone, Debug)]
-pub(crate) struct ComputeMatrix<T: FixedNum = FixedPoint> {
+#[doc(hidden)]
+pub struct ComputeMatrix<T: FixedNum = FixedPoint> {
     rows: usize,
     cols: usize,
     data: Vec<Compute<T>>,

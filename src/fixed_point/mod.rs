@@ -9,7 +9,7 @@ pub mod canonical;
 
 /// Imperative numeric types: `FixedPoint`, `FixedVector`, `FixedMatrix`.
 pub mod imperative;
-pub use imperative::{FixedPoint, FixedVector, FixedMatrix, Interval};
+pub use imperative::{FixedPoint, FixedVector, FixedMatrix, Interval, Scalar};
 
 // Width as a type: a format is a storage word and a number of fractional bits.
 pub use fixed_num::{Fixed, FixedNum, Q16_16, Q32_32, Q64_64, Q128_128, Q256_256};

@@ -856,7 +856,7 @@ fn test_parallel_transport_hyperbolic_preserves_norm() {
 fn test_stiefel_dimension() {
     let st = StiefelManifold { k: 2, n: 4 };
     // dim = nk - k(k+1)/2 = 4*2 - 2*3/2 = 8 - 3 = 5
-    assert_eq!(st.dimension(), 5);
+    assert_eq!(<StiefelManifold as Manifold>::dimension(&st), 5);
 }
 
 #[test]
@@ -935,7 +935,7 @@ fn stiefel_vec_to_mat_pub(v: &FixedVector, n: usize, k: usize) -> FixedMatrix {
 
 #[test]
 fn test_product_dimension() {
-    let pm = ProductManifold::new(
+    let pm: ProductManifold = ProductManifold::new(
         Box::new(EuclideanSpace { dim: 3 }), 3,
         Box::new(Sphere { dim: 2 }), 3, // S² embedded in R³
     );
@@ -945,7 +945,7 @@ fn test_product_dimension() {
 
 #[test]
 fn test_product_exp_log_roundtrip() {
-    let pm = ProductManifold::new(
+    let pm: ProductManifold = ProductManifold::new(
         Box::new(EuclideanSpace { dim: 2 }), 2,
         Box::new(EuclideanSpace { dim: 3 }), 3,
     );
@@ -962,7 +962,7 @@ fn test_product_exp_log_roundtrip() {
 
 #[test]
 fn test_product_distance() {
-    let pm = ProductManifold::new(
+    let pm: ProductManifold = ProductManifold::new(
         Box::new(EuclideanSpace { dim: 1 }), 1,
         Box::new(EuclideanSpace { dim: 1 }), 1,
     );
@@ -976,7 +976,7 @@ fn test_product_distance() {
 
 #[test]
 fn test_product_parallel_transport() {
-    let pm = ProductManifold::new(
+    let pm: ProductManifold = ProductManifold::new(
         Box::new(EuclideanSpace { dim: 2 }), 2,
         Box::new(EuclideanSpace { dim: 2 }), 2,
     );

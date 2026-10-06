@@ -735,3 +735,194 @@ fn matrix_functions_are_bit_identical_to_0_6_5() {
         t.report();
     }
 }
+
+// ---- geometry layers, dynamics, tensors (width-types phase 4a) -------------
+
+mod geo_old {
+    pub use g_math_065::fixed_point::imperative::curvature::{christoffel, riemann_curvature, scalar_curvature, HyperbolicMetric, SphereMetric};
+    pub use g_math_065::fixed_point::imperative::fiber_bundle::{BundleConnection, VectorBundle};
+    pub use g_math_065::fixed_point::imperative::lie_group::{LieGroup, SE3, SO3, SOn};
+    pub use g_math_065::fixed_point::imperative::manifold::{HyperbolicSpace, Manifold, SPDManifold, Sphere};
+    pub use g_math_065::fixed_point::imperative::ode::{ode_fn, rk4_step, rk45_integrate, verlet_integrate, HamiltonianSystem, Rk45Config};
+    pub use g_math_065::fixed_point::imperative::projective::{cross_ratio_1d, from_homogeneous, stereo_project, stereo_unproject, to_homogeneous, Moebius};
+    pub use g_math_065::fixed_point::imperative::tensor::{contract, symmetrize, trace, Tensor};
+    pub use g_math_065::fixed_point::imperative::tensor_decompose::{cp_decompose, truncated_svd, tucker_decompose};
+}
+mod geo_new {
+    pub use g_math::fixed_point::imperative::curvature::{christoffel, riemann_curvature, scalar_curvature, HyperbolicMetric, SphereMetric};
+    pub use g_math::fixed_point::imperative::fiber_bundle::{BundleConnection, VectorBundle};
+    pub use g_math::fixed_point::imperative::lie_group::{LieGroup, SE3, SO3, SOn};
+    pub use g_math::fixed_point::imperative::manifold::{HyperbolicSpace, Manifold, SPDManifold, Sphere};
+    pub use g_math::fixed_point::imperative::ode::{ode_fn, rk4_step, rk45_integrate, verlet_integrate, HamiltonianSystem, Rk45Config};
+    pub use g_math::fixed_point::imperative::projective::{cross_ratio_1d, from_homogeneous, stereo_project, stereo_unproject, to_homogeneous, Moebius};
+    pub use g_math::fixed_point::imperative::tensor::{contract, symmetrize, trace, Tensor};
+    pub use g_math::fixed_point::imperative::tensor_decompose::{cp_decompose, truncated_svd, tucker_decompose};
+}
+
+/// The harmonic oscillator as a Hamiltonian system for both crates.
+struct Oscillator;
+impl geo_old::HamiltonianSystem for Oscillator {
+    fn force(&self, q: &OldVector, _p: &OldVector) -> OldVector { -q }
+    fn velocity(&self, _q: &OldVector, p: &OldVector) -> OldVector { p.clone() }
+    fn energy(&self, q: &OldVector, p: &OldVector) -> Old { (q.dot(q) + p.dot(p)) / Old::from_int(2) }
+}
+impl geo_new::HamiltonianSystem for Oscillator {
+    fn force(&self, q: &NewVector, _p: &NewVector) -> NewVector { -q }
+    fn velocity(&self, _q: &NewVector, p: &NewVector) -> NewVector { p.clone() }
+    fn energy(&self, q: &NewVector, p: &NewVector) -> New { (q.dot(q) + p.dot(p)) / New::from_int(2) }
+}
+
+fn old_tensor(shape: &[usize], raws: &[Raw]) -> geo_old::Tensor { geo_old::Tensor::from_data(shape, &raws.iter().map(|&r| raw::old(r)).collect::<Vec<_>>()) }
+fn new_tensor(shape: &[usize], raws: &[Raw]) -> geo_new::Tensor { geo_new::Tensor::from_data(shape, &raws.iter().map(|&r| raw::new(r)).collect::<Vec<_>>()) }
+fn old_traws(t: &geo_old::Tensor) -> Vec<Raw> { t.data().iter().map(|&x| raw::old_raw(x)).collect() }
+fn new_traws(t: &geo_new::Tensor) -> Vec<Raw> { t.data().iter().map(|&x| raw::new_raw(x)).collect() }
+
+#[test]
+fn geometry_is_bit_identical_to_0_6_5() {
+    use geo_new as n_;
+    use geo_new::{BundleConnection as _, LieGroup as _, Manifold as _};
+    use geo_old as o_;
+    use geo_old::{BundleConnection as _, LieGroup as _, Manifold as _};
+    silence_panics();
+    let n = count(60);
+    let mut rng = Rng(0x6E0_0001);
+    let t = |name: &'static str| Tally::new(name);
+    let (mut sph, mut hyp, mut spd, mut so3, mut se3, mut son, mut curv, mut ode, mut proj, mut ten, mut fib) = (
+        t("sphere"), t("hyperbolic"), t("spd"), t("so3"), t("se3"), t("son"), t("curvature"), t("ode"), t("projective"), t("tensors"), t("fiber bundle"),
+    );
+    let unit_old = |v: OldVector| { let l = v.length(); OldVector::from_slice(&(0..v.len()).map(|i| v[i] / l).collect::<Vec<_>>()) };
+    let unit_new = |v: NewVector| { let l = v.length(); NewVector::from_slice(&(0..v.len()).map(|i| v[i] / l).collect::<Vec<_>>()) };
+    for _ in 0..n {
+        let small = |rng: &mut Rng, k: usize, bits: u32| (0..k).map(|_| rng.raw(bits)).collect::<Vec<Raw>>();
+        // sphere S^2: unit points, the tangent of q at p
+        let (a, b) = (small(&mut rng, 3, FRAC), small(&mut rng, 3, FRAC));
+        let (op, oq) = (unit_old(old_vec(&a)), unit_old(old_vec(&b)));
+        let (np, nq) = (unit_new(new_vec(&a)), unit_new(new_vec(&b)));
+        let s_o = o_::Sphere { dim: 2 };
+        let s_n = n_::Sphere { dim: 2 };
+        sph.check(fallible(|| s_o.distance(&op, &oq).map(raw::old_raw)), fallible(|| s_n.distance(&np, &nq).map(raw::new_raw)), &(&a, &b));
+        sph.check(fallible(|| s_o.log_map(&op, &oq).map(|v| old_raws(&v))), fallible(|| s_n.log_map(&np, &nq).map(|v| new_raws(&v))), &(&a, &b));
+        let (ot, nt) = (o_::Manifold::log_map(&s_o, &op, &oq), n_::Manifold::log_map(&s_n, &np, &nq));
+        if let (Ok(ot), Ok(nt)) = (ot, nt) {
+            sph.check(fallible(|| s_o.exp_map(&op, &ot).map(|v| old_raws(&v))), fallible(|| s_n.exp_map(&np, &nt).map(|v| new_raws(&v))), &(&a, &b));
+            sph.check(fallible(|| s_o.parallel_transport(&op, &oq, &ot).map(|v| old_raws(&v))), fallible(|| s_n.parallel_transport(&np, &nq, &nt).map(|v| new_raws(&v))), &(&a, &b));
+        }
+        // hyperboloid H^2: x0 = sqrt(1 + x1^2 + x2^2)
+        let (a, b) = (small(&mut rng, 2, FRAC - 1), small(&mut rng, 2, FRAC - 1));
+        let lift_old = |r: &[Raw]| { let (x, y) = (raw::old(r[0]), raw::old(r[1])); OldVector::from_slice(&[(Old::one() + x * x + y * y).sqrt(), x, y]) };
+        let lift_new = |r: &[Raw]| { let (x, y) = (raw::new(r[0]), raw::new(r[1])); NewVector::from_slice(&[(New::one() + x * x + y * y).sqrt(), x, y]) };
+        let (op, oq, np, nq) = (lift_old(&a), lift_old(&b), lift_new(&a), lift_new(&b));
+        let h_o = o_::HyperbolicSpace { dim: 2 };
+        let h_n = n_::HyperbolicSpace { dim: 2 };
+        hyp.check(fallible(|| h_o.distance(&op, &oq).map(raw::old_raw)), fallible(|| h_n.distance(&np, &nq).map(raw::new_raw)), &(&a, &b));
+        hyp.check(fallible(|| h_o.log_map(&op, &oq).map(|v| old_raws(&v))), fallible(|| h_n.log_map(&np, &nq).map(|v| new_raws(&v))), &(&a, &b));
+        if let (Ok(ot), Ok(nt)) = (h_o.log_map(&op, &oq), h_n.log_map(&np, &nq)) {
+            hyp.check(fallible(|| h_o.exp_map(&op, &ot).map(|v| old_raws(&v))), fallible(|| h_n.exp_map(&np, &nt).map(|v| new_raws(&v))), &(&a, &b));
+        }
+        // SPD(2): M^T M + I, tangents symmetric
+        let (m, w) = (small(&mut rng, 4, FRAC - 1), small(&mut rng, 4, FRAC - 2));
+        let spd_old = |r: &[Raw]| { let m = old_mat(2, 2, r); &(&m.transpose() * &m) + &OldMatrix::identity(2) };
+        let spd_new = |r: &[Raw]| { let m = new_mat(2, 2, r); &(&m.transpose() * &m) + &NewMatrix::<New>::identity(2) };
+        let (op, oq) = (spd_old(&m), spd_old(&w));
+        let (np, nq) = (spd_new(&m), spd_new(&w));
+        let sym = |r: &[Raw]| vec![r[0], r[1], r[1], r[3]];
+        let sv = sym(&w);
+        let (opv, oqv, otv) = (old_vec(&old_mraws(&op)), old_vec(&old_mraws(&oq)), old_vec(&sv));
+        let (npv, nqv, ntv) = (new_vec(&new_mraws(&np)), new_vec(&new_mraws(&nq)), new_vec(&sv));
+        let p_o = o_::SPDManifold { n: 2 };
+        let p_n = n_::SPDManifold { n: 2 };
+        spd.check(fallible(|| p_o.distance(&opv, &oqv).map(raw::old_raw)), fallible(|| p_n.distance(&npv, &nqv).map(raw::new_raw)), &(&m, &w));
+        spd.check(fallible(|| p_o.exp_map(&opv, &otv).map(|v| old_raws(&v))), fallible(|| p_n.exp_map(&npv, &ntv).map(|v| new_raws(&v))), &(&m, &w));
+        spd.check(fallible(|| p_o.log_map(&opv, &oqv).map(|v| old_raws(&v))), fallible(|| p_n.log_map(&npv, &nqv).map(|v| new_raws(&v))), &(&m, &w));
+        // SO(3), SE(3), SO(n)
+        let xi = small(&mut rng, 3, FRAC);
+        let (oxi, nxi) = (old_vec(&xi), new_vec(&xi));
+        so3.check(fallible(|| o_::SO3.lie_exp(&oxi).map(|g| old_mraws(&g))), fallible(|| n_::SO3.lie_exp(&nxi).map(|g| new_mraws(&g))), &xi);
+        if let (Ok(og), Ok(ng)) = (o_::SO3.lie_exp(&oxi), n_::SO3.lie_exp(&nxi)) {
+            so3.check(fallible(|| o_::SO3.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SO3.lie_log(&ng).map(|v| new_raws(&v))), &xi);
+            so3.check(fallible(|| o_::SO3.adjoint(&og, &oxi).map(|v| old_raws(&v))), fallible(|| n_::SO3.adjoint(&ng, &nxi).map(|v| new_raws(&v))), &xi);
+            son.check(fallible(|| o_::SOn { n: 3 }.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SOn { n: 3 }.lie_log(&ng).map(|v| new_raws(&v))), &xi);
+        }
+        son.check(fallible(|| o_::SOn { n: 3 }.lie_exp(&oxi).map(|g| old_mraws(&g))), fallible(|| n_::SOn { n: 3 }.lie_exp(&nxi).map(|g| new_mraws(&g))), &xi);
+        let xi6 = small(&mut rng, 6, FRAC);
+        let (oxi6, nxi6) = (old_vec(&xi6), new_vec(&xi6));
+        se3.check(fallible(|| o_::SE3.lie_exp(&oxi6).map(|g| old_mraws(&g))), fallible(|| n_::SE3.lie_exp(&nxi6).map(|g| new_mraws(&g))), &xi6);
+        if let (Ok(og), Ok(ng)) = (o_::SE3.lie_exp(&oxi6), n_::SE3.lie_exp(&nxi6)) {
+            se3.check(fallible(|| o_::SE3.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SE3.lie_log(&ng).map(|v| new_raws(&v))), &xi6);
+        }
+        // curvature on the round sphere (radius in (1, 2)) and the hyperbolic plane
+        let r = rng.raw(FRAC - 1);
+        let ang = small(&mut rng, 2, FRAC - 1); // theta, phi in (-0.5, 0.5) + offsets
+        let (otp, ntp) = (
+            OldVector::from_slice(&[raw::old(ang[0]).abs_or_self() + Old::one() / Old::from_int(2), raw::old(ang[1])]),
+            NewVector::from_slice(&[raw::new(ang[0]).abs_or_self() + New::one() / New::from_int(2), raw::new(ang[1])]),
+        );
+        let (sm_o, sm_n) = (o_::SphereMetric { radius: Old::one() + raw::old(r).abs_or_self() }, n_::SphereMetric { radius: New::one() + raw::new(r).abs_or_self() });
+        curv.check(fallible(|| o_::christoffel(&sm_o, &otp).map(|t| old_traws(&t))), fallible(|| n_::christoffel(&sm_n, &ntp).map(|t| new_traws(&t))), &(r, &ang));
+        curv.check(fallible(|| o_::riemann_curvature(&sm_o, &otp).map(|t| old_traws(&t))), fallible(|| n_::riemann_curvature(&sm_n, &ntp).map(|t| new_traws(&t))), &(r, &ang));
+        curv.check(fallible(|| o_::scalar_curvature(&sm_o, &otp).map(raw::old_raw)), fallible(|| n_::scalar_curvature(&sm_n, &ntp).map(raw::new_raw)), &(r, &ang));
+        let (ohp, nhp) = (OldVector::from_slice(&[raw::old(ang[0]), raw::old(ang[1])]), NewVector::from_slice(&[raw::new(ang[0]), raw::new(ang[1])]));
+        curv.check(fallible(|| o_::scalar_curvature(&o_::HyperbolicMetric, &ohp).map(raw::old_raw)), fallible(|| n_::scalar_curvature(&n_::HyperbolicMetric, &nhp).map(raw::new_raw)), &ang);
+        // ODE: one RK4 step and a short RK45 run of the oscillator, Verlet
+        let x = small(&mut rng, 2, FRAC);
+        let h = rng.raw(FRAC - 3);
+        let (ox, nx, oh, nh) = (old_vec(&x), new_vec(&x), raw::old(h).abs_or_self(), raw::new(h).abs_or_self());
+        let osc_o = o_::ode_fn(|_t: Old, x: &OldVector| OldVector::from_slice(&[x[1], -x[0]]));
+        let osc_n = n_::ode_fn(|_t: New, x: &NewVector| NewVector::from_slice(&[x[1], -x[0]]));
+        ode.check(value(|| old_raws(&o_::rk4_step(&osc_o, Old::ZERO, &ox, oh))), value(|| new_raws(&n_::rk4_step(&osc_n, New::ZERO, &nx, nh))), &(&x, h));
+        let end_o = oh * Old::from_int(3);
+        let end_n = nh * New::from_int(3);
+        ode.check(
+            fallible(|| o_::rk45_integrate(&osc_o, &ox, Old::ZERO, end_o, &o_::Rk45Config::new(oh, oh)).map(|(pts, s)| (pts.iter().map(|p| (raw::old_raw(p.t), old_raws(&p.x))).collect::<Vec<_>>(), s))),
+            fallible(|| n_::rk45_integrate(&osc_n, &nx, New::ZERO, end_n, &n_::Rk45Config::new(nh, nh)).map(|(pts, s)| (pts.iter().map(|p| (raw::new_raw(p.t), new_raws(&p.x))).collect::<Vec<_>>(), s))),
+            &(&x, h),
+        );
+        let (oq, nq) = (old_vec(&x[..1]), new_vec(&x[..1]));
+        ode.check(
+            value(|| o_::verlet_integrate(&Oscillator, &oq, &oq, Old::ZERO, end_o, oh).iter().map(|p| (old_raws(&p.q), old_raws(&p.p), raw::old_raw(p.energy))).collect::<Vec<_>>()),
+            value(|| n_::verlet_integrate(&Oscillator, &nq, &nq, New::ZERO, end_n, nh).iter().map(|p| (new_raws(&p.q), new_raws(&p.p), raw::new_raw(p.energy))).collect::<Vec<_>>()),
+            &(&x, h),
+        );
+        // projective: Moebius maps, the cross ratio, stereographic projection
+        let c = small(&mut rng, 5, FRAC);
+        let (mo, mn) = (o_::Moebius::new(raw::old(c[0]), raw::old(c[1]), raw::old(c[2]), raw::old(c[3])), n_::Moebius::new(raw::new(c[0]), raw::new(c[1]), raw::new(c[2]), raw::new(c[3])));
+        proj.check(fallible(|| mo.apply(raw::old(c[4])).map(raw::old_raw)), fallible(|| mn.apply(raw::new(c[4])).map(raw::new_raw)), &c);
+        proj.check(value(|| old_mraws(&mo.compose(&mo.inverse()).to_matrix())), value(|| new_mraws(&mn.compose(&mn.inverse()).to_matrix())), &c);
+        let q4 = small(&mut rng, 4, FRAC + 1);
+        proj.check(
+            fallible(|| o_::cross_ratio_1d(raw::old(q4[0]), raw::old(q4[1]), raw::old(q4[2]), raw::old(q4[3])).map(raw::old_raw)),
+            fallible(|| n_::cross_ratio_1d(raw::new(q4[0]), raw::new(q4[1]), raw::new(q4[2]), raw::new(q4[3])).map(raw::new_raw)),
+            &q4,
+        );
+        let (a3, b3) = (small(&mut rng, 3, FRAC), small(&mut rng, 2, FRAC));
+        let (op3, np3) = (unit_old(old_vec(&a3)), unit_new(new_vec(&a3)));
+        proj.check(fallible(|| o_::stereo_project(&op3).map(|v| old_raws(&v))), fallible(|| n_::stereo_project(&np3).map(|v| new_raws(&v))), &a3);
+        proj.check(value(|| old_raws(&o_::stereo_unproject(&old_vec(&b3)))), value(|| new_raws(&n_::stereo_unproject(&new_vec(&b3)))), &b3);
+        proj.check(fallible(|| o_::from_homogeneous(&o_::to_homogeneous(&old_vec(&a3))).map(|v| old_raws(&v))), fallible(|| n_::from_homogeneous(&n_::to_homogeneous(&new_vec(&a3))).map(|v| new_raws(&v))), &a3);
+        // tensors: contraction, trace, symmetrisation, the three decompositions
+        let (ta, tb) = (small(&mut rng, 6, FRAC), small(&mut rng, 6, FRAC));
+        ten.check(value(|| old_traws(&o_::contract(&old_tensor(&[2, 3], &ta), &old_tensor(&[3, 2], &tb), &[(1, 0)]))), value(|| new_traws(&n_::contract(&new_tensor(&[2, 3], &ta), &new_tensor(&[3, 2], &tb), &[(1, 0)]))), &(&ta, &tb));
+        let t8 = small(&mut rng, 8, FRAC);
+        ten.check(value(|| old_traws(&o_::trace(&old_tensor(&[2, 2, 2], &t8), 0, 2))), value(|| new_traws(&n_::trace(&new_tensor(&[2, 2, 2], &t8), 0, 2))), &t8);
+        ten.check(value(|| old_traws(&o_::symmetrize(&old_tensor(&[2, 2, 2], &t8), &[0, 1]))), value(|| new_traws(&n_::symmetrize(&new_tensor(&[2, 2, 2], &t8), &[0, 1]))), &t8);
+        let m9 = small(&mut rng, 9, FRAC);
+        ten.check(fallible(|| o_::truncated_svd(&old_mat(3, 3, &m9), 2).map(|d| old_mraws(&d.reconstruct()))), fallible(|| n_::truncated_svd(&new_mat(3, 3, &m9), 2).map(|d| new_mraws(&d.reconstruct()))), &m9);
+        ten.check(fallible(|| o_::tucker_decompose(&old_tensor(&[2, 2, 2], &t8), &[2, 2, 2]).map(|d| old_traws(&d.reconstruct()))), fallible(|| n_::tucker_decompose(&new_tensor(&[2, 2, 2], &t8), &[2, 2, 2]).map(|d| new_traws(&d.reconstruct()))), &t8);
+        ten.check(
+            fallible(|| o_::cp_decompose(&old_tensor(&[2, 2, 2], &t8), 2, 8, Old::ZERO).map(|d| old_traws(&d.reconstruct(&[2, 2, 2])))),
+            fallible(|| n_::cp_decompose(&new_tensor(&[2, 2, 2], &t8), 2, 8, New::ZERO).map(|d| new_traws(&d.reconstruct(&[2, 2, 2])))),
+            &t8,
+        );
+        // a vector bundle with a connection: transport along a short path
+        let coeffs = small(&mut rng, 8, FRAC - 2); // A[a, b, i] for k = 2, n = 2
+        let path = [small(&mut rng, 2, FRAC - 2), small(&mut rng, 2, FRAC - 2), small(&mut rng, 2, FRAC - 2)];
+        let f0 = small(&mut rng, 2, FRAC);
+        let vb_o = o_::VectorBundle::with_connection(2, 2, coeffs.iter().map(|&r| raw::old(r)).collect());
+        let vb_n = n_::VectorBundle::with_connection(2, 2, coeffs.iter().map(|&r| raw::new(r)).collect());
+        let (opath, npath): (Vec<OldVector>, Vec<NewVector>) = (path.iter().map(|p| old_vec(p)).collect(), path.iter().map(|p| new_vec(p)).collect());
+        fib.check(fallible(|| vb_o.parallel_transport_along(&opath, &old_vec(&f0)).map(|v| old_raws(&v))), fallible(|| vb_n.parallel_transport_along(&npath, &new_vec(&f0)).map(|v| new_raws(&v))), &(&coeffs, &path, &f0));
+    }
+    for t in [&sph, &hyp, &spd, &so3, &se3, &son, &curv, &ode, &proj, &ten, &fib] {
+        t.report();
+    }
+}

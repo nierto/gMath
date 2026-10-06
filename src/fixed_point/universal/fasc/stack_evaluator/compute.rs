@@ -572,17 +572,6 @@ pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
 pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
     <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::make_compute_int(n)
 }
-
-/// `c * num / den` at the compute tier for integers `num`, `den` (den > 0),
-/// rounded to nearest, ties toward +infinity. On realtime the compute tier
-/// holds only +-2^(63 - 2F), so `num` and `den` never become compute-tier
-/// values themselves (an ODE tableau numerator of 339200 or a Pade
-/// denominator of 665280 does not fit at 24 fraction bits); an i128
-/// intermediate carries the product and the result is range-checked.
-pub(crate) fn compute_mul_div_int(c: ComputeStorage, num: i64, den: i64) -> Result<ComputeStorage, OverflowDetected> {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::compute_mul_div_int(c, num, den)
-}
-
 /// `c / n` for a count `n > 0`, rounded to nearest (ties toward +infinity)
 /// as `compute_divide(c, make_compute_int(n))`, without making `n` a
 /// compute-tier value (on realtime the tier holds only +-2^(63 - 2F)).

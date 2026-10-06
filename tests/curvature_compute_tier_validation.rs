@@ -66,7 +66,7 @@ fn check(name: &str, worst: i128, bound: i128) {
 
 /// k with differentiation_step() = 2^-k.
 fn step_k() -> u32 {
-    let h = differentiation_step();
+    let h: FixedPoint = differentiation_step();
     let mut p = FixedPoint::one();
     for k in 0..200 {
         if p == h { return k; }

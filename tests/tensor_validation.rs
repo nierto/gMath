@@ -34,7 +34,7 @@ fn tol() -> FixedPoint {
 
 #[test]
 fn test_tensor_new_and_shape() {
-    let t = Tensor::new(&[2, 3, 4]);
+    let t: Tensor = Tensor::new(&[2, 3, 4]);
     assert_eq!(t.rank(), 3);
     assert_eq!(t.shape(), &[2, 3, 4]);
     assert_eq!(t.len(), 24);
@@ -42,7 +42,7 @@ fn test_tensor_new_and_shape() {
 
 #[test]
 fn test_tensor_get_set() {
-    let mut t = Tensor::new(&[2, 3]);
+    let mut t: Tensor = Tensor::new(&[2, 3]);
     t.set(&[1, 2], fp("7"));
     assert!((t.get(&[1, 2]) - fp("7")).abs() < tol());
     assert!(t.get(&[0, 0]).is_zero());
@@ -121,7 +121,7 @@ fn test_contraction_rank3_with_vector() {
     // T[i,j,k] * V[k] = M[i,j]
     // T: 2×2×2, V = [1, -1]
     // M[i,j] = T[i,j,0] - T[i,j,1] = -1 for all
-    let mut t = Tensor::new(&[2, 2, 2]);
+    let mut t: Tensor = Tensor::new(&[2, 2, 2]);
     // T[0,0,:] = [1,2], T[0,1,:] = [3,4], T[1,0,:] = [5,6], T[1,1,:] = [7,8]
     t.set(&[0, 0, 0], fp("1")); t.set(&[0, 0, 1], fp("2"));
     t.set(&[0, 1, 0], fp("3")); t.set(&[0, 1, 1], fp("4"));
@@ -187,7 +187,7 @@ fn test_transpose_rank2() {
 
 #[test]
 fn test_transpose_rank3() {
-    let mut t = Tensor::new(&[2, 3, 4]);
+    let mut t: Tensor = Tensor::new(&[2, 3, 4]);
     t.set(&[1, 2, 3], fp("42"));
     let tt = transpose(&t, &[2, 0, 1]); // (i,j,k) → (k,i,j)
     assert_eq!(tt.shape(), &[4, 2, 3]);
@@ -214,7 +214,7 @@ fn test_trace_rank2() {
 fn test_trace_rank4() {
     // Rank-4 tensor, trace over indices 1 and 3 (both dim 2)
     // T[a,i,b,i] summed over i → result is rank-2 [a,b]
-    let mut t = Tensor::new(&[2, 2, 3, 2]);
+    let mut t: Tensor = Tensor::new(&[2, 2, 3, 2]);
     t.set(&[0, 0, 1, 0], fp("10")); // contributes to result[0,1]
     t.set(&[0, 1, 1, 1], fp("20")); // contributes to result[0,1]
     let tr = trace(&t, 1, 3);

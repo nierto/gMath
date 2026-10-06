@@ -362,3 +362,74 @@ fn matrix_functions_run_at_every_width() {
     matrix_function_identities::<I256, 128>();
     matrix_function_identities::<I512, 256>();
 }
+
+// ---- geometry layers, dynamics and tensors at every width (phase 4a) --------
+
+use g_math::fixed_point::imperative::curvature::{scalar_curvature, SphereMetric};
+use g_math::fixed_point::imperative::lie_group::{LieGroup, SO3};
+use g_math::fixed_point::imperative::manifold::{HyperbolicSpace, Manifold, Sphere};
+use g_math::fixed_point::imperative::ode::{ode_fn, rk4_step};
+use g_math::fixed_point::imperative::projective::Moebius;
+use g_math::fixed_point::imperative::tensor::{contract, Tensor};
+use g_math::fixed_point::Scalar;
+
+/// A few identities that hold at every width: exp_map(p, 0) = p on the
+/// sphere, distance(p, p) = 0 on the hyperboloid, log(exp(xi)) = xi on SO(3)
+/// to two units, the scalar curvature of the unit sphere is 2 to a few
+/// units, the identity Moebius map and the identity contraction are exact,
+/// and one RK4 step of x' = 0 leaves x unchanged.
+fn geometry_identities<S: Storage, const F: u32>()
+where
+    Fixed<S, F>: Scalar<Storage = S> + g_math::fixed_point::imperative::matrix_functions::MatrixFunctions,
+{
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    let q = |n: i32| dyadic::<S, F>(n); // n / 256
+    let ulp = Fixed::<S, F>::from_raw(S::one());
+    let units = |x: Fixed<S, F>, want: Fixed<S, F>| ((x - want).abs() / ulp).to_int();
+    // sphere
+    let s = Sphere { dim: 2 };
+    let p = FixedVector::from_slice(&[v(0), v(0), v(1)]);
+    let zero = FixedVector::<Fixed<S, F>>::new(3);
+    assert_eq!(s.exp_map(&p, &zero).unwrap(), p, "sphere exp_map at F={F}");
+    let e0 = FixedVector::from_slice(&[v(1), v(0), v(0)]);
+    let d = s.distance(&p, &e0).unwrap();
+    let pi_half = Fixed::<S, F>::from_raw(Fixed::<S, F>::downscale_to_storage(Fixed::<S, F>::pi_half_at_compute_tier()).unwrap());
+    assert!(units(d, pi_half) <= 2, "sphere quarter turn at F={F}: {} units", units(d, pi_half));
+    // hyperboloid
+    let h = HyperbolicSpace { dim: 2 };
+    let x = FixedVector::from_slice(&[(v(1) + q(64) * q(64) + q(32) * q(32)).sqrt(), q(64), q(32)]);
+    assert_eq!(h.distance(&x, &x).unwrap(), v(0), "hyperbolic distance(p, p) at F={F}");
+    // SO(3)
+    let xi = FixedVector::from_slice(&[q(64), q(-32), q(96)]);
+    let g = SO3.lie_exp(&xi).unwrap();
+    let back = SO3.lie_log(&g).unwrap();
+    for i in 0..3 {
+        assert!(units(back[i], xi[i]) <= 2, "so3 log(exp) at F={F}: component {i} off by {} units", units(back[i], xi[i]));
+    }
+    // curvature of the unit sphere in (theta, phi): R = 2
+    let r = scalar_curvature(&SphereMetric { radius: v(1) }, &FixedVector::from_slice(&[q(256) + q(64), q(32)])).unwrap();
+    let tol = if F <= 12 { 64 } else { 8 };
+    assert!(units(r, v(2)) <= tol, "sphere scalar curvature at F={F}: {} units", units(r, v(2)));
+    // projective
+    let m = Moebius::<Fixed<S, F>>::identity();
+    assert_eq!(m.apply(q(100)).unwrap(), q(100), "moebius identity at F={F}");
+    // tensors
+    let id = Tensor::from_data(&[2, 2], &[v(1), v(0), v(0), v(1)]);
+    let t = Tensor::from_data(&[2, 2], &[q(1), q(2), q(3), q(4)]);
+    assert_eq!(contract(&id, &t, &[(1, 0)]).data(), t.data(), "identity contraction at F={F}");
+    // one RK4 step of x' = 0
+    let still = ode_fn(|_t: Fixed<S, F>, x: &FixedVector<Fixed<S, F>>| FixedVector::<Fixed<S, F>>::new(x.len()));
+    let x0 = FixedVector::from_slice(&[q(5), q(-7)]);
+    assert_eq!(rk4_step(&still, v(0), &x0, q(16)), x0, "rk4 of a constant at F={F}");
+}
+
+#[test]
+fn geometry_runs_at_every_width() {
+    geometry_identities::<i32, 10>();
+    geometry_identities::<i32, 16>();
+    geometry_identities::<i32, 24>();
+    geometry_identities::<i64, 32>();
+    geometry_identities::<i128, 64>();
+    geometry_identities::<I256, 128>();
+    geometry_identities::<I512, 256>();
+}

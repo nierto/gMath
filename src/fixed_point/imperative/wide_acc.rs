@@ -140,6 +140,11 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
     super::kernels::narrow_triple_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
 
+#[cfg(test)]
+pub(crate) fn divide_to_storage_nearest(num: acc::Orient, den: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
+    super::kernels::divide_to_storage_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(num, den)
+}
+
 /// `a / 2^shift` rounded to nearest with ties toward positive infinity (floor
 /// plus the round bit), narrowed to storage (checked). For an exact product
 /// whose scale carries a power-of-two normalisation, so the shift is not one
@@ -149,50 +154,6 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
 pub(crate) fn narrow_shifted_nearest(a: acc::Orient, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
     super::kernels::narrow_shifted_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(a, shift)
 }
-
-/// `num / den` rounded to nearest, ties toward positive infinity, narrowed
-/// to storage (checked): `num` an exact wide value, `den` a nonzero compute
-/// raw. With `num` at `3F` fractional bits and `den` at `2F` the quotient is
-/// at the storage scale. Lets a caller divide an exact product by a compute
-/// value without forming a quotient that may exceed the compute tier.
-pub(crate) fn divide_to_storage_nearest(num: acc::Orient, den: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    super::kernels::divide_to_storage_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(num, den)
-}
-
-/// `num / den` rounded to nearest, ties toward positive infinity, narrowed to
-/// the compute tier (checked): with `num` at `4F` fractional bits and `den`
-/// at `2F` the quotient is a compute raw. The compute-tier twin of
-/// [`divide_to_storage_nearest`], for algorithms that keep their state at the
-/// compute tier between steps.
-pub(crate) fn divide_to_compute_nearest(num: acc::Orient, den: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    super::kernels::divide_to_compute_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(num, den)
-}
-
-/// Exact `sum a_i b_i` of compute raws at `4F` fractional bits (checked).
-pub(crate) fn exact_dot_compute(a: &[ComputeStorage], b: &[ComputeStorage]) -> Result<acc::Orient, OverflowDetected> {
-    super::kernels::exact_dot_compute::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
-}
-
-/// `init - sum a_i b_i` of compute raws: the sum exact at `4F`, `init`
-/// widened exactly, one rounding to the compute tier (nearest, ties toward
-/// +infinity, checked). The substitution and elimination kernel of the
-/// compute-tier factorizations.
-pub(crate) fn exact_sub_dot_compute(
-    init: ComputeStorage, a: &[ComputeStorage], b: &[ComputeStorage],
-) -> Result<ComputeStorage, OverflowDetected> {
-    super::kernels::exact_sub_dot_compute::<crate::fixed_point::fixed_num::ProfileFormat>(init, a, b)
-}
-
-/// Narrow an exact product of two compute raws (`4F` fractional bits, from
-/// [`widen_product`]) to the compute scale (`2F`), rounding to nearest with
-/// ties toward positive infinity. The result is fits-checked against the
-/// compute width; a value beyond it is a `TierOverflow`, never a wrap.
-#[inline]
-pub(crate) fn narrow_product_to_compute(a: acc::Orient) -> Result<ComputeStorage, OverflowDetected> {
-    super::kernels::narrow_product_to_compute::<crate::fixed_point::fixed_num::ProfileFormat>(a)
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

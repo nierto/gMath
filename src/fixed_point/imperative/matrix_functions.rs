@@ -222,7 +222,7 @@ where
 /// Which working matrix a format's matrix functions run on: the 32-bit
 /// word runs at Q64.64 (`WideMatrix`), every wider word at its compute
 /// tier. The routing of 0.6.4, written once per width.
-pub trait MatrixFunctions: FixedNum {
+pub trait MatrixFunctions: FixedNum + MatrixFunctionsCompute {
     #[doc(hidden)]
     fn exp(a: &FixedMatrix<Self>) -> Result<FixedMatrix<Self>, OverflowDetected>;
     #[doc(hidden)]
@@ -234,7 +234,8 @@ pub trait MatrixFunctions: FixedNum {
 }
 
 /// The compute-tier forms of the matrix functions, for the geometry layers.
-pub(crate) trait MatrixFunctionsCompute: FixedNum {
+#[doc(hidden)]
+pub trait MatrixFunctionsCompute: FixedNum {
     fn exp_compute(a: &ComputeMatrix<Self>) -> Result<ComputeMatrix<Self>, OverflowDetected>;
     fn sqrt_compute(a: &ComputeMatrix<Self>) -> Result<ComputeMatrix<Self>, OverflowDetected>;
     fn log_compute(a: &ComputeMatrix<Self>) -> Result<ComputeMatrix<Self>, OverflowDetected>;

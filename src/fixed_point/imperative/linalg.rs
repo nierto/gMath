@@ -30,7 +30,6 @@ pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStor
 pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::downscale_to_storage;
 
 // Re-export fused sincos for imperative-module consumers (lie_group, etc.)
-pub(crate) use crate::fixed_point::universal::fasc::stack_evaluator::compute::sincos_at_compute_tier;
 
 // ============================================================================
 // Rounding helper: round-to-nearest when downscaling from compute to storage
@@ -80,28 +79,6 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
     FixedPoint::from_raw(round_to_storage(compute_tier_dot_acc(FixedPoint::raw_slice(a), FixedPoint::raw_slice(b))))
 }
-
-/// Compute-tier multiply-accumulate: acc += a_i * b_i for matrix operations.
-///
-/// Same as `compute_tier_dot` but takes raw BinaryStorage slices for
-/// internal use where the FixedPoint wrapper would add unnecessary overhead.
-#[inline]
-pub(crate) fn compute_tier_dot_raw(a: &[BinaryStorage], b: &[BinaryStorage]) -> BinaryStorage {
-    round_to_storage(compute_tier_dot_acc(a, b))
-}
-
-/// sqrt(sum a_i b_i) with the sum AND the root at the compute tier and one
-/// rounding to storage. Rounding the sum to storage first (then `.sqrt()`)
-/// rounds twice, amplifies the first rounding by 1 / (2 |x|) for small norms,
-/// and overflows storage once the SQUARED norm leaves the range even though
-/// the norm fits. `Err(DomainError)` for a negative sum.
-pub(crate) fn compute_tier_sqrt_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<BinaryStorage, OverflowDetected> {
-    use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_is_negative, sqrt_at_compute_tier};
-    let acc = compute_tier_dot_acc(a, b);
-    if compute_is_negative(&acc) { return Err(OverflowDetected::DomainError); }
-    downscale_to_storage(sqrt_at_compute_tier(acc))
-}
-
 /// sum a_i b_i at the compute tier, unrounded. The accumulation is checked:
 /// a sum beyond the compute tier panics instead of wrapping (the plain
 /// additions wrapped silently in release builds before 0.6.4).
@@ -183,7 +160,6 @@ pub(crate) unsafe fn unchecked_dot_avx2(a: &[i32], b: &[i32]) -> i64 {
 // transform adds at most about half an ulp per entry. Every step is checked:
 // leaving the storage range is a `TierOverflow`, never a wrap.
 
-use crate::fixed_point::core_types::errors::OverflowDetected;
 
 /// Consecutive non-improving iterations after which an iterative decomposition
 /// is taken to sit at its precision floor.
@@ -196,29 +172,6 @@ pub(crate) const STAGNATION_SWEEPS: usize = 5;
 pub(crate) fn storage_frac_bits() -> u32 {
     <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::FRAC_BITS
 }
-
-/// `|v| >> shift` for a compute raw.
-#[inline]
-pub(crate) fn compute_abs_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
-    super::kernels::compute_abs_shr::<crate::fixed_point::fixed_num::ProfileFormat>(v, shift)
-}
-
-/// A plane rotation `[cs sn; -sn cs]` whose coefficients stay at the compute
-/// tier (`2 * FRAC_BITS` fractional bits).
-
-/// `a b` of two compute raws, rounded once at the compute tier from the exact
-/// product. A product beyond the compute tier is a `TierOverflow`.
-#[inline]
-pub(crate) fn compute_product(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    super::kernels::compute_product::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
-}
-
-/// Exact `sum a_i b_i` of storage values as a compute raw (`2 * FRAC_BITS`
-/// fractional bits). A sum beyond the compute tier is a `TierOverflow`.
-pub(crate) fn exact_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<ComputeStorage, OverflowDetected> {
-    super::kernels::exact_dot::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
-}
-
 /// Significant bits of `|v|` for a compute raw.
 // used by the fused kernels on the wider profiles
 #[allow(dead_code)]
@@ -245,24 +198,6 @@ pub(crate) fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
 // ============================================================================
 // Convergence threshold for fixed-point iterative algorithms
 // ============================================================================
-
-/// Compute the convergence threshold for iterative algorithms.
-///
-/// In floating-point, convergence is tested against machine epsilon.
-/// In fixed-point, we use `magnitude >> (FRAC_BITS / 2)`, which gives
-/// sqrt(quantum) relative precision: the tightest achievable by iterative
-/// multiply-based algorithms at storage tier.
-///
-/// Floored at 1 quantum (the smallest nonzero representable value).
-///
-/// Profile-dependent precision:
-/// - Q64.64:  ~2^-32 relative (~9.5 decimal digits)
-/// - Q128.128: ~2^-64 relative (~19 decimal digits)
-/// - Q256.256: ~2^-128 relative (~38 decimal digits)
-pub(crate) fn convergence_threshold(magnitude: FixedPoint) -> FixedPoint {
-    super::kernels::convergence_threshold(magnitude)
-}
-
 // ============================================================================
 // Compute-tier trit-weighted operations (zero-multiply dot product)
 // Infrastructure ready for FASC ternary integration.

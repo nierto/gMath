@@ -309,7 +309,7 @@ fn test_ricci_from_riemann_consistency() {
 
 #[test]
 fn test_differentiation_step_positive() {
-    let h = differentiation_step();
+    let h: FixedPoint = differentiation_step();
     assert!(!h.is_zero(), "differentiation_step should be nonzero");
     assert!(!h.is_negative(), "differentiation_step should be positive");
 }

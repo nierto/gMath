@@ -16,13 +16,12 @@
 //! **Conserved quantity monitoring:** Optional invariant function `C(x)` tracked during
 //! integration with threshold-based projection back to constraint surface.
 
-use super::FixedPoint;
 use super::FixedVector;
-use super::linalg::{round_to_storage, upscale_to_compute, ComputeStorage};
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_add, compute_mul_div_int, compute_multiply, compute_negate, compute_subtract,
-};
+use super::kernels;
+use super::FixedPoint;
+use super::Scalar;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
+use crate::fixed_point::width::{Storage};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
@@ -33,24 +32,27 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 ///
 /// Implement this for your specific ODE. The `eval` method must be deterministic
 /// and must not use floating-point internally (per gMath constraints).
-pub trait OdeSystem {
+pub trait OdeSystem<T: Scalar = FixedPoint> {
     /// Evaluate f(t, x) → dx/dt.
-    fn eval(&self, t: FixedPoint, x: &FixedVector) -> FixedVector;
+    fn eval(&self, t: T, x: &FixedVector<T>) -> FixedVector<T>;
 }
 
 /// A boxed closure implementing OdeSystem for convenience.
-pub struct OdeFn<F: Fn(FixedPoint, &FixedVector) -> FixedVector> {
-    pub f: F,
+pub struct OdeFn<Func> {
+    pub f: Func,
 }
 
-impl<F: Fn(FixedPoint, &FixedVector) -> FixedVector> OdeSystem for OdeFn<F> {
-    fn eval(&self, t: FixedPoint, x: &FixedVector) -> FixedVector {
+impl<S: Storage, const F: u32, Func: Fn(Fixed<S, F>, &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>>> OdeSystem<Fixed<S, F>> for OdeFn<Func>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    fn eval(&self, t: Fixed<S, F>, x: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
         (self.f)(t, x)
     }
 }
 
 /// Wrap a closure as an ODE system.
-pub fn ode_fn<F: Fn(FixedPoint, &FixedVector) -> FixedVector>(f: F) -> OdeFn<F> {
+pub fn ode_fn<Func>(f: Func) -> OdeFn<Func> {
     OdeFn { f }
 }
 
@@ -60,9 +62,9 @@ pub fn ode_fn<F: Fn(FixedPoint, &FixedVector) -> FixedVector>(f: F) -> OdeFn<F> 
 
 /// A single point in an ODE solution trajectory.
 #[derive(Clone, Debug)]
-pub struct OdePoint {
-    pub t: FixedPoint,
-    pub x: FixedVector,
+pub struct OdePoint<T = FixedPoint> {
+    pub t: T,
+    pub x: FixedVector<T>,
 }
 
 // ============================================================================
@@ -76,28 +78,34 @@ pub struct OdePoint {
 /// was rounded to storage first: at h = 0.01 on realtime Q22.10 that is 2
 /// units instead of 1.67, and every step ran 20% long (38.7 units of error at
 /// Q16.16 on the same test).
-pub fn rk4_step<S: OdeSystem>(
-    sys: &S,
-    t: FixedPoint,
-    x: &FixedVector,
-    h: FixedPoint,
-) -> FixedVector {
+pub fn rk4_step<S: Storage, const F: u32, Sys: OdeSystem<Fixed<S, F>>>(
+    sys: &Sys,
+    t: Fixed<S, F>,
+    x: &FixedVector<Fixed<S, F>>,
+    h: Fixed<S, F>,
+) -> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let x_c = state_to_compute(x);
-    state_to_storage(&rk4_step_compute(sys, upscale_to_compute(t.raw()), &x_c, upscale_to_compute(h.raw())))
+    state_to_storage(&rk4_step_compute(sys, Fixed::<S, F>::upscale_to_compute(t.raw()), &x_c, Fixed::<S, F>::upscale_to_compute(h.raw())))
 }
 
 /// One RK4 step on a state held at the compute tier: `t`, `x` and `h` are
 /// compute raws, the right-hand side sees them rounded to storage, and the
 /// new state `x + (h/6)(k1 + 2k2 + 2k3 + k4)` stays at the compute tier.
-pub(crate) fn rk4_step_compute<S: OdeSystem>(
-    sys: &S,
-    t: ComputeStorage,
-    x: &[ComputeStorage],
-    h: ComputeStorage,
-) -> Vec<ComputeStorage> {
+pub(crate) fn rk4_step_compute<S: Storage, const F: u32, Sys: OdeSystem<Fixed<S, F>>>(
+    sys: &Sys,
+    t: Compute<Fixed<S, F>>,
+    x: &[Compute<Fixed<S, F>>],
+    h: Compute<Fixed<S, F>>,
+) -> Vec<Compute<Fixed<S, F>>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let t_s = time_to_storage(t);
-    let t_half = time_to_storage(compute_add(t, scale(h, 1, 2)));
-    let t_full = time_to_storage(compute_add(t, h));
+    let t_half = time_to_storage(Fixed::<S, F>::compute_add(t, scale(h, 1, 2)));
+    let t_full = time_to_storage(Fixed::<S, F>::compute_add(t, h));
 
     let k1 = sys.eval(t_s, &state_to_storage(x));
     let k2 = sys.eval(t_half, &state_to_storage(&stage(x, h, &[(1, 2, &k1)])));
@@ -108,39 +116,54 @@ pub(crate) fn rk4_step_compute<S: OdeSystem>(
 }
 
 /// `c * num / den` at the compute tier.
-fn scale(c: ComputeStorage, num: i64, den: i64) -> ComputeStorage {
-    compute_mul_div_int(c, num, den).expect("ode: stage term exceeds the compute tier")
+fn scale<S: Storage, const F: u32>(c: Compute<Fixed<S, F>>, num: i64, den: i64) -> Compute<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    Fixed::<S, F>::compute_mul_div_int(c, num, den).expect("ode: stage term exceeds the compute tier")
 }
 
 /// `x + h * sum_j k_j * num_j / den_j` per component, every product, quotient
 /// and sum at the compute tier: nothing is rounded to storage, so a stage or
 /// a step update is one compute-tier value (Runge-Kutta coefficients, the
 /// step and the state are never rounded to storage on their own).
-fn stage(x: &[ComputeStorage], h: ComputeStorage, terms: &[(i64, i64, &FixedVector)]) -> Vec<ComputeStorage> {
+fn stage<S: Storage, const F: u32>(x: &[Compute<Fixed<S, F>>], h: Compute<Fixed<S, F>>, terms: &[(i64, i64, &FixedVector<Fixed<S, F>>)]) -> Vec<Compute<Fixed<S, F>>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     (0..x.len()).map(|i| {
-        let mut acc = upscale_to_compute(FixedPoint::ZERO.raw());
+        let mut acc = Fixed::<S, F>::upscale_to_compute(Fixed::ZERO.raw());
         for &(num, den, k) in terms {
-            acc = compute_add(acc, scale(upscale_to_compute(k[i].raw()), num, den));
+            acc = Fixed::<S, F>::compute_add(acc, scale(Fixed::<S, F>::upscale_to_compute(k[i].raw()), num, den));
         }
-        compute_add(x[i], compute_multiply(acc, h))
+        Fixed::<S, F>::compute_add(x[i], Fixed::<S, F>::compute_multiply(acc, h))
     }).collect()
 }
 
 /// A storage vector as compute raws (exact).
-pub(crate) fn state_to_compute(x: &FixedVector) -> Vec<ComputeStorage> {
-    (0..x.len()).map(|i| upscale_to_compute(x[i].raw())).collect()
+pub(crate) fn state_to_compute<S: Storage, const F: u32>(x: &FixedVector<Fixed<S, F>>) -> Vec<Compute<Fixed<S, F>>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    (0..x.len()).map(|i| Fixed::<S, F>::upscale_to_compute(x[i].raw())).collect()
 }
 
 /// A compute-tier state rounded to storage, nearest (ties toward +infinity).
 /// Panics when a component leaves the storage range, like every infallible
 /// downscale (never wraps).
-pub(crate) fn state_to_storage(x: &[ComputeStorage]) -> FixedVector {
-    FixedVector::from_slice(&x.iter().map(|&v| FixedPoint::from_raw(round_to_storage(v))).collect::<Vec<_>>())
+pub(crate) fn state_to_storage<S: Storage, const F: u32>(x: &[Compute<Fixed<S, F>>]) -> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    FixedVector::<Fixed<S, F>>::from_slice(&x.iter().map(|&v| Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(v))).collect::<Vec<_>>())
 }
 
 /// A compute-tier time rounded to storage for the right-hand side.
-fn time_to_storage(t: ComputeStorage) -> FixedPoint {
-    FixedPoint::from_raw(round_to_storage(t))
+fn time_to_storage<S: Storage, const F: u32>(t: Compute<Fixed<S, F>>) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(t))
 }
 
 /// Integrate an ODE from t0 to t_end using fixed-step RK4.
@@ -153,25 +176,28 @@ fn time_to_storage(t: ComputeStorage) -> FixedPoint {
 /// storage only for the right-hand side and for each reported point, so the
 /// trajectory is not rounded after every step (0.6.3 rounded the state each
 /// step: up to N/2 units after N steps).
-pub fn rk4_integrate<S: OdeSystem>(
-    sys: &S,
-    x0: &FixedVector,
-    t0: FixedPoint,
-    t_end: FixedPoint,
-    h: FixedPoint,
-) -> Vec<OdePoint> {
+pub fn rk4_integrate<S: Storage, const F: u32, Sys: OdeSystem<Fixed<S, F>>>(
+    sys: &Sys,
+    x0: &FixedVector<Fixed<S, F>>,
+    t0: Fixed<S, F>,
+    t_end: Fixed<S, F>,
+    h: Fixed<S, F>,
+) -> Vec<OdePoint<Fixed<S, F>>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let mut trajectory = Vec::new();
     let mut t = t0;
     let mut x = state_to_compute(x0);
-    trajectory.push(OdePoint { t, x: x0.clone() });
+    trajectory.push(OdePoint::<Fixed<S, F>> { t, x: x0.clone() });
 
     while t < t_end {
         let remaining = t_end - t;
         let step = if remaining < h { remaining } else { h };
         if step.is_zero() { break; }
-        x = rk4_step_compute(sys, upscale_to_compute(t.raw()), &x, upscale_to_compute(step.raw()));
+        x = rk4_step_compute(sys, Fixed::<S, F>::upscale_to_compute(t.raw()), &x, Fixed::<S, F>::upscale_to_compute(step.raw()));
         t = t + step;
-        trajectory.push(OdePoint { t, x: state_to_storage(&x) });
+        trajectory.push(OdePoint::<Fixed<S, F>> { t, x: state_to_storage(&x) });
     }
     trajectory
 }
@@ -181,26 +207,29 @@ pub fn rk4_integrate<S: OdeSystem>(
 // ============================================================================
 
 /// Dormand-Prince coefficients stored as (numerator, denominator) integer pairs.
-/// We compute them as FixedPoint rationals at the call site.
+/// We compute them as Fixed<S, F> rationals at the call site.
 
 /// Configuration for adaptive RK45 integration.
-pub struct Rk45Config {
+pub struct Rk45Config<T = FixedPoint> {
     /// Error tolerance per step.
-    pub tol: FixedPoint,
+    pub tol: T,
     /// Initial step size.
-    pub h_init: FixedPoint,
+    pub h_init: T,
     /// Minimum step size (floor).
-    pub h_min: FixedPoint,
+    pub h_min: T,
     /// Maximum step size (cap).
-    pub h_max: FixedPoint,
+    pub h_max: T,
     /// Maximum number of steps (safety limit).
     pub max_steps: usize,
 }
 
-impl Rk45Config {
+impl<S: Storage, const F: u32> Rk45Config<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Default configuration with the given tolerance and initial step.
-    pub fn new(tol: FixedPoint, h_init: FixedPoint) -> Self {
-        let h_min = FixedPoint::from_raw(quantum_raw());
+    pub fn new(tol: Fixed<S, F>, h_init: Fixed<S, F>) -> Self {
+        let h_min = Fixed::from_raw(S::one());
         Self {
             tol,
             h_init,
@@ -227,21 +256,24 @@ impl Rk45Config {
 /// point; the error estimate `|x5 - x4|` is the compute-tier difference.
 ///
 /// Returns the trajectory and the number of rejected steps.
-pub fn rk45_integrate<S: OdeSystem>(
-    sys: &S,
-    x0: &FixedVector,
-    t0: FixedPoint,
-    t_end: FixedPoint,
-    config: &Rk45Config,
-) -> Result<(Vec<OdePoint>, usize), OverflowDetected> {
+pub fn rk45_integrate<S: Storage, const F: u32, Sys: OdeSystem<Fixed<S, F>>>(
+    sys: &Sys,
+    x0: &FixedVector<Fixed<S, F>>,
+    t0: Fixed<S, F>,
+    t_end: Fixed<S, F>,
+    config: &Rk45Config<Fixed<S, F>>,
+) -> Result<(Vec<OdePoint<Fixed<S, F>>>, usize), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let mut trajectory = Vec::new();
     let mut t = t0;
     let mut x = state_to_compute(x0);
     let mut h = config.h_init;
     let mut rejected = 0usize;
-    let tol = upscale_to_compute(config.tol.raw());
+    let tol = Fixed::<S, F>::upscale_to_compute(config.tol.raw());
 
-    trajectory.push(OdePoint { t, x: x0.clone() });
+    trajectory.push(OdePoint::<Fixed<S, F>> { t, x: x0.clone() });
 
 
     for _ in 0..config.max_steps {
@@ -269,12 +301,12 @@ pub fn rk45_integrate<S: OdeSystem>(
         // Accept step (use the 5th-order solution)
         x = x5;
         t = t + step;
-        trajectory.push(OdePoint { t, x: state_to_storage(&x) });
+        trajectory.push(OdePoint::<Fixed<S, F>> { t, x: state_to_storage(&x) });
 
         // Adjust step size
         // err < tol / 32, without dividing: tol / 32 rounds to zero for a
         // tolerance of a few units (the step could then never grow)
-        let err32 = compute_mul_div_int(err, 32, 1);
+        let err32 = Fixed::<S, F>::compute_mul_div_int(err, 32, 1);
         if matches!(err32, Ok(e) if e < tol) {
             h = h + h; // double
             if h > config.h_max { h = config.h_max; }
@@ -289,20 +321,23 @@ pub fn rk45_integrate<S: OdeSystem>(
 /// a compute-tier state `x`; both stay at the compute tier.
 ///
 /// Returns (x4, x5) where x4 is 4th-order and x5 is 5th-order.
-fn dp45_pair<S: OdeSystem>(
-    sys: &S,
-    t: FixedPoint,
-    x: &[ComputeStorage],
-    h: FixedPoint,
-) -> (Vec<ComputeStorage>, Vec<ComputeStorage>) {
+fn dp45_pair<S: Storage, const F: u32, Sys: OdeSystem<Fixed<S, F>>>(
+    sys: &Sys,
+    t: Fixed<S, F>,
+    x: &[Compute<Fixed<S, F>>],
+    h: Fixed<S, F>,
+) -> (Vec<Compute<Fixed<S, F>>>, Vec<Compute<Fixed<S, F>>>)
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     // Dormand-Prince tableau as exact rationals; every stage is formed at the
     // compute tier and rounded once, to call the right-hand side (the
     // coefficients used to be rounded to storage first, e.g. 212/729 at 10
     // fraction bits).
-    let t_c = upscale_to_compute(t.raw());
-    let h_c = upscale_to_compute(h.raw());
-    let at = |num: i64, den: i64| time_to_storage(compute_add(t_c, scale(h_c, num, den)));
-    let st = |terms: &[(i64, i64, &FixedVector)]| state_to_storage(&stage(x, h_c, terms));
+    let t_c = Fixed::<S, F>::upscale_to_compute(t.raw());
+    let h_c = Fixed::<S, F>::upscale_to_compute(h.raw());
+    let at = |num: i64, den: i64| time_to_storage(Fixed::<S, F>::compute_add(t_c, scale(h_c, num, den)));
+    let st = |terms: &[(i64, i64, &FixedVector<Fixed<S, F>>)]| state_to_storage(&stage(x, h_c, terms));
 
     let k1 = sys.eval(t, &state_to_storage(x));
     let k2 = sys.eval(at(1, 5), &st(&[(1, 5, &k1)]));
@@ -339,22 +374,22 @@ fn dp45_pair<S: OdeSystem>(
 /// A Hamiltonian system: dq/dt = ∂H/∂p, dp/dt = -∂H/∂q.
 ///
 /// `grad_q` returns -∂H/∂q (the force), and `grad_p` returns ∂H/∂p (the velocity).
-pub trait HamiltonianSystem {
+pub trait HamiltonianSystem<T: Scalar = FixedPoint> {
     /// Force: dp/dt = -∂H/∂q(q, p).
-    fn force(&self, q: &FixedVector, p: &FixedVector) -> FixedVector;
+    fn force(&self, q: &FixedVector<T>, p: &FixedVector<T>) -> FixedVector<T>;
     /// Velocity: dq/dt = ∂H/∂p(q, p).
-    fn velocity(&self, q: &FixedVector, p: &FixedVector) -> FixedVector;
+    fn velocity(&self, q: &FixedVector<T>, p: &FixedVector<T>) -> FixedVector<T>;
     /// Total energy H(q, p): for conservation monitoring.
-    fn energy(&self, q: &FixedVector, p: &FixedVector) -> FixedPoint;
+    fn energy(&self, q: &FixedVector<T>, p: &FixedVector<T>) -> T;
 }
 
 /// Result of a Hamiltonian integration step.
 #[derive(Clone, Debug)]
-pub struct HamiltonianPoint {
-    pub t: FixedPoint,
-    pub q: FixedVector,
-    pub p: FixedVector,
-    pub energy: FixedPoint,
+pub struct HamiltonianPoint<T = FixedPoint> {
+    pub t: T,
+    pub q: FixedVector<T>,
+    pub p: FixedVector<T>,
+    pub energy: T,
 }
 
 /// Perform one Störmer-Verlet step.
@@ -368,24 +403,30 @@ pub struct HamiltonianPoint {
 /// p_{1/2} is rounded to storage only to call the system, so p_{n+1} is one
 /// rounding of p_n + (h/2)(f_0 + f_1). This preserves the symplectic
 /// structure to storage-tier precision.
-pub fn verlet_step<H: HamiltonianSystem>(
+pub fn verlet_step<S: Storage, const F: u32, H: HamiltonianSystem<Fixed<S, F>>>(
     sys: &H,
-    q: &FixedVector,
-    p: &FixedVector,
-    h: FixedPoint,
-) -> (FixedVector, FixedVector) {
-    let (q_new, p_new) = verlet_step_compute(sys, &state_to_compute(q), &state_to_compute(p), upscale_to_compute(h.raw()));
+    q: &FixedVector<Fixed<S, F>>,
+    p: &FixedVector<Fixed<S, F>>,
+    h: Fixed<S, F>,
+) -> (FixedVector<Fixed<S, F>>, FixedVector<Fixed<S, F>>)
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let (q_new, p_new) = verlet_step_compute(sys, &state_to_compute(q), &state_to_compute(p), Fixed::<S, F>::upscale_to_compute(h.raw()));
     (state_to_storage(&q_new), state_to_storage(&p_new))
 }
 
 /// One Störmer-Verlet step on a compute-tier state (q, p); the system sees
 /// the state rounded to storage and the new state stays at the compute tier.
-fn verlet_step_compute<H: HamiltonianSystem>(
+fn verlet_step_compute<S: Storage, const F: u32, H: HamiltonianSystem<Fixed<S, F>>>(
     sys: &H,
-    q: &[ComputeStorage],
-    p: &[ComputeStorage],
-    h: ComputeStorage,
-) -> (Vec<ComputeStorage>, Vec<ComputeStorage>) {
+    q: &[Compute<Fixed<S, F>>],
+    p: &[Compute<Fixed<S, F>>],
+    h: Compute<Fixed<S, F>>,
+) -> (Vec<Compute<Fixed<S, F>>>, Vec<Compute<Fixed<S, F>>>)
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let q_s = state_to_storage(q);
 
     // Half-step momentum (h/2 at the compute tier: a raw shift floored h/2
@@ -413,14 +454,17 @@ fn verlet_step_compute<H: HamiltonianSystem>(
 /// (q, p) are carried at the compute tier from step to step and rounded to
 /// storage only for the system calls and for each reported point (0.6.3
 /// rounded them after every half kick and drift).
-pub fn verlet_integrate<H: HamiltonianSystem>(
+pub fn verlet_integrate<S: Storage, const F: u32, H: HamiltonianSystem<Fixed<S, F>>>(
     sys: &H,
-    q0: &FixedVector,
-    p0: &FixedVector,
-    t0: FixedPoint,
-    t_end: FixedPoint,
-    h: FixedPoint,
-) -> Vec<HamiltonianPoint> {
+    q0: &FixedVector<Fixed<S, F>>,
+    p0: &FixedVector<Fixed<S, F>>,
+    t0: Fixed<S, F>,
+    t_end: Fixed<S, F>,
+    h: Fixed<S, F>,
+) -> Vec<HamiltonianPoint<Fixed<S, F>>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let mut trajectory = Vec::new();
     let mut t = t0;
     let mut q = state_to_compute(q0);
@@ -438,14 +482,14 @@ pub fn verlet_integrate<H: HamiltonianSystem>(
         let step = if remaining < h { remaining } else { h };
         if step.is_zero() { break; }
 
-        let (q_new, p_new) = verlet_step_compute(sys, &q, &p, upscale_to_compute(step.raw()));
+        let (q_new, p_new) = verlet_step_compute(sys, &q, &p, Fixed::<S, F>::upscale_to_compute(step.raw()));
         q = q_new;
         p = p_new;
         t = t + step;
 
         let (q_s, p_s) = (state_to_storage(&q), state_to_storage(&p));
         let energy = sys.energy(&q_s, &p_s);
-        trajectory.push(HamiltonianPoint { t, q: q_s, p: p_s, energy });
+        trajectory.push(HamiltonianPoint::<Fixed<S, F>> { t, q: q_s, p: p_s, energy });
     }
 
     trajectory
@@ -459,15 +503,18 @@ pub fn verlet_integrate<H: HamiltonianSystem>(
 ///
 /// Given a trajectory, evaluates the invariant at each point and returns
 /// (max_drift, drift_at_each_point). max_drift = max |C(x_i) - C(x_0)|.
-pub fn monitor_invariant<F: Fn(&FixedVector) -> FixedPoint>(
-    invariant: F,
-    trajectory: &[OdePoint],
-) -> (FixedPoint, Vec<FixedPoint>) {
+pub fn monitor_invariant<S: Storage, const F: u32, Inv: Fn(&FixedVector<Fixed<S, F>>) -> Fixed<S, F>>(
+    invariant: Inv,
+    trajectory: &[OdePoint<Fixed<S, F>>],
+) -> (Fixed<S, F>, Vec<Fixed<S, F>>)
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     if trajectory.is_empty() {
-        return (FixedPoint::ZERO, Vec::new());
+        return (Fixed::ZERO, Vec::new());
     }
     let c0 = invariant(&trajectory[0].x);
-    let mut max_drift = FixedPoint::ZERO;
+    let mut max_drift = Fixed::ZERO;
     let mut drifts = Vec::with_capacity(trajectory.len());
 
     for point in trajectory {
@@ -487,48 +534,28 @@ pub fn monitor_invariant<F: Fn(&FixedVector) -> FixedPoint>(
 /// h/2 via bit-shift: exact for an even raw h, floored for an odd one. Only
 /// used to halve a rejected RK45 step, where the exact value does not matter.
 #[inline]
-fn h_half(h: FixedPoint) -> FixedPoint {
-    // Right-shift the raw Q-format value by 1 bit = divide by 2 exactly.
-    // This works because the Q-format representation has the fractional
-    // point at bit FRAC_BITS, so shifting right by 1 divides by 2.
-    #[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-    { FixedPoint::from_raw(h.raw() >> 1) }
-    #[cfg(table_format = "q64_64")]
-    { FixedPoint::from_raw(h.raw() >> 1u32) }
-    #[cfg(table_format = "q128_128")]
-    { FixedPoint::from_raw(h.raw() >> 1u32) }
-    #[cfg(table_format = "q256_256")]
-    { FixedPoint::from_raw(h.raw() >> 1usize) }
+fn h_half<S: Storage, const F: u32>(h: Fixed<S, F>) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    // the raw value shifted right by one bit: h / 2 exactly for an even raw h
+    Fixed::from_raw(h.raw().shr_bits(1))
 }
 
 /// Infinity norm of the difference of two compute-tier vectors:
 /// max_i |a[i] - b[i]|, at the compute tier.
-fn inf_norm_diff(a: &[ComputeStorage], b: &[ComputeStorage]) -> ComputeStorage {
+fn inf_norm_diff<S: Storage, const F: u32>(a: &[Compute<Fixed<S, F>>], b: &[Compute<Fixed<S, F>>]) -> Compute<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert_eq!(a.len(), b.len());
-    let zero = upscale_to_compute(FixedPoint::ZERO.raw());
+    let zero = Fixed::<S, F>::upscale_to_compute(Fixed::ZERO.raw());
     let mut max_val = zero;
     for i in 0..a.len() {
-        let d = compute_subtract(a[i], b[i]);
-        let d = if d < zero { compute_negate(d) } else { d };
+        let d = Fixed::<S, F>::compute_subtract(a[i], b[i]);
+        let d = if d < zero { Fixed::<S, F>::compute_negate(d) } else { d };
         if d > max_val { max_val = d; }
     }
     max_val
 }
 
-/// Storage-tier quantum (smallest nonzero FixedPoint).
-#[cfg(table_format = "q32_32")]
-fn quantum_raw() -> BinaryStorage { 1i64 }
-#[cfg(table_format = "q16_16")]
-fn quantum_raw() -> BinaryStorage { 1i32 }
-#[cfg(table_format = "q64_64")]
-fn quantum_raw() -> BinaryStorage { 1i128 }
-#[cfg(table_format = "q128_128")]
-fn quantum_raw() -> BinaryStorage {
-    use crate::fixed_point::I256;
-    I256::from_i128(1)
-}
-#[cfg(table_format = "q256_256")]
-fn quantum_raw() -> BinaryStorage {
-    use crate::fixed_point::I512;
-    I512::from_i128(1)
-}

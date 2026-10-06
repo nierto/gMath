@@ -111,9 +111,9 @@ fn test_spd_distance_self_is_zero() {
 
 #[test]
 fn test_spd_dimension() {
-    assert_eq!(SPDManifold { n: 2 }.dimension(), 3); // 2*3/2
-    assert_eq!(SPDManifold { n: 3 }.dimension(), 6); // 3*4/2
-    assert_eq!(SPDManifold { n: 4 }.dimension(), 10); // 4*5/2
+    assert_eq!(<SPDManifold as Manifold>::dimension(&SPDManifold { n: 2 }), 3); // 2*3/2
+    assert_eq!(<SPDManifold as Manifold>::dimension(&SPDManifold { n: 3 }), 6); // 3*4/2
+    assert_eq!(<SPDManifold as Manifold>::dimension(&SPDManifold { n: 4 }), 10); // 4*5/2
 }
 
 #[test]
@@ -161,9 +161,9 @@ fn gr_point_1d(x: &str, y: &str, z: &str) -> FixedVector {
 
 #[test]
 fn test_grassmannian_dimension() {
-    assert_eq!(Grassmannian { k: 1, n: 3 }.dimension(), 2); // 1*(3-1)
-    assert_eq!(Grassmannian { k: 2, n: 4 }.dimension(), 4); // 2*(4-2)
-    assert_eq!(Grassmannian { k: 3, n: 6 }.dimension(), 9); // 3*(6-3)
+    assert_eq!(<Grassmannian as Manifold>::dimension(&Grassmannian { k: 1, n: 3 }), 2); // 1*(3-1)
+    assert_eq!(<Grassmannian as Manifold>::dimension(&Grassmannian { k: 2, n: 4 }), 4); // 2*(4-2)
+    assert_eq!(<Grassmannian as Manifold>::dimension(&Grassmannian { k: 3, n: 6 }), 9); // 3*(6-3)
 }
 
 #[test]

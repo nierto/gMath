@@ -1,4 +1,4 @@
-//! L2B: Tensor types and operations.
+//! L2B: Tensor<Fixed<S, F>> types and operations.
 //!
 //! Generic rank-N tensors with flat storage, compute-tier contraction,
 //! and index manipulation operations.
@@ -8,30 +8,33 @@
 //! contraction output element is a dot product at tier N+1 with single
 //! downscale, giving 1 ULP regardless of the number of summed terms.
 
+use super::kernels;
 use super::FixedPoint;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::width::{Storage};
 use super::FixedVector;
 use super::FixedMatrix;
-use super::linalg::{compute_tier_dot_acc, compute_tier_dot_raw, round_to_storage};
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::compute_mul_div_int;
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 // ============================================================================
-// Tensor type
+// Tensor<Fixed<S, F>> type
 // ============================================================================
 
 /// A generic rank-N tensor with fixed-point entries.
 ///
-/// Stored as a flat `Vec<FixedPoint>` in row-major order (last index varies fastest).
+/// Stored as a flat `Vec<Fixed<S, F>>` in row-major order (last index varies fastest).
 /// Shape `[d₀, d₁, ..., d_{N-1}]` means the tensor has N indices,
 /// each ranging from 0 to d_i - 1.
 #[derive(Clone, Debug)]
-pub struct Tensor {
+pub struct Tensor<T = FixedPoint> {
     shape: Vec<usize>,
     strides: Vec<usize>,
-    data: Vec<FixedPoint>,
+    data: Vec<T>,
 }
 
-impl Tensor {
+impl<S: Storage, const F: u32> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Create a zero-filled tensor with the given shape.
     pub fn new(shape: &[usize]) -> Self {
         let total = shape.iter().product::<usize>().max(1);
@@ -39,16 +42,16 @@ impl Tensor {
         Self {
             shape: shape.to_vec(),
             strides,
-            data: vec![FixedPoint::ZERO; total],
+            data: vec![Fixed::ZERO; total],
         }
     }
 
     /// Create a tensor from a flat data slice and shape.
     ///
     /// Panics if `data.len() != product(shape)`.
-    pub fn from_data(shape: &[usize], data: &[FixedPoint]) -> Self {
+    pub fn from_data(shape: &[usize], data: &[Fixed<S, F>]) -> Self {
         let total: usize = shape.iter().product();
-        assert_eq!(data.len(), total, "Tensor::from_data: shape/data mismatch");
+        assert_eq!(data.len(), total, "Tensor::<Fixed<S, F>>::from_data: shape/data mismatch");
         let strides = Self::compute_strides(shape);
         Self {
             shape: shape.to_vec(),
@@ -65,7 +68,7 @@ impl Tensor {
         strides
     }
 
-    /// Tensor rank (number of indices).
+    /// Tensor<Fixed<S, F>> rank (number of indices).
     #[inline]
     pub fn rank(&self) -> usize {
         self.shape.len()
@@ -85,28 +88,28 @@ impl Tensor {
 
     /// Flat index from multi-index.
     fn flat_index(&self, indices: &[usize]) -> usize {
-        assert_eq!(indices.len(), self.shape.len(), "Tensor: index rank mismatch");
+        assert_eq!(indices.len(), self.shape.len(), "Tensor<Fixed<S, F>>: index rank mismatch");
         let mut idx = 0;
         for (i, &d) in indices.iter().enumerate() {
-            assert!(d < self.shape[i], "Tensor: index {} out of bounds ({} >= {})", i, d, self.shape[i]);
+            assert!(d < self.shape[i], "Tensor<Fixed<S, F>>: index {} out of bounds ({} >= {})", i, d, self.shape[i]);
             idx += d * self.strides[i];
         }
         idx
     }
 
     /// Get element by multi-index.
-    pub fn get(&self, indices: &[usize]) -> FixedPoint {
+    pub fn get(&self, indices: &[usize]) -> Fixed<S, F> {
         self.data[self.flat_index(indices)]
     }
 
     /// Set element by multi-index.
-    pub fn set(&mut self, indices: &[usize], val: FixedPoint) {
+    pub fn set(&mut self, indices: &[usize], val: Fixed<S, F>) {
         let idx = self.flat_index(indices);
         self.data[idx] = val;
     }
 
     /// Access the flat data slice.
-    pub fn data(&self) -> &[FixedPoint] {
+    pub fn data(&self) -> &[Fixed<S, F>] {
         &self.data
     }
 }
@@ -115,9 +118,12 @@ impl Tensor {
 // Conversions from existing types
 // ============================================================================
 
-impl From<FixedPoint> for Tensor {
+impl<S: Storage, const F: u32> From<Fixed<S, F>> for Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Rank-0 tensor (scalar).
-    fn from(val: FixedPoint) -> Self {
+    fn from(val: Fixed<S, F>) -> Self {
         Tensor {
             shape: vec![],
             strides: vec![],
@@ -126,9 +132,12 @@ impl From<FixedPoint> for Tensor {
     }
 }
 
-impl From<&FixedVector> for Tensor {
+impl<S: Storage, const F: u32> From<&FixedVector<Fixed<S, F>>> for Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Rank-1 tensor from vector.
-    fn from(v: &FixedVector) -> Self {
+    fn from(v: &FixedVector<Fixed<S, F>>) -> Self {
         let n = v.len();
         let mut data = Vec::with_capacity(n);
         for i in 0..n {
@@ -142,9 +151,12 @@ impl From<&FixedVector> for Tensor {
     }
 }
 
-impl From<&FixedMatrix> for Tensor {
+impl<S: Storage, const F: u32> From<&FixedMatrix<Fixed<S, F>>> for Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Rank-2 tensor from matrix (row-major).
-    fn from(m: &FixedMatrix) -> Self {
+    fn from(m: &FixedMatrix<Fixed<S, F>>) -> Self {
         let (rows, cols) = (m.rows(), m.cols());
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
@@ -160,35 +172,38 @@ impl From<&FixedMatrix> for Tensor {
     }
 }
 
-impl Tensor {
-    /// Convert a rank-2 tensor to FixedMatrix.
+impl<S: Storage, const F: u32> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    /// Convert a rank-2 tensor to FixedMatrix<Fixed<S, F>>.
     ///
     /// Panics if rank != 2.
-    pub fn to_matrix(&self) -> FixedMatrix {
-        assert_eq!(self.rank(), 2, "Tensor::to_matrix: rank must be 2");
+    pub fn to_matrix(&self) -> FixedMatrix<Fixed<S, F>> {
+        assert_eq!(self.rank(), 2, "Tensor::<Fixed<S, F>>::to_matrix: rank must be 2");
         let (rows, cols) = (self.shape[0], self.shape[1]);
-        FixedMatrix::from_fn(rows, cols, |r, c| self.get(&[r, c]))
+        FixedMatrix::<Fixed<S, F>>::from_fn(rows, cols, |r, c| self.get(&[r, c]))
     }
 
-    /// Convert a rank-1 tensor to FixedVector.
+    /// Convert a rank-1 tensor to FixedVector<Fixed<S, F>>.
     ///
     /// Panics if rank != 1.
-    pub fn to_vector(&self) -> FixedVector {
-        assert_eq!(self.rank(), 1, "Tensor::to_vector: rank must be 1");
-        FixedVector::from_slice(&self.data)
+    pub fn to_vector(&self) -> FixedVector<Fixed<S, F>> {
+        assert_eq!(self.rank(), 1, "Tensor::<Fixed<S, F>>::to_vector: rank must be 1");
+        FixedVector::<Fixed<S, F>>::from_slice(&self.data)
     }
 
-    /// Convert a rank-0 tensor to FixedPoint.
+    /// Convert a rank-0 tensor to Fixed<S, F>.
     ///
     /// Panics if rank != 0.
-    pub fn to_scalar(&self) -> FixedPoint {
-        assert_eq!(self.rank(), 0, "Tensor::to_scalar: rank must be 0");
+    pub fn to_scalar(&self) -> Fixed<S, F> {
+        assert_eq!(self.rank(), 0, "Tensor::<Fixed<S, F>>::to_scalar: rank must be 0");
         self.data[0]
     }
 }
 
 // ============================================================================
-// Tensor contraction (compute-tier accumulation)
+// Tensor<Fixed<S, F>> contraction (compute-tier accumulation)
 // ============================================================================
 
 /// Contract two tensors over specified index pairs.
@@ -203,7 +218,10 @@ impl Tensor {
 /// **Special cases:**
 /// - `contract(A[i,j], B[j,k], &[(1,0)])` = matrix multiply A×B
 /// - `contract(A[i], B[i], &[(0,0)])` = dot product
-pub fn contract(a: &Tensor, b: &Tensor, pairs: &[(usize, usize)]) -> Tensor {
+pub fn contract<S: Storage, const F: u32>(a: &Tensor<Fixed<S, F>>, b: &Tensor<Fixed<S, F>>, pairs: &[(usize, usize)]) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     // Validate pairs
     for &(ai, bi) in pairs {
         assert!(ai < a.rank(), "contract: a index {} out of range (rank {})", ai, a.rank());
@@ -236,14 +254,14 @@ pub fn contract(a: &Tensor, b: &Tensor, pairs: &[(usize, usize)]) -> Tensor {
     let contract_dims: Vec<usize> = pairs.iter().map(|&(ai, _)| a.shape[ai]).collect();
     let contract_total: usize = contract_dims.iter().product::<usize>().max(1);
 
-    let mut result = Tensor::new(&out_shape);
+    let mut result = Tensor::<Fixed<S, F>>::new(&out_shape);
     if result.len() == 0 || contract_total == 0 {
         return result;
     }
 
     // Iterate over all output indices
     let out_total = result.len();
-    let out_strides = Tensor::compute_strides(&out_shape);
+    let out_strides = Tensor::<Fixed<S, F>>::compute_strides(&out_shape);
 
     for out_flat in 0..out_total {
         // Decode output flat index into multi-index
@@ -313,7 +331,7 @@ pub fn contract(a: &Tensor, b: &Tensor, pairs: &[(usize, usize)]) -> Tensor {
         }
 
         // Compute-tier dot product: single downscale for the entire sum
-        let val = FixedPoint::from_raw(compute_tier_dot_raw(&a_raw_vals, &b_raw_vals));
+        let val = Fixed::from_raw(kernels::dot_raw::<Fixed<S, F>>(&a_raw_vals, &b_raw_vals));
         result.data[out_flat] = val;
     }
 
@@ -321,14 +339,17 @@ pub fn contract(a: &Tensor, b: &Tensor, pairs: &[(usize, usize)]) -> Tensor {
 }
 
 // ============================================================================
-// Tensor outer product
+// Tensor<Fixed<S, F>> outer product
 // ============================================================================
 
 /// Outer (tensor) product: C_{i₁...iₐ j₁...jᵦ} = A_{i₁...iₐ} * B_{j₁...jᵦ}.
 ///
 /// Result rank = rank(A) + rank(B).
 /// Each element is a single product, no accumulation needed.
-pub fn outer(a: &Tensor, b: &Tensor) -> Tensor {
+pub fn outer<S: Storage, const F: u32>(a: &Tensor<Fixed<S, F>>, b: &Tensor<Fixed<S, F>>) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let mut out_shape = a.shape.clone();
     out_shape.extend_from_slice(&b.shape);
 
@@ -339,7 +360,7 @@ pub fn outer(a: &Tensor, b: &Tensor) -> Tensor {
         }
     }
 
-    Tensor::from_data(&out_shape, &data)
+    Tensor::<Fixed<S, F>>::from_data(&out_shape, &data)
 }
 
 // ============================================================================
@@ -349,7 +370,10 @@ pub fn outer(a: &Tensor, b: &Tensor) -> Tensor {
 /// Transpose (reorder indices): T'_{perm[0], perm[1], ...} = T_{0, 1, ...}.
 ///
 /// `perm` is a permutation of `0..rank`.
-pub fn transpose(t: &Tensor, perm: &[usize]) -> Tensor {
+pub fn transpose<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, perm: &[usize]) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let rank = t.rank();
     assert_eq!(perm.len(), rank, "transpose: perm length must match rank");
 
@@ -363,7 +387,7 @@ pub fn transpose(t: &Tensor, perm: &[usize]) -> Tensor {
 
     // New shape
     let new_shape: Vec<usize> = perm.iter().map(|&p| t.shape[p]).collect();
-    let mut result = Tensor::new(&new_shape);
+    let mut result = Tensor::<Fixed<S, F>>::new(&new_shape);
 
     // Copy elements with permuted indices
     let mut idx = vec![0usize; rank];
@@ -387,7 +411,10 @@ pub fn transpose(t: &Tensor, perm: &[usize]) -> Tensor {
 ///
 /// The two indices must have the same dimension. Result has rank - 2.
 /// Sum accumulated at compute tier.
-pub fn trace(t: &Tensor, idx1: usize, idx2: usize) -> Tensor {
+pub fn trace<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, idx1: usize, idx2: usize) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert_ne!(idx1, idx2, "trace: indices must differ");
     let rank = t.rank();
     assert!(idx1 < rank && idx2 < rank, "trace: index out of range");
@@ -403,9 +430,9 @@ pub fn trace(t: &Tensor, idx1: usize, idx2: usize) -> Tensor {
         .map(|(_, &d)| d)
         .collect();
 
-    let mut result = Tensor::new(&out_shape);
+    let mut result = Tensor::<Fixed<S, F>>::new(&out_shape);
     let out_total = result.len();
-    let out_strides = Tensor::compute_strides(&out_shape);
+    let out_strides = Tensor::<Fixed<S, F>>::compute_strides(&out_shape);
 
     for out_flat in 0..out_total {
         // Decode output index
@@ -420,7 +447,7 @@ pub fn trace(t: &Tensor, idx1: usize, idx2: usize) -> Tensor {
 
         // Build raw values for compute-tier dot: sum over trace dimension
         let mut vals = Vec::with_capacity(trace_dim);
-        let ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); trace_dim];
+        let ones: Vec<S> = vec![Fixed::one().raw(); trace_dim];
 
         for k in 0..trace_dim {
             // Build full index: insert k at positions lo and hi
@@ -438,7 +465,7 @@ pub fn trace(t: &Tensor, idx1: usize, idx2: usize) -> Tensor {
         }
 
         // Compute-tier sum: dot(vals, ones) = sum of vals
-        let sum = FixedPoint::from_raw(compute_tier_dot_raw(&vals, &ones));
+        let sum = Fixed::from_raw(kernels::dot_raw::<Fixed<S, F>>(&vals, &ones));
         result.data[out_flat] = sum;
     }
 
@@ -448,7 +475,10 @@ pub fn trace(t: &Tensor, idx1: usize, idx2: usize) -> Tensor {
 /// Raise an index: T^i = g^{ij} T_j (contraction with metric inverse).
 ///
 /// Contracts index `idx` of tensor T with the second index of `metric_inverse`.
-pub fn raise_index(t: &Tensor, idx: usize, metric_inverse: &Tensor) -> Tensor {
+pub fn raise_index<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, idx: usize, metric_inverse: &Tensor<Fixed<S, F>>) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert_eq!(metric_inverse.rank(), 2, "raise_index: metric must be rank 2");
     assert_eq!(t.shape[idx], metric_inverse.shape()[1],
         "raise_index: dimension mismatch");
@@ -458,7 +488,10 @@ pub fn raise_index(t: &Tensor, idx: usize, metric_inverse: &Tensor) -> Tensor {
 /// Lower an index: T_i = g_{ij} T^j (contraction with metric).
 ///
 /// Contracts index `idx` of tensor T with the second index of `metric`.
-pub fn lower_index(t: &Tensor, idx: usize, metric: &Tensor) -> Tensor {
+pub fn lower_index<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, idx: usize, metric: &Tensor<Fixed<S, F>>) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert_eq!(metric.rank(), 2, "lower_index: metric must be rank 2");
     assert_eq!(t.shape[idx], metric.shape()[1],
         "lower_index: dimension mismatch");
@@ -469,7 +502,10 @@ pub fn lower_index(t: &Tensor, idx: usize, metric: &Tensor) -> Tensor {
 ///
 /// All specified indices must have the same dimension.
 /// Result has the same shape as input.
-pub fn symmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
+pub fn symmetrize<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, indices: &[usize]) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     if indices.len() <= 1 {
         return t.clone();
     }
@@ -480,7 +516,7 @@ pub fn symmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
         assert_eq!(t.shape[idx], dim, "symmetrize: dimensions must match");
     }
 
-    let mut result = Tensor::new(&t.shape);
+    let mut result = Tensor::<Fixed<S, F>>::new(&t.shape);
     let n_perms = factorial(indices.len());
 
     // Generate all permutations of the indices
@@ -498,8 +534,8 @@ pub fn symmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
         }
 
         // Collect permuted values for compute-tier accumulation
-        let mut terms: Vec<BinaryStorage> = Vec::with_capacity(perms.len());
-        let ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); perms.len()];
+        let mut terms: Vec<S> = Vec::with_capacity(perms.len());
+        let ones: Vec<S> = vec![Fixed::one().raw(); perms.len()];
         for perm in &perms {
             let mut permuted_idx = idx.clone();
             for (pi, &p) in perm.iter().enumerate() {
@@ -520,7 +556,10 @@ pub fn symmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
 /// Antisymmetrize over specified indices: signed average over permutations.
 ///
 /// All specified indices must have the same dimension.
-pub fn antisymmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
+pub fn antisymmetrize<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, indices: &[usize]) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     if indices.len() <= 1 {
         return t.clone();
     }
@@ -530,7 +569,7 @@ pub fn antisymmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
         assert_eq!(t.shape[idx], dim, "antisymmetrize: dimensions must match");
     }
 
-    let mut result = Tensor::new(&t.shape);
+    let mut result = Tensor::<Fixed<S, F>>::new(&t.shape);
     let n_perms = factorial(indices.len());
 
     let perms = permutations(indices.len());
@@ -547,8 +586,8 @@ pub fn antisymmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
         }
 
         // Collect sign-adjusted values for compute-tier accumulation
-        let mut signed_values: Vec<BinaryStorage> = Vec::with_capacity(perms.len());
-        let mut ones: Vec<BinaryStorage> = vec![FixedPoint::one().raw(); perms.len()];
+        let mut signed_values: Vec<S> = Vec::with_capacity(perms.len());
+        let mut ones: Vec<S> = vec![Fixed::one().raw(); perms.len()];
         for (pi, perm) in perms.iter().enumerate() {
             let mut permuted_idx = idx.clone();
             for (qi, &p) in perm.iter().enumerate() {
@@ -556,7 +595,7 @@ pub fn antisymmetrize(t: &Tensor, indices: &[usize]) -> Tensor {
             }
             signed_values.push(t.get(&permuted_idx).raw());
             // the sign goes on the coefficient: negating the value wraps at the minimum
-            if !signs[pi] { ones[pi] = (-FixedPoint::one()).raw(); }
+            if !signs[pi] { ones[pi] = (-Fixed::one()).raw(); }
         }
         // Signed mean at the compute tier, one rounding (see symmetrize)
         result.data[flat] = mean_of(&signed_values, &ones, n_perms);
@@ -612,8 +651,11 @@ fn perm_signs(n: usize) -> Vec<bool> {
 }
 
 /// sum_i values_i * coeffs_i / n at the compute tier, rounded to storage once.
-fn mean_of(values: &[BinaryStorage], coeffs: &[BinaryStorage], n: usize) -> FixedPoint {
-    let acc = compute_tier_dot_acc(values, coeffs);
-    let mean = compute_mul_div_int(acc, 1, n as i64).expect("tensor mean: n > 0");
-    FixedPoint::from_raw(round_to_storage(mean))
+fn mean_of<S: Storage, const F: u32>(values: &[S], coeffs: &[S], n: usize) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let acc = kernels::dot_acc::<Fixed<S, F>>(values, coeffs);
+    let mean = Fixed::<S, F>::compute_mul_div_int(acc, 1, n as i64).expect("tensor mean: n > 0");
+    Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(mean))
 }

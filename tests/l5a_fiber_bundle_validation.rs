@@ -403,11 +403,11 @@ fn test_nonflat_bundle_curvature() {
 #[test]
 fn test_bundle_dimensions() {
     let trivial = TrivialBundle { base_dimension: 3, fiber_dimension: 2 };
-    assert_eq!(trivial.base_dim(), 3);
-    assert_eq!(trivial.fiber_dim(), 2);
-    assert_eq!(trivial.total_dim(), 5);
+    assert_eq!(<TrivialBundle as FiberBundle>::base_dim(&trivial), 3);
+    assert_eq!(<TrivialBundle as FiberBundle>::fiber_dim(&trivial), 2);
+    assert_eq!(<TrivialBundle as FiberBundle>::total_dim(&trivial), 5);
 
-    let vb = VectorBundle::flat(4, 3);
+    let vb: VectorBundle = VectorBundle::flat(4, 3);
     assert_eq!(vb.base_dim(), 4);
     assert_eq!(vb.fiber_dim(), 3);
     assert_eq!(vb.total_dim(), 7);
