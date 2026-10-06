@@ -588,3 +588,99 @@ fn vectors_and_matrices_are_bit_identical_to_0_6_5() {
         t.report();
     }
 }
+
+
+// ---- decompositions and derived operations ----------------------------------
+
+#[test]
+fn decompositions_are_bit_identical_to_0_6_5() {
+    use g_math::fixed_point::imperative::decompose as nd;
+    use g_math::fixed_point::imperative::derived as nv;
+    use g_math_065::fixed_point::imperative::decompose as od;
+    use g_math_065::fixed_point::imperative::derived as ov;
+    silence_panics();
+    let n = count(240);
+    let mut rng = Rng(0xDEC0_0001);
+    let mut lu = Tally::new("lu/solve/det/inverse");
+    let mut qr = Tally::new("qr");
+    let mut chol = Tally::new("cholesky/inverse_spd");
+    let mut eig = Tally::new("eigen_symmetric");
+    let mut svd = Tally::new("svd/pseudoinverse/rank");
+    let mut schur = Tally::new("schur");
+    let mut norms = Tally::new("norms/condition");
+    for i in 0..n {
+        // 1 x 1 to 5 x 5, entries a few units in magnitude; every ninth at
+        // the storage range (overflow and refusal paths)
+        let d = 1 + (rng.next() % 5) as usize;
+        let bits = if i % 9 == 8 { WIDTH - 1 } else { FRAC + 2 };
+        let m: Vec<Raw> = (0..d * d).map(|_| rng.raw(bits)).collect();
+        let b: Vec<Raw> = (0..d).map(|_| rng.raw(bits)).collect();
+        let (om, nm) = (old_mat(d, d, &m), new_mat(d, d, &m));
+        let (ob, nb) = (old_vec(&b), new_vec(&b));
+        // a symmetric form from the same raws (mirrored, not summed: no overflow)
+        let sym: Vec<Raw> = (0..d * d).map(|k| { let (i, j) = (k / d, k % d); m[if i <= j { i * d + j } else { j * d + i }] }).collect();
+        let (os, ns) = (old_mat(d, d, &sym), new_mat(d, d, &sym));
+        lu.check(
+            fallible(|| od::lu_decompose(&om).and_then(|f| Ok((old_mraws(&f.l), old_mraws(&f.u), f.perm.clone(), f.num_swaps, old_raws(&f.solve(&ob)?), raw::old_raw(f.determinant()), old_mraws(&f.inverse()?))))),
+            fallible(|| nd::lu_decompose(&nm).and_then(|f| Ok((new_mraws(&f.l), new_mraws(&f.u), f.perm.clone(), f.num_swaps, new_raws(&f.solve(&nb)?), raw::new_raw(f.determinant()), new_mraws(&f.inverse()?))))),
+            &m,
+        );
+        lu.check(
+            fallible(|| -> Result<_, g_math_065::fixed_point::OverflowDetected> { Ok((old_raws(&ov::solve(&om, &ob)?), raw::old_raw(ov::determinant(&om)?), old_mraws(&ov::inverse(&om)?))) }),
+            fallible(|| -> Result<_, g_math::fixed_point::OverflowDetected> { Ok((new_raws(&nv::solve(&nm, &nb)?), raw::new_raw(nv::determinant(&nm)?), new_mraws(&nv::inverse(&nm)?))) }),
+            &m,
+        );
+        qr.check(
+            fallible(|| od::qr_decompose(&om).and_then(|f| Ok((old_mraws(&f.q), old_mraws(&f.r), old_raws(&f.solve(&ob)?))))),
+            fallible(|| nd::qr_decompose(&nm).and_then(|f| Ok((new_mraws(&f.q), new_mraws(&f.r), new_raws(&f.solve(&nb)?))))),
+            &m,
+        );
+        chol.check(
+            fallible(|| od::cholesky_decompose(&os).and_then(|f| Ok((old_mraws(&f.l), old_raws(&f.solve(&ob)?))))),
+            fallible(|| nd::cholesky_decompose(&ns).and_then(|f| Ok((new_mraws(&f.l), new_raws(&f.solve(&nb)?))))),
+            &m,
+        );
+        chol.check(fallible(|| ov::inverse_spd(&os).map(|x| old_mraws(&x))), fallible(|| nv::inverse_spd(&ns).map(|x| new_mraws(&x))), &m);
+        if bits < WIDTH - 1 {
+            // a positive definite form: M^T M plus the identity
+            let (opd, npd) = (&(&om.transpose() * &om) + &OldMatrix::identity(d), &(&nm.transpose() * &nm) + &NewMatrix::<g_math::fixed_point::FixedPoint>::identity(d));
+            chol.check(
+                fallible(|| od::cholesky_decompose(&opd).and_then(|f| Ok((old_mraws(&f.l), old_raws(&f.solve(&ob)?), raw::old_raw(f.determinant()))))),
+                fallible(|| nd::cholesky_decompose(&npd).and_then(|f| Ok((new_mraws(&f.l), new_raws(&f.solve(&nb)?), raw::new_raw(f.determinant()))))),
+                &m,
+            );
+            chol.check(fallible(|| ov::solve_spd(&opd, &ob).map(|x| old_raws(&x))), fallible(|| nv::solve_spd(&npd, &nb).map(|x| new_raws(&x))), &m);
+        }
+        if bits < WIDTH - 1 {
+            // the iterative ones on in-range entries only (debug builds are slow at the range)
+            eig.check(
+                fallible(|| od::eigen_symmetric(&os).map(|e| (old_raws(&e.values), old_mraws(&e.vectors)))),
+                fallible(|| nd::eigen_symmetric(&ns).map(|e| (new_raws(&e.values), new_mraws(&e.vectors)))),
+                &m,
+            );
+            svd.check(
+                fallible(|| od::svd_decompose(&om).map(|s| (old_mraws(&s.u), old_raws(&s.sigma), old_mraws(&s.vt)))),
+                fallible(|| nd::svd_decompose(&nm).map(|s| (new_mraws(&s.u), new_raws(&s.sigma), new_mraws(&s.vt)))),
+                &m,
+            );
+            svd.check(
+                fallible(|| -> Result<_, g_math_065::fixed_point::OverflowDetected> { Ok((old_mraws(&ov::pseudoinverse(&om)?), ov::rank(&om)?, raw::old_raw(ov::condition_number_2(&om)?))) }),
+                fallible(|| -> Result<_, g_math::fixed_point::OverflowDetected> { Ok((new_mraws(&nv::pseudoinverse(&nm)?), nv::rank(&nm)?, raw::new_raw(nv::condition_number_2(&nm)?))) }),
+                &m,
+            );
+            schur.check(
+                fallible(|| od::schur_decompose(&om).map(|s| (old_mraws(&s.q), old_mraws(&s.t)))),
+                fallible(|| nd::schur_decompose(&nm).map(|s| (new_mraws(&s.q), new_mraws(&s.t)))),
+                &m,
+            );
+        }
+        norms.check(
+            fallible(|| -> Result<_, g_math_065::fixed_point::OverflowDetected> { Ok((raw::old_raw(ov::frobenius_norm(&om)), raw::old_raw(ov::norm_1(&om)), raw::old_raw(ov::norm_inf(&om)), raw::old_raw(ov::condition_number_1(&om)?))) }),
+            fallible(|| -> Result<_, g_math::fixed_point::OverflowDetected> { Ok((raw::new_raw(nv::frobenius_norm(&nm)), raw::new_raw(nv::norm_1(&nm)), raw::new_raw(nv::norm_inf(&nm)), raw::new_raw(nv::condition_number_1(&nm)?))) }),
+            &m,
+        );
+    }
+    for t in [&lu, &qr, &chol, &eig, &svd, &schur, &norms] {
+        t.report();
+    }
+}

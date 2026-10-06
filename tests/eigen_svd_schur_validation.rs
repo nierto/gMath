@@ -606,7 +606,7 @@ fn test_condition_number_2_diagonal() {
 
 #[test]
 fn test_nullspace_full_rank() {
-    let a = FixedMatrix::identity(3);
+    let a: FixedMatrix = FixedMatrix::identity(3);
     let ns = nullspace(&a).unwrap();
     assert_eq!(ns.cols(), 0, "Full rank matrix should have empty nullspace");
 }

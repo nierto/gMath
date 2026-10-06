@@ -270,3 +270,59 @@ fn containers_are_exact_at_every_width() {
     container_identities::<I256, 128>();
     container_identities::<I512, 256>();
 }
+
+// ============================================================================
+// Decompositions and derived operations at every width
+// ============================================================================
+
+use g_math::fixed_point::imperative::decompose::{cholesky_decompose, eigen_symmetric, lu_decompose, qr_decompose, svd_decompose};
+use g_math::fixed_point::imperative::derived::{determinant, inverse, solve};
+
+fn decomposition_identities<S: Storage, const F: u32>()
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    let half = Fixed::<S, F>::one() / v(2);
+    // a dyadic SPD matrix with an exact factorisation: [4 2; 2 5] = L L^T, L = [2 0; 1 2]
+    let a = FixedMatrix::from_slice(2, 2, &[v(4), v(2), v(2), v(5)]);
+    let chol = cholesky_decompose(&a).unwrap();
+    assert_eq!(chol.l, FixedMatrix::from_slice(2, 2, &[v(2), v(0), v(1), v(2)]));
+    let lu = lu_decompose(&a).unwrap();
+    assert_eq!(lu.determinant(), v(16));
+    assert_eq!(determinant(&a).unwrap(), v(16));
+    let b = FixedVector::from_slice(&[v(8), v(9)]);
+    let eighth = half * half * half;
+    assert_eq!(solve(&a, &b).unwrap(), FixedVector::from_slice(&[v(1) + v(3) * eighth, v(1) + v(2) * eighth]));
+    let inv = inverse(&a).unwrap();
+    assert_eq!(inv, FixedMatrix::from_slice(2, 2, &[v(5) / v(16), -v(2) / v(16), -v(2) / v(16), v(4) / v(16)]));
+    // QR of an orthogonal-friendly matrix: Q R = A within one unit, R upper triangular
+    let m = FixedMatrix::from_slice(2, 2, &[v(3), v(1), v(4), v(2)]);
+    let qr = qr_decompose(&m).unwrap();
+    let back = &qr.q * &qr.r;
+    let ulp = Fixed::<S, F>::from_raw(S::one());
+    for i in 0..2 { for j in 0..2 { assert!((back.get(i, j) - m.get(i, j)).abs() <= ulp * v(2), "QR at F={F}"); } }
+    assert_eq!(qr.r.get(1, 0), Fixed::ZERO);
+    // symmetric eigenproblem with exact eigenvalues: [2 1; 1 2] -> 1, 3
+    let s = FixedMatrix::from_slice(2, 2, &[v(2), v(1), v(1), v(2)]);
+    let eig = eigen_symmetric(&s).unwrap();
+    let mut vals = vec![eig.values[0], eig.values[1]];
+    vals.sort();
+    assert!((vals[0] - v(1)).abs() <= ulp * v(4) && (vals[1] - v(3)).abs() <= ulp * v(4), "eigen at F={F}");
+    // singular values of diag(3, 4) are 4, 3
+    let d = FixedMatrix::from_slice(2, 2, &[v(3), v(0), v(0), v(4)]);
+    let svd = svd_decompose(&d).unwrap();
+    assert!((svd.sigma[0] - v(4)).abs() <= ulp * v(4) && (svd.sigma[1] - v(3)).abs() <= ulp * v(4), "SVD at F={F}");
+}
+
+#[test]
+fn decompositions_run_at_every_width() {
+    decomposition_identities::<i32, 8>();
+    decomposition_identities::<i32, 10>();
+    decomposition_identities::<i32, 16>();
+    decomposition_identities::<i32, 24>();
+    decomposition_identities::<i64, 32>();
+    decomposition_identities::<i128, 64>();
+    decomposition_identities::<I256, 128>();
+    decomposition_identities::<I512, 256>();
+}

@@ -424,3 +424,9 @@ pub(crate) fn sqrt_dot<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> Resul
 pub(crate) fn dot_raw<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> T::Storage {
     round_to_storage::<T>(dot_acc::<T>(a, b))
 }
+
+/// A compute value scaled by `2^shift` (the caller has bounded the bit length).
+#[inline]
+pub(crate) fn compute_scale_up<T: FixedNum>(v: Compute<T>, shift: u32) -> Compute<T> {
+    v.shl_bits(shift)
+}

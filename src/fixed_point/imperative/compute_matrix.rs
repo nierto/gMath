@@ -1,22 +1,19 @@
-//! ComputeMatrix: matrix type operating entirely at compute tier (tier N+1).
+//! ComputeMatrix<Fixed<S, F>>: matrix type operating entirely at compute tier (tier N+1).
 //!
 //! All operations (multiply, add, LU solve) stay at compute-tier precision.
-//! Only downscaled to FixedMatrix via `to_fixed_matrix()` at the very end.
+//! Only downscaled to FixedMatrix<Fixed<S, F>> via `to_fixed_matrix()` at the very end.
 //! This gives 0-1 ULP for arbitrarily long matrix operation chains: the
 //! same principle as FASC's BinaryCompute chain persistence for scalars.
 
-use super::FixedPoint;
 use super::FixedMatrix;
-use super::linalg::{ComputeStorage, upscale_to_compute, round_to_storage};
-use super::wide_acc::exact_sub_dot_compute;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
-    compute_halve, compute_is_zero, compute_is_negative, sqrt_at_compute_tier,
-};
+use super::kernels;
+use super::FixedPoint;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
+use crate::fixed_point::width::Storage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
-// ComputeMatrix
+// ComputeMatrix<Fixed<S, F>>
 // ============================================================================
 
 /// Row-major matrix of compute-tier values (tier N+1 precision).
@@ -25,27 +22,36 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// intermediate operations at double width. Downscale once at the end
 /// via `to_fixed_matrix()` for 0-1 ULP final precision.
 #[derive(Clone, Debug)]
-pub(crate) struct ComputeMatrix {
+pub(crate) struct ComputeMatrix<T: FixedNum = FixedPoint> {
     rows: usize,
     cols: usize,
-    data: Vec<ComputeStorage>,
+    data: Vec<Compute<T>>,
 }
 
-fn compute_zero() -> ComputeStorage {
-    upscale_to_compute(FixedPoint::ZERO.raw())
+fn compute_zero<S: Storage, const F: u32>() -> Compute<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    Fixed::<S, F>::upscale_to_compute(Fixed::ZERO.raw())
 }
 
-fn compute_one() -> ComputeStorage {
-    upscale_to_compute(FixedPoint::one().raw())
+fn compute_one<S: Storage, const F: u32>() -> Compute<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    Fixed::<S, F>::upscale_to_compute(Fixed::one().raw())
 }
 
-impl ComputeMatrix {
+impl<S: Storage, const F: u32> ComputeMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     pub fn new(rows: usize, cols: usize) -> Self {
-        let z = compute_zero();
+        let z = compute_zero::<S, F>();
         Self { rows, cols, data: vec![z; rows * cols] }
     }
 
-    pub fn from_fn(rows: usize, cols: usize, f: impl Fn(usize, usize) -> ComputeStorage) -> Self {
+    pub fn from_fn(rows: usize, cols: usize, f: impl Fn(usize, usize) -> Compute<Fixed<S, F>>) -> Self {
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
@@ -56,20 +62,20 @@ impl ComputeMatrix {
     }
 
     pub fn identity(n: usize) -> Self {
-        let z = compute_zero();
-        let o = compute_one();
+        let z = compute_zero::<S, F>();
+        let o = compute_one::<S, F>();
         Self::from_fn(n, n, |r, c| if r == c { o } else { z })
     }
 
-    /// Upscale a FixedMatrix to compute tier.
-    pub fn from_fixed_matrix(m: &FixedMatrix) -> Self {
-        Self::from_fn(m.rows(), m.cols(), |r, c| upscale_to_compute(m.get(r, c).raw()))
+    /// Upscale a FixedMatrix<Fixed<S, F>> to compute tier.
+    pub fn from_fixed_matrix(m: &FixedMatrix<Fixed<S, F>>) -> Self {
+        Self::from_fn(m.rows(), m.cols(), |r, c| Fixed::<S, F>::upscale_to_compute(m.get(r, c).raw()))
     }
 
-    /// Downscale to FixedMatrix: single rounding per element (0-1 ULP).
-    pub fn to_fixed_matrix(&self) -> FixedMatrix {
-        FixedMatrix::from_fn(self.rows, self.cols, |r, c| {
-            FixedPoint::from_raw(round_to_storage(self.get(r, c)))
+    /// Downscale to FixedMatrix<Fixed<S, F>>: single rounding per element (0-1 ULP).
+    pub fn to_fixed_matrix(&self) -> FixedMatrix<Fixed<S, F>> {
+        FixedMatrix::<Fixed<S, F>>::from_fn(self.rows, self.cols, |r, c| {
+            Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(self.get(r, c)))
         })
     }
 
@@ -80,12 +86,12 @@ impl ComputeMatrix {
     pub fn cols(&self) -> usize { self.cols }
 
     #[inline]
-    pub fn get(&self, row: usize, col: usize) -> ComputeStorage {
+    pub fn get(&self, row: usize, col: usize) -> Compute<Fixed<S, F>> {
         self.data[row * self.cols + col]
     }
 
     #[inline]
-    pub fn set(&mut self, row: usize, col: usize, val: ComputeStorage) {
+    pub fn set(&mut self, row: usize, col: usize, val: Compute<Fixed<S, F>>) {
         self.data[row * self.cols + col] = val;
     }
 
@@ -100,27 +106,27 @@ impl ComputeMatrix {
 
     pub fn add(&self, other: &Self) -> Self {
         Self::from_fn(self.rows, self.cols, |r, c|
-            compute_add(self.get(r, c), other.get(r, c)))
+            Fixed::<S, F>::compute_add(self.get(r, c), other.get(r, c)))
     }
 
     pub fn sub(&self, other: &Self) -> Self {
         Self::from_fn(self.rows, self.cols, |r, c|
-            compute_subtract(self.get(r, c), other.get(r, c)))
+            Fixed::<S, F>::compute_subtract(self.get(r, c), other.get(r, c)))
     }
 
     pub fn neg(&self) -> Self {
         Self::from_fn(self.rows, self.cols, |r, c|
-            compute_negate(self.get(r, c)))
+            Fixed::<S, F>::compute_negate(self.get(r, c)))
     }
 
-    pub fn scalar_mul(&self, s: ComputeStorage) -> Self {
+    pub fn scalar_mul(&self, s: Compute<Fixed<S, F>>) -> Self {
         Self::from_fn(self.rows, self.cols, |r, c|
-            compute_multiply(self.get(r, c), s))
+            Fixed::<S, F>::compute_multiply(self.get(r, c), s))
     }
 
     pub fn halve(&self) -> Self {
         Self::from_fn(self.rows, self.cols, |r, c|
-            compute_halve(self.get(r, c)))
+            Fixed::<S, F>::compute_halve(self.get(r, c)))
     }
 
     /// Matrix multiply at compute tier: each entry one rounding of its exact
@@ -129,58 +135,58 @@ impl ComputeMatrix {
     pub fn mat_mul(&self, other: &Self) -> Self {
         assert_eq!(self.cols, other.rows);
         Self::from_fn(self.rows, other.cols, |r, c| {
-            let row: Vec<ComputeStorage> = (0..self.cols).map(|m| self.get(r, m)).collect();
+            let row: Vec<Compute<Fixed<S, F>>> = (0..self.cols).map(|m| self.get(r, m)).collect();
             let col = other.col_vec(c);
-            exact_sub_dot_compute(compute_zero(), &row, &col.iter().map(|v| compute_negate(*v)).collect::<Vec<_>>())
-                .expect("ComputeMatrix::mat_mul: entry exceeds the compute tier")
+            kernels::exact_sub_dot_compute::<Fixed<S, F>>(compute_zero::<S, F>(), &row, &col.iter().map(|v| Fixed::<S, F>::compute_negate(*v)).collect::<Vec<_>>())
+                .expect("ComputeMatrix::<Fixed<S, F>>::mat_mul: entry exceeds the compute tier")
         })
     }
 
-    /// Extract column as Vec<ComputeStorage>.
-    pub fn col_vec(&self, c: usize) -> Vec<ComputeStorage> {
+    /// Extract column as Vec<Compute<Fixed<S, F>>>.
+    pub fn col_vec(&self, c: usize) -> Vec<Compute<Fixed<S, F>>> {
         (0..self.rows).map(|r| self.get(r, c)).collect()
     }
 
     /// Matrix-vector multiply at compute tier. Returns compute-tier result vector.
     /// Both matrix and vector stay at tier N+1, no mid-chain downscale.
-    pub fn mul_vector_compute(&self, v: &[ComputeStorage]) -> Vec<ComputeStorage> {
+    pub fn mul_vector_compute(&self, v: &[Compute<Fixed<S, F>>]) -> Vec<Compute<Fixed<S, F>>> {
         assert_eq!(self.cols, v.len());
         // each entry one rounding of its exact sum of products
-        let neg: Vec<ComputeStorage> = v.iter().map(|x| compute_negate(*x)).collect();
+        let neg: Vec<Compute<Fixed<S, F>>> = v.iter().map(|x| Fixed::<S, F>::compute_negate(*x)).collect();
         (0..self.rows).map(|r| {
-            let row: Vec<ComputeStorage> = (0..self.cols).map(|c| self.get(r, c)).collect();
-            exact_sub_dot_compute(compute_zero(), &row, &neg)
-                .expect("ComputeMatrix::mul_vector_compute: entry exceeds the compute tier")
+            let row: Vec<Compute<Fixed<S, F>>> = (0..self.cols).map(|c| self.get(r, c)).collect();
+            kernels::exact_sub_dot_compute::<Fixed<S, F>>(compute_zero::<S, F>(), &row, &neg)
+                .expect("ComputeMatrix::<Fixed<S, F>>::mul_vector_compute: entry exceeds the compute tier")
         }).collect()
     }
 
     /// Frobenius norm computed at tier N+1: sqrt(sum(a_ij²)).
     /// Sum-of-squares and sqrt at compute tier, single downscale at end.
-    pub fn frobenius_norm_compute(&self) -> FixedPoint {
-        let mut sum_sq = compute_zero();
+    pub fn frobenius_norm_compute(&self) -> Fixed<S, F> {
+        let mut sum_sq = compute_zero::<S, F>();
         for r in 0..self.rows {
             for c in 0..self.cols {
                 let v = self.get(r, c);
-                sum_sq = compute_add(sum_sq, compute_multiply(v, v));
+                sum_sq = Fixed::<S, F>::compute_add(sum_sq, Fixed::<S, F>::compute_multiply(v, v));
             }
         }
-        FixedPoint::from_raw(round_to_storage(sqrt_at_compute_tier(sum_sq)))
+        Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(Fixed::<S, F>::sqrt_at_compute_tier(sum_sq)))
     }
 
     /// 1-norm computed at tier N+1: max absolute column sum.
     /// Single downscale at end for comparison.
-    pub fn norm_1_compute(&self) -> FixedPoint {
-        let mut max_col_sum = compute_zero();
+    pub fn norm_1_compute(&self) -> Fixed<S, F> {
+        let mut max_col_sum = compute_zero::<S, F>();
         for c in 0..self.cols {
-            let mut col_sum = compute_zero();
+            let mut col_sum = compute_zero::<S, F>();
             for r in 0..self.rows {
-                col_sum = compute_add(col_sum, compute_abs(self.get(r, c)));
+                col_sum = Fixed::<S, F>::compute_add(col_sum, kernels::compute_abs::<Fixed<S, F>>(self.get(r, c)));
             }
             if col_sum > max_col_sum {
                 max_col_sum = col_sum;
             }
         }
-        FixedPoint::from_raw(round_to_storage(max_col_sum))
+        Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(max_col_sum))
     }
 
     /// Copy this matrix (all data at compute tier).
@@ -194,13 +200,13 @@ impl ComputeMatrix {
     }
 
     /// Trace at compute tier: sum of diagonal elements, single downscale at end.
-    pub fn trace_compute(&self) -> FixedPoint {
+    pub fn trace_compute(&self) -> Fixed<S, F> {
         assert_eq!(self.rows, self.cols, "trace: matrix must be square");
-        let mut acc = compute_zero();
+        let mut acc = compute_zero::<S, F>();
         for i in 0..self.rows {
-            acc = compute_add(acc, self.get(i, i));
+            acc = Fixed::<S, F>::compute_add(acc, self.get(i, i));
         }
-        FixedPoint::from_raw(round_to_storage(acc))
+        Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(acc))
     }
 }
 
@@ -209,50 +215,52 @@ impl ComputeMatrix {
 // ============================================================================
 
 #[derive(Clone, Debug)]
-pub(crate) struct ComputeLU {
-    l: ComputeMatrix,
-    u: ComputeMatrix,
+pub(crate) struct ComputeLU<T: FixedNum = FixedPoint> {
+    l: ComputeMatrix<T>,
+    u: ComputeMatrix<T>,
     perm: Vec<usize>,
     num_swaps: usize,
 }
 
 /// Compute-tier sub-dot `init - sum(a[i] * b[i])`: exact sum, one rounding.
-fn compute_sub_dot(init: ComputeStorage, a: &[ComputeStorage], b: &[ComputeStorage]) -> Result<ComputeStorage, OverflowDetected> {
-    exact_sub_dot_compute(init, a, b)
+fn compute_sub_dot<S: Storage, const F: u32>(init: Compute<Fixed<S, F>>, a: &[Compute<Fixed<S, F>>], b: &[Compute<Fixed<S, F>>]) -> Result<Compute<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    kernels::exact_sub_dot_compute::<Fixed<S, F>>(init, a, b)
 }
 
-fn compute_abs(a: ComputeStorage) -> ComputeStorage {
-    if compute_is_negative(&a) { compute_negate(a) } else { a }
-}
-
-pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, OverflowDetected> {
+pub(crate) fn compute_lu_decompose<S: Storage, const F: u32>(a: &ComputeMatrix<Fixed<S, F>>) -> Result<ComputeLU<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let n = a.rows();
-    let mut pa = ComputeMatrix::from_fn(n, n, |r, c| a.get(r, c));
-    let mut l = ComputeMatrix::new(n, n);
-    let mut u = ComputeMatrix::new(n, n);
+    let mut pa = ComputeMatrix::<Fixed<S, F>>::from_fn(n, n, |r, c| a.get(r, c));
+    let mut l = ComputeMatrix::<Fixed<S, F>>::new(n, n);
+    let mut u = ComputeMatrix::<Fixed<S, F>>::new(n, n);
     let mut perm: Vec<usize> = (0..n).collect();
     let mut num_swaps = 0;
 
     for k in 0..n {
         // Pivoting: find max |candidate| for rows k..n
-        let mut max_abs = compute_zero();
+        let mut max_abs = compute_zero::<S, F>();
         let mut max_row = k;
         for i in k..n {
             let candidate = if k == 0 {
                 pa.get(i, k)
             } else {
-                let l_row: Vec<ComputeStorage> = (0..k).map(|j| l.get(i, j)).collect();
-                let u_col: Vec<ComputeStorage> = (0..k).map(|j| u.get(j, k)).collect();
+                let l_row: Vec<Compute<Fixed<S, F>>> = (0..k).map(|j| l.get(i, j)).collect();
+                let u_col: Vec<Compute<Fixed<S, F>>> = (0..k).map(|j| u.get(j, k)).collect();
                 compute_sub_dot(pa.get(i, k), &l_row, &u_col)?
             };
-            let abs_c = compute_abs(candidate);
+            let abs_c = kernels::compute_abs::<Fixed<S, F>>(candidate);
             if abs_c > max_abs {
                 max_abs = abs_c;
                 max_row = i;
             }
         }
 
-        if compute_is_zero(&max_abs) {
+        if Fixed::<S, F>::compute_is_zero(&max_abs) {
             return Err(OverflowDetected::DivisionByZero);
         }
 
@@ -272,8 +280,8 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
             let val = if k == 0 {
                 pa.get(k, j)
             } else {
-                let l_row: Vec<ComputeStorage> = (0..k).map(|m| l.get(k, m)).collect();
-                let u_col: Vec<ComputeStorage> = (0..k).map(|m| u.get(m, j)).collect();
+                let l_row: Vec<Compute<Fixed<S, F>>> = (0..k).map(|m| l.get(k, m)).collect();
+                let u_col: Vec<Compute<Fixed<S, F>>> = (0..k).map(|m| u.get(m, j)).collect();
                 compute_sub_dot(pa.get(k, j), &l_row, &u_col)?
             };
             u.set(k, j, val);
@@ -281,28 +289,31 @@ pub(crate) fn compute_lu_decompose(a: &ComputeMatrix) -> Result<ComputeLU, Overf
 
         // L column k
         let pivot = u.get(k, k);
-        l.set(k, k, compute_one());
+        l.set(k, k, compute_one::<S, F>());
         for i in (k + 1)..n {
             let numerator = if k == 0 {
                 pa.get(i, k)
             } else {
-                let l_row: Vec<ComputeStorage> = (0..k).map(|m| l.get(i, m)).collect();
-                let u_col: Vec<ComputeStorage> = (0..k).map(|m| u.get(m, k)).collect();
+                let l_row: Vec<Compute<Fixed<S, F>>> = (0..k).map(|m| l.get(i, m)).collect();
+                let u_col: Vec<Compute<Fixed<S, F>>> = (0..k).map(|m| u.get(m, k)).collect();
                 compute_sub_dot(pa.get(i, k), &l_row, &u_col)?
             };
-            l.set(i, k, compute_divide(numerator, pivot)?);
+            l.set(i, k, Fixed::<S, F>::compute_divide(numerator, pivot)?);
         }
     }
 
-    Ok(ComputeLU { l, u, perm, num_swaps })
+    Ok(ComputeLU::<Fixed<S, F>> { l, u, perm, num_swaps })
 }
 
-impl ComputeLU {
+impl<S: Storage, const F: u32> ComputeLU<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// The unit lower factor, at the compute tier.
-    pub fn l(&self) -> &ComputeMatrix { &self.l }
+    pub fn l(&self) -> &ComputeMatrix<Fixed<S, F>> { &self.l }
 
     /// The upper factor, at the compute tier.
-    pub fn u(&self) -> &ComputeMatrix { &self.u }
+    pub fn u(&self) -> &ComputeMatrix<Fixed<S, F>> { &self.u }
 
     /// Row `i` of PA is row `perm[i]` of A.
     pub fn perm(&self) -> &[usize] { &self.perm }
@@ -312,46 +323,46 @@ impl ComputeLU {
 
     /// `det A` at the compute tier: the product of U's diagonal, signed by
     /// the swap parity.
-    pub fn determinant(&self) -> ComputeStorage {
+    pub fn determinant(&self) -> Compute<Fixed<S, F>> {
         let n = self.u.rows();
-        let mut acc = compute_one();
+        let mut acc = compute_one::<S, F>();
         for i in 0..n {
-            acc = compute_multiply(acc, self.u.get(i, i));
+            acc = Fixed::<S, F>::compute_multiply(acc, self.u.get(i, i));
         }
-        if self.num_swaps % 2 == 1 { compute_negate(acc) } else { acc }
+        if self.num_swaps % 2 == 1 { Fixed::<S, F>::compute_negate(acc) } else { acc }
     }
 
     /// Solve Ax = b at compute tier. Returns compute-tier solution vector.
-    pub fn solve(&self, b: &[ComputeStorage]) -> Result<Vec<ComputeStorage>, OverflowDetected> {
+    pub fn solve(&self, b: &[Compute<Fixed<S, F>>]) -> Result<Vec<Compute<Fixed<S, F>>>, OverflowDetected> {
         let n = self.l.rows();
-        let pb: Vec<ComputeStorage> = (0..n).map(|i| b[self.perm[i]]).collect();
+        let pb: Vec<Compute<Fixed<S, F>>> = (0..n).map(|i| b[self.perm[i]]).collect();
 
         // Forward: Ly = pb
-        let mut y = vec![compute_zero(); n];
+        let mut y = vec![compute_zero::<S, F>(); n];
         for i in 0..n {
             if i == 0 {
                 y[0] = pb[0];
             } else {
-                let l_row: Vec<ComputeStorage> = (0..i).map(|j| self.l.get(i, j)).collect();
-                let y_prev: Vec<ComputeStorage> = y[0..i].to_vec();
+                let l_row: Vec<Compute<Fixed<S, F>>> = (0..i).map(|j| self.l.get(i, j)).collect();
+                let y_prev: Vec<Compute<Fixed<S, F>>> = y[0..i].to_vec();
                 y[i] = compute_sub_dot(pb[i], &l_row, &y_prev)?;
             }
         }
 
         // Back: Ux = y
-        let mut x = vec![compute_zero(); n];
+        let mut x = vec![compute_zero::<S, F>(); n];
         for i in (0..n).rev() {
             let diag = self.u.get(i, i);
-            if compute_is_zero(&diag) {
+            if Fixed::<S, F>::compute_is_zero(&diag) {
                 return Err(OverflowDetected::DivisionByZero);
             }
             if i == n - 1 {
-                x[n - 1] = compute_divide(y[n - 1], diag)?;
+                x[n - 1] = Fixed::<S, F>::compute_divide(y[n - 1], diag)?;
             } else {
-                let u_row: Vec<ComputeStorage> = (i + 1..n).map(|j| self.u.get(i, j)).collect();
-                let x_tail: Vec<ComputeStorage> = x[i + 1..n].to_vec();
+                let u_row: Vec<Compute<Fixed<S, F>>> = (i + 1..n).map(|j| self.u.get(i, j)).collect();
+                let x_tail: Vec<Compute<Fixed<S, F>>> = x[i + 1..n].to_vec();
                 let numerator = compute_sub_dot(y[i], &u_row, &x_tail)?;
-                x[i] = compute_divide(numerator, diag)?;
+                x[i] = Fixed::<S, F>::compute_divide(numerator, diag)?;
             }
         }
 
@@ -359,12 +370,12 @@ impl ComputeLU {
     }
 
     /// Solve for full inverse at compute tier.
-    pub fn inverse(&self) -> Result<ComputeMatrix, OverflowDetected> {
+    pub fn inverse(&self) -> Result<ComputeMatrix<Fixed<S, F>>, OverflowDetected> {
         let n = self.l.rows();
-        let mut inv = ComputeMatrix::new(n, n);
+        let mut inv = ComputeMatrix::<Fixed<S, F>>::new(n, n);
         for j in 0..n {
-            let mut e_j = vec![compute_zero(); n];
-            e_j[j] = compute_one();
+            let mut e_j = vec![compute_zero::<S, F>(); n];
+            e_j[j] = compute_one::<S, F>();
             let col = self.solve(&e_j)?;
             for i in 0..n {
                 inv.set(i, j, col[i]);

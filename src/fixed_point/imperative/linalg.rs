@@ -170,17 +170,6 @@ pub(crate) unsafe fn unchecked_dot_avx2(a: &[i32], b: &[i32]) -> i64 {
 }
 
 
-/// `init - sum a_i b_i` of storage raws at the compute tier, WITHOUT
-/// downscaling (the products are exact at the compute tier). Used where the
-/// compute-tier value feeds a further compute-tier step.
-pub(crate) fn compute_tier_sub_dot_compute(
-    init: BinaryStorage,
-    a: &[BinaryStorage],
-    b: &[BinaryStorage],
-) -> ComputeStorage {
-    super::kernels::sub_dot_compute::<crate::fixed_point::fixed_num::ProfileFormat>(init, a, b)
-}
-
 // ============================================================================
 // Compute-tier orthogonal transforms for the iterative decompositions
 // ============================================================================
@@ -214,44 +203,8 @@ pub(crate) fn compute_abs_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
     super::kernels::compute_abs_shr::<crate::fixed_point::fixed_num::ProfileFormat>(v, shift)
 }
 
-/// `2^shift` compute quanta.
-/// Deflation bound of the iterations that keep their state at the compute
-/// tier: `magnitude * 2^-(3F/2)`, floored at `2^-(3F/2)` absolute.
-///
-/// The compute tier resolves `2^-2F`, so the iteration reaches this bound
-/// with `F/2` bits to spare; dropping an entry this small moves an eigen- or
-/// singular value of the magnitude's size by at most `2^-(F/2)` units (Weyl;
-/// quadratically less for a symmetric matrix), below the final rounding.
-#[inline]
-pub(crate) fn compute_deflation_threshold(magnitude: ComputeStorage) -> ComputeStorage {
-    super::kernels::compute_deflation_threshold::<crate::fixed_point::fixed_num::ProfileFormat>(magnitude)
-}
-
-/// Absolute noise floor of the compute-tier iterations, `2^-(3F/2)`: a
-/// diagonal entry at or below it is an exact zero computed as rounding noise.
-#[inline]
-pub(crate) fn compute_noise_floor() -> ComputeStorage {
-    super::kernels::compute_noise_floor::<crate::fixed_point::fixed_num::ProfileFormat>()
-}
-
-/// The looser bound accepted once a compute-tier iteration has stopped
-/// improving: one storage unit relative to the magnitude, with the same
-/// absolute floor as [`compute_deflation_threshold`].
-#[inline]
-pub(crate) fn compute_stagnation_threshold(magnitude: ComputeStorage) -> ComputeStorage {
-    super::kernels::compute_stagnation_threshold::<crate::fixed_point::fixed_num::ProfileFormat>(magnitude)
-}
-
-/// Magnitude of a compute-tier value.
-#[inline]
-pub(crate) fn compute_abs(v: ComputeStorage) -> ComputeStorage {
-    super::kernels::compute_abs::<crate::fixed_point::fixed_num::ProfileFormat>(v)
-}
-
 /// A plane rotation `[cs sn; -sn cs]` whose coefficients stay at the compute
 /// tier (`2 * FRAC_BITS` fractional bits).
-/// A Givens rotation at the compute tier of the profile's format.
-pub(crate) type Rotation = super::kernels::Rotation<crate::fixed_point::fixed_num::ProfileFormat>;
 
 /// `a b` of two compute raws, rounded once at the compute tier from the exact
 /// product. A product beyond the compute tier is a `TierOverflow`.
@@ -266,25 +219,6 @@ pub(crate) fn exact_dot(a: &[BinaryStorage], b: &[BinaryStorage]) -> Result<Comp
     super::kernels::exact_dot::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
 }
 
-/// A compute raw scaled by `2^-shift`, rounded once to storage (nearest,
-/// ties toward +infinity, checked): for iterations that scaled a block up by
-/// a power of two to keep relative precision.
-pub(crate) fn downscale_shifted_to_storage(v: ComputeStorage, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
-    super::kernels::downscale_shifted_to_storage::<crate::fixed_point::fixed_num::ProfileFormat>(v, shift)
-}
-
-/// `v * 2^shift` for a compute raw (exact; the caller keeps it in range).
-#[inline]
-pub(crate) fn compute_scale_up(v: ComputeStorage, shift: u32) -> ComputeStorage {
-    compute_shl(v, shift)
-}
-
-/// The power-of-two exponent that brings the largest of `values` into
-/// `[1/2, 1)` at the compute scale when it is below `1/2`, else 0.
-pub(crate) fn scale_up_exponent(values: &[ComputeStorage]) -> u32 {
-    super::kernels::scale_up_exponent::<crate::fixed_point::fixed_num::ProfileFormat>(values)
-}
-
 /// Significant bits of `|v|` for a compute raw.
 // used by the fused kernels on the wider profiles
 #[allow(dead_code)]
@@ -293,48 +227,19 @@ pub(crate) fn compute_bit_length(v: ComputeStorage) -> u32 {
     super::kernels::compute_bit_length::<crate::fixed_point::fixed_num::ProfileFormat>(v)
 }
 
-/// `v << shift` for a compute raw (exact; the caller keeps it in range).
+/// `v >> shift` (arithmetic) for a compute raw.
+// used by the fused kernels on the wider profiles
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn compute_shl(v: ComputeStorage, shift: u32) -> ComputeStorage {
     crate::fixed_point::width::WideInt::shl_bits(v, shift)
 }
 
-/// `v >> shift` (arithmetic) for a compute raw.
 // used by the fused kernels on the wider profiles
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn compute_shr(v: ComputeStorage, shift: u32) -> ComputeStorage {
     crate::fixed_point::width::WideInt::shr_bits(v, shift)
-}
-
-/// Householder direction for a column held at the compute tier: `v = x -
-/// alpha e_1`, `alpha = -sign(x_0) ||x||`, and `v.v` (both compute raws).
-/// The sums of squares are exact (4F) and narrowed once, the root taken at
-/// the compute tier. `None` when `x` (or `v`) is zero.
-///
-/// The column is first scaled by a power of two so its largest entry lies in
-/// `[1/2, 1)`: the reflection depends only on the direction of `v`, while
-/// `x.x` and `v.v` narrowed to the compute tier keep their relative precision
-/// only at that size (at `F = 10` an entry near `2^-8` left `x.x` a few
-/// significant bits, and the reflection lost orthogonality), and fit the
-/// compute tier only below it (on realtime the compute tier has the storage
-/// range, so `x.x` of a large column overflowed). Scaling up is exact;
-/// scaling down keeps `2F` significant bits of the largest entry. The
-/// returned `v` is the scaled one.
-pub(crate) fn householder_vector_compute(
-    x: &[ComputeStorage],
-) -> Result<Option<(Vec<ComputeStorage>, ComputeStorage)>, OverflowDetected> {
-    super::kernels::householder_vector_compute::<crate::fixed_point::fixed_num::ProfileFormat>(x)
-}
-
-/// Reflect a compute-tier vector `w` in the hyperplane orthogonal to `v`:
-/// each `w_k -= 2 (v.w) v_k / (v.v)` as one exact quotient at the compute
-/// tier. No rounding to storage: callers carry the state across reflections
-/// and round once at the end.
-pub(crate) fn reflect_compute(
-    w: &mut [ComputeStorage], v: &[ComputeStorage], v_dot_v: ComputeStorage,
-) -> Result<(), OverflowDetected> {
-    super::kernels::reflect_compute::<crate::fixed_point::fixed_num::ProfileFormat>(w, v, v_dot_v)
 }
 
 // ============================================================================

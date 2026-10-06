@@ -298,7 +298,7 @@ pub fn cp_decompose(
             let unfolded = mode_unfold(t, n);
             let cols: Vec<Vec<ComputeStorage>> = (0..rank).map(|r| v.col_vec(r)).collect();
             // VᵀV (R × R): exact dots rounded at the compute tier
-            let mut vtv = ComputeMatrix::new(rank, rank);
+            let mut vtv = ComputeMatrix::<FixedPoint>::new(rank, rank);
             for a in 0..rank {
                 for b in 0..rank {
                     vtv.set(a, b, narrow_product_to_compute(exact_dot_compute(&cols[a], &cols[b])?)?);

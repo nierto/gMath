@@ -6,25 +6,14 @@
 //! Non-iterative: LU, QR, Cholesky.
 //! Iterative: Jacobi symmetric eigenvalue, Golub-Kahan SVD, Francis QR Schur.
 
-use super::FixedPoint;
 use super::FixedVector;
 use super::FixedMatrix;
 use super::compute_matrix::{compute_lu_decompose, ComputeLU, ComputeMatrix};
-use super::linalg::{
-    compute_tier_sub_dot_compute, upscale_to_compute, round_to_storage, compute_abs, compute_product,
-    householder_vector_compute, reflect_compute, ComputeStorage,
-    compute_deflation_threshold, compute_noise_floor, compute_stagnation_threshold,
-    compute_scale_up, downscale_shifted_to_storage, scale_up_exponent,
-    Rotation, STAGNATION_SWEEPS,
-};
-use super::wide_acc::{exact_dot_compute, exact_sub_dot_compute, narrow_product_to_compute};
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    sqrt_at_compute_tier, compute_divide, downscale_to_storage,
-    compute_multiply, compute_add, compute_negate,
-    compute_is_negative, compute_is_zero,
-    compute_checked_add, compute_checked_divide, compute_halve, make_compute_int,
-};
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+use super::kernels::{self, Rotation};
+use super::linalg::STAGNATION_SWEEPS;
+use super::FixedPoint;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
+use crate::fixed_point::width::Storage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
@@ -42,12 +31,12 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// inspection. `solve`, `inverse`, `refine` and `determinant` use the
 /// compute-tier factors themselves, kept alongside.
 #[derive(Clone, Debug)]
-pub struct LUDecomposition {
-    pub l: FixedMatrix,
-    pub u: FixedMatrix,
+pub struct LUDecomposition<T: FixedNum = FixedPoint> {
+    pub l: FixedMatrix<T>,
+    pub u: FixedMatrix<T>,
     pub perm: Vec<usize>,
     pub num_swaps: usize,
-    compute: ComputeLU,
+    compute: ComputeLU<T>,
 }
 
 /// LU decomposition with partial pivoting (Doolittle, compute-tier).
@@ -64,9 +53,12 @@ pub struct LUDecomposition {
 /// `solve`, 70 in `determinant` on well-conditioned 4 x 4 systems).
 ///
 /// Returns `Err(DivisionByZero)` if the matrix is singular.
-pub fn lu_decompose(a: &FixedMatrix) -> Result<LUDecomposition, OverflowDetected> {
+pub fn lu_decompose<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<LUDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert!(a.is_square(), "lu_decompose: matrix must be square");
-    let compute = compute_lu_decompose(&ComputeMatrix::from_fixed_matrix(a))?;
+    let compute = compute_lu_decompose(&ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(a))?;
     Ok(LUDecomposition {
         l: narrow_matrix(compute.l())?,
         u: narrow_matrix(compute.u())?,
@@ -76,60 +68,69 @@ pub fn lu_decompose(a: &FixedMatrix) -> Result<LUDecomposition, OverflowDetected
     })
 }
 
-impl LUDecomposition {
+impl<S: Storage, const F: u32> LUDecomposition<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Solve Ax = b: forward then back substitution on the compute-tier
     /// factors, every sum exact, the solution rounded once.
-    pub fn solve(&self, b: &FixedVector) -> Result<FixedVector, OverflowDetected> {
+    pub fn solve(&self, b: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         let n = self.l.rows();
         assert_eq!(b.len(), n, "LU solve: dimension mismatch");
-        let bc: Vec<ComputeStorage> = (0..n).map(|i| upscale_to_compute(b[i].raw())).collect();
+        let bc: Vec<Compute<Fixed<S, F>>> = (0..n).map(|i| Fixed::<S, F>::upscale_to_compute(b[i].raw())).collect();
         narrow_vector(&self.compute.solve(&bc)?)
     }
 
     /// Determinant: det(A) = (-1)^num_swaps * product(U diagonal), formed at
     /// the compute tier from the compute-tier factor and rounded once.
-    pub fn determinant(&self) -> FixedPoint {
-        FixedPoint::from_raw(round_to_storage(self.compute.determinant()))
+    pub fn determinant(&self) -> Fixed<S, F> {
+        Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(self.compute.determinant()))
     }
 
     /// Iterative refinement: the residual `b - Ax` exact at the compute tier,
     /// the correction solved at the compute tier, `x + dx` rounded once.
-    pub fn refine(&self, a: &FixedMatrix, b: &FixedVector, x: &FixedVector) -> Result<FixedVector, OverflowDetected> {
+    pub fn refine(&self, a: &FixedMatrix<Fixed<S, F>>, b: &FixedVector<Fixed<S, F>>, x: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         let n = a.rows();
-        let x_raw: Vec<BinaryStorage> = (0..n).map(|j| x[j].raw()).collect();
-        let r: Vec<ComputeStorage> = (0..n)
-            .map(|i| compute_tier_sub_dot_compute(b[i].raw(), &a.row_raw_range(i, 0, n), &x_raw))
+        let x_raw: Vec<S> = (0..n).map(|j| x[j].raw()).collect();
+        let r: Vec<Compute<Fixed<S, F>>> = (0..n)
+            .map(|i| kernels::sub_dot_compute::<Fixed<S, F>>(b[i].raw(), &a.row_raw_range(i, 0, n), &x_raw))
             .collect();
         let dx = self.compute.solve(&r)?;
-        let refined: Result<Vec<ComputeStorage>, OverflowDetected> = (0..n)
-            .map(|i| compute_checked_add(upscale_to_compute(x[i].raw()), dx[i]))
+        let refined: Result<Vec<Compute<Fixed<S, F>>>, OverflowDetected> = (0..n)
+            .map(|i| Fixed::<S, F>::compute_checked_add(Fixed::<S, F>::upscale_to_compute(x[i].raw()), dx[i]))
             .collect();
         narrow_vector(&refined?)
     }
 
     /// Compute A^{-1} by solving AX = I column by column at the compute tier,
     /// every entry rounded once.
-    pub fn inverse(&self) -> Result<FixedMatrix, OverflowDetected> {
+    pub fn inverse(&self) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected> {
         narrow_matrix(&self.compute.inverse()?)
     }
 }
 
 /// A compute-tier matrix rounded to storage, entry by entry (checked).
-fn narrow_matrix(c: &ComputeMatrix) -> Result<FixedMatrix, OverflowDetected> {
-    let mut out = FixedMatrix::new(c.rows(), c.cols());
+fn narrow_matrix<S: Storage, const F: u32>(c: &ComputeMatrix<Fixed<S, F>>) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = FixedMatrix::<Fixed<S, F>>::new(c.rows(), c.cols());
     for i in 0..c.rows() {
         for j in 0..c.cols() {
-            out.set(i, j, FixedPoint::from_raw(downscale_to_storage(c.get(i, j))?));
+            out.set(i, j, Fixed::from_raw(Fixed::<S, F>::downscale_to_storage(c.get(i, j))?));
         }
     }
     Ok(out)
 }
 
 /// A compute-tier vector rounded to storage (checked).
-fn narrow_vector(c: &[ComputeStorage]) -> Result<FixedVector, OverflowDetected> {
-    let values: Result<Vec<FixedPoint>, OverflowDetected> =
-        c.iter().map(|v| downscale_to_storage(*v).map(FixedPoint::from_raw)).collect();
-    Ok(FixedVector::from_slice(&values?))
+fn narrow_vector<S: Storage, const F: u32>(c: &[Compute<Fixed<S, F>>]) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let values: Result<Vec<Fixed<S, F>>, OverflowDetected> =
+        c.iter().map(|v| Fixed::<S, F>::downscale_to_storage(*v).map(Fixed::from_raw)).collect();
+    Ok(FixedVector::<Fixed<S, F>>::from_slice(&values?))
 }
 
 // ============================================================================
@@ -141,11 +142,11 @@ fn narrow_vector(c: &[ComputeStorage]) -> Result<FixedVector, OverflowDetected> 
 /// `q` and `r` are the compute-tier factors rounded once to storage;
 /// `solve` uses the compute-tier factors, kept alongside.
 #[derive(Clone, Debug)]
-pub struct QRDecomposition {
-    pub q: FixedMatrix,
-    pub r: FixedMatrix,
-    compute_q: ComputeMatrix,
-    compute_r: ComputeMatrix,
+pub struct QRDecomposition<T: FixedNum = FixedPoint> {
+    pub q: FixedMatrix<T>,
+    pub r: FixedMatrix<T>,
+    compute_q: ComputeMatrix<T>,
+    compute_r: ComputeMatrix<T>,
 }
 
 /// QR decomposition via Householder reflections.
@@ -154,7 +155,10 @@ pub struct QRDecomposition {
 /// and R is m×n upper triangular.
 ///
 /// All column norms and reflection dot products use compute-tier accumulation.
-pub fn qr_decompose(a: &FixedMatrix) -> Result<QRDecomposition, OverflowDetected> {
+pub fn qr_decompose<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<QRDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let m = a.rows();
     let n = a.cols();
     assert!(m >= n, "qr_decompose: requires m >= n");
@@ -164,65 +168,68 @@ pub fn qr_decompose(a: &FixedMatrix) -> Result<QRDecomposition, OverflowDetected
     // quotient (compute-tier Householder kernels). Before 0.6.4 R and Q were
     // rounded to storage after every reflection, so an entry touched by k
     // reflections carried k roundings (4 units on a 3 x 3 at Q16.16).
-    let mut r = ComputeMatrix::from_fixed_matrix(a);
-    let mut q = ComputeMatrix::identity(m);
+    let mut r = ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(a);
+    let mut q = ComputeMatrix::<Fixed<S, F>>::identity(m);
 
     for k in 0..n {
-        let x: Vec<ComputeStorage> = (k..m).map(|i| r.get(i, k)).collect();
-        let Some((v, vv)) = householder_vector_compute(&x)? else { continue };
+        let x: Vec<Compute<Fixed<S, F>>> = (k..m).map(|i| r.get(i, k)).collect();
+        let Some((v, vv)) = kernels::householder_vector_compute::<Fixed<S, F>>(&x)? else { continue };
 
         // R <- H R, column by column
         for j in k..n {
-            let mut col: Vec<ComputeStorage> = (k..m).map(|i| r.get(i, j)).collect();
-            reflect_compute(&mut col, &v, vv)?;
+            let mut col: Vec<Compute<Fixed<S, F>>> = (k..m).map(|i| r.get(i, j)).collect();
+            kernels::reflect_compute::<Fixed<S, F>>(&mut col, &v, vv)?;
             for (i, c) in (k..m).zip(col) {
                 r.set(i, j, c);
             }
         }
         // the reflected column is (alpha, 0, ..., 0) exactly
         for i in (k + 1)..m {
-            r.set(i, k, make_compute_int(0));
+            r.set(i, k, Fixed::<S, F>::make_compute_int(0));
         }
 
         // Q <- Q H, row by row
         for i in 0..m {
-            let mut row: Vec<ComputeStorage> = (k..m).map(|j| q.get(i, j)).collect();
-            reflect_compute(&mut row, &v, vv)?;
+            let mut row: Vec<Compute<Fixed<S, F>>> = (k..m).map(|j| q.get(i, j)).collect();
+            kernels::reflect_compute::<Fixed<S, F>>(&mut row, &v, vv)?;
             for (j, c) in (k..m).zip(row) {
                 q.set(i, j, c);
             }
         }
     }
 
-    Ok(QRDecomposition { q: narrow_matrix(&q)?, r: narrow_matrix(&r)?, compute_q: q, compute_r: r })
+    Ok(QRDecomposition::<Fixed<S, F>> { q: narrow_matrix(&q)?, r: narrow_matrix(&r)?, compute_q: q, compute_r: r })
 }
 
-impl QRDecomposition {
+impl<S: Storage, const F: u32> QRDecomposition<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Solve Ax = b via R^{-1} Q^T b on the compute-tier factors: `Q^T b`
     /// exact sums, back substitution at the compute tier, the solution
     /// rounded once (before 0.6.4 on the storage factors: up to 27 units on
     /// well-conditioned 4 x 4 systems).
-    pub fn solve(&self, b: &FixedVector) -> Result<FixedVector, OverflowDetected> {
+    pub fn solve(&self, b: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         let m = self.q.rows();
         let n = self.r.cols();
         assert_eq!(b.len(), m, "QR solve: dimension mismatch");
 
-        let bc: Vec<ComputeStorage> = (0..m).map(|j| upscale_to_compute(b[j].raw())).collect();
+        let bc: Vec<Compute<Fixed<S, F>>> = (0..m).map(|j| Fixed::<S, F>::upscale_to_compute(b[j].raw())).collect();
         let mut qtb = Vec::with_capacity(m);
         for i in 0..m {
-            let q_col: Vec<ComputeStorage> = (0..m).map(|j| self.compute_q.get(j, i)).collect();
-            qtb.push(narrow_product_to_compute(exact_dot_compute(&q_col, &bc)?)?);
+            let q_col: Vec<Compute<Fixed<S, F>>> = (0..m).map(|j| self.compute_q.get(j, i)).collect();
+            qtb.push(kernels::narrow_product_to_compute::<Fixed<S, F>>(kernels::exact_dot_compute::<Fixed<S, F>>(&q_col, &bc)?)?);
         }
 
-        let mut x = vec![make_compute_int(0); n];
+        let mut x = vec![Fixed::<S, F>::make_compute_int(0); n];
         for i in (0..n).rev() {
             let diag = self.compute_r.get(i, i);
-            if compute_is_zero(&diag) {
+            if Fixed::<S, F>::compute_is_zero(&diag) {
                 return Err(OverflowDetected::DivisionByZero);
             }
-            let r_row: Vec<ComputeStorage> = (i + 1..n).map(|j| self.compute_r.get(i, j)).collect();
-            let numerator = exact_sub_dot_compute(qtb[i], &r_row, &x[i + 1..n])?;
-            x[i] = compute_divide(numerator, diag)?;
+            let r_row: Vec<Compute<Fixed<S, F>>> = (i + 1..n).map(|j| self.compute_r.get(i, j)).collect();
+            let numerator = kernels::exact_sub_dot_compute::<Fixed<S, F>>(qtb[i], &r_row, &x[i + 1..n])?;
+            x[i] = Fixed::<S, F>::compute_divide(numerator, diag)?;
         }
         narrow_vector(&x)
     }
@@ -238,9 +245,9 @@ impl QRDecomposition {
 /// factor rounded once to storage. `solve` and `determinant` use the
 /// compute-tier factor, kept alongside.
 #[derive(Clone, Debug)]
-pub struct CholeskyDecomposition {
-    pub l: FixedMatrix,
-    compute: ComputeMatrix,
+pub struct CholeskyDecomposition<T: FixedNum = FixedPoint> {
+    pub l: FixedMatrix<T>,
+    compute: ComputeMatrix<T>,
 }
 
 /// Cholesky decomposition for symmetric positive-definite matrices.
@@ -252,63 +259,69 @@ pub struct CholeskyDecomposition {
 /// `(A[j][i] - sum L[j][k] L[i][k]) / L[i][i]` from exact sums of the
 /// compute-tier entries before it, rounded once to storage for `l`. Before
 /// 0.6.4 each entry was rounded to storage and reused.
-pub fn cholesky_decompose(a: &FixedMatrix) -> Result<CholeskyDecomposition, OverflowDetected> {
+pub fn cholesky_decompose<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<CholeskyDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert!(a.is_square(), "cholesky_decompose: matrix must be square");
     let n = a.rows();
-    let mut lc = ComputeMatrix::new(n, n);
+    let mut lc = ComputeMatrix::<Fixed<S, F>>::new(n, n);
 
     for i in 0..n {
-        let row_i: Vec<ComputeStorage> = (0..i).map(|k| lc.get(i, k)).collect();
-        let diag = exact_sub_dot_compute(upscale_to_compute(a.get(i, i).raw()), &row_i, &row_i)?;
+        let row_i: Vec<Compute<Fixed<S, F>>> = (0..i).map(|k| lc.get(i, k)).collect();
+        let diag = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::upscale_to_compute(a.get(i, i).raw()), &row_i, &row_i)?;
         // positive-definiteness, decided at the compute tier (before sqrt)
-        if compute_is_negative(&diag) || compute_is_zero(&diag) {
+        if Fixed::<S, F>::compute_is_negative(&diag) || Fixed::<S, F>::compute_is_zero(&diag) {
             return Err(OverflowDetected::DomainError);
         }
-        let l_ii = sqrt_at_compute_tier(diag);
+        let l_ii = Fixed::<S, F>::sqrt_at_compute_tier(diag);
         lc.set(i, i, l_ii);
         for j in (i + 1)..n {
-            let row_j: Vec<ComputeStorage> = (0..i).map(|k| lc.get(j, k)).collect();
-            let numerator = exact_sub_dot_compute(upscale_to_compute(a.get(j, i).raw()), &row_j, &row_i)?;
-            lc.set(j, i, compute_divide(numerator, l_ii)?);
+            let row_j: Vec<Compute<Fixed<S, F>>> = (0..i).map(|k| lc.get(j, k)).collect();
+            let numerator = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::upscale_to_compute(a.get(j, i).raw()), &row_j, &row_i)?;
+            lc.set(j, i, Fixed::<S, F>::compute_divide(numerator, l_ii)?);
         }
     }
 
-    Ok(CholeskyDecomposition { l: narrow_matrix(&lc)?, compute: lc })
+    Ok(CholeskyDecomposition::<Fixed<S, F>> { l: narrow_matrix(&lc)?, compute: lc })
 }
 
-impl CholeskyDecomposition {
+impl<S: Storage, const F: u32> CholeskyDecomposition<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Solve Ax = b: forward (Ly = b), then back (L^T x = y), on the
     /// compute-tier factor with exact sums; the solution rounded once.
-    pub fn solve(&self, b: &FixedVector) -> Result<FixedVector, OverflowDetected> {
+    pub fn solve(&self, b: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         let n = self.l.rows();
         assert_eq!(b.len(), n, "Cholesky solve: dimension mismatch");
         let l = &self.compute;
 
-        let mut y = vec![make_compute_int(0); n];
+        let mut y = vec![Fixed::<S, F>::make_compute_int(0); n];
         for i in 0..n {
-            let l_row: Vec<ComputeStorage> = (0..i).map(|k| l.get(i, k)).collect();
-            let numerator = exact_sub_dot_compute(upscale_to_compute(b[i].raw()), &l_row, &y[..i])?;
-            y[i] = compute_divide(numerator, l.get(i, i))?;
+            let l_row: Vec<Compute<Fixed<S, F>>> = (0..i).map(|k| l.get(i, k)).collect();
+            let numerator = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::upscale_to_compute(b[i].raw()), &l_row, &y[..i])?;
+            y[i] = Fixed::<S, F>::compute_divide(numerator, l.get(i, i))?;
         }
 
-        let mut x = vec![make_compute_int(0); n];
+        let mut x = vec![Fixed::<S, F>::make_compute_int(0); n];
         for i in (0..n).rev() {
-            let lt_row: Vec<ComputeStorage> = (i + 1..n).map(|k| l.get(k, i)).collect();
-            let numerator = exact_sub_dot_compute(y[i], &lt_row, &x[i + 1..n])?;
-            x[i] = compute_divide(numerator, l.get(i, i))?;
+            let lt_row: Vec<Compute<Fixed<S, F>>> = (i + 1..n).map(|k| l.get(k, i)).collect();
+            let numerator = kernels::exact_sub_dot_compute::<Fixed<S, F>>(y[i], &lt_row, &x[i + 1..n])?;
+            x[i] = Fixed::<S, F>::compute_divide(numerator, l.get(i, i))?;
         }
         narrow_vector(&x)
     }
 
     /// Determinant: det(A) = product(L[i][i])^2, formed at the compute tier
     /// and rounded once (before 0.6.4 a chain of storage products).
-    pub fn determinant(&self) -> FixedPoint {
+    pub fn determinant(&self) -> Fixed<S, F> {
         let n = self.l.rows();
-        let mut det_l = make_compute_int(1);
+        let mut det_l = Fixed::<S, F>::make_compute_int(1);
         for i in 0..n {
-            det_l = compute_multiply(det_l, self.compute.get(i, i));
+            det_l = Fixed::<S, F>::compute_multiply(det_l, self.compute.get(i, i));
         }
-        FixedPoint::from_raw(round_to_storage(compute_multiply(det_l, det_l)))
+        Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(Fixed::<S, F>::compute_multiply(det_l, det_l)))
     }
 }
 
@@ -320,7 +333,7 @@ impl CholeskyDecomposition {
 // they apply inject less rounding noise than their convergence tests resolve.
 // Their state (the matrix being reduced and the accumulated transforms) is
 // carried at the compute tier, every transformed entry rounded once there
-// from an exact accumulator (`Rotation::apply_compute`,
+// from an exact accumulator (`Rotation::<Fixed<S, F>>::apply_compute`,
 // `householder_vector_compute` and `reflect_compute` in `linalg`), and the
 // convergence tests work at the compute scale; the results are rounded to
 // storage once. Every step is checked: leaving the range is a `TierOverflow`,
@@ -337,11 +350,14 @@ const JACOBI_MAX_SWEEPS: usize = 100;
 const SCHUR_FLOOR_ITERATIONS: usize = 30;
 
 /// Reflect column `col` of a compute-tier matrix, rows `start..start + v.len()`.
-fn reflect_compute_column(
-    mat: &mut ComputeMatrix, col: usize, start: usize, v: &[ComputeStorage], v_dot_v: ComputeStorage,
-) -> Result<(), OverflowDetected> {
-    let mut w: Vec<ComputeStorage> = (start..start + v.len()).map(|i| mat.get(i, col)).collect();
-    reflect_compute(&mut w, v, v_dot_v)?;
+fn reflect_compute_column<S: Storage, const F: u32>(
+    mat: &mut ComputeMatrix<Fixed<S, F>>, col: usize, start: usize, v: &[Compute<Fixed<S, F>>], v_dot_v: Compute<Fixed<S, F>>,
+) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut w: Vec<Compute<Fixed<S, F>>> = (start..start + v.len()).map(|i| mat.get(i, col)).collect();
+    kernels::reflect_compute::<Fixed<S, F>>(&mut w, v, v_dot_v)?;
     for (k, value) in w.into_iter().enumerate() {
         mat.set(start + k, col, value);
     }
@@ -349,11 +365,14 @@ fn reflect_compute_column(
 }
 
 /// Reflect row `row` of a compute-tier matrix, columns `start..start + v.len()`.
-fn reflect_compute_row(
-    mat: &mut ComputeMatrix, row: usize, start: usize, v: &[ComputeStorage], v_dot_v: ComputeStorage,
-) -> Result<(), OverflowDetected> {
-    let mut w: Vec<ComputeStorage> = (start..start + v.len()).map(|c| mat.get(row, c)).collect();
-    reflect_compute(&mut w, v, v_dot_v)?;
+fn reflect_compute_row<S: Storage, const F: u32>(
+    mat: &mut ComputeMatrix<Fixed<S, F>>, row: usize, start: usize, v: &[Compute<Fixed<S, F>>], v_dot_v: Compute<Fixed<S, F>>,
+) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut w: Vec<Compute<Fixed<S, F>>> = (start..start + v.len()).map(|c| mat.get(row, c)).collect();
+    kernels::reflect_compute::<Fixed<S, F>>(&mut w, v, v_dot_v)?;
     for (k, value) in w.into_iter().enumerate() {
         mat.set(row, start + k, value);
     }
@@ -362,7 +381,10 @@ fn reflect_compute_row(
 
 /// Rotate columns `a` and `b` of every row of a compute-tier matrix, each
 /// entry rounded once at the compute tier.
-fn rotate_compute_columns(mat: &mut ComputeMatrix, a: usize, b: usize, rot: &Rotation) -> Result<(), OverflowDetected> {
+fn rotate_compute_columns<S: Storage, const F: u32>(mat: &mut ComputeMatrix<Fixed<S, F>>, a: usize, b: usize, rot: &Rotation<Fixed<S, F>>) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     for r in 0..mat.rows() {
         let (new_a, new_b) = rot.apply_compute(mat.get(r, a), mat.get(r, b))?;
         mat.set(r, a, new_a);
@@ -371,24 +393,30 @@ fn rotate_compute_columns(mat: &mut ComputeMatrix, a: usize, b: usize, rot: &Rot
     Ok(())
 }
 
-fn compute_sum(terms: &[ComputeStorage]) -> Result<ComputeStorage, OverflowDetected> {
-    let mut acc = make_compute_int(0);
+fn compute_sum<S: Storage, const F: u32>(terms: &[Compute<Fixed<S, F>>]) -> Result<Compute<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut acc = Fixed::<S, F>::make_compute_int(0);
     for term in terms {
-        acc = compute_checked_add(acc, *term)?;
+        acc = Fixed::<S, F>::compute_checked_add(acc, *term)?;
     }
     Ok(acc)
 }
 
 /// `sqrt(a^2 + b^2)` of two compute raws in ratio form: neither is squared.
-fn compute_hypot(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    let (x, y) = (compute_abs(a), compute_abs(b));
+fn compute_hypot<S: Storage, const F: u32>(a: Compute<Fixed<S, F>>, b: Compute<Fixed<S, F>>) -> Result<Compute<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let (x, y) = (kernels::compute_abs::<Fixed<S, F>>(a), kernels::compute_abs::<Fixed<S, F>>(b));
     let (big, small) = if x >= y { (x, y) } else { (y, x) };
-    if compute_is_zero(&big) {
+    if Fixed::<S, F>::compute_is_zero(&big) {
         return Ok(big);
     }
-    let one = make_compute_int(1);
-    let ratio = compute_divide(small, big)?;
-    Ok(compute_multiply(big, sqrt_at_compute_tier(compute_add(one, compute_multiply(ratio, ratio)))))
+    let one = Fixed::<S, F>::make_compute_int(1);
+    let ratio = Fixed::<S, F>::compute_divide(small, big)?;
+    Ok(Fixed::<S, F>::compute_multiply(big, Fixed::<S, F>::sqrt_at_compute_tier(Fixed::<S, F>::compute_add(one, Fixed::<S, F>::compute_multiply(ratio, ratio)))))
 }
 
 // ============================================================================
@@ -400,9 +428,9 @@ fn compute_hypot(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage,
 /// - `values` contains eigenvalues (diagonal of Λ), sorted descending by absolute value
 /// - `vectors` is orthogonal (Qᵀ Q = I), columns are eigenvectors
 #[derive(Clone, Debug)]
-pub struct EigenDecomposition {
-    pub values: FixedVector,
-    pub vectors: FixedMatrix,
+pub struct EigenDecomposition<T: FixedNum = FixedPoint> {
+    pub values: FixedVector<T>,
+    pub vectors: FixedMatrix<T>,
 }
 
 /// Symmetric eigenvalue decomposition via the classical Jacobi method.
@@ -436,42 +464,48 @@ pub struct EigenDecomposition {
 /// sweeps (never a partially converged result); `Err(TierOverflow)` if an entry
 /// leaves the storage range. Panics if the matrix is not square. The matrix
 /// must be symmetric; that is not checked.
-pub fn eigen_symmetric(a: &FixedMatrix) -> Result<EigenDecomposition, OverflowDetected> {
+pub fn eigen_symmetric<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<EigenDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     eigen_symmetric_within(a, JACOBI_MAX_SWEEPS)
 }
 
-fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDecomposition, OverflowDetected> {
+fn eigen_symmetric_within<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>, max_sweeps: usize) -> Result<EigenDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert!(a.is_square(), "eigen_symmetric: matrix must be square");
     let n = a.rows();
 
     if n == 0 {
         return Ok(EigenDecomposition {
-            values: FixedVector::new(0),
-            vectors: FixedMatrix::new(0, 0),
+            values: FixedVector::<Fixed<S, F>>::new(0),
+            vectors: FixedMatrix::<Fixed<S, F>>::new(0, 0),
         });
     }
 
     if n == 1 {
         return Ok(EigenDecomposition {
-            values: FixedVector::from_slice(&[a.get(0, 0)]),
-            vectors: FixedMatrix::identity(1),
+            values: FixedVector::<Fixed<S, F>>::from_slice(&[a.get(0, 0)]),
+            vectors: FixedMatrix::<Fixed<S, F>>::identity(1),
         });
     }
 
     // S and the eigenvector accumulator V stay at the compute tier through
     // every rotation and are rounded to storage once at the end.
-    let mut s = ComputeMatrix::from_fixed_matrix(a);
-    let mut v = ComputeMatrix::identity(n);
+    let mut s = ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(a);
+    let mut v = ComputeMatrix::<Fixed<S, F>>::identity(n);
 
     let mut converged = false;
-    let mut best_off: Option<ComputeStorage> = None;
+    let mut best_off: Option<Compute<Fixed<S, F>>> = None;
     let mut stagnant = 0usize;
     for _sweep in 0..max_sweeps {
         let mut rotated = false;
         for p in 0..n {
             for q in (p + 1)..n {
-                let bound = compute_deflation_threshold(compute_abs(s.get(p, p)).max(compute_abs(s.get(q, q))));
-                if compute_abs(s.get(p, q)) > bound {
+                let bound = kernels::compute_deflation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(s.get(p, p)).max(kernels::compute_abs::<Fixed<S, F>>(s.get(q, q))));
+                if kernels::compute_abs::<Fixed<S, F>>(s.get(p, q)) > bound {
                     jacobi_rotate(&mut s, &mut v, p, q)?;
                     rotated = true;
                 }
@@ -501,22 +535,22 @@ fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDec
     // One rotation on the largest remaining off-diagonal entry: it is within
     // the bound, but still contributes to the nearest eigenvalues.
     let (largest, p, q) = largest_off_diagonal(&s);
-    if !compute_is_zero(&largest) {
+    if !Fixed::<S, F>::compute_is_zero(&largest) {
         jacobi_rotate(&mut s, &mut v, p, q)?;
     }
 
     // Eigenvalues from the diagonal, each rounded once
-    let mut eigen_pairs: Vec<(FixedPoint, usize)> = Vec::with_capacity(n);
+    let mut eigen_pairs: Vec<(Fixed<S, F>, usize)> = Vec::with_capacity(n);
     for i in 0..n {
-        eigen_pairs.push((FixedPoint::from_raw(downscale_to_storage(s.get(i, i))?), i));
+        eigen_pairs.push((Fixed::from_raw(Fixed::<S, F>::downscale_to_storage(s.get(i, i))?), i));
     }
 
     // Sort descending by absolute value
     eigen_pairs.sort_by(|a, b| b.0.abs().partial_cmp(&a.0.abs()).unwrap_or(std::cmp::Ordering::Equal));
 
     let vectors_all = narrow_matrix(&v)?;
-    let mut values = FixedVector::new(n);
-    let mut vectors = FixedMatrix::new(n, n);
+    let mut values = FixedVector::<Fixed<S, F>>::new(n);
+    let mut vectors = FixedMatrix::<Fixed<S, F>>::new(n, n);
     for (k, (val, orig_idx)) in eigen_pairs.iter().enumerate() {
         values[k] = *val;
         for r in 0..n {
@@ -524,16 +558,19 @@ fn eigen_symmetric_within(a: &FixedMatrix, max_sweeps: usize) -> Result<EigenDec
         }
     }
 
-    Ok(EigenDecomposition { values, vectors })
+    Ok(EigenDecomposition::<Fixed<S, F>> { values, vectors })
 }
 
 /// Largest |s[p][q]| over p < q, with its position (the first on ties).
-fn largest_off_diagonal(s: &ComputeMatrix) -> (ComputeStorage, usize, usize) {
+fn largest_off_diagonal<S: Storage, const F: u32>(s: &ComputeMatrix<Fixed<S, F>>) -> (Compute<Fixed<S, F>>, usize, usize)
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let n = s.rows();
-    let (mut largest, mut at_p, mut at_q) = (make_compute_int(0), 0, 1);
+    let (mut largest, mut at_p, mut at_q) = (Fixed::<S, F>::make_compute_int(0), 0, 1);
     for p in 0..n {
         for q in (p + 1)..n {
-            let value = compute_abs(s.get(p, q));
+            let value = kernels::compute_abs::<Fixed<S, F>>(s.get(p, q));
             if value > largest {
                 largest = value;
                 at_p = p;
@@ -544,11 +581,14 @@ fn largest_off_diagonal(s: &ComputeMatrix) -> (ComputeStorage, usize, usize) {
     (largest, at_p, at_q)
 }
 
-fn off_diagonal_within_stagnation_bound(s: &ComputeMatrix) -> bool {
+fn off_diagonal_within_stagnation_bound<S: Storage, const F: u32>(s: &ComputeMatrix<Fixed<S, F>>) -> bool
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let n = s.rows();
     (0..n).all(|p| {
         ((p + 1)..n).all(|q| {
-            compute_abs(s.get(p, q)) <= compute_stagnation_threshold(compute_abs(s.get(p, p)).max(compute_abs(s.get(q, q))))
+            kernels::compute_abs::<Fixed<S, F>>(s.get(p, q)) <= kernels::compute_stagnation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(s.get(p, p)).max(kernels::compute_abs::<Fixed<S, F>>(s.get(q, q))))
         })
     })
 }
@@ -560,31 +600,34 @@ fn off_diagonal_within_stagnation_bound(s: &ComputeMatrix) -> bool {
 /// off-diagonal rows rotate by `(cs, sn)`; the diagonal moves by `± t a_pq`.
 /// Every entry is a compute raw, each updated entry rounded once at the
 /// compute tier from its exact value.
-fn jacobi_rotate(s: &mut ComputeMatrix, v: &mut ComputeMatrix, p: usize, q: usize) -> Result<(), OverflowDetected> {
+fn jacobi_rotate<S: Storage, const F: u32>(s: &mut ComputeMatrix<Fixed<S, F>>, v: &mut ComputeMatrix<Fixed<S, F>>, p: usize, q: usize) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let n = s.rows();
     let (a_pp, a_qq, a_pq) = (s.get(p, p), s.get(q, q), s.get(p, q));
-    if compute_is_zero(&a_pq) {
+    if Fixed::<S, F>::compute_is_zero(&a_pq) {
         return Ok(());
     }
-    let one = make_compute_int(1);
-    let num = compute_checked_add(a_pp, compute_negate(a_qq))?;
-    let den = compute_checked_add(a_pq, a_pq)?;
-    let negative = !compute_is_zero(&num) && (compute_is_negative(&num) != compute_is_negative(&den));
-    let (num_abs, den_abs) = (compute_abs(num), compute_abs(den));
+    let one = Fixed::<S, F>::make_compute_int(1);
+    let num = Fixed::<S, F>::compute_checked_add(a_pp, Fixed::<S, F>::compute_negate(a_qq))?;
+    let den = Fixed::<S, F>::compute_checked_add(a_pq, a_pq)?;
+    let negative = !Fixed::<S, F>::compute_is_zero(&num) && (Fixed::<S, F>::compute_is_negative(&num) != Fixed::<S, F>::compute_is_negative(&den));
+    let (num_abs, den_abs) = (kernels::compute_abs::<Fixed<S, F>>(num), kernels::compute_abs::<Fixed<S, F>>(den));
     let t_abs = if num_abs <= den_abs {
         // |τ| <= 1
-        let tau = compute_divide(num_abs, den_abs)?;
-        let root = sqrt_at_compute_tier(compute_add(one, compute_multiply(tau, tau)));
-        compute_divide(one, compute_add(tau, root))?
+        let tau = Fixed::<S, F>::compute_divide(num_abs, den_abs)?;
+        let root = Fixed::<S, F>::sqrt_at_compute_tier(Fixed::<S, F>::compute_add(one, Fixed::<S, F>::compute_multiply(tau, tau)));
+        Fixed::<S, F>::compute_divide(one, Fixed::<S, F>::compute_add(tau, root))?
     } else {
         // |τ| > 1: with r = 1/|τ|, t = r / (1 + sqrt(1 + r²))
-        let r = compute_divide(den_abs, num_abs)?;
-        let root = sqrt_at_compute_tier(compute_add(one, compute_multiply(r, r)));
-        compute_divide(r, compute_add(one, root))?
+        let r = Fixed::<S, F>::compute_divide(den_abs, num_abs)?;
+        let root = Fixed::<S, F>::sqrt_at_compute_tier(Fixed::<S, F>::compute_add(one, Fixed::<S, F>::compute_multiply(r, r)));
+        Fixed::<S, F>::compute_divide(r, Fixed::<S, F>::compute_add(one, root))?
     };
-    let t = if negative { compute_negate(t_abs) } else { t_abs };
-    let cs = compute_divide(one, sqrt_at_compute_tier(compute_add(one, compute_multiply(t, t))))?;
-    let rot = Rotation::from_parts(cs, compute_multiply(t, cs));
+    let t = if negative { Fixed::<S, F>::compute_negate(t_abs) } else { t_abs };
+    let cs = Fixed::<S, F>::compute_divide(one, Fixed::<S, F>::sqrt_at_compute_tier(Fixed::<S, F>::compute_add(one, Fixed::<S, F>::compute_multiply(t, t))))?;
+    let rot = Rotation::<Fixed<S, F>>::from_parts(cs, Fixed::<S, F>::compute_multiply(t, cs));
 
     for r in 0..n {
         if r == p || r == q {
@@ -597,11 +640,11 @@ fn jacobi_rotate(s: &mut ComputeMatrix, v: &mut ComputeMatrix, p: usize, q: usiz
         s.set(q, r, new_rq);
     }
 
-    let shift = compute_product(t, a_pq)?;
-    s.set(p, p, compute_checked_add(a_pp, shift)?);
-    s.set(q, q, compute_checked_add(a_qq, compute_negate(shift))?);
-    s.set(p, q, make_compute_int(0));
-    s.set(q, p, make_compute_int(0));
+    let shift = kernels::compute_product::<Fixed<S, F>>(t, a_pq)?;
+    s.set(p, p, Fixed::<S, F>::compute_checked_add(a_pp, shift)?);
+    s.set(q, q, Fixed::<S, F>::compute_checked_add(a_qq, Fixed::<S, F>::compute_negate(shift))?);
+    s.set(p, q, Fixed::<S, F>::make_compute_int(0));
+    s.set(q, p, Fixed::<S, F>::make_compute_int(0));
 
     for r in 0..v.rows() {
         let (new_a, new_b) = rot.apply_compute(v.get(r, p), v.get(r, q))?;
@@ -621,10 +664,10 @@ fn jacobi_rotate(s: &mut ComputeMatrix, v: &mut ComputeMatrix, p: usize, q: usiz
 /// - `sigma` contains singular values (non-negative, sorted descending)
 /// - `vt` is n×n orthogonal (Vᵀ, not V)
 #[derive(Clone, Debug)]
-pub struct SVDDecomposition {
-    pub u: FixedMatrix,
-    pub sigma: FixedVector,
-    pub vt: FixedMatrix,
+pub struct SVDDecomposition<T: FixedNum = FixedPoint> {
+    pub u: FixedMatrix<T>,
+    pub sigma: FixedVector<T>,
+    pub vt: FixedMatrix<T>,
 }
 
 /// SVD via Golub-Kahan bidiagonalization + implicit QR iteration.
@@ -664,18 +707,24 @@ pub struct SVDDecomposition {
 ///
 /// Returns singular values sorted descending. For m < n, transposes
 /// internally and adjusts U/V accordingly.
-pub fn svd_decompose(a: &FixedMatrix) -> Result<SVDDecomposition, OverflowDetected> {
+pub fn svd_decompose<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<SVDDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     svd_decompose_within(a, ITERATIONS_PER_N_SQUARED)
 }
 
-fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Result<SVDDecomposition, OverflowDetected> {
+fn svd_decompose_within<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>, iterations_per_n_squared: usize) -> Result<SVDDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let (m, n) = (a.rows(), a.cols());
 
     if m == 0 || n == 0 {
         return Ok(SVDDecomposition {
-            u: FixedMatrix::identity(m),
-            sigma: FixedVector::new(0),
-            vt: FixedMatrix::identity(n),
+            u: FixedMatrix::<Fixed<S, F>>::identity(m),
+            sigma: FixedVector::<Fixed<S, F>>::new(0),
+            vt: FixedMatrix::<Fixed<S, F>>::identity(n),
         });
     }
 
@@ -696,14 +745,14 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // U₀ᵀ A V₀ = B
     // B, U and V stay at the compute tier through the bidiagonalization and
     // the QR iteration, and are rounded to storage once at the end.
-    let mut b = ComputeMatrix::from_fixed_matrix(a);
-    let mut u_acc = ComputeMatrix::identity(m);
-    let mut v_acc = ComputeMatrix::identity(n);
+    let mut b = ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(a);
+    let mut u_acc = ComputeMatrix::<Fixed<S, F>>::identity(m);
+    let mut v_acc = ComputeMatrix::<Fixed<S, F>>::identity(n);
 
     for j in 0..n {
         // ── Left Householder: zero out B[j+1..m, j] ──
-        let column: Vec<ComputeStorage> = (j..m).map(|i| b.get(i, j)).collect();
-        if let Some((v_hh, vtv)) = householder_vector_compute(&column)? {
+        let column: Vec<Compute<Fixed<S, F>>> = (j..m).map(|i| b.get(i, j)).collect();
+        if let Some((v_hh, vtv)) = kernels::householder_vector_compute::<Fixed<S, F>>(&column)? {
             for c in j..n {
                 reflect_compute_column(&mut b, c, j, &v_hh, vtv)?;
             }
@@ -712,14 +761,14 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
             }
             // the reflected column is (alpha, 0, ..., 0) exactly
             for i in (j + 1)..m {
-                b.set(i, j, make_compute_int(0));
+                b.set(i, j, Fixed::<S, F>::make_compute_int(0));
             }
         }
 
         // ── Right Householder: zero out B[j, j+2..n] ──
         if j + 1 < n {
-            let row: Vec<ComputeStorage> = (j + 1..n).map(|c| b.get(j, c)).collect();
-            if let Some((v_hh, vtv)) = householder_vector_compute(&row)? {
+            let row: Vec<Compute<Fixed<S, F>>> = (j + 1..n).map(|c| b.get(j, c)).collect();
+            if let Some((v_hh, vtv)) = kernels::householder_vector_compute::<Fixed<S, F>>(&row)? {
                 for r in j..m {
                     reflect_compute_row(&mut b, r, j + 1, &v_hh, vtv)?;
                 }
@@ -727,7 +776,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
                     reflect_compute_row(&mut v_acc, r, j + 1, &v_hh, vtv)?;
                 }
                 for c in (j + 2)..n {
-                    b.set(j, c, make_compute_int(0));
+                    b.set(j, c, Fixed::<S, F>::make_compute_int(0));
                 }
             }
         }
@@ -739,9 +788,9 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // chase rounded to storage loses a bulge of less than one quantum, and with
     // it the shift: on entries of a few hundred quanta the step then repeats
     // itself exactly and the block never converges.
-    let mut d: Vec<ComputeStorage> = (0..n).map(|i| b.get(i, i)).collect();
-    let mut e: Vec<ComputeStorage> = (0..n.saturating_sub(1)).map(|i| b.get(i, i + 1)).collect();
-    let zero = make_compute_int(0);
+    let mut d: Vec<Compute<Fixed<S, F>>> = (0..n).map(|i| b.get(i, i)).collect();
+    let mut e: Vec<Compute<Fixed<S, F>>> = (0..n.saturating_sub(1)).map(|i| b.get(i, i + 1)).collect();
+    let zero = Fixed::<S, F>::make_compute_int(0);
     // Power-of-two exponent by which each d[i] (and e[i]) has been scaled up.
     // An active block whose entries are all below 1/2 is scaled up (exactly)
     // until its largest lies in [1/2, 1): singular values scale with the
@@ -751,7 +800,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // froze). Undone in the final rounding.
     let mut exponent = vec![0u32; n];
 
-    let floor = compute_noise_floor();
+    let floor = kernels::compute_noise_floor::<Fixed<S, F>>();
     let max_iter = iterations_per_n_squared * n * n;
     let mut iter_count = 0usize;
     let mut q_end = n; // exclusive end of the unconverged part
@@ -760,13 +809,13 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     // superdiagonal and diagonal entry has reached, and the iterations since any
     // entry last reached a new one
     let mut stall_block = (usize::MAX, usize::MAX);
-    let mut stall_best: Vec<ComputeStorage> = Vec::new();
+    let mut stall_best: Vec<Compute<Fixed<S, F>>> = Vec::new();
     let mut stall_count = 0usize;
 
     loop {
         // Peel converged superdiagonal entries off the bottom
         while q_end > 1
-            && compute_abs(e[q_end - 2]) <= compute_deflation_threshold(compute_abs(d[q_end - 1]).max(compute_abs(d[q_end - 2])))
+            && kernels::compute_abs::<Fixed<S, F>>(e[q_end - 2]) <= kernels::compute_deflation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(d[q_end - 1]).max(kernels::compute_abs::<Fixed<S, F>>(d[q_end - 2])))
         {
             q_end -= 1;
         }
@@ -780,22 +829,22 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // Active block: d[p..=q], e[p..q]
         let q = q_end - 1;
         let mut p = q;
-        while p > 0 && compute_abs(e[p - 1]) > compute_deflation_threshold(compute_abs(d[p]).max(compute_abs(d[p - 1]))) {
+        while p > 0 && kernels::compute_abs::<Fixed<S, F>>(e[p - 1]) > kernels::compute_deflation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(d[p]).max(kernels::compute_abs::<Fixed<S, F>>(d[p - 1]))) {
             p -= 1;
         }
 
-        let k = scale_up_exponent(&d[p..=q].iter().chain(&e[p..q]).copied().collect::<Vec<_>>());
+        let k = kernels::scale_up_exponent::<Fixed<S, F>>(&d[p..=q].iter().chain(&e[p..q]).copied().collect::<Vec<_>>());
         if k > 0 {
             for i in p..=q {
-                d[i] = compute_scale_up(d[i], k);
+                d[i] = kernels::compute_scale_up::<Fixed<S, F>>(d[i], k);
                 exponent[i] += k;
             }
             for i in p..q {
-                e[i] = compute_scale_up(e[i], k);
+                e[i] = kernels::compute_scale_up::<Fixed<S, F>>(e[i], k);
             }
             if stall_block == (p, q) {
                 for best in stall_best.iter_mut() {
-                    *best = compute_scale_up(*best, k);
+                    *best = kernels::compute_scale_up::<Fixed<S, F>>(*best, k);
                 }
             }
         }
@@ -805,8 +854,8 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // STAGNATION_SWEEPS iterations sits at the precision floor. The largest
         // entry alone is no such evidence: it often holds while the bottom of
         // the block converges.
-        let magnitudes: Vec<ComputeStorage> =
-            (p..q).map(|k| compute_abs(e[k])).chain((p..=q).map(|k| compute_abs(d[k]))).collect();
+        let magnitudes: Vec<Compute<Fixed<S, F>>> =
+            (p..q).map(|k| kernels::compute_abs::<Fixed<S, F>>(e[k])).chain((p..=q).map(|k| kernels::compute_abs::<Fixed<S, F>>(d[k]))).collect();
         let mut forced_zero: Option<usize> = None;
         if stall_block != (p, q) {
             stall_block = (p, q);
@@ -824,18 +873,18 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         }
         if stall_count >= STAGNATION_SWEEPS {
             stall_count = 0;
-            let ie = (p..q).min_by_key(|&k| compute_abs(e[k])).expect("active block has a superdiagonal entry");
-            let id = (p..=q).min_by_key(|&k| compute_abs(d[k])).expect("active block has a diagonal entry");
-            let e_ok = compute_abs(e[ie]) <= compute_stagnation_threshold(compute_abs(d[ie]).max(compute_abs(d[ie + 1])));
+            let ie = (p..q).min_by_key(|&k| kernels::compute_abs::<Fixed<S, F>>(e[k])).expect("active block has a superdiagonal entry");
+            let id = (p..=q).min_by_key(|&k| kernels::compute_abs::<Fixed<S, F>>(d[k])).expect("active block has a diagonal entry");
+            let e_ok = kernels::compute_abs::<Fixed<S, F>>(e[ie]) <= kernels::compute_stagnation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(d[ie]).max(kernels::compute_abs::<Fixed<S, F>>(d[ie + 1])));
             let mut neighbour = zero;
             if id > 0 {
-                neighbour = neighbour.max(compute_abs(d[id - 1])).max(compute_abs(e[id - 1]));
+                neighbour = neighbour.max(kernels::compute_abs::<Fixed<S, F>>(d[id - 1])).max(kernels::compute_abs::<Fixed<S, F>>(e[id - 1]));
             }
             if id < q {
-                neighbour = neighbour.max(compute_abs(e[id]));
+                neighbour = neighbour.max(kernels::compute_abs::<Fixed<S, F>>(e[id]));
             }
-            let d_ok = compute_abs(d[id]) <= compute_stagnation_threshold(neighbour);
-            if e_ok && (!d_ok || compute_abs(e[ie]) <= compute_abs(d[id])) {
+            let d_ok = kernels::compute_abs::<Fixed<S, F>>(d[id]) <= kernels::compute_stagnation_threshold::<Fixed<S, F>>(neighbour);
+            if e_ok && (!d_ok || kernels::compute_abs::<Fixed<S, F>>(e[ie]) <= kernels::compute_abs::<Fixed<S, F>>(d[id])) {
                 e[ie] = zero;
                 iter_count += 1;
                 continue;
@@ -847,12 +896,12 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 
         // ── Zero diagonal at the bottom of the block ──
         // Chase e[q-1] upward with column rotations (columns j and q), which V takes.
-        if compute_abs(d[q]) <= floor || forced_zero == Some(q) {
+        if kernels::compute_abs::<Fixed<S, F>>(d[q]) <= floor || forced_zero == Some(q) {
             d[q] = zero;
             let mut bulge = e[q - 1];
             e[q - 1] = zero;
             for j in (p..q).rev() {
-                let rot = Rotation::zeroing_compute(d[j], bulge)?;
+                let rot = Rotation::<Fixed<S, F>>::zeroing_compute(d[j], bulge)?;
                 d[j] = rot.combine_compute(d[j], bulge)?;
                 if j > p {
                     bulge = rot.neg_sin_times_compute(e[j - 1])?;
@@ -867,12 +916,12 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
         // ── Zero diagonal inside the block ──
         // Chase e[i] downward with row rotations (rows j and i): the rows move by
         // G, so U takes Gᵀ on columns (j, i).
-        if let Some(i) = (p..q).find(|&i| compute_abs(d[i]) <= floor || forced_zero == Some(i)) {
+        if let Some(i) = (p..q).find(|&i| kernels::compute_abs::<Fixed<S, F>>(d[i]) <= floor || forced_zero == Some(i)) {
             d[i] = zero;
             let mut bulge = e[i];
             e[i] = zero;
             for j in (i + 1)..=q {
-                let rot = Rotation::zeroing_compute(d[j], bulge)?;
+                let rot = Rotation::<Fixed<S, F>>::zeroing_compute(d[j], bulge)?;
                 d[j] = rot.combine_compute(d[j], bulge)?;
                 if j < q {
                     bulge = rot.neg_sin_times_compute(e[j])?;
@@ -886,12 +935,12 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 
         // ── Implicit QR step (Golub-Kahan), Wilkinson shift ──
         let shift = wilkinson_shift(d[q - 1], e[q - 1], d[q], if q >= 2 { Some(e[q - 2]) } else { None })?;
-        let mut x = compute_checked_add(compute_product(d[p], d[p])?, compute_negate(shift))?;
-        let mut z = compute_product(d[p], e[p])?;
+        let mut x = Fixed::<S, F>::compute_checked_add(kernels::compute_product::<Fixed<S, F>>(d[p], d[p])?, Fixed::<S, F>::compute_negate(shift))?;
+        let mut z = kernels::compute_product::<Fixed<S, F>>(d[p], e[p])?;
 
         for i in p..q {
             // Right rotation on columns i, i+1
-            let rot = Rotation::zeroing_compute(x, z)?;
+            let rot = Rotation::<Fixed<S, F>>::zeroing_compute(x, z)?;
             if i > p {
                 e[i - 1] = rot.combine_compute(e[i - 1], z)?;
             }
@@ -901,7 +950,7 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
             rotate_compute_columns(&mut v_acc, i, i + 1, &rot)?;
 
             // Left rotation on rows i, i+1
-            let rot2 = Rotation::zeroing_compute(d[i], bulge)?;
+            let rot2 = Rotation::<Fixed<S, F>>::zeroing_compute(d[i], bulge)?;
             d[i] = rot2.combine_compute(d[i], bulge)?;
             (e[i], d[i + 1]) = rot2.apply_compute(e[i], d[i + 1])?;
             rotate_compute_columns(&mut u_acc, i, i + 1, &rot2)?;
@@ -918,13 +967,13 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     }
 
     // ── Phase 3: Make singular values non-negative and sort descending ──
-    let mut values: Vec<FixedPoint> = Vec::with_capacity(n);
+    let mut values: Vec<Fixed<S, F>> = Vec::with_capacity(n);
     for i in 0..n {
-        values.push(FixedPoint::from_raw(downscale_shifted_to_storage(compute_abs(d[i]), exponent[i])?));
-        if compute_is_negative(&d[i]) {
+        values.push(Fixed::from_raw(kernels::downscale_shifted_to_storage::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(d[i]), exponent[i])?));
+        if Fixed::<S, F>::compute_is_negative(&d[i]) {
             // Flip sign of corresponding V column (row of Vᵀ)
             for r in 0..n {
-                v_acc.set(r, i, compute_negate(v_acc.get(r, i)));
+                v_acc.set(r, i, Fixed::<S, F>::compute_negate(v_acc.get(r, i)));
             }
         }
     }
@@ -934,9 +983,9 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| values[b].cmp(&values[a]));
 
-    let mut sigma = FixedVector::new(n);
-    let mut u_sorted = FixedMatrix::new(m, m);
-    let mut vt_sorted = FixedMatrix::new(n, n);
+    let mut sigma = FixedVector::<Fixed<S, F>>::new(n);
+    let mut u_sorted = FixedMatrix::<Fixed<S, F>>::new(m, m);
+    let mut vt_sorted = FixedMatrix::<Fixed<S, F>>::new(n, n);
 
     for (new_idx, &old_idx) in indices.iter().enumerate() {
         sigma[new_idx] = values[old_idx];
@@ -969,28 +1018,31 @@ fn svd_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Res
 ///   [d[q-1] e[q-1],      d[q]² + e[q-1]²]
 /// The entries are compute raws; each product is rounded once at the compute
 /// tier. The discriminant is formed in ratio form, without squaring the block.
-fn wilkinson_shift(
-    d_prev: ComputeStorage, e_last: ComputeStorage, d_last: ComputeStorage, e_prev: Option<ComputeStorage>,
-) -> Result<ComputeStorage, OverflowDetected> {
+fn wilkinson_shift<S: Storage, const F: u32>(
+    d_prev: Compute<Fixed<S, F>>, e_last: Compute<Fixed<S, F>>, d_last: Compute<Fixed<S, F>>, e_prev: Option<Compute<Fixed<S, F>>>,
+) -> Result<Compute<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let e_prev_sq = match e_prev {
-        Some(ep) => compute_product(ep, ep)?,
-        None => make_compute_int(0),
+        Some(ep) => kernels::compute_product::<Fixed<S, F>>(ep, ep)?,
+        None => Fixed::<S, F>::make_compute_int(0),
     };
-    let f = compute_checked_add(compute_product(d_prev, d_prev)?, e_prev_sq)?;
-    let g = compute_checked_add(compute_product(d_last, d_last)?, compute_product(e_last, e_last)?)?;
-    let h = compute_product(d_prev, e_last)?;
-    let diff = compute_halve(compute_checked_add(f, compute_negate(g))?);
-    if compute_is_zero(&diff) && compute_is_zero(&h) {
+    let f = Fixed::<S, F>::compute_checked_add(kernels::compute_product::<Fixed<S, F>>(d_prev, d_prev)?, e_prev_sq)?;
+    let g = Fixed::<S, F>::compute_checked_add(kernels::compute_product::<Fixed<S, F>>(d_last, d_last)?, kernels::compute_product::<Fixed<S, F>>(e_last, e_last)?)?;
+    let h = kernels::compute_product::<Fixed<S, F>>(d_prev, e_last)?;
+    let diff = Fixed::<S, F>::compute_halve(Fixed::<S, F>::compute_checked_add(f, Fixed::<S, F>::compute_negate(g))?);
+    if Fixed::<S, F>::compute_is_zero(&diff) && Fixed::<S, F>::compute_is_zero(&h) {
         return Ok(g);
     }
     let disc = compute_hypot(diff, h)?;
-    let denom = if compute_is_negative(&diff) {
-        compute_checked_add(diff, compute_negate(disc))?
+    let denom = if Fixed::<S, F>::compute_is_negative(&diff) {
+        Fixed::<S, F>::compute_checked_add(diff, Fixed::<S, F>::compute_negate(disc))?
     } else {
-        compute_checked_add(diff, disc)?
+        Fixed::<S, F>::compute_checked_add(diff, disc)?
     };
-    let ratio = compute_checked_divide(h, denom)?;
-    compute_checked_add(g, compute_negate(compute_multiply(h, ratio)))
+    let ratio = Fixed::<S, F>::compute_checked_divide(h, denom)?;
+    Fixed::<S, F>::compute_checked_add(g, Fixed::<S, F>::compute_negate(Fixed::<S, F>::compute_multiply(h, ratio)))
 }
 
 // ============================================================================
@@ -1003,9 +1055,9 @@ fn wilkinson_shift(
 /// - `t` is quasi-upper-triangular (upper triangular with possible 2×2 diagonal
 ///   blocks for complex eigenvalue pairs)
 #[derive(Clone, Debug)]
-pub struct SchurDecomposition {
-    pub q: FixedMatrix,
-    pub t: FixedMatrix,
+pub struct SchurDecomposition<T: FixedNum = FixedPoint> {
+    pub q: FixedMatrix<T>,
+    pub t: FixedMatrix<T>,
 }
 
 /// Real Schur decomposition via Hessenberg reduction + Francis implicit double-shift QR.
@@ -1043,17 +1095,23 @@ pub struct SchurDecomposition {
 /// out: an unconverged T is never returned. `Err(TierOverflow)` if a norm or a
 /// transformed entry leaves the storage range. Panics if the matrix is not
 /// square.
-pub fn schur_decompose(a: &FixedMatrix) -> Result<SchurDecomposition, OverflowDetected> {
+pub fn schur_decompose<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<SchurDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     schur_decompose_within(a, ITERATIONS_PER_N_SQUARED)
 }
 
-fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> Result<SchurDecomposition, OverflowDetected> {
+fn schur_decompose_within<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>, iterations_per_n_squared: usize) -> Result<SchurDecomposition<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert!(a.is_square(), "schur_decompose: matrix must be square");
     let n = a.rows();
 
     if n <= 1 {
         return Ok(SchurDecomposition {
-            q: FixedMatrix::identity(n),
+            q: FixedMatrix::<Fixed<S, F>>::identity(n),
             t: a.clone(),
         });
     }
@@ -1062,14 +1120,14 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
     // Reduce A to upper Hessenberg form H via Householder: Qᵀ A Q = H. H and
     // Q stay at the compute tier through the reduction and the Francis
     // iteration, and are rounded to storage once at the end.
-    let mut h = ComputeMatrix::from_fixed_matrix(a);
-    let mut q_acc = ComputeMatrix::identity(n);
-    let zero = make_compute_int(0);
+    let mut h = ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(a);
+    let mut q_acc = ComputeMatrix::<Fixed<S, F>>::identity(n);
+    let zero = Fixed::<S, F>::make_compute_int(0);
 
     for k in 0..n.saturating_sub(2) {
         let start = k + 1;
-        let column: Vec<ComputeStorage> = (start..n).map(|i| h.get(i, k)).collect();
-        let (v_hh, vtv) = match householder_vector_compute(&column)? {
+        let column: Vec<Compute<Fixed<S, F>>> = (start..n).map(|i| h.get(i, k)).collect();
+        let (v_hh, vtv) = match kernels::householder_vector_compute::<Fixed<S, F>>(&column)? {
             Some(reflector) => reflector,
             None => continue,
         };
@@ -1100,7 +1158,7 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
     // each subdiagonal entry has reached, and the iterations since any entry
     // last reached a new one
     let mut stall_block = (usize::MAX, usize::MAX);
-    let mut stall_best: Vec<ComputeStorage> = Vec::new();
+    let mut stall_best: Vec<Compute<Fixed<S, F>>> = Vec::new();
     let mut stall_count = 0usize;
 
     while nn > 0 {
@@ -1108,8 +1166,8 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
         // is set to zero (its backward error is the entry itself)
         let mut l = nn - 1;
         while l > 0 {
-            let bound = compute_deflation_threshold(compute_abs(h.get(l, l)).max(compute_abs(h.get(l - 1, l - 1))));
-            if compute_abs(h.get(l, l - 1)) <= bound {
+            let bound = kernels::compute_deflation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(h.get(l, l)).max(kernels::compute_abs::<Fixed<S, F>>(h.get(l - 1, l - 1))));
+            if kernels::compute_abs::<Fixed<S, F>>(h.get(l, l - 1)) <= bound {
                 h.set(l, l - 1, zero);
                 break;
             }
@@ -1139,7 +1197,7 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
         // subdiagonal entry has reached a new minimum for five iterations,
         // deflate the smallest entry if it is within the loose bound. A block
         // that is still converging, however slowly, keeps iterating.
-        let subdiagonal: Vec<ComputeStorage> = ((l + 1)..nn).map(|i| compute_abs(h.get(i, i - 1))).collect();
+        let subdiagonal: Vec<Compute<Fixed<S, F>>> = ((l + 1)..nn).map(|i| kernels::compute_abs::<Fixed<S, F>>(h.get(i, i - 1))).collect();
         if stall_block != (l, nn) {
             stall_block = (l, nn);
             stall_best = subdiagonal.clone();
@@ -1155,9 +1213,9 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
             stall_count = if improved { 0 } else { stall_count + 1 };
         }
         if its >= SCHUR_FLOOR_ITERATIONS && stall_count >= STAGNATION_SWEEPS {
-            let i = ((l + 1)..nn).min_by_key(|&i| compute_abs(h.get(i, i - 1))).expect("block of size >= 3");
-            if compute_abs(h.get(i, i - 1))
-                <= compute_stagnation_threshold(compute_abs(h.get(i, i)).max(compute_abs(h.get(i - 1, i - 1))))
+            let i = ((l + 1)..nn).min_by_key(|&i| kernels::compute_abs::<Fixed<S, F>>(h.get(i, i - 1))).expect("block of size >= 3");
+            if kernels::compute_abs::<Fixed<S, F>>(h.get(i, i - 1))
+                <= kernels::compute_stagnation_threshold::<Fixed<S, F>>(kernels::compute_abs::<Fixed<S, F>>(h.get(i, i)).max(kernels::compute_abs::<Fixed<S, F>>(h.get(i - 1, i - 1))))
             {
                 h.set(i, i - 1, zero);
                 its = 0;
@@ -1172,8 +1230,8 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
         // (exact) until its largest entry lies in [1/2, 1): a small block
         // keeps its relative precision there, and the step's direction is the
         // same.
-        let block: Vec<ComputeStorage> = (l..nn).flat_map(|i| (l..nn).map(move |j| (i, j))).map(|(i, j)| h.get(i, j)).collect();
-        let k = scale_up_exponent(&block);
+        let block: Vec<Compute<Fixed<S, F>>> = (l..nn).flat_map(|i| (l..nn).map(move |j| (i, j))).map(|(i, j)| h.get(i, j)).collect();
+        let k = kernels::scale_up_exponent::<Fixed<S, F>>(&block);
         let (trace, det) = if its > 0 && its % 10 == 0 {
             exceptional_shifts(&h, l, nn, its, k)?
         } else {
@@ -1184,18 +1242,21 @@ fn schur_decompose_within(a: &FixedMatrix, iterations_per_n_squared: usize) -> R
         iter_count += 1;
     }
 
-    Ok(SchurDecomposition { q: narrow_matrix(&q_acc)?, t: narrow_matrix(&h)? })
+    Ok(SchurDecomposition::<Fixed<S, F>> { q: narrow_matrix(&q_acc)?, t: narrow_matrix(&h)? })
 }
 
 /// Trace and determinant of the trailing 2×2 block (the double-shift pair),
 /// as compute raws (the determinant from exact products, rounded once), of H
 /// scaled by `2^k`.
-fn trailing_shifts(h: &ComputeMatrix, nn: usize, k: u32) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
-    let hs = |i: usize, j: usize| compute_scale_up(h.get(i, j), k);
+fn trailing_shifts<S: Storage, const F: u32>(h: &ComputeMatrix<Fixed<S, F>>, nn: usize, k: u32) -> Result<(Compute<Fixed<S, F>>, Compute<Fixed<S, F>>), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let hs = |i: usize, j: usize| kernels::compute_scale_up::<Fixed<S, F>>(h.get(i, j), k);
     let (a, b) = (hs(nn - 2, nn - 2), hs(nn - 2, nn - 1));
     let (c, d) = (hs(nn - 1, nn - 2), hs(nn - 1, nn - 1));
-    let trace = compute_checked_add(a, d)?;
-    let det = exact_sub_dot_compute(make_compute_int(0), &[b, compute_negate(a)], &[c, d])?;
+    let trace = Fixed::<S, F>::compute_checked_add(a, d)?;
+    let det = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::make_compute_int(0), &[b, Fixed::<S, F>::compute_negate(a)], &[c, d])?;
     Ok((trace, det))
 }
 
@@ -1206,20 +1267,23 @@ fn trailing_shifts(h: &ComputeMatrix, nn: usize, k: u32) -> Result<(ComputeStora
 /// the cycles an ordinary Francis step sits in, such as permutation matrices;
 /// with shifts at 10 and 20 only, a cycle entered later persisted. Of H
 /// scaled by `2^k`.
-fn exceptional_shifts(h: &ComputeMatrix, l: usize, nn: usize, its: usize, k: u32) -> Result<(ComputeStorage, ComputeStorage), OverflowDetected> {
-    let hs = |i: usize, j: usize| compute_scale_up(h.get(i, j), k);
+fn exceptional_shifts<S: Storage, const F: u32>(h: &ComputeMatrix<Fixed<S, F>>, l: usize, nn: usize, its: usize, k: u32) -> Result<(Compute<Fixed<S, F>>, Compute<Fixed<S, F>>), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let hs = |i: usize, j: usize| kernels::compute_scale_up::<Fixed<S, F>>(h.get(i, j), k);
     let (s_c, anchor) = if its % 20 == 10 {
-        (compute_checked_add(compute_abs(hs(l + 1, l)), compute_abs(hs(l + 2, l + 1)))?, hs(l, l))
+        (Fixed::<S, F>::compute_checked_add(kernels::compute_abs::<Fixed<S, F>>(hs(l + 1, l)), kernels::compute_abs::<Fixed<S, F>>(hs(l + 2, l + 1)))?, hs(l, l))
     } else {
-        (compute_checked_add(compute_abs(hs(nn - 1, nn - 2)), compute_abs(hs(nn - 2, nn - 3)))?, hs(nn - 1, nn - 1))
+        (Fixed::<S, F>::compute_checked_add(kernels::compute_abs::<Fixed<S, F>>(hs(nn - 1, nn - 2)), kernels::compute_abs::<Fixed<S, F>>(hs(nn - 2, nn - 3)))?, hs(nn - 1, nn - 1))
     };
-    let three_quarters = compute_divide(make_compute_int(3), make_compute_int(4))?;
-    let seven_sixteenths = compute_divide(make_compute_int(7), make_compute_int(16))?;
-    let w = compute_checked_add(anchor, compute_multiply(three_quarters, s_c))?;
-    let trace = compute_checked_add(w, w)?;
-    let det = compute_checked_add(
-        compute_multiply(w, w),
-        compute_multiply(seven_sixteenths, compute_multiply(s_c, s_c)),
+    let three_quarters = Fixed::<S, F>::compute_divide(Fixed::<S, F>::make_compute_int(3), Fixed::<S, F>::make_compute_int(4))?;
+    let seven_sixteenths = Fixed::<S, F>::compute_divide(Fixed::<S, F>::make_compute_int(7), Fixed::<S, F>::make_compute_int(16))?;
+    let w = Fixed::<S, F>::compute_checked_add(anchor, Fixed::<S, F>::compute_multiply(three_quarters, s_c))?;
+    let trace = Fixed::<S, F>::compute_checked_add(w, w)?;
+    let det = Fixed::<S, F>::compute_checked_add(
+        Fixed::<S, F>::compute_multiply(w, w),
+        Fixed::<S, F>::compute_multiply(seven_sixteenths, Fixed::<S, F>::compute_multiply(s_c, s_c)),
     )?;
     Ok((trace, det))
 }
@@ -1229,23 +1293,26 @@ fn exceptional_shifts(h: &ComputeMatrix, l: usize, nn: usize, its: usize, k: u32
 /// The shifts only steer convergence; every transform applied is orthogonal.
 /// `trace` and `det` are of H scaled by `2^k`; the first column is formed at
 /// that scale (its direction does not depend on it).
-fn francis_step(
-    h: &mut ComputeMatrix, q_acc: &mut ComputeMatrix, l: usize, nn: usize,
-    trace: ComputeStorage, det: ComputeStorage, k: u32,
-) -> Result<(), OverflowDetected> {
+fn francis_step<S: Storage, const F: u32>(
+    h: &mut ComputeMatrix<Fixed<S, F>>, q_acc: &mut ComputeMatrix<Fixed<S, F>>, l: usize, nn: usize,
+    trace: Compute<Fixed<S, F>>, det: Compute<Fixed<S, F>>, k: u32,
+) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let n = h.rows();
-    let zero = make_compute_int(0);
+    let zero = Fixed::<S, F>::make_compute_int(0);
 
     // First column of (H - s1 I)(H - s2 I) = H² - trace H + det I
-    let hs = |i: usize, j: usize| compute_scale_up(h.get(i, j), k);
+    let hs = |i: usize, j: usize| kernels::compute_scale_up::<Fixed<S, F>>(h.get(i, j), k);
     let (h11, h12, h21) = (hs(l, l), hs(l, l + 1), hs(l + 1, l));
     let (h22, h32) = (hs(l + 1, l + 1), hs(l + 2, l + 1));
-    let x = exact_sub_dot_compute(det, &[compute_negate(h11), compute_negate(h12), trace], &[h11, h21, h11])?;
-    let y = compute_product(h21, compute_sum(&[h11, h22, compute_negate(trace)])?)?;
-    let z = compute_product(h21, h32)?;
+    let x = kernels::exact_sub_dot_compute::<Fixed<S, F>>(det, &[Fixed::<S, F>::compute_negate(h11), Fixed::<S, F>::compute_negate(h12), trace], &[h11, h21, h11])?;
+    let y = kernels::compute_product::<Fixed<S, F>>(h21, compute_sum(&[h11, h22, Fixed::<S, F>::compute_negate(trace)])?)?;
+    let z = kernels::compute_product::<Fixed<S, F>>(h21, h32)?;
 
     // Reflector introducing the bulge at rows l..l+3
-    if let Some((v_hh, vtv)) = householder_vector_compute(&[x, y, z])? {
+    if let Some((v_hh, vtv)) = kernels::householder_vector_compute::<Fixed<S, F>>(&[x, y, z])? {
         for c in l..n {
             reflect_compute_column(h, c, l, &v_hh, vtv)?;
         }
@@ -1261,8 +1328,8 @@ fn francis_step(
     for k in (l + 1)..(nn - 1) {
         if k + 2 < nn {
             // 3-element reflector on rows k..k+3 zeroes h[k+1, k-1], h[k+2, k-1]
-            let column: Vec<ComputeStorage> = (k..k + 3).map(|i| h.get(i, k - 1)).collect();
-            if let Some((v_hh, vtv)) = householder_vector_compute(&column)? {
+            let column: Vec<Compute<Fixed<S, F>>> = (k..k + 3).map(|i| h.get(i, k - 1)).collect();
+            if let Some((v_hh, vtv)) = kernels::householder_vector_compute::<Fixed<S, F>>(&column)? {
                 for c in (k - 1)..n {
                     reflect_compute_column(h, c, k, &v_hh, vtv)?;
                 }
@@ -1277,7 +1344,7 @@ fn francis_step(
             h.set(k + 2, k - 1, zero);
         } else {
             // Last step: a rotation on rows k, k+1 zeroes h[k+1, k-1]
-            let rot = Rotation::zeroing_compute(h.get(k, k - 1), h.get(k + 1, k - 1))?;
+            let rot = Rotation::<Fixed<S, F>>::zeroing_compute(h.get(k, k - 1), h.get(k + 1, k - 1))?;
             for c in (k - 1)..n {
                 let (top, bottom) = rot.apply_compute(h.get(k, c), h.get(k + 1, c))?;
                 h.set(k, c, top);
@@ -1301,30 +1368,33 @@ fn francis_step(
 /// `(λ - d, c)` of `λ = (a+d)/2 + sign(p) sqrt(p² + bc)`, `p = (a-d)/2`
 /// (no cancellation in `λ - d = p + sign(p) sqrt(..)`). A complex pair keeps
 /// its block.
-fn split_real_block(h: &mut ComputeMatrix, q_acc: &mut ComputeMatrix, i: usize) -> Result<(), OverflowDetected> {
+fn split_real_block<S: Storage, const F: u32>(h: &mut ComputeMatrix<Fixed<S, F>>, q_acc: &mut ComputeMatrix<Fixed<S, F>>, i: usize) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let n = h.rows();
-    if compute_is_zero(&h.get(i + 1, i)) {
+    if Fixed::<S, F>::compute_is_zero(&h.get(i + 1, i)) {
         return Ok(());
     }
     // the rotation's direction is homogeneous in the block: form it from the
     // block scaled up to [1/2, 1) (exact), where a small block keeps its
     // relative precision
-    let k = scale_up_exponent(&[h.get(i, i), h.get(i, i + 1), h.get(i + 1, i), h.get(i + 1, i + 1)]);
-    let hs = |r: usize, c: usize| compute_scale_up(h.get(r, c), k);
+    let k = kernels::scale_up_exponent::<Fixed<S, F>>(&[h.get(i, i), h.get(i, i + 1), h.get(i + 1, i), h.get(i + 1, i + 1)]);
+    let hs = |r: usize, c: usize| kernels::compute_scale_up::<Fixed<S, F>>(h.get(r, c), k);
     let (a, b) = (hs(i, i), hs(i, i + 1));
     let (c, d) = (hs(i + 1, i), hs(i + 1, i + 1));
-    let p = compute_halve(compute_checked_add(a, compute_negate(d))?);
-    let disc = exact_sub_dot_compute(make_compute_int(0), &[compute_negate(p), compute_negate(b)], &[p, c])?;
-    if compute_is_negative(&disc) {
+    let p = Fixed::<S, F>::compute_halve(Fixed::<S, F>::compute_checked_add(a, Fixed::<S, F>::compute_negate(d))?);
+    let disc = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::make_compute_int(0), &[Fixed::<S, F>::compute_negate(p), Fixed::<S, F>::compute_negate(b)], &[p, c])?;
+    if Fixed::<S, F>::compute_is_negative(&disc) {
         return Ok(());
     }
-    let root = sqrt_at_compute_tier(disc);
-    let lead = if compute_is_negative(&p) {
-        compute_checked_add(p, compute_negate(root))?
+    let root = Fixed::<S, F>::sqrt_at_compute_tier(disc);
+    let lead = if Fixed::<S, F>::compute_is_negative(&p) {
+        Fixed::<S, F>::compute_checked_add(p, Fixed::<S, F>::compute_negate(root))?
     } else {
-        compute_checked_add(p, root)?
+        Fixed::<S, F>::compute_checked_add(p, root)?
     };
-    let rot = Rotation::zeroing_compute(lead, c)?;
+    let rot = Rotation::<Fixed<S, F>>::zeroing_compute(lead, c)?;
     // Gᵀ H on rows i, i+1 (entries left of column i are zero in both rows)
     for col in i..n {
         let (top, bottom) = rot.apply_compute(h.get(i, col), h.get(i + 1, col))?;
@@ -1338,7 +1408,7 @@ fn split_real_block(h: &mut ComputeMatrix, q_acc: &mut ComputeMatrix, i: usize) 
         h.set(row, i + 1, right);
     }
     rotate_compute_columns(q_acc, i, i + 1, &rot)?;
-    h.set(i + 1, i, make_compute_int(0));
+    h.set(i + 1, i, Fixed::<S, F>::make_compute_int(0));
     Ok(())
 }
 
@@ -1347,7 +1417,7 @@ mod tests {
     use super::*;
 
     fn int_matrix(rows: &[&[i32]]) -> FixedMatrix {
-        FixedMatrix::from_fn(rows.len(), rows[0].len(), |i, j| FixedPoint::from_int(rows[i][j]))
+        FixedMatrix::from_fn(rows.len(), rows[0].len(), |i, j| Fixed::from_int(rows[i][j]))
     }
 
     /// Running out of iterations is an error, never a partially converged Ok.

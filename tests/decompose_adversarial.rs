@@ -441,6 +441,6 @@ fn test_adversarial_indefinite_fails() {
 
 #[test]
 fn test_adversarial_zero_matrix() {
-    let a = FixedMatrix::new(3, 3); // all zeros
+    let a: FixedMatrix = FixedMatrix::new(3, 3); // all zeros
     assert!(lu_decompose(&a).is_err(), "zero matrix must fail LU");
 }
