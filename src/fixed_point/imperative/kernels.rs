@@ -12,6 +12,7 @@
 //! delegate here with the profile's format, so each width returns the
 //! integers it always did.
 
+use super::FixedMatrix;
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage, WideInt};
@@ -429,4 +430,27 @@ pub(crate) fn dot_raw<T: FixedNum>(a: &[T::Storage], b: &[T::Storage]) -> T::Sto
 #[inline]
 pub(crate) fn compute_scale_up<T: FixedNum>(v: Compute<T>, shift: u32) -> Compute<T> {
     v.shl_bits(shift)
+}
+
+/// v^T M v exactly at 3F (the orient accumulator): each product of three
+/// storage values is exact, and the sum is checked.
+pub(crate) fn quadratic_form_exact<S: Storage, const F: u32>(v: &[S], m: &FixedMatrix<Fixed<S, F>>) -> Result<Orient<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let n = v.len();
+    assert!(m.is_square() && m.rows() == n, "quadratic_form: dimension mismatch");
+    let mut sum = Orient::<Fixed<S, F>>::zero();
+    for i in 0..n {
+        let vi = v[i];
+        let vv = vi.mul_wide(vi);
+        sum = sum.add_exact(S::widen_product(m.get(i, i).raw().widen(), vv))?;
+        for j in (i + 1)..n {
+            // W+1 bits at most: exact at the compute width (2W).
+            let pair = m.get(i, j).raw().widen() + m.get(j, i).raw().widen();
+            let vv = vi.mul_wide(v[j]);
+            sum = sum.add_exact(S::widen_product(pair, vv))?;
+        }
+    }
+    Ok(sum)
 }

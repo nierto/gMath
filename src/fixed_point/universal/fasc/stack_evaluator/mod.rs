@@ -35,9 +35,9 @@ use core::fmt::{self, Display};
 pub(crate) use conversion::try_to_binary_storage;
 #[allow(unused_imports)]
 pub(crate) use compute::{
-    downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier, exp_at_compute_tier,
+    downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier,
     sinhcosh_at_compute_tier,
-    compute_add, compute_subtract, compute_negate, compute_multiply, compute_divide,
+    compute_divide,
     compute_halve, compute_is_zero, compute_is_negative,
 };
 

@@ -202,7 +202,7 @@ fn test_softmax_shift_invariance() {
 
 #[test]
 fn test_softmax_empty() {
-    let result = fused::softmax(&[]).unwrap();
+    let result = fused::softmax(&[] as &[FixedPoint] as &[FixedPoint]).unwrap();
     assert!(result.is_empty());
 }
 

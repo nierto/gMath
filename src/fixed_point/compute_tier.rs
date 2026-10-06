@@ -40,164 +40,133 @@
 //! # }
 //! ```
 
-use crate::fixed_point::imperative::FixedPoint;
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-use crate::fixed_point::universal::fasc::stack_evaluator::compute::{
-    compute_add, compute_checked_add, compute_ceiling, compute_divide,
-    compute_is_negative, compute_is_zero, compute_negate, downscale_to_storage,
-    exp_at_compute_tier, ln_at_compute_tier, make_compute_int,
-    sinhcosh_at_compute_tier, sqrt_at_compute_tier, upscale_to_compute,
-};
+use crate::fixed_point::fixed_num::{Compute, FixedNum};
 
-/// The wide integer type of the compute tier for the active profile
-/// (`i64`/`i128`/`I256`/`I512`/`I1024` for
-/// realtime/compact/embedded/balanced/scientific respectively).
 pub use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
 
-/// Fractional bits of the storage tier (`FixedPoint`).
 pub use crate::fixed_point::frac_config::FRAC_BITS;
 
-/// Fractional bits of the compute tier (`= 2 × FRAC_BITS`).
 pub use crate::fixed_point::frac_config::COMPUTE_FRAC_BITS;
 
-/// The value `1.0` at compute-tier scale (`1 << COMPUTE_FRAC_BITS`).
+/// 1.0 at the compute tier of the format `T`.
 #[inline]
-pub fn one() -> ComputeStorage {
-    make_compute_int(1)
+pub fn one<T: FixedNum>() -> Compute<T> {
+    T::make_compute_int(1)
 }
 
-/// The compute tier's maximum value: the saturation ceiling for [`exp`].
+/// The exponential's saturation value at the compute tier of `T`.
 #[inline]
-pub fn ceiling() -> ComputeStorage {
-    compute_ceiling()
+pub fn ceiling<T: FixedNum>() -> Compute<T> {
+    T::compute_ceiling()
 }
 
-/// Promote a `FixedPoint` (storage tier) to the compute tier. Exact.
+/// A storage value lifted to its compute tier (exact).
 #[inline]
-pub fn from_fixed(x: FixedPoint) -> ComputeStorage {
-    upscale_to_compute(x.raw())
+pub fn from_fixed<T: FixedNum>(x: T) -> Compute<T> {
+    T::upscale_to_compute(x.raw_storage())
 }
 
-/// Round a compute-tier value to the nearest `FixedPoint` (single rounding).
+/// A compute-tier value rounded to storage (nearest, ties toward +inf).
 ///
 /// # Panics
-/// Panics if the value does not fit the storage tier. Use [`try_to_fixed`]
-/// for a non-panicking variant.
+/// Panics if the value does not fit the storage tier.
 #[inline]
-pub fn to_fixed(x: ComputeStorage) -> FixedPoint {
+pub fn to_fixed<T: FixedNum>(x: Compute<T>) -> T {
     try_to_fixed(x).expect("compute_tier::to_fixed: value does not fit the storage tier")
 }
 
-/// Round a compute-tier value to the nearest `FixedPoint`, or `None` on storage overflow.
+/// A compute-tier value rounded to storage, `None` if it does not fit.
 #[inline]
-pub fn try_to_fixed(x: ComputeStorage) -> Option<FixedPoint> {
-    let raw: BinaryStorage = downscale_to_storage(x).ok()?;
-    Some(FixedPoint::from_raw(raw))
+pub fn try_to_fixed<T: FixedNum>(x: Compute<T>) -> Option<T> {
+    Some(T::from_raw_storage(T::downscale_to_storage(x).ok()?))
 }
 
-/// `e^x` at the compute tier.
-///
-/// Saturates at [`ceiling`] when the true result exceeds the compute tier's
-/// range; never wraps. A subsequent [`to_fixed`] on a saturated value panics
-/// (it does not fit storage), which is the intended loud failure.
+/// e^x at the compute tier; saturates at [`ceiling`], never wraps.
 #[inline]
-pub fn exp(x: ComputeStorage) -> ComputeStorage {
-    exp_at_compute_tier(x)
+pub fn exp<T: FixedNum>(x: Compute<T>) -> Compute<T> {
+    T::exp_at_compute_tier(x)
 }
 
-/// `ln(x)` at the compute tier.
+/// ln x at the compute tier.
 ///
 /// # Panics
 /// Panics if `x <= 0`.
 #[inline]
-pub fn ln(x: ComputeStorage) -> ComputeStorage {
+pub fn ln<T: FixedNum>(x: Compute<T>) -> Compute<T> {
     assert!(
-        !(compute_is_negative(&x) || compute_is_zero(&x)),
+        !(T::compute_is_negative(&x) || T::compute_is_zero(&x)),
         "compute_tier::ln: x <= 0 is outside the domain"
     );
-    ln_at_compute_tier(x)
+    T::ln_at_compute_tier(x)
 }
 
-/// `sqrt(x)` at the compute tier.
+/// sqrt x at the compute tier.
 ///
 /// # Panics
 /// Panics if `x < 0`.
 #[inline]
-pub fn sqrt(x: ComputeStorage) -> ComputeStorage {
+pub fn sqrt<T: FixedNum>(x: Compute<T>) -> Compute<T> {
     assert!(
-        !compute_is_negative(&x),
+        !T::compute_is_negative(&x),
         "compute_tier::sqrt: x < 0 is outside the domain"
     );
-    sqrt_at_compute_tier(x)
+    T::sqrt_at_compute_tier(x)
 }
 
-/// `(sinh(x), cosh(x))` at the compute tier from one shared exponential pair.
-///
-/// Both values derive from the same `(e^x, e^-x)` computation, so systematic
-/// rounding bias cancels in expressions that use both.
+/// (sinh x, cosh x) at the compute tier from one exponential pair.
 #[inline]
-pub fn sinhcosh(x: ComputeStorage) -> (ComputeStorage, ComputeStorage) {
-    sinhcosh_at_compute_tier(x)
+pub fn sinhcosh<T: FixedNum>(x: Compute<T>) -> (Compute<T>, Compute<T>) {
+    T::sinhcosh_at_compute_tier(x)
 }
 
-/// `1 / (1 + e^-x)` at the compute tier.
-///
-/// Uses the sign-split form so the denominator stays in `[1, 2]`: no
-/// intermediate can overflow, and large `|x|` saturates smoothly to 0 or 1.
+/// 1 / (1 + e^-x) at the compute tier (sign-split: the exponential argument
+/// is never positive and the denominator stays in [1, 2]).
 #[inline]
-pub fn sigmoid(x: ComputeStorage) -> ComputeStorage {
-    let one = make_compute_int(1);
-    if compute_is_negative(&x) {
+pub fn sigmoid<T: FixedNum>(x: Compute<T>) -> Compute<T> {
+    let one = T::make_compute_int(1);
+    if T::compute_is_negative(&x) {
         // e^x <= 1, denominator in [1, 2]
-        let e = exp_at_compute_tier(x);
-        compute_divide(e, compute_add(one, e))
+        let e = T::exp_at_compute_tier(x);
+        T::compute_divide(e, T::compute_add(one, e))
             .expect("sigmoid: denominator in [1,2] cannot overflow")
     } else {
         // e^-x <= 1, denominator in [1, 2]
-        let e = exp_at_compute_tier(compute_negate(x));
-        compute_divide(one, compute_add(one, e))
+        let e = T::exp_at_compute_tier(T::compute_negate(x));
+        T::compute_divide(one, T::compute_add(one, e))
             .expect("sigmoid: denominator in [1,2] cannot overflow")
     }
 }
 
-/// `ln(1 + e^x)` (softplus) at the compute tier.
-///
-/// Uses the stable form `max(x, 0) + ln(1 + e^-|x|)`: the exponential
-/// argument is never positive, so nothing saturates for any input.
+/// ln(1 + e^x) at the compute tier (sign-split: `x + ln(1 + e^-|x|)` for
+/// positive x, `ln(1 + e^x)` otherwise).
 ///
 /// # Panics
-/// Panics only if `x` is within `ln 2` of [`ceiling`] (the exact result
-/// itself would not fit the compute tier).
+/// Panics if the result does not fit the compute tier.
 #[inline]
-pub fn softplus(x: ComputeStorage) -> ComputeStorage {
-    let one = make_compute_int(1);
-    let neg_abs = if compute_is_negative(&x) { x } else { compute_negate(x) };
-    let e = exp_at_compute_tier(neg_abs); // in (0, 1]
-    let corr = ln_at_compute_tier(compute_add(one, e)); // arg in (1, 2], always in domain
-    if compute_is_negative(&x) {
+pub fn softplus<T: FixedNum>(x: Compute<T>) -> Compute<T> {
+    let one = T::make_compute_int(1);
+    let neg_abs = if T::compute_is_negative(&x) { x } else { T::compute_negate(x) };
+    let e = T::exp_at_compute_tier(neg_abs); // in (0, 1]
+    let corr = T::ln_at_compute_tier(T::compute_add(one, e)); // arg in (1, 2], always in domain
+    if T::compute_is_negative(&x) {
         corr
     } else {
-        compute_checked_add(x, corr)
+        T::compute_checked_add(x, corr)
             .expect("softplus: result does not fit the compute tier")
     }
 }
 
-/// `ln(1 + x)` at the compute tier.
-///
-/// The `1 + x` addition is exact in fixed point (integer add), so unlike
-/// floating point there is no cancellation regime; this is a convenience
-/// wrapper with a domain check, not a different algorithm.
+/// ln(1 + x) at the compute tier.
 ///
 /// # Panics
-/// Panics if `x <= -1` (outside the domain) or if `1 + x` does not fit the
-/// compute tier.
+/// Panics if `x <= -1` or if `1 + x` does not fit the compute tier.
 #[inline]
-pub fn ln1p(x: ComputeStorage) -> ComputeStorage {
-    let arg = compute_checked_add(make_compute_int(1), x)
+pub fn ln1p<T: FixedNum>(x: Compute<T>) -> Compute<T> {
+    let arg = T::compute_checked_add(T::make_compute_int(1), x)
         .expect("ln1p: 1 + x does not fit the compute tier");
     assert!(
-        !(compute_is_negative(&arg) || compute_is_zero(&arg)),
+        !(T::compute_is_negative(&arg) || T::compute_is_zero(&arg)),
         "compute_tier::ln1p: x <= -1 is outside the domain"
     );
-    ln_at_compute_tier(arg)
+    T::ln_at_compute_tier(arg)
 }

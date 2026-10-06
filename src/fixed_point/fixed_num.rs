@@ -106,6 +106,10 @@ pub(crate) type ProfileFormat = Fixed<
 /// `transcendental/mod.rs`), and each is kept as it was.
 pub trait FixedNum: Copy + sealed::Sealed {
     type Storage: Storage;
+    /// The value with this raw storage word (`Fixed::from_raw` for generic code).
+    fn from_raw_storage(raw: Self::Storage) -> Self;
+    /// The raw storage word.
+    fn raw_storage(self) -> Self::Storage;
     /// Fractional bits of a storage value.
     const FRAC_BITS: u32;
     /// The storage word's tier in the canonical layer's binary ladder.
@@ -405,6 +409,10 @@ mod c32 {
 impl<const F: u32> sealed::Sealed for Fixed<i32, F> {}
 impl<const F: u32> FixedNum for Fixed<i32, F> {
     type Storage = i32;
+    #[inline]
+    fn from_raw_storage(raw: Self::Storage) -> Self { Self { raw } }
+    #[inline]
+    fn raw_storage(self) -> Self::Storage { self.raw }
     // Every kernel that depends on the split reads it through this constant,
     // so an unsupported split is a compile error where it is first used.
     const FRAC_BITS: u32 = {
@@ -610,6 +618,10 @@ impl<const F: u32> FixedNum for Fixed<i32, F> {
 impl sealed::Sealed for Fixed<i64, 32> {}
 impl FixedNum for Fixed<i64, 32> {
     type Storage = i64;
+    #[inline]
+    fn from_raw_storage(raw: Self::Storage) -> Self { Self { raw } }
+    #[inline]
+    fn raw_storage(self) -> Self::Storage { self.raw }
     const FRAC_BITS: u32 = 32;
     const STORAGE_TIER: u8 = 2;
     const CONVERGENCE_SHIFT: u32 = 16;
@@ -801,6 +813,10 @@ impl FixedNum for Fixed<i64, 32> {
 impl sealed::Sealed for Fixed<i128, 64> {}
 impl FixedNum for Fixed<i128, 64> {
     type Storage = i128;
+    #[inline]
+    fn from_raw_storage(raw: Self::Storage) -> Self { Self { raw } }
+    #[inline]
+    fn raw_storage(self) -> Self::Storage { self.raw }
     const FRAC_BITS: u32 = 64;
     const STORAGE_TIER: u8 = 3;
     const CONVERGENCE_SHIFT: u32 = 32;
@@ -1008,6 +1024,10 @@ impl FixedNum for Fixed<i128, 64> {
 impl sealed::Sealed for Fixed<I256, 128> {}
 impl FixedNum for Fixed<I256, 128> {
     type Storage = I256;
+    #[inline]
+    fn from_raw_storage(raw: Self::Storage) -> Self { Self { raw } }
+    #[inline]
+    fn raw_storage(self) -> Self::Storage { self.raw }
     const FRAC_BITS: u32 = 128;
     const STORAGE_TIER: u8 = 4;
     const CONVERGENCE_SHIFT: u32 = 64;
@@ -1236,6 +1256,10 @@ impl FixedNum for Fixed<I256, 128> {
 impl sealed::Sealed for Fixed<I512, 256> {}
 impl FixedNum for Fixed<I512, 256> {
     type Storage = I512;
+    #[inline]
+    fn from_raw_storage(raw: Self::Storage) -> Self { Self { raw } }
+    #[inline]
+    fn raw_storage(self) -> Self::Storage { self.raw }
     const FRAC_BITS: u32 = 256;
     const STORAGE_TIER: u8 = 5;
     const CONVERGENCE_SHIFT: u32 = 128;

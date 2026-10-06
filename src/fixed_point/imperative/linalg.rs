@@ -9,7 +9,6 @@
 //!
 //! These are the matrix-operation analog of BinaryCompute chain persistence.
 
-use super::FixedPoint;
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 #[cfg(table_format = "q16_16")]
 use crate::fixed_point::frac_config;
@@ -66,27 +65,6 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 // ============================================================================
 // Compute-tier dot product
 // ============================================================================
-
-/// Dot product accumulated at tier N+1 (compute tier).
-///
-/// Each product a_i * b_i is computed at double width without truncation.
-/// The entire sum is accumulated at double width (checked: a sum beyond the
-/// compute tier panics, never wraps) and rounded to storage once, to nearest
-/// with ties toward +infinity like every binary result. Before 0.6.4 this
-/// floored (`acc >> F`), up to one unit below the matrix path's nearest.
-///
-/// Panics if the slices have different lengths.
-pub fn compute_tier_dot(a: &[FixedPoint], b: &[FixedPoint]) -> FixedPoint {
-    FixedPoint::from_raw(round_to_storage(compute_tier_dot_acc(FixedPoint::raw_slice(a), FixedPoint::raw_slice(b))))
-}
-/// sum a_i b_i at the compute tier, unrounded. The accumulation is checked:
-/// a sum beyond the compute tier panics instead of wrapping (the plain
-/// additions wrapped silently in release builds before 0.6.4).
-#[inline]
-pub(crate) fn compute_tier_dot_acc(a: &[BinaryStorage], b: &[BinaryStorage]) -> ComputeStorage {
-    super::kernels::dot_acc::<crate::fixed_point::fixed_num::ProfileFormat>(a, b)
-}
-
 /// Below this length the per-term check is cheaper than the bound pass
 /// (measured: the two cross between 16 and 32 elements). The length test
 /// is made inline by `Storage::dot_acc_fast`; only longer vectors reach the

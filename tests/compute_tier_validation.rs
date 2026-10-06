@@ -71,7 +71,7 @@ fn check(
             "{label}(x_raw={x_raw}): compute-tier diff {cdiff} ULP (got {}, want {want_compute})",
             cs_to_i128(got)
         );
-        let got_fixed = ct::to_fixed(got);
+        let got_fixed: FixedPoint = ct::to_fixed::<FixedPoint>(got);
         let sdiff = (got_fixed.raw() as i64 - want_storage).abs();
         assert!(
             sdiff <= max_storage_ulp,
@@ -120,42 +120,42 @@ const STORAGE_LSB: i64 = 0;
 
 #[test]
 fn mpmath_exp() {
-    check("exp", ct::exp, refs::EXP, PRIM_CULP, STORAGE_LSB);
+    check("exp", ct::exp::<FixedPoint>, refs::EXP, PRIM_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_ln() {
-    check("ln", ct::ln, refs::LN, PRIM_CULP, STORAGE_LSB);
+    check("ln", ct::ln::<FixedPoint>, refs::LN, PRIM_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_sqrt() {
-    check("sqrt", ct::sqrt, refs::SQRT, PRIM_CULP, STORAGE_LSB);
+    check("sqrt", ct::sqrt::<FixedPoint>, refs::SQRT, PRIM_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_sigmoid() {
-    check("sigmoid", ct::sigmoid, refs::SIGMOID, COMP_CULP, STORAGE_LSB);
+    check("sigmoid", ct::sigmoid::<FixedPoint>, refs::SIGMOID, COMP_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_softplus() {
-    check("softplus", ct::softplus, refs::SOFTPLUS, COMP_CULP, STORAGE_LSB);
+    check("softplus", ct::softplus::<FixedPoint>, refs::SOFTPLUS, COMP_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_ln1p() {
-    check("ln1p", ct::ln1p, refs::LN1P, COMP_CULP, STORAGE_LSB);
+    check("ln1p", ct::ln1p::<FixedPoint>, refs::LN1P, COMP_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_sinh() {
-    check("sinh", |x| ct::sinhcosh(x).0, refs::SINH, COMP_CULP, STORAGE_LSB);
+    check("sinh", |x| ct::sinhcosh::<FixedPoint>(x).0, refs::SINH, COMP_CULP, STORAGE_LSB);
 }
 
 #[test]
 fn mpmath_cosh() {
-    check("cosh", |x| ct::sinhcosh(x).1, refs::COSH, COMP_CULP, STORAGE_LSB);
+    check("cosh", |x| ct::sinhcosh::<FixedPoint>(x).1, refs::COSH, COMP_CULP, STORAGE_LSB);
 }
 
 // ============================================================================
@@ -171,7 +171,7 @@ fn path_independence_exp_ln_sqrt() {
         let Some(x) = fits(s) else { continue };
         if let Ok(want) = x.try_exp() {
             assert_eq!(
-                ct::to_fixed(ct::exp(ct::from_fixed(x))).raw(),
+                ct::to_fixed::<FixedPoint>(ct::exp::<FixedPoint>(ct::from_fixed(x))).raw(),
                 want.raw(),
                 "exp({s}) diverges between compute_tier and FixedPoint"
             );
@@ -179,7 +179,7 @@ fn path_independence_exp_ln_sqrt() {
         }
         if let Ok(want) = x.try_ln() {
             assert_eq!(
-                ct::to_fixed(ct::ln(ct::from_fixed(x))).raw(),
+                ct::to_fixed::<FixedPoint>(ct::ln::<FixedPoint>(ct::from_fixed(x))).raw(),
                 want.raw(),
                 "ln({s}) diverges between compute_tier and FixedPoint"
             );
@@ -187,7 +187,7 @@ fn path_independence_exp_ln_sqrt() {
         }
         if let Ok(want) = x.try_sqrt() {
             assert_eq!(
-                ct::to_fixed(ct::sqrt(ct::from_fixed(x))).raw(),
+                ct::to_fixed::<FixedPoint>(ct::sqrt::<FixedPoint>(ct::from_fixed(x))).raw(),
                 want.raw(),
                 "sqrt({s}) diverges between compute_tier and FixedPoint"
             );
@@ -201,7 +201,7 @@ fn path_independence_exp_ln_sqrt() {
 fn roundtrip_from_to_fixed_is_identity() {
     for s in ["0", "0.0625", "1", "7.75", "-2.5", "-0.0625"] {
         let Some(x) = fits(s) else { continue };
-        assert_eq!(ct::to_fixed(ct::from_fixed(x)).raw(), x.raw());
+        assert_eq!(ct::to_fixed::<FixedPoint>(ct::from_fixed(x)).raw(), x.raw());
     }
 }
 
@@ -212,25 +212,25 @@ fn roundtrip_from_to_fixed_is_identity() {
 #[test]
 #[should_panic(expected = "outside the domain")]
 fn ln_zero_panics() {
-    let _ = ct::ln(cs(0));
+    let _ = ct::ln::<FixedPoint>(cs(0));
 }
 
 #[test]
 #[should_panic(expected = "outside the domain")]
 fn ln_negative_panics() {
-    let _ = ct::ln(ct::from_fixed(fp("-1")));
+    let _ = ct::ln::<FixedPoint>(ct::from_fixed(fp("-1")));
 }
 
 #[test]
 #[should_panic(expected = "outside the domain")]
 fn sqrt_negative_panics() {
-    let _ = ct::sqrt(ct::from_fixed(fp("-0.5")));
+    let _ = ct::sqrt::<FixedPoint>(ct::from_fixed(fp("-0.5")));
 }
 
 #[test]
 #[should_panic(expected = "outside the domain")]
 fn ln1p_at_minus_one_panics() {
-    let _ = ct::ln1p(ct::from_fixed(fp("-1")));
+    let _ = ct::ln1p::<FixedPoint>(ct::from_fixed(fp("-1")));
 }
 
 #[test]
@@ -240,16 +240,16 @@ fn exp_saturates_at_ceiling_never_wraps() {
     // at 30 fractional bits, where e^2 = 7.39 is below the compute range of 8
     // (it still exceeds the storage range of 2).
     let big = ct::from_fixed(FixedPoint::from_raw(g_math::fixed_point::imperative::BinaryStorage::MAX));
-    let sat = ct::exp(big);
+    let sat = ct::exp::<FixedPoint>(big);
     #[cfg(table_format = "q16_16")]
     let saturates = g_math::fixed_point::frac_config::FRAC_BITS < 30;
     #[cfg(not(table_format = "q16_16"))]
     let saturates = true;
     if saturates {
-        assert_eq!(cs_to_i128(sat), cs_to_i128(ct::ceiling()), "exp must saturate at ceiling()");
+        assert_eq!(cs_to_i128(sat), cs_to_i128(ct::ceiling::<FixedPoint>()), "exp must saturate at ceiling()");
     }
     // The saturated value must NOT silently convert to storage.
-    assert!(ct::try_to_fixed(sat).is_none(), "saturated exp must not fit storage");
+    assert!(ct::try_to_fixed::<FixedPoint>(sat).is_none(), "saturated exp must not fit storage");
 }
 
 #[test]
@@ -257,15 +257,15 @@ fn sigmoid_extremes_and_symmetry() {
     // Extremes pin to exactly 0 and 1 at the compute tier.
     if let Some(fifty) = fits("50") {
         let big = ct::from_fixed(fifty);
-        assert_eq!(cs_to_i128(ct::sigmoid(big)), cs_to_i128(ct::one()));
-        assert_eq!(cs_to_i128(ct::sigmoid(-big)), 0);
+        assert_eq!(cs_to_i128(ct::sigmoid::<FixedPoint>(big)), cs_to_i128(ct::one::<FixedPoint>()));
+        assert_eq!(cs_to_i128(ct::sigmoid::<FixedPoint>(-big)), 0);
     }
     // sigmoid(x) + sigmoid(-x) = 1, within 2 compute ULP.
     for s in ["0", "0.5", "2.5", "7"] {
         let Some(x) = fits(s) else { continue };
         let x = ct::from_fixed(x);
-        let sum = cs_to_i128(ct::sigmoid(x)) + cs_to_i128(ct::sigmoid(-x));
-        let diff = (sum - cs_to_i128(ct::one())).abs();
+        let sum = cs_to_i128(ct::sigmoid::<FixedPoint>(x)) + cs_to_i128(ct::sigmoid::<FixedPoint>(-x));
+        let diff = (sum - cs_to_i128(ct::one::<FixedPoint>())).abs();
         assert!(diff <= 2, "sigmoid symmetry off by {diff} compute ULP at x={s}");
     }
 }
@@ -276,7 +276,7 @@ fn softplus_difference_identity() {
     for s in ["0", "0.5", "2.5", "7"] {
         let Some(x) = fits(s) else { continue };
         let x = ct::from_fixed(x);
-        let d = cs_to_i128(ct::softplus(x)) - cs_to_i128(ct::softplus(-x));
+        let d = cs_to_i128(ct::softplus::<FixedPoint>(x)) - cs_to_i128(ct::softplus::<FixedPoint>(-x));
         let diff = (d - cs_to_i128(x)).abs();
         assert!(diff <= 2, "softplus identity off by {diff} compute ULP at x={s}");
     }

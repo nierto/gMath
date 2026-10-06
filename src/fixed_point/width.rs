@@ -18,6 +18,7 @@
 #![allow(dead_code)]
 
 use crate::fixed_point::core_types::errors::OverflowDetected;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::i256::mul_i128_to_i256;
 use crate::fixed_point::{I1024, I2048, I256, I512};
 
@@ -54,6 +55,10 @@ pub trait WideInt:
     /// Sign extension of a native integer (every word is at least 32 bits;
     /// the value must fit, which is the caller's contract on `i32`/`i64`).
     fn from_i64(v: i64) -> Self;
+    /// The value of an `i128`, which must fit (panics otherwise).
+    fn from_i128(v: i128) -> Self;
+    /// The value of an `i128` if it fits.
+    fn from_i128_checked(v: i128) -> Option<Self>;
     fn is_negative(self) -> bool;
     /// Significant bits of a NON-NEGATIVE value.
     fn bit_length(self) -> u32;
@@ -116,6 +121,8 @@ macro_rules! native_wide_int {
             #[inline] fn zero() -> Self { 0 }
             #[inline] fn one() -> Self { 1 }
             #[inline] fn from_i64(v: i64) -> Self { v as $t }
+            #[inline] fn from_i128(v: i128) -> Self { <$t>::try_from(v).expect("value exceeds the word") }
+            #[inline] fn from_i128_checked(v: i128) -> Option<Self> { <$t>::try_from(v).ok() }
             #[inline] fn is_negative(self) -> bool { self < 0 }
             #[inline] fn bit_length(self) -> u32 { $bits - self.leading_zeros() }
             #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { <$t>::checked_add(self, rhs) }
@@ -143,6 +150,8 @@ macro_rules! word_wide_int {
             #[inline] fn zero() -> Self { $t::zero() }
             #[inline] fn one() -> Self { $t::from_i128(1) }
             #[inline] fn from_i64(v: i64) -> Self { $t::from_i128(v as i128) }
+            #[inline] fn from_i128(v: i128) -> Self { $t::from_i128(v) }
+            #[inline] fn from_i128_checked(v: i128) -> Option<Self> { Some($t::from_i128(v)) }
             #[inline] fn is_negative(self) -> bool { $t::is_negative(self) }
             #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
             #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { $t::checked_add(self, rhs) }
@@ -208,6 +217,55 @@ pub trait Storage: WideInt {
     fn dot_acc_fast(_a: &[Self], _b: &[Self]) -> Option<Self::Compute> {
         None
     }
+
+    // The fused kernels' word-specific fast paths (hidden): the 32-bit word
+    // runs the softmax numerators on i64, the reciprocal root on u128 and
+    // the dot of many keys on AVX2; the 32- and 64-bit words gate through
+    // the Q64.64 sigmoid and entropy kernels. Each returns `None` (or
+    // `false`) where the word has no fast path and the generic body applies.
+
+    #[doc(hidden)]
+    fn mix_numerators_fast<'a, const F: u32>(_exps: &[Self::Compute], _row: &dyn Fn(usize) -> &'a [Self], _num: &mut [Self::Compute]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
+    #[doc(hidden)]
+    fn sigmoid_mul_fast<const F: u32>(_x: Self, _gate: Self) -> Option<Self>
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        None
+    }
+    #[doc(hidden)]
+    fn entropy_fast<const F: u32>(_weights: &[Self]) -> Option<Result<Self, OverflowDetected>>
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        None
+    }
+    #[doc(hidden)]
+    fn dot_many_into_fast<const F: u32>(_query: &[Self], _keys_flat: &[Self], _dim: usize, _out: &mut [Self]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
+    #[doc(hidden)]
+    fn rms_apply_in_place_fast<const F: u32>(_x: &mut [Self], _w: &[Self], _inv: Self::Compute, _shift: u32) -> Option<Result<(), OverflowDetected>>
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        None
+    }
+    #[doc(hidden)]
+    fn rms_reciprocal_fast<const F: u32>(_values: &[Self], _eps_q64: i128) -> Option<Result<(Self::Compute, u32), OverflowDetected>>
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        None
+    }
 }
 
 /// Storage words with a second exact accumulator, wide enough for the circle
@@ -268,6 +326,113 @@ impl Storage for i32 {
         use crate::fixed_point::imperative::linalg::{long_dot_acc_i32, BOUNDED_DOT_MIN_LEN};
         if a.len() < BOUNDED_DOT_MIN_LEN { None } else { long_dot_acc_i32(a, b) }
     }
+
+    fn mix_numerators_fast<'a, const F: u32>(exps: &[i64], row: &dyn Fn(usize) -> &'a [i32], num: &mut [i64]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        if F > 15 || exps.len() > 1usize << (31 - F) {
+            return false;
+        }
+        let round = 1i64 << (F - 1);
+        for (j, &e) in exps.iter().enumerate() {
+            let v = row(j);
+            for (n, &x) in num.iter_mut().zip(v) {
+                *n += (e * x as i64 + round) >> F;
+            }
+        }
+        true
+    }
+    fn sigmoid_mul_fast<const F: u32>(x: i32, gate: i32) -> Option<i32>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        let p = (x as i128) * gate_sigmoid_q64::<F>(gate as i128);
+        Some(((p >> 64) + ((p >> 63) & 1)) as i32)
+    }
+    fn entropy_fast<const F: u32>(weights: &[i32]) -> Option<Result<i32, OverflowDetected>>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        Some(entropy_q64::<F>(weights.iter().map(|&w| w as i128)).and_then(|r| i32::try_from(r).map_err(|_| OverflowDetected::TierOverflow)))
+    }
+    #[cfg(target_arch = "x86_64")]
+    fn dot_many_into_fast<const F: u32>(q: &[i32], keys_flat: &[i32], dim: usize, out: &mut [i32]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        use crate::fixed_point::imperative::linalg::{max_abs_avx2, unchecked_dot_avx2};
+        if !std::is_x86_feature_detected!("avx2") {
+            return false;
+        }
+        let q_max = unsafe { max_abs_avx2(q) };
+        if (dim as u128) * (q_max as u128) * (1u128 << 31) >= 1u128 << 63 {
+            return false;
+        }
+        for (o, key) in out.iter_mut().zip(keys_flat.chunks_exact(dim)) {
+            *o = crate::fixed_point::imperative::kernels::round_to_storage::<Fixed<i32, F>>(unsafe { unchecked_dot_avx2(q, key) });
+        }
+        true
+    }
+    #[inline]
+    fn rms_apply_in_place_fast<const F: u32>(x: &mut [i32], w: &[i32], inv: i64, shift: u32) -> Option<Result<(), OverflowDetected>>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        for (v, &w) in x.iter_mut().zip(w) {
+            let product = (*v as i64 * w as i64) as i128 * inv as i128;
+            let rounded = ((product >> (shift - 1)) + 1) >> 1;
+            match i32::try_from(rounded) {
+                Ok(r) => *v = r,
+                Err(_) => return Some(Err(OverflowDetected::TierOverflow)),
+            }
+        }
+        Some(Ok(()))
+    }
+    fn rms_reciprocal_fast<const F: u32>(values: &[i32], eps_q64: i128) -> Option<Result<(i64, u32), OverflowDetected>>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        const OVERFLOW: OverflowDetected = OverflowDetected::TierOverflow;
+        let n = values.len() as u128;
+        let mut sum_sq = 0u128;
+        for &v in values {
+            let raw = v as i64;
+            match sum_sq.checked_add((raw * raw) as u128) {
+                Some(s) => sum_sq = s,
+                None => return Some(Err(OVERFLOW)),
+            }
+        }
+        // T = n * (mean + eps) at Q64.64: the sum of squares (2F fraction bits)
+        // moved up to 64, plus n * eps
+        let up = 64 - 2 * F;
+        if sum_sq.leading_zeros() <= up + 1 {
+            return Some(Err(OVERFLOW));
+        }
+        let Some(n_eps) = i128::try_from(n).ok().and_then(|n| n.checked_mul(eps_q64)) else { return Some(Err(OVERFLOW)) };
+        let Some(total) = ((sum_sq << up) as i128).checked_add(n_eps) else { return Some(Err(OVERFLOW)) };
+        if total < 0 {
+            return Some(Err(OverflowDetected::DomainError));
+        }
+        if total == 0 {
+            return Some(Err(OverflowDetected::DivisionByZero));
+        }
+        // mean + eps = q / 2^(64 + t_shift); both shifts even so the root's
+        // exponent is whole
+        let total = total as u128;
+        let t_shift = total.leading_zeros() & !1;
+        let q = (total << t_shift) / n;
+        if q == 0 {
+            return Some(Err(OVERFLOW));
+        }
+        let q_shift = q.leading_zeros() & !1;
+        let root = (q << q_shift).isqrt(); // [2^63, 2^64): sqrt(mean + eps) * 2^half
+        let half = (64 + t_shift + q_shift) / 2;
+        let inv = ((1u128 << 125) / root) as i64; // 2^(125 - half) / sqrt(mean + eps)
+        // storage raw = x_raw * w_raw / 2^F * inv / 2^(125 - half)
+        // half <= 111 for any length below 2^32 (shift >= 16); refuse the rest
+        Some((125 + F).checked_sub(half).filter(|&shift| shift >= 1).map(|shift| (inv, shift)).ok_or(OVERFLOW))
+    }
 }
 impl CircleStorage for i32 {
     type Circle = I256; // 133 / 166 bits
@@ -291,6 +456,24 @@ impl Storage for i64 {
     #[inline]
     fn narrow_orient_to_compute(o: I256) -> Option<i128> {
         if o.fits_in_i128() { Some(o.as_i128()) } else { None }
+    }
+
+    fn sigmoid_mul_fast<const F: u32>(x: i64, gate: i64) -> Option<i64>
+    where
+        Fixed<i64, F>: FixedNum<Storage = i64>,
+    {
+        let p = crate::fixed_point::i256::mul_i128_to_i256(x as i128, gate_sigmoid_q64::<F>(gate as i128));
+        let mut q = p >> 64u32;
+        if p.words[0] >= 1u64 << 63 {
+            q = q + crate::fixed_point::I256::from_i128(1);
+        }
+        Some(q.as_i128() as i64)
+    }
+    fn entropy_fast<const F: u32>(weights: &[i64]) -> Option<Result<i64, OverflowDetected>>
+    where
+        Fixed<i64, F>: FixedNum<Storage = i64>,
+    {
+        Some(entropy_q64::<F>(weights.iter().map(|&w| w as i128)).and_then(|r| i64::try_from(r).map_err(|_| OverflowDetected::TierOverflow)))
     }
 }
 impl CircleStorage for i64 {
@@ -380,6 +563,36 @@ impl Storage for I512 {
         if o.fits_in_i1024() { Some(o.as_i1024()) } else { None }
     }
 }
+
+/// sigma(gate) at Q64.64 for a raw of F fraction bits (given as i128),
+/// through the wide kernel.
+#[inline]
+fn gate_sigmoid_q64<const F: u32>(gate: i128) -> i128 {
+    crate::fixed_point::wide::sigmoid_q64(gate << (64 - F))
+}
+
+/// -sum w ln w at Q64.64 for raws of F fraction bits (given as i128), the
+/// result at F fraction bits.
+fn entropy_q64<const F: u32>(weights: impl Iterator<Item = i128>) -> Result<i128, OverflowDetected> {
+    use crate::fixed_point::wide::{ln_q64, narrow_q64};
+    let mut sum: i128 = 0;
+    for w in weights {
+        let w_q64 = w << (64 - F);
+        if let Some(ln) = ln_q64(w_q64) {
+            let p = crate::fixed_point::i256::mul_i128_to_i256(w_q64, ln);
+            let mut term = p >> 64u32;
+            if p.words[0] >= 1u64 << 63 {
+                term = term + crate::fixed_point::I256::from_i128(1);
+            }
+            if !term.fits_in_i128() {
+                return Err(OverflowDetected::TierOverflow);
+            }
+            sum = sum.checked_add(term.as_i128()).ok_or(OverflowDetected::TierOverflow)?;
+        }
+    }
+    Ok(narrow_q64(sum.checked_neg().ok_or(OverflowDetected::TierOverflow)?, F))
+}
+
 
 #[cfg(test)]
 mod tests {

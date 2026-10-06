@@ -926,3 +926,79 @@ fn geometry_is_bit_identical_to_0_6_5() {
         t.report();
     }
 }
+
+// ---- fused kernels and the compute tier (width-types phase 4b) ------------
+
+#[test]
+fn fused_and_compute_tier_are_bit_identical_to_0_6_5() {
+    use g_math::fixed_point::compute_tier as nct;
+    use g_math::fixed_point::imperative::fused as nf;
+    use g_math_065::fixed_point::compute_tier as oct;
+    use g_math_065::fixed_point::imperative::fused as of;
+    silence_panics();
+    let n = count(80);
+    let mut rng = Rng(0xF05E_D001);
+    let t = |name: &'static str| Tally::new(name);
+    let (mut norms, mut soft, mut mix, mut gates, mut rms, mut ct) = (t("norms"), t("softmax/silu"), t("softmax_mix"), t("sigmoid_mul/entropy"), t("rms_norm"), t("compute_tier"));
+    for _ in 0..n {
+        let len = 1 + (rng.next() % 12) as usize;
+        let small = |rng: &mut Rng, k: usize, bits: u32| (0..k).map(|_| rng.raw(bits)).collect::<Vec<Raw>>();
+        let (a, b) = (small(&mut rng, len, FRAC + 2), small(&mut rng, len, FRAC + 2));
+        let (oa, na, ob, nb) = (old_vec(&a), new_vec(&a), old_vec(&b), new_vec(&b));
+        let (oas, obs, nas, nbs) = (oa.as_slice(), ob.as_slice(), na.as_slice(), nb.as_slice());
+        norms.check(value(|| raw::old_raw(of::sqrt_sum_sq(oas))), value(|| raw::new_raw(nf::sqrt_sum_sq(nas))), &a);
+        norms.check(value(|| raw::old_raw(of::inv_sqrt_sum_sq(oas))), value(|| raw::new_raw(nf::inv_sqrt_sum_sq(nas))), &a);
+        norms.check(value(|| raw::old_raw(of::euclidean_distance(oas, obs))), value(|| raw::new_raw(nf::euclidean_distance(nas, nbs))), &(&a, &b));
+        norms.check(value(|| raw::old_raw(of::euclidean_distance_squared(oas, obs))), value(|| raw::new_raw(nf::euclidean_distance_squared(nas, nbs))), &(&a, &b));
+        norms.check(value(|| raw::old_raw(of::dot(oas, obs))), value(|| raw::new_raw(nf::dot(nas, nbs))), &(&a, &b));
+        norms.check(value(|| raw::old_raw(of::mobius_denominator_sq(oas, obs))), value(|| raw::new_raw(nf::mobius_denominator_sq(nas, nbs))), &(&a, &b));
+        let m = small(&mut rng, len * len, FRAC);
+        norms.check(fallible(|| of::try_quadratic_form(&oa, &old_mat(len, len, &m)).map(raw::old_raw)), fallible(|| nf::try_quadratic_form(&na, &new_mat(len, len, &m)).map(raw::new_raw)), &(&a, &m));
+        norms.check(value(|| raw::old_raw(of::quadratic_form(&oa, &old_mat(len, len, &m)))), value(|| raw::new_raw(nf::quadratic_form(&na, &new_mat(len, len, &m)))), &(&a, &m));
+        norms.check(value(|| old_raws(&OldVector::from_slice(&of::dot_many(oas, &[obs, oas].concat(), len)))), value(|| new_raws(&NewVector::from_slice(&nf::dot_many(nas, &[nbs, nas].concat(), len)))), &(&a, &b));
+        // softmax, silu
+        let s = small(&mut rng, len, FRAC + 3);
+        let (os, ns) = (old_vec(&s), new_vec(&s));
+        soft.check(fallible(|| of::softmax(os.as_slice()).map(|v| old_raws(&OldVector::from_slice(&v)))), fallible(|| nf::softmax(ns.as_slice()).map(|v| new_raws(&NewVector::from_slice(&v)))), &s);
+        soft.check(value(|| raw::old_raw(of::silu(raw::old(s[0])))), value(|| raw::new_raw(nf::silu(raw::new(s[0])))), &s[0]);
+        let eps = rng.raw(FRAC - 4);
+        soft.check(fallible(|| of::rms_norm_factor(oas, raw::old(eps).abs_or_self()).map(raw::old_raw)), fallible(|| nf::rms_norm_factor(nas, raw::new(eps).abs_or_self()).map(raw::new_raw)), &(&a, eps));
+        let eps_q64 = (rng.next() as i128) << 20;
+        soft.check(fallible(|| of::rms_norm_factor_eps_wide(oas, eps_q64).map(raw::old_raw)), fallible(|| nf::rms_norm_factor_eps_wide(nas, eps_q64).map(raw::new_raw)), &(&a, eps_q64));
+        // softmax_mix over `len` rows of width `dim`
+        let dim = 1 + (rng.next() % 5) as usize;
+        let flat = small(&mut rng, len * dim, FRAC + 2);
+        let (oflat, nflat) = (old_vec(&flat), new_vec(&flat));
+        mix.check(
+            fallible(|| of::softmax_mix_flat(os.as_slice(), oflat.as_slice(), dim).map(|(o, w)| (old_raws(&OldVector::from_slice(&o)), old_raws(&OldVector::from_slice(&w))))),
+            fallible(|| nf::softmax_mix_flat(ns.as_slice(), nflat.as_slice(), dim).map(|(o, w)| (new_raws(&NewVector::from_slice(&o)), new_raws(&NewVector::from_slice(&w))))),
+            &(&s, &flat, dim),
+        );
+        let orows: Vec<&[Old]> = oflat.as_slice().chunks_exact(dim).collect();
+        let nrows: Vec<&[New]> = nflat.as_slice().chunks_exact(dim).collect();
+        mix.check(fallible(|| of::softmax_mix_values(os.as_slice(), &orows).map(|o| old_raws(&OldVector::from_slice(&o)))), fallible(|| nf::softmax_mix_values(ns.as_slice(), &nrows).map(|o| new_raws(&NewVector::from_slice(&o)))), &(&s, &flat, dim));
+        // sigmoid_mul, entropy
+        let g = small(&mut rng, len, FRAC + 3);
+        let (og, ng) = (old_vec(&g), new_vec(&g));
+        gates.check(value(|| old_raws(&OldVector::from_slice(&of::sigmoid_mul_slice(oas, og.as_slice())))), value(|| new_raws(&NewVector::from_slice(&nf::sigmoid_mul_slice(nas, ng.as_slice())))), &(&a, &g));
+        let w: Vec<Raw> = a.iter().map(|&r| r).collect();
+        let (ow, nw) = (OldVector::from_slice(&oa.as_slice().iter().map(|x| x.abs_or_self()).collect::<Vec<_>>()), NewVector::from_slice(&na.as_slice().iter().map(|x| x.abs_or_self()).collect::<Vec<_>>()));
+        gates.check(fallible(|| of::entropy(ow.as_slice()).map(raw::old_raw)), fallible(|| nf::entropy(nw.as_slice()).map(raw::new_raw)), &w);
+        // rms_norm
+        rms.check(fallible(|| of::rms_norm(oas, obs, eps_q64).map(|v| old_raws(&OldVector::from_slice(&v)))), fallible(|| nf::rms_norm(nas, nbs, eps_q64).map(|v| new_raws(&NewVector::from_slice(&v)))), &(&a, &b, eps_q64));
+        // compute tier (the compute words are different types per crate: compared as their Debug text)
+        let x = rng.raw(FRAC + 3);
+        let (ox, nx) = (oct::from_fixed(raw::old(x)), nct::from_fixed(raw::new(x)));
+        ct.check(value(|| format!("{:?}", oct::exp(ox))), value(|| format!("{:?}", nct::exp::<New>(nx))), &x);
+        ct.check(value(|| format!("{:?}", oct::sigmoid(ox))), value(|| format!("{:?}", nct::sigmoid::<New>(nx))), &x);
+        ct.check(value(|| format!("{:?}", oct::softplus(ox))), value(|| format!("{:?}", nct::softplus::<New>(nx))), &x);
+        ct.check(value(|| format!("{:?}", oct::sinhcosh(ox))), value(|| format!("{:?}", nct::sinhcosh::<New>(nx))), &x);
+        ct.check(value(|| format!("{:?}", oct::ln(ox))), value(|| format!("{:?}", nct::ln::<New>(nx))), &x);
+        ct.check(value(|| format!("{:?}", oct::sqrt(ox))), value(|| format!("{:?}", nct::sqrt::<New>(nx))), &x);
+        ct.check(value(|| format!("{:?}", oct::ln1p(ox))), value(|| format!("{:?}", nct::ln1p::<New>(nx))), &x);
+        ct.check(value(|| oct::try_to_fixed(oct::exp(ox)).map(raw::old_raw)), value(|| nct::try_to_fixed::<New>(nct::exp::<New>(nx)).map(raw::new_raw)), &x);
+    }
+    for t in [&norms, &soft, &mix, &gates, &rms, &ct] {
+        t.report();
+    }
+}

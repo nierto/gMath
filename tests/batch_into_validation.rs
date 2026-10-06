@@ -167,6 +167,6 @@ fn fused_forms_write_what_they_return() {
     }
     // empty scores: nothing is written
     let mut out = vec![FixedPoint::one(); 3];
-    fused::softmax_mix_flat_values_into(&[], &[], 3, &mut out).unwrap();
+    fused::softmax_mix_flat_values_into(&[] as &[FixedPoint], &[], 3, &mut out).unwrap();
     assert_eq!(out, vec![FixedPoint::one(); 3]);
 }

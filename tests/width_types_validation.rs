@@ -433,3 +433,52 @@ fn geometry_runs_at_every_width() {
     geometry_identities::<I256, 128>();
     geometry_identities::<I512, 256>();
 }
+
+// ---- fused kernels and the compute tier at every width (phase 4b) ----------
+
+use g_math::fixed_point::compute_tier;
+use g_math::fixed_point::imperative::fused;
+
+/// Identities that hold at every width: sqrt_sum_sq([3, 4]) = 5 exactly,
+/// the softmax of equal scores sums to one within n units, silu(0) = 0,
+/// sigmoid_mul(x, 0) = x / 2 within a unit, the rms factor of ones with no
+/// eps is one, the entropy of a one-hot is zero, dot_many agrees with dot,
+/// the quadratic form with the identity is the squared norm, and exp(0) at
+/// the compute tier is one.
+fn fused_identities<S: Storage, const F: u32>()
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    let q = |n: i32| dyadic::<S, F>(n); // n / 256
+    let ulp = Fixed::<S, F>::from_raw(S::one());
+    let units = |x: Fixed<S, F>, want: Fixed<S, F>| ((x - want).abs() / ulp).to_int();
+    assert_eq!(fused::sqrt_sum_sq(&[v(3), v(4)]), v(5), "sqrt_sum_sq at F={F}");
+    assert_eq!(fused::euclidean_distance(&[v(1), v(2)], &[v(4), v(6)]), v(5), "euclidean_distance at F={F}");
+    let soft = fused::softmax(&[q(10), q(10), q(10), q(10)]).unwrap();
+    let sum = soft.iter().fold(v(0), |s, &x| s + x);
+    assert!(units(sum, v(1)) <= 4, "softmax sum at F={F}: {} units", units(sum, v(1)));
+    assert_eq!(fused::silu(v(0)), v(0), "silu(0) at F={F}");
+    let half = fused::sigmoid_mul(q(200), v(0));
+    assert!(units(half, q(100)) <= 1, "sigmoid_mul(x, 0) at F={F}: {} units", units(half, q(100)));
+    assert_eq!(fused::rms_norm_factor(&[v(1), v(1), v(1), v(1)], v(0)).unwrap(), v(1), "rms factor at F={F}");
+    assert_eq!(fused::entropy(&[v(1), v(0), v(0)]).unwrap(), v(0), "entropy of a one-hot at F={F}");
+    let (qv, k) = ([q(3), q(-5), q(7)], [q(1), q(2), q(3), q(-4), q(5), q(-6)]);
+    let many = fused::dot_many(&qv, &k, 3);
+    assert_eq!(many, vec![fused::dot(&qv, &k[..3]), fused::dot(&qv, &k[3..])], "dot_many at F={F}");
+    let vec = FixedVector::from_slice(&[q(3), q(-5), q(7)]);
+    assert_eq!(fused::quadratic_form(&vec, &FixedMatrix::identity(3)), fused::dot(&qv, &qv), "quadratic form at F={F}");
+    assert_eq!(compute_tier::exp::<Fixed<S, F>>(compute_tier::from_fixed(v(0))), compute_tier::one::<Fixed<S, F>>(), "compute_tier exp(0) at F={F}");
+    assert_eq!(compute_tier::to_fixed::<Fixed<S, F>>(compute_tier::sqrt::<Fixed<S, F>>(compute_tier::from_fixed(v(9)))), v(3), "compute_tier sqrt(9) at F={F}");
+}
+
+#[test]
+fn fused_kernels_run_at_every_width() {
+    fused_identities::<i32, 10>();
+    fused_identities::<i32, 16>();
+    fused_identities::<i32, 24>();
+    fused_identities::<i64, 32>();
+    fused_identities::<i128, 64>();
+    fused_identities::<I256, 128>();
+    fused_identities::<I512, 256>();
+}

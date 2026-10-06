@@ -131,11 +131,7 @@ pub(crate) fn narrow_triple_floor(a: acc::Orient) -> Result<BinaryStorage, Overf
 pub(crate) fn narrow_triple_ceil(a: acc::Orient) -> Result<BinaryStorage, OverflowDetected> {
     super::kernels::narrow_triple_ceil::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
-
-/// Narrow a `3F`-scaled exact value to the storage scale, rounding to nearest
-/// with ties toward positive infinity: floor plus the round bit, the binary
-/// house rule, on every profile. The bump is checked.
-#[inline]
+#[cfg(test)]
 pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, OverflowDetected> {
     super::kernels::narrow_triple_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(a)
 }
@@ -143,16 +139,6 @@ pub(crate) fn narrow_triple_nearest(a: acc::Orient) -> Result<BinaryStorage, Ove
 #[cfg(test)]
 pub(crate) fn divide_to_storage_nearest(num: acc::Orient, den: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
     super::kernels::divide_to_storage_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(num, den)
-}
-
-/// `a / 2^shift` rounded to nearest with ties toward positive infinity (floor
-/// plus the round bit), narrowed to storage (checked). For an exact product
-/// whose scale carries a power-of-two normalisation, so the shift is not one
-/// of the fixed `2F` or `3F`. (Realtime does the same on a plain `i128` in
-/// `fused`.)
-#[cfg(not(table_format = "q16_16"))]
-pub(crate) fn narrow_shifted_nearest(a: acc::Orient, shift: u32) -> Result<BinaryStorage, OverflowDetected> {
-    super::kernels::narrow_shifted_nearest::<crate::fixed_point::fixed_num::ProfileFormat>(a, shift)
 }
 #[cfg(test)]
 mod tests {

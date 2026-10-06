@@ -426,7 +426,7 @@ fn rms_norm_eps_wide_is_invisible_on_the_healthy_path() {
                 fused::rms_norm_factor(v, eps).unwrap());
         }
     }
-    assert_eq!(fused::rms_norm_factor_eps_wide(&[], 1), Err(OverflowDetected::DivisionByZero));
+    assert_eq!(fused::rms_norm_factor_eps_wide(&[] as &[FixedPoint], 1), Err(OverflowDetected::DivisionByZero));
 }
 
 #[test]

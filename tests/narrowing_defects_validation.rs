@@ -434,21 +434,21 @@ fn to_int_beyond_i32_panics() {
 fn compute_divide_rounds_to_nearest() {
     use g_math::compute_tier::{exp, one, sigmoid, COMPUTE_FRAC_BITS};
     let nearest = |n: i128, d: i128| (2 * n + d).div_euclid(2 * d);
-    let one = one();
+    let one = one::<FixedPoint>();
     let mut differs = 0;
     for k in 0..400i64 {
         // x from 0 to about 8 in uneven steps
         let x = k * (one / 50) + k * k;
         for x in [x, -x] {
             let (n, d) = if x >= 0 {
-                let e = exp(-x) as i128;
+                let e = exp::<FixedPoint>(-x) as i128;
                 ((one as i128) << COMPUTE_FRAC_BITS, one as i128 + e)
             } else {
-                let e = exp(x) as i128;
+                let e = exp::<FixedPoint>(x) as i128;
                 (e << COMPUTE_FRAC_BITS, one as i128 + e)
             };
             let expected = nearest(n, d);
-            assert_eq!(sigmoid(x) as i128, expected, "sigmoid raw {x}");
+            assert_eq!(sigmoid::<FixedPoint>(x) as i128, expected, "sigmoid raw {x}");
             if expected != n / d { differs += 1; }
         }
     }

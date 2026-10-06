@@ -436,16 +436,6 @@ pub(super) fn symbolic_wide_to_compute_storage(
 // ============================================================================
 // COMPUTE-TIER ARITHMETIC HELPERS
 // ============================================================================
-
-/// Add two compute-tier values
-#[inline]
-pub(crate) fn compute_add(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    // checked: a sum beyond the compute tier panics instead of wrapping
-    // (before 0.6.4 it wrapped silently in release builds);
-    // compute_checked_add returns the error instead
-    a.checked_add(b).expect("compute tier: addition overflow")
-}
-
 /// Add two compute-tier values, detecting signed overflow instead of wrapping.
 ///
 /// `compute_add` wraps silently (native ints in release, schoolbook wrap on the
@@ -475,16 +465,6 @@ pub(crate) fn compute_checked_negate(a: ComputeStorage) -> Result<ComputeStorage
     #[cfg(table_format = "q256_256")]
     { if a == I1024::min_value() { Err(OverflowDetected::TierOverflow) } else { Ok(-a) } }
 }
-
-/// The compute tier's maximum value: the ceiling that saturating downscales
-/// (`downscale_q64_to_q32`) and the exp overflow sentinel land on. Consumers
-/// that would add to a ceiling value (tanh/cosh denominators) check against
-/// this to fail loud instead of wrapping.
-#[inline]
-pub(crate) fn compute_ceiling() -> ComputeStorage {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::compute_ceiling()
-}
-
 /// True when an exp engine result sits at its overflow sentinel.
 ///
 /// The sentinel differs by profile: the q16_16/q32_32/q256_256 engines
@@ -498,39 +478,6 @@ pub(crate) fn compute_ceiling() -> ComputeStorage {
 pub(crate) fn exp_sentinel_reached(v: &ComputeStorage) -> bool {
     <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::exp_sentinel_reached(v)
 }
-
-/// Subtract two compute-tier values
-#[inline]
-pub(crate) fn compute_subtract(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    // checked like compute_add
-    #[cfg(not(table_format = "q256_256"))]
-    { a.checked_sub(b).expect("compute tier: subtraction overflow") }
-    #[cfg(table_format = "q256_256")]
-    { a.checked_add(compute_negate(b)).expect("compute tier: subtraction overflow") }
-}
-
-/// Negate a compute-tier value
-#[inline]
-pub(crate) fn compute_negate(a: ComputeStorage) -> ComputeStorage {
-    // the compute-tier minimum has no positive twin: panic, never wrap
-    #[cfg(not(table_format = "q256_256"))]
-    { a.checked_neg().expect("compute tier: negation overflow") }
-    #[cfg(table_format = "q256_256")]
-    {
-        assert!(a != I1024::min_value(), "compute tier: negation overflow");
-        -a
-    }
-}
-
-/// Multiply two compute-tier values (needs double-width intermediate).
-///
-/// Rounded to nearest from the exact product and range-checked: a product
-/// beyond the compute tier panics (before 0.6.4 every arm narrowed with an
-/// unchecked cast). In-range results are unchanged.
-pub(crate) fn compute_multiply(a: ComputeStorage, b: ComputeStorage) -> ComputeStorage {
-    compute_checked_multiply(a, b).expect("compute tier: multiplication overflow")
-}
-
 /// `a * b` at the compute tier, rounded to nearest from the exact product;
 /// `Err(TierOverflow)` when it leaves the compute tier.
 pub(crate) fn compute_checked_multiply(a: ComputeStorage, b: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
@@ -572,13 +519,6 @@ pub(crate) fn compute_halve(a: ComputeStorage) -> ComputeStorage {
 pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
     <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::make_compute_int(n)
 }
-/// `c / n` for a count `n > 0`, rounded to nearest (ties toward +infinity)
-/// as `compute_divide(c, make_compute_int(n))`, without making `n` a
-/// compute-tier value (on realtime the tier holds only +-2^(63 - 2F)).
-pub(crate) fn compute_div_count(c: ComputeStorage, n: usize) -> Result<ComputeStorage, OverflowDetected> {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::compute_div_count(c, n)
-}
-
 /// Check if a compute-tier value is zero
 #[inline]
 pub(crate) fn compute_is_zero(a: &ComputeStorage) -> bool {
@@ -661,16 +601,6 @@ pub(super) fn atan_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
 pub(super) fn atan2_at_compute_tier(y: ComputeStorage, x: ComputeStorage) -> ComputeStorage {
     <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::atan2_at_compute_tier(y, x)
 }
-
-/// Compute exp at compute tier (tier N+1): free function variant.
-///
-/// Returns ComputeStorage directly (no StackValue wrapping).
-/// Used by fused operations that need exp without evaluator context.
-#[inline]
-pub(crate) fn exp_at_compute_tier(x: ComputeStorage) -> ComputeStorage {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::exp_at_compute_tier(x)
-}
-
 /// Compute sqrt at compute tier (tier N+1)
 #[inline]
 pub(crate) fn sqrt_at_compute_tier(x: ComputeStorage) -> ComputeStorage {

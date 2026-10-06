@@ -349,9 +349,23 @@ let v = evaluate::<Q64_64>(&e)?;          // or: let v: StackValue<Q64_64> = eva
 - **Interval, predicates**: generic over `T`. `incircle`/`insphere` require
   `T::Storage: Storage<Circle = Acc>`; on Q256.256 they are absent by trait bound
   (a compile error naming the reason) instead of by cfg.
-- **compute_tier, wide**: `compute_tier` becomes methods on `T::Compute` through
-  `FixedNum`. `wide` (Q64.64 kernels at native precision) stays as is; it was
-  already profile-independent.
+- **compute_tier, wide** (phase 4b, done): `compute_tier` keeps its free
+  functions, generic over the format: `exp::<T>(x)`, `sigmoid::<T>(x)`,
+  `to_fixed::<T>(x)` on `Compute<T>` raws, `from_fixed(x)` inferring the
+  format from its argument. `wide` (Q64.64 kernels at native precision)
+  stays as is; it was already profile-independent.
+- **fused** (phase 4b, done): every kernel generic over `Fixed<S, F>`. The
+  word-specific fast paths (the i64 softmax numerators at F <= 15, the u128
+  reciprocal root, the AVX2 dot of many keys, the Q64.64 sigmoid and
+  entropy gates on the 32- and 64-bit words) are hidden methods of
+  `Storage` with `None`/`false` defaults, so a kernel asks the word for its
+  fast path and takes the generic body otherwise. They work on raw slices
+  and are generic over the split, which keeps the arithmetic of 0.6.7 to
+  the bit. A per-element hook returning `Option<Result<..>>` cost
+  `rms_norm` 5 to 7 percent (the enum per element again, as with the add
+  operator); the hook runs over the slice instead and `rms_norm` is 12
+  percent faster than 0.6.7.
+
 - **tq19 and the inference module**: today the 32- and 64-bit profiles only, AVX2
   kernels on 32 only. They become generic over `Fixed<i32, F>` and
   `Fixed<i64, 32>`; the AVX2 kernels work on any `F` because they operate on
@@ -391,7 +405,7 @@ generic code, while new tests exercise all widths in one build.
 | 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
-| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b), Interval, predicates (4c), tq19 (4d) | differential gate, certified-geometry gates |
+| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c), tq19 (4d) | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |
