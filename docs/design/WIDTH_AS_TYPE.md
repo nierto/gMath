@@ -331,6 +331,33 @@ let v = evaluate::<Q64_64>(&e)?;          // or: let v: StackValue<Q64_64> = eva
   width-specific `StackValue::Decimal`.
 - Mode routing (`set_gmath_mode`) is width-independent and unchanged.
 
+Refined for the build (2026-10-06, after phase 4), in three sub-phases:
+
+- **5a, the format's arms as a trait.** Every profile arm in the evaluator
+  (decimal digit budgets, tier-raw widenings and narrowings, the literal
+  parser's ranges, the decimal formatter, the compute-tier conversions of
+  decimal values, the integer and halving helpers) becomes a method or
+  constant of a crate-private trait `FascFormat: FixedNum`, with one impl
+  per format produced by the cfg-specialiser (arms transplanted, not
+  retyped); the old functions delegate through `ProfileFormat`. Zero
+  behaviour change; gate = the full suite per profile.
+- **5b, the typed value and the per-word evaluator.** The evaluator's
+  buffer holds `RawValue<S>` (tier, word, shadow: the payload depends on
+  the storage word only), so one `thread_local!` per word serves all its
+  splits; the public `StackValue<T>` is `RawValue<T::Storage>` with the
+  format as a phantom, so a result of one format cannot enter a tree of
+  another. `LazyExpr<T>`, `StackEvaluator<S>` whose methods take `F` as a
+  const parameter, `Storage::with_evaluator`. The generic entry points are
+  `evaluate_in::<T>`, `gmath_parse_in::<T>`, ... while the profile-bound
+  `evaluate`, `gmath_parse` keep their names until phase 7 (then the
+  generic forms take the names). Gates: full suite, a differential FASC
+  corpus against 0.6.7 (expression strings evaluated in both), all-widths
+  FASC identities.
+- **5c, the matrix layer and the last scalar methods.** `DomainMatrix<T>`,
+  `LazyMatrixExpr<T>`, `evaluate_matrix_in`, `evaluate_sincos_in`; the
+  `gmath!` helpers emit exact decimal values; `from_str`, `Display`,
+  `try_pow`, `try_atan2` on every `Fixed<S, F>` through `evaluate_in`.
+
 ## 8. Other modules
 
 - **DecimalFixed<D>**: arithmetic is already profile-independent (i128 storage,
