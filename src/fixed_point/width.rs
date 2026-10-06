@@ -82,6 +82,8 @@ pub trait WideInt:
     /// integers: the quotient toward zero, the remainder with the dividend's
     /// sign. Panics on a zero divisor.
     fn divmod(self, d: Self) -> (Self, Self);
+    /// The integer square root of a non-negative value (the largest k with k * k <= self).
+    fn isqrt(self) -> Self;
 
     #[inline]
     fn mul_exact(self, rhs: Self) -> Self {
@@ -134,6 +136,7 @@ macro_rules! native_wide_int {
             #[inline] fn low_bits_any(self, n: u32) -> bool { n > 0 && (self as $u) & (<$u>::MAX >> ($bits - n)) != 0 }
             #[inline] fn magnitude_bit_length(self) -> u32 { $bits - self.unsigned_abs().leading_zeros() }
             #[inline] fn divmod(self, d: Self) -> (Self, Self) { (self / d, self % d) }
+            #[inline] fn isqrt(self) -> Self { debug_assert!(self >= 0); (self as $u).isqrt() as $t }
         }
     };
 }
@@ -172,6 +175,19 @@ macro_rules! word_wide_int {
                 words_bit_length(&m.words)
             }
             #[inline] fn divmod(self, d: Self) -> (Self, Self) { $divmod(self, d) }
+            #[inline]
+            fn isqrt(self) -> Self {
+                // Newton from 2^ceil(bits / 2), monotone until it stops decreasing
+                debug_assert!(!self.is_negative());
+                if self == Self::ZERO { return self; }
+                let bits = self.bit_length();
+                let mut k = Self::one().shl_bits((bits + 1) / 2);
+                loop {
+                    let next = (k + self.divmod(k).0).shr_bits(1);
+                    if next >= k { return k; }
+                    k = next;
+                }
+            }
         }
     };
 }

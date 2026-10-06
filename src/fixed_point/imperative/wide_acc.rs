@@ -37,15 +37,8 @@ use crate::fixed_point::width::Storage;
 pub(crate) mod acc {
     use super::BinaryStorage;
     use crate::fixed_point::width::Storage;
-    #[cfg(not(table_format = "q256_256"))]
-    use crate::fixed_point::width::CircleStorage;
 
     pub type Orient = <BinaryStorage as Storage>::Orient;
-    #[cfg(not(table_format = "q256_256"))]
-    pub type Circle = <BinaryStorage as CircleStorage>::Circle;
-    #[inline] pub fn orient(v: BinaryStorage) -> Orient { Storage::orient(v) }
-    #[cfg(not(table_format = "q256_256"))]
-    #[inline] pub fn circle(v: BinaryStorage) -> Circle { CircleStorage::circle(v) }
 }
 
 // ============================================================================

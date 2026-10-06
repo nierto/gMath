@@ -1002,3 +1002,76 @@ fn fused_and_compute_tier_are_bit_identical_to_0_6_5() {
         t.report();
     }
 }
+
+// ---- the certified interval and the exact predicates (width-types phase 4c) --
+
+#[test]
+fn intervals_and_predicates_are_bit_identical_to_0_6_5() {
+    use g_math::fixed_point::imperative::predicates as np;
+    use g_math::fixed_point::Interval as NI;
+    use g_math_065::fixed_point::imperative::predicates as op;
+    use g_math_065::fixed_point::Interval as OI;
+    silence_panics();
+    let n = count(100);
+    let mut rng = Rng(0x1A7E_0001);
+    let t = |name: &'static str| Tally::new(name);
+    let (mut iv, mut sq, mut dots, mut ori, mut pd) = (t("interval ops"), t("interval sqrt"), t("interval dot/qf"), t("orientation"), t("pd_verdict"));
+    let oiv = |r: &[Raw]| OI::new(raw::old(r[0]).min(raw::old(r[1])), raw::old(r[0]).max(raw::old(r[1])));
+    let niv = |r: &[Raw]| NI::new(raw::new(r[0]).min(raw::new(r[1])), raw::new(r[0]).max(raw::new(r[1])));
+    let oraws = |i: OI| (raw::old_raw(i.lo()), raw::old_raw(i.hi()));
+    let nraws = |i: NI| (raw::new_raw(i.lo()), raw::new_raw(i.hi()));
+    for _ in 0..n {
+        let small = |rng: &mut Rng, k: usize, bits: u32| (0..k).map(|_| rng.raw(bits)).collect::<Vec<Raw>>();
+        let (a, b) = (small(&mut rng, 2, FRAC + 4), small(&mut rng, 2, FRAC + 4));
+        let (oa, ob, na, nb) = (oiv(&a), oiv(&b), niv(&a), niv(&b));
+        iv.check(fallible(|| oa.try_add(ob).map(oraws)), fallible(|| na.try_add(nb).map(nraws)), &(&a, &b));
+        iv.check(fallible(|| oa.try_sub(ob).map(oraws)), fallible(|| na.try_sub(nb).map(nraws)), &(&a, &b));
+        iv.check(fallible(|| oa.try_mul(ob).map(oraws)), fallible(|| na.try_mul(nb).map(nraws)), &(&a, &b));
+        iv.check(fallible(|| oa.try_div(ob).map(oraws)), fallible(|| na.try_div(nb).map(nraws)), &(&a, &b));
+        iv.check(fallible(|| oa.try_neg().map(oraws)), fallible(|| na.try_neg().map(nraws)), &a);
+        iv.check(value(|| oraws(oa * ob)), value(|| nraws(na * nb)), &(&a, &b));
+        sq.check(fallible(|| oa.try_sqrt().map(oraws)), fallible(|| na.try_sqrt().map(nraws)), &a);
+        let (oab, nab) = (
+            OI::new(raw::old(a[0]).abs_or_self().min(raw::old(a[1]).abs_or_self()), raw::old(a[0]).abs_or_self().max(raw::old(a[1]).abs_or_self())),
+            NI::new(raw::new(a[0]).abs_or_self().min(raw::new(a[1]).abs_or_self()), raw::new(a[0]).abs_or_self().max(raw::new(a[1]).abs_or_self())),
+        );
+        sq.check(fallible(|| oab.try_sqrt().map(oraws)), fallible(|| nab.try_sqrt().map(nraws)), &a);
+        let (p, q) = (small(&mut rng, 4, FRAC + 2), small(&mut rng, 4, FRAC + 2));
+        let (op_, oq, np_, nq) = (old_vec(&p), old_vec(&q), new_vec(&p), new_vec(&q));
+        dots.check(fallible(|| OI::try_dot(op_.as_slice(), oq.as_slice()).map(oraws)), fallible(|| NI::try_dot(np_.as_slice(), nq.as_slice()).map(nraws)), &(&p, &q));
+        let (opi, npi): (Vec<OI>, Vec<NI>) = (p.chunks(2).map(oiv).collect(), p.chunks(2).map(niv).collect());
+        let (oqi, nqi): (Vec<OI>, Vec<NI>) = (q.chunks(2).map(oiv).collect(), q.chunks(2).map(niv).collect());
+        dots.check(fallible(|| OI::try_dot_intervals(&opi, &oqi).map(oraws)), fallible(|| NI::try_dot_intervals(&npi, &nqi).map(nraws)), &(&p, &q));
+        let m = small(&mut rng, 16, FRAC);
+        dots.check(fallible(|| OI::try_quadratic_form(&op_, &old_mat(4, 4, &m)).map(oraws)), fallible(|| NI::try_quadratic_form(&np_, &new_mat(4, 4, &m)).map(nraws)), &(&p, &m));
+        // orientation predicates on random points (collinear cases from duplicated coordinates)
+        let pts = small(&mut rng, 12, FRAC + 3);
+        let pt2 = |r: &[Raw]| ([raw::old(r[0]), raw::old(r[1])], [raw::new(r[0]), raw::new(r[1])]);
+        let pt3 = |r: &[Raw]| ([raw::old(r[0]), raw::old(r[1]), raw::old(r[2])], [raw::new(r[0]), raw::new(r[1]), raw::new(r[2])]);
+        let ((oa2, na2), (ob2, nb2), (oc2, nc2), (od2, nd2)) = (pt2(&pts[0..2]), pt2(&pts[2..4]), pt2(&pts[4..6]), pt2(&pts[0..2]));
+        ori.check(value(|| format!("{:?}", op::orient2d(oa2, ob2, oc2))), value(|| format!("{:?}", np::orient2d(na2, nb2, nc2))), &pts);
+        ori.check(value(|| format!("{:?}", op::orient2d(oa2, ob2, od2))), value(|| format!("{:?}", np::orient2d(na2, nb2, nd2))), &pts);
+        let ((oa3, na3), (ob3, nb3), (oc3, nc3), (od3, nd3)) = (pt3(&pts[0..3]), pt3(&pts[3..6]), pt3(&pts[6..9]), pt3(&pts[9..12]));
+        ori.check(value(|| format!("{:?}", op::orient3d(oa3, ob3, oc3, od3))), value(|| format!("{:?}", np::orient3d(na3, nb3, nc3, nd3))), &pts);
+        #[cfg(not(table_format = "q256_256"))]
+        {
+            let ((oe2, ne2), (of2, nf2)) = (pt2(&pts[6..8]), pt2(&pts[8..10]));
+            ori.check(value(|| format!("{:?}", op::incircle(oa2, ob2, oc2, oe2))), value(|| format!("{:?}", np::incircle(na2, nb2, nc2, ne2))), &pts);
+            ori.check(value(|| format!("{:?}", op::incircle(oa2, ob2, oe2, of2))), value(|| format!("{:?}", np::incircle(na2, nb2, ne2, nf2))), &pts);
+            let (oe3, ne3) = pt3(&pts[1..4]);
+            ori.check(value(|| format!("{:?}", op::insphere(oa3, ob3, oc3, od3, oe3))), value(|| format!("{:?}", np::insphere(na3, nb3, nc3, nd3, ne3))), &pts);
+        }
+        // definiteness of M^T M + c I and of a shifted copy
+        let mm = small(&mut rng, 9, FRAC - 1);
+        let (om, nm) = (old_mat(3, 3, &mm), new_mat(3, 3, &mm));
+        let (ospd, nspd) = (&(&om.transpose() * &om) + &OldMatrix::identity(3), &(&nm.transpose() * &nm) + &NewMatrix::<New>::identity(3));
+        let (onot, nnot) = (&(&om.transpose() * &om) - &OldMatrix::identity(3), &(&nm.transpose() * &nm) - &NewMatrix::<New>::identity(3));
+        let overdict = |v: Result<op::PdVerdict, _>| v.map(|v| format!("{v:?}"));
+        let nverdict = |v: Result<np::PdVerdict, _>| v.map(|v| format!("{v:?}"));
+        pd.check(fallible(|| overdict(op::pd_verdict(&ospd))), fallible(|| nverdict(np::pd_verdict(&nspd))), &mm);
+        pd.check(fallible(|| overdict(op::pd_verdict(&onot))), fallible(|| nverdict(np::pd_verdict(&nnot))), &mm);
+    }
+    for t in [&iv, &sq, &dots, &ori, &pd] {
+        t.report();
+    }
+}

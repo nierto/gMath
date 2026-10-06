@@ -346,9 +346,15 @@ let v = evaluate::<Q64_64>(&e)?;          // or: let v: StackValue<Q64_64> = eva
   (`Tensor<T = FixedPoint>`, `OdePoint<T>`, `Moebius<T>`, `VectorBundle<T>`,
   ...), structs that hold only dimensions unchanged (`Sphere`, `SO3`, ...)
   with width-generic methods.
-- **Interval, predicates**: generic over `T`. `incircle`/`insphere` require
-  `T::Storage: Storage<Circle = Acc>`; on Q256.256 they are absent by trait bound
-  (a compile error naming the reason) instead of by cfg.
+- **Interval, predicates** (phase 4c, done): `Interval<T = FixedPoint>`,
+  `PdVerdict<T>`, the predicates generic over the format. `incircle` and
+  `insphere` are bounded by `S: CircleStorage`, so on Q256.256 they are
+  absent by trait bound (a compile error naming the reason) instead of by
+  cfg. The directed division, the certified square root (now on
+  `WideInt::isqrt`, Newton on the word types, the native `isqrt` on the
+  primitives) and the storage-unit constants are functions of the word
+  and the split. The profile-bound accumulator module survives only as
+  the reference of its own tests.
 - **compute_tier, wide** (phase 4b, done): `compute_tier` keeps its free
   functions, generic over the format: `exp::<T>(x)`, `sigmoid::<T>(x)`,
   `to_fixed::<T>(x)` on `Compute<T>` raws, `from_fixed(x)` inferring the
@@ -405,7 +411,7 @@ generic code, while new tests exercise all widths in one build.
 | 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
-| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c), tq19 (4d) | differential gate, certified-geometry gates |
+| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d) | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |

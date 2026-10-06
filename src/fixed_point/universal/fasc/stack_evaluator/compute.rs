@@ -31,31 +31,6 @@ pub(crate) fn upscale_to_compute(val: BinaryStorage) -> ComputeStorage {
 pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
     <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::downscale_to_storage(val)
 }
-
-/// Downscale from compute tier to storage tier rounding toward negative
-/// infinity (floor).
-///
-/// The arithmetic right shift IS floor in two's complement, so this is
-/// `downscale_to_storage` without its round-bit bump. Fits-checked the same
-/// way. Used for the lower endpoint of certified intervals; never on a scalar
-/// path, which keeps the one-rounding-rule-per-domain contract intact.
-#[inline]
-pub(crate) fn downscale_to_storage_floor(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::downscale_to_storage_floor(val)
-}
-
-/// Downscale from compute tier to storage tier rounding toward positive
-/// infinity (ceil).
-///
-/// Floor plus one whenever any discarded bit is set. The bump is checked:
-/// a value whose floor is exactly the storage maximum has no ceiling in the
-/// storage tier, and that is a `TierOverflow`, not a wrap. Used for the upper
-/// endpoint of certified intervals.
-#[inline]
-pub(crate) fn downscale_to_storage_ceil(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::downscale_to_storage_ceil(val)
-}
-
 /// Convert a Decimal StackValue directly to ComputeStorage at full compute-tier precision.
 ///
 /// This avoids the precision loss of going through BinaryStorage first.

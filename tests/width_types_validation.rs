@@ -482,3 +482,59 @@ fn fused_kernels_run_at_every_width() {
     fused_identities::<I256, 128>();
     fused_identities::<I512, 256>();
 }
+
+// ---- the certified interval and the exact predicates at every width (phase 4c)
+
+use g_math::fixed_point::imperative::predicates::{orient2d, orient3d, pd_verdict, PdVerdict, Sign};
+use g_math::fixed_point::{CircleStorage, Interval};
+
+/// Identities at every width: [1, 2] * [3, 4] = [3, 8] exactly, sqrt([4, 9])
+/// = [2, 3], 1/3 encloses its nearest rounding with width one unit, a
+/// counterclockwise triangle is positive and a collinear one zero, the
+/// tetrahedron sign, and the identity is proven positive definite.
+fn certified_identities<S: Storage, const F: u32>()
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    let ulp = Fixed::<S, F>::from_raw(S::one());
+    assert_eq!(Interval::new(v(1), v(2)) * Interval::new(v(3), v(4)), Interval::new(v(3), v(8)), "interval product at F={F}");
+    assert_eq!(Interval::new(v(4), v(9)).sqrt(), Interval::new(v(2), v(3)), "interval sqrt at F={F}");
+    let third = Interval::point(v(1)) / Interval::point(v(3));
+    assert_eq!(third.width(), ulp, "1/3 enclosure width at F={F}");
+    assert!(third.contains(v(1) / v(3)), "1/3 enclosure at F={F}");
+    assert_eq!(orient2d([v(0), v(0)], [v(1), v(0)], [v(0), v(1)]), Sign::Positive, "orient2d at F={F}");
+    assert_eq!(orient2d([v(0), v(0)], [v(1), v(1)], [v(2), v(2)]), Sign::Zero, "collinear at F={F}");
+    assert_eq!(orient3d([v(0), v(0), v(0)], [v(1), v(0), v(0)], [v(0), v(1), v(0)], [v(0), v(0), v(1)]), Sign::Negative, "orient3d at F={F}");
+    assert_eq!(pd_verdict(&FixedMatrix::<Fixed<S, F>>::identity(3)).unwrap(), PdVerdict::PositiveDefinite, "pd_verdict at F={F}");
+}
+
+fn circle_identities<S: CircleStorage, const F: u32>()
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    use g_math::fixed_point::imperative::predicates::{incircle, insphere};
+    let v = |n: i32| Fixed::<S, F>::from_int(n);
+    // the unit circle through (1,0), (0,1), (-1,0): the origin inside, (2,0) outside, (0,-1) on it
+    assert_eq!(incircle([v(1), v(0)], [v(0), v(1)], [v(-1), v(0)], [v(0), v(0)]), Sign::Positive, "incircle inside at F={F}");
+    assert_eq!(incircle([v(1), v(0)], [v(0), v(1)], [v(-1), v(0)], [v(2), v(0)]), Sign::Negative, "incircle outside at F={F}");
+    assert_eq!(incircle([v(1), v(0)], [v(0), v(1)], [v(-1), v(0)], [v(0), v(-1)]), Sign::Zero, "incircle on at F={F}");
+    let s = insphere([v(1), v(0), v(0)], [v(0), v(1), v(0)], [v(0), v(0), v(1)], [v(-1), v(0), v(0)], [v(0), v(0), v(0)]);
+    assert_ne!(s, Sign::Zero, "insphere at F={F}");
+}
+
+#[test]
+fn certified_arithmetic_runs_at_every_width() {
+    certified_identities::<i32, 10>();
+    certified_identities::<i32, 16>();
+    certified_identities::<i32, 24>();
+    certified_identities::<i64, 32>();
+    certified_identities::<i128, 64>();
+    certified_identities::<I256, 128>();
+    certified_identities::<I512, 256>();
+    circle_identities::<i32, 10>();
+    circle_identities::<i32, 24>();
+    circle_identities::<i64, 32>();
+    circle_identities::<i128, 64>();
+    circle_identities::<I256, 128>();
+}

@@ -75,8 +75,8 @@ fn dyadic_spd(rng: &mut Rng, n: usize) -> FixedMatrix {
 
 #[test]
 fn proven_positive_definite() {
-    assert_eq!(pd_verdict(&FixedMatrix::identity(1)).unwrap(), PdVerdict::PositiveDefinite);
-    assert_eq!(pd_verdict(&FixedMatrix::identity(7)).unwrap(), PdVerdict::PositiveDefinite);
+    assert_eq!(pd_verdict(&FixedMatrix::<FixedPoint>::identity(1)).unwrap(), PdVerdict::PositiveDefinite);
+    assert_eq!(pd_verdict(&FixedMatrix::<FixedPoint>::identity(7)).unwrap(), PdVerdict::PositiveDefinite);
     let mut diag = matrix(&[&["2", "0", "0"], &["0", "0.5", "0"], &["0", "0", "0.001"]]);
     // the small positive pivot: 0.001 is stored as 0 below 10 fraction bits
     // (a singular matrix, correctly not PD), so it is one unit there instead

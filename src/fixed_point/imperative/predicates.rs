@@ -25,20 +25,22 @@
 //!   positive definite; no arbitrary precision is involved. If a pivot's
 //!   interval lies at or below zero, the matrix is proven not positive
 //!   definite. If a pivot's interval straddles zero the verdict is
-//!   [`PdVerdict::Inconclusive`] and the caller decides, with the straddling
+//!   [`PdVerdict::<Fixed<S, F>>::Inconclusive`] and the caller decides, with the straddling
 //!   interval in hand; regularisation then becomes a documented decision
 //!   taken after a diagnosis rather than a blind nudge.
 //!
 //! The certificate covers the STORED matrix: the verdict is about the
-//! `FixedMatrix` passed in, not about whatever statistical quantity it
+//! `FixedMatrix<Fixed<S, F>>` passed in, not about whatever statistical quantity it
 //! approximates. Only the lower triangle is read, as with
 //! `cholesky_decompose`; symmetry is the caller's contract.
 //!
 //! Design and measurements: `docs/design/CERTIFIED_INTERVALS.md`.
 
-use super::{FixedMatrix, FixedPoint, Interval};
+use super::{FixedMatrix, Interval};
+use super::FixedPoint;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::width::{CircleStorage, Storage, WideInt};
 use crate::fixed_point::core_types::errors::OverflowDetected;
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 // ============================================================================
 // Sign
@@ -71,10 +73,9 @@ impl Sign {
 // Exact accumulator arithmetic (shared: super::wide_acc)
 // ============================================================================
 
-use super::wide_acc::{acc, Wide};
 
 /// The sign of an exactly evaluated accumulator value.
-trait WideSign: Wide {
+trait WideSign: WideInt {
     #[inline]
     fn sign(self) -> Sign {
         if self.is_negative() {
@@ -87,31 +88,37 @@ trait WideSign: Wide {
     }
 }
 
-impl<W: Wide> WideSign for W {}
+impl<W: WideInt> WideSign for W {}
 
 #[inline]
-fn p2<W: Wide>(p: [FixedPoint; 2], widen: fn(BinaryStorage) -> W) -> [W; 2] {
+fn p2<S: Storage, const F: u32, W: WideInt>(p: [Fixed<S, F>; 2], widen: fn(S) -> W) -> [W; 2]
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     [widen(p[0].raw()), widen(p[1].raw())]
 }
 
 #[inline]
-fn p3<W: Wide>(p: [FixedPoint; 3], widen: fn(BinaryStorage) -> W) -> [W; 3] {
+fn p3<S: Storage, const F: u32, W: WideInt>(p: [Fixed<S, F>; 3], widen: fn(S) -> W) -> [W; 3]
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     [widen(p[0].raw()), widen(p[1].raw()), widen(p[2].raw())]
 }
 
 #[inline]
-fn sub2<W: Wide>(a: [W; 2], b: [W; 2]) -> [W; 2] {
+fn sub2<W: WideInt>(a: [W; 2], b: [W; 2]) -> [W; 2] {
     [a[0] - b[0], a[1] - b[1]]
 }
 
 #[inline]
-fn sub3<W: Wide>(a: [W; 3], b: [W; 3]) -> [W; 3] {
+fn sub3<W: WideInt>(a: [W; 3], b: [W; 3]) -> [W; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 /// `| r0 ; r1 ; r2 |`, degree 3 in the entries.
 #[inline]
-fn det3<W: Wide>(r0: [W; 3], r1: [W; 3], r2: [W; 3]) -> W {
+fn det3<W: WideInt>(r0: [W; 3], r1: [W; 3], r2: [W; 3]) -> W {
     r0[0].mul_exact(r1[1].mul_exact(r2[2]) - r1[2].mul_exact(r2[1]))
         - r0[1].mul_exact(r1[0].mul_exact(r2[2]) - r1[2].mul_exact(r2[0]))
         + r0[2].mul_exact(r1[0].mul_exact(r2[1]) - r1[1].mul_exact(r2[0]))
@@ -119,7 +126,7 @@ fn det3<W: Wide>(r0: [W; 3], r1: [W; 3], r2: [W; 3]) -> W {
 
 /// `| r0 ; r1 |`, degree 2.
 #[inline]
-fn det2<W: Wide>(r0: [W; 2], r1: [W; 2]) -> W {
+fn det2<W: WideInt>(r0: [W; 2], r1: [W; 2]) -> W {
     r0[0].mul_exact(r1[1]) - r0[1].mul_exact(r1[0])
 }
 
@@ -131,8 +138,11 @@ fn det2<W: Wide>(r0: [W; 2], r1: [W; 2]) -> W {
 /// `Negative` if clockwise, `Zero` if the three points are exactly collinear.
 ///
 /// The sign of `| a-c ; b-c |`, evaluated exactly.
-pub fn orient2d(a: [FixedPoint; 2], b: [FixedPoint; 2], c: [FixedPoint; 2]) -> Sign {
-    let (a, b, c) = (p2(a, acc::orient), p2(b, acc::orient), p2(c, acc::orient));
+pub fn orient2d<S: Storage, const F: u32>(a: [Fixed<S, F>; 2], b: [Fixed<S, F>; 2], c: [Fixed<S, F>; 2]) -> Sign
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let (a, b, c) = (p2(a, S::orient), p2(b, S::orient), p2(c, S::orient));
     det2(sub2(a, c), sub2(b, c)).sign()
 }
 
@@ -141,8 +151,11 @@ pub fn orient2d(a: [FixedPoint; 2], b: [FixedPoint; 2], c: [FixedPoint; 2]) -> S
 /// if above, `Zero` if the four points are exactly coplanar.
 ///
 /// The sign of `| a-d ; b-d ; c-d |`, evaluated exactly.
-pub fn orient3d(a: [FixedPoint; 3], b: [FixedPoint; 3], c: [FixedPoint; 3], d: [FixedPoint; 3]) -> Sign {
-    let (a, b, c, d) = (p3(a, acc::orient), p3(b, acc::orient), p3(c, acc::orient), p3(d, acc::orient));
+pub fn orient3d<S: Storage, const F: u32>(a: [Fixed<S, F>; 3], b: [Fixed<S, F>; 3], c: [Fixed<S, F>; 3], d: [Fixed<S, F>; 3]) -> Sign
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let (a, b, c, d) = (p3(a, S::orient), p3(b, S::orient), p3(c, S::orient), p3(d, S::orient));
     det3(sub3(a, d), sub3(b, d), sub3(c, d)).sign()
 }
 
@@ -154,11 +167,13 @@ pub fn orient3d(a: [FixedPoint; 3], b: [FixedPoint; 3], c: [FixedPoint; 3], d: [
 /// |c-d|^2 |`, expanded along the lift column so that every product pairs a
 /// degree-2 lift with a degree-2 minor. Not available on the scientific
 /// profile (see the module documentation).
-#[cfg(not(table_format = "q256_256"))]
-pub fn incircle(a: [FixedPoint; 2], b: [FixedPoint; 2], c: [FixedPoint; 2], d: [FixedPoint; 2]) -> Sign {
-    let (a, b, c, d) = (p2(a, acc::circle), p2(b, acc::circle), p2(c, acc::circle), p2(d, acc::circle));
+pub fn incircle<S: CircleStorage, const F: u32>(a: [Fixed<S, F>; 2], b: [Fixed<S, F>; 2], c: [Fixed<S, F>; 2], d: [Fixed<S, F>; 2]) -> Sign
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let (a, b, c, d) = (p2(a, S::circle), p2(b, S::circle), p2(c, S::circle), p2(d, S::circle));
     let (ad, bd, cd) = (sub2(a, d), sub2(b, d), sub2(c, d));
-    let lift = |v: [acc::Circle; 2]| v[0].mul_exact(v[0]) + v[1].mul_exact(v[1]);
+    let lift = |v: [<S as CircleStorage>::Circle; 2]| v[0].mul_exact(v[0]) + v[1].mul_exact(v[1]);
     (lift(ad).mul_exact(det2(bd, cd)) - lift(bd).mul_exact(det2(ad, cd)) + lift(cd).mul_exact(det2(ad, bd))).sign()
 }
 
@@ -169,23 +184,25 @@ pub fn incircle(a: [FixedPoint; 2], b: [FixedPoint; 2], c: [FixedPoint; 2], d: [
 /// The sign of the lifted 4 x 4 determinant, expanded along the lift column so
 /// that every product pairs a degree-2 lift with a degree-3 minor. Not
 /// available on the scientific profile (see the module documentation).
-#[cfg(not(table_format = "q256_256"))]
-pub fn insphere(
-    a: [FixedPoint; 3],
-    b: [FixedPoint; 3],
-    c: [FixedPoint; 3],
-    d: [FixedPoint; 3],
-    e: [FixedPoint; 3],
-) -> Sign {
+pub fn insphere<S: CircleStorage, const F: u32>(
+    a: [Fixed<S, F>; 3],
+    b: [Fixed<S, F>; 3],
+    c: [Fixed<S, F>; 3],
+    d: [Fixed<S, F>; 3],
+    e: [Fixed<S, F>; 3],
+) -> Sign
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     let (a, b, c, d, e) = (
-        p3(a, acc::circle),
-        p3(b, acc::circle),
-        p3(c, acc::circle),
-        p3(d, acc::circle),
-        p3(e, acc::circle),
+        p3(a, S::circle),
+        p3(b, S::circle),
+        p3(c, S::circle),
+        p3(d, S::circle),
+        p3(e, S::circle),
     );
     let (ae, be, ce, de) = (sub3(a, e), sub3(b, e), sub3(c, e), sub3(d, e));
-    let lift = |v: [acc::Circle; 3]| v[0].mul_exact(v[0]) + v[1].mul_exact(v[1]) + v[2].mul_exact(v[2]);
+    let lift = |v: [<S as CircleStorage>::Circle; 3]| v[0].mul_exact(v[0]) + v[1].mul_exact(v[1]) + v[2].mul_exact(v[2]);
     (det3(be, ce, de).mul_exact(-lift(ae)) + det3(ae, ce, de).mul_exact(lift(be))
         - det3(ae, be, de).mul_exact(lift(ce))
         + det3(ae, be, ce).mul_exact(lift(de)))
@@ -194,7 +211,7 @@ pub fn insphere(
 
 /// The outcome of a certified positive-definiteness test.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum PdVerdict {
+pub enum PdVerdict<T = FixedPoint> {
     /// Every Cholesky pivot is certainly positive: proven positive definite.
     PositiveDefinite,
     /// Pivot `pivot` is certainly at or below zero, all earlier pivots being
@@ -204,20 +221,23 @@ pub enum PdVerdict {
     /// Pivot `pivot` encloses zero with a positive upper endpoint: the stored
     /// matrix is too close to singular for the arithmetic to decide. The
     /// enclosure is returned so the caller can see how close.
-    Inconclusive { pivot: usize, straddle: Interval },
+    Inconclusive { pivot: usize, straddle: Interval<T> },
 }
 
-impl PdVerdict {
-    /// `true` only for [`PdVerdict::PositiveDefinite`].
+impl<S: Storage, const F: u32> PdVerdict<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    /// `true` only for [`PdVerdict::<Fixed<S, F>>::PositiveDefinite`].
     #[inline]
     pub fn is_proven_positive_definite(self) -> bool {
-        matches!(self, PdVerdict::PositiveDefinite)
+        matches!(self, PdVerdict::<Fixed<S, F>>::PositiveDefinite)
     }
 }
 
 /// Certified positive-definiteness verdict via interval Cholesky.
 ///
-/// Mirrors `cholesky_decompose` step for step with `Interval` entries: pivot
+/// Mirrors `cholesky_decompose` step for step with `Interval<Fixed<S, F>>` entries: pivot
 /// `d_i = a_ii - sum_k L_ik^2` and column `L_ji = (a_ji - sum_k L_jk L_ik) /
 /// L_ii`, each an exact compute-tier accumulation narrowed once. By induction
 /// the exact pivots of the stored matrix lie inside the pivot intervals, so a
@@ -227,29 +247,32 @@ impl PdVerdict {
 ///
 /// Returns `Err(TierOverflow)` if an entry of the factor leaves the storage
 /// tier. Panics if `a` is not square.
-pub fn pd_verdict(a: &FixedMatrix) -> Result<PdVerdict, OverflowDetected> {
+pub fn pd_verdict<S: Storage, const F: u32>(a: &FixedMatrix<Fixed<S, F>>) -> Result<PdVerdict<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     assert!(a.is_square(), "pd_verdict: matrix must be square");
     let n = a.rows();
-    let zero = Interval::point(FixedPoint::ZERO);
+    let zero = Interval::<Fixed<S, F>>::point(Fixed::ZERO);
     // Lower-triangular factor, row-major, entries are enclosures.
-    let mut l: Vec<Vec<Interval>> = vec![vec![zero; n]; n];
+    let mut l: Vec<Vec<Interval<Fixed<S, F>>>> = vec![vec![zero; n]; n];
 
     for i in 0..n {
-        let pivot = Interval::point(a.get(i, i)).try_sub(Interval::try_dot_intervals(&l[i][..i], &l[i][..i])?)?;
+        let pivot = Interval::<Fixed<S, F>>::point(a.get(i, i)).try_sub(Interval::<Fixed<S, F>>::try_dot_intervals(&l[i][..i], &l[i][..i])?)?;
         if pivot.is_certainly_positive() {
             let l_ii = pivot.try_sqrt()?;
             l[i][i] = l_ii;
             for j in (i + 1)..n {
-                let numerator = Interval::point(a.get(j, i)).try_sub(Interval::try_dot_intervals(&l[j][..i], &l[i][..i])?)?;
+                let numerator = Interval::<Fixed<S, F>>::point(a.get(j, i)).try_sub(Interval::<Fixed<S, F>>::try_dot_intervals(&l[j][..i], &l[i][..i])?)?;
                 l[j][i] = numerator.try_div(l_ii)?;
             }
-        } else if pivot.hi() <= FixedPoint::ZERO {
-            return Ok(PdVerdict::NotPositiveDefinite { pivot: i });
+        } else if pivot.hi() <= Fixed::ZERO {
+            return Ok(PdVerdict::<Fixed<S, F>>::NotPositiveDefinite { pivot: i });
         } else {
-            return Ok(PdVerdict::Inconclusive { pivot: i, straddle: pivot });
+            return Ok(PdVerdict::<Fixed<S, F>>::Inconclusive { pivot: i, straddle: pivot });
         }
     }
-    Ok(PdVerdict::PositiveDefinite)
+    Ok(PdVerdict::<Fixed<S, F>>::PositiveDefinite)
 }
 
 #[cfg(test)]

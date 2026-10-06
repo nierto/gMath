@@ -24,6 +24,8 @@ pub mod projective;
 pub mod fiber_bundle;
 pub mod interval;
 pub mod predicates;
+// the profile-bound accumulator helpers survive only as the reference of their tests
+#[cfg(test)]
 mod wide_acc;
 pub(crate) mod kernels;
 pub(crate) mod decimal_literal;
