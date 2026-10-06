@@ -170,34 +170,35 @@ fn whitespace_only_decimal_string_is_empty() {
 #[cfg(all(feature = "inference", table_format = "q16_16"))]
 mod tq19_narrowing {
     use g_math::fixed_point::frac_config::FRAC_BITS;
+    use g_math::fixed_point::FixedPoint;
     use g_math::tq19::{packed_trit_dot, tq19_dot, tq19_dot_q2f, trit_dot, TQ19Matrix, MAX_RAW, SCALE};
 
     /// 0.6.4 returned -2147483648 (the true sum is 2^31).
     #[test]
     #[should_panic(expected = "exceeds storage range")]
     fn trit_dot_past_storage_panics() {
-        let _ = trit_dot(&[1, 1], &[1 << 30, 1 << 30]);
+        let _ = trit_dot(&[1, 1], FixedPoint::from_raw_slice(&[1 << 30, 1 << 30]));
     }
 
     /// 0.6.4 returned -436426 (the true value is 25,769,367,350).
     #[test]
     #[should_panic(expected = "exceeds storage range")]
     fn tq19_dot_past_storage_panics() {
-        let _ = tq19_dot(&[MAX_RAW; 8], &[i32::MAX; 8]);
+        let _ = tq19_dot(&[MAX_RAW; 8], FixedPoint::from_raw_slice(&[i32::MAX; 8]));
     }
 
     #[test]
     #[should_panic(expected = "exceeds storage range")]
     fn tq19_matvec_past_storage_panics() {
         let m = TQ19Matrix::new(1, 8, vec![MAX_RAW; 8]);
-        let _ = m.matvec(&[i32::MAX; 8]);
+        let _ = m.matvec(FixedPoint::from_raw_slice(&[i32::MAX; 8]));
     }
 
     /// Byte 229 decodes to trits [1, 1, 0, 0, 0].
     #[test]
     #[should_panic(expected = "exceeds storage range")]
     fn packed_trit_dot_past_storage_panics() {
-        let _ = packed_trit_dot(&[229], 5, &[1 << 30, 1 << 30, 0, 0, 0], 1 << FRAC_BITS);
+        let _ = packed_trit_dot(&[229], 5, FixedPoint::from_raw_slice(&[1 << 30, 1 << 30, 0, 0, 0]), FixedPoint::from_raw(1 << FRAC_BITS));
     }
 
     /// The unscaled dot (2^31) exceeds storage but the scaled value (2^30)
@@ -206,10 +207,10 @@ mod tq19_narrowing {
     #[test]
     fn packed_trit_dot_scales_before_narrowing() {
         let half = 1 << (FRAC_BITS - 1);
-        assert_eq!(packed_trit_dot(&[229], 5, &[1 << 30, 1 << 30, 0, 0, 0], half), 1 << 30);
+        assert_eq!(packed_trit_dot(&[229], 5, FixedPoint::from_raw_slice(&[1 << 30, 1 << 30, 0, 0, 0]), FixedPoint::from_raw(half)).raw(), 1 << 30);
         // unchanged in range: (3 + 4) * 0.5 = 3.5 raw -> ties toward +inf
-        assert_eq!(packed_trit_dot(&[229], 5, &[3, 4, 0, 0, 0], half), 4);
-        assert_eq!(packed_trit_dot(&[229], 5, &[-3, -4, 0, 0, 0], half), -3);
+        assert_eq!(packed_trit_dot(&[229], 5, FixedPoint::from_raw_slice(&[3, 4, 0, 0, 0]), FixedPoint::from_raw(half)).raw(), 4);
+        assert_eq!(packed_trit_dot(&[229], 5, FixedPoint::from_raw_slice(&[-3, -4, 0, 0, 0]), FixedPoint::from_raw(half)).raw(), -3);
     }
 
     /// -(i32::MIN) is 2^31. The AVX2 kernel flipped the sign in 32 bits, which
@@ -220,8 +221,8 @@ mod tq19_narrowing {
         let trits = [-1i8, 1, 0, 0, 0, 0, 0, 0, 1];
         let acts = [i32::MIN, -5, 9, 9, 9, 9, 9, 9, 2];
         // 2^31 - 5 + 2 = 2147483645
-        assert_eq!(trit_dot(&trits, &acts), 2147483645);
-        assert_eq!(trit_dot(&trits[..2], &acts[..2]), 2147483643);
+        assert_eq!(trit_dot(&trits, FixedPoint::from_raw_slice(&acts)).raw(), 2147483645);
+        assert_eq!(trit_dot(&trits[..2], FixedPoint::from_raw_slice(&acts[..2])).raw(), 2147483643);
     }
 
     fn reference(weights: &[i16], acts: &[i32]) -> i128 {
@@ -236,13 +237,13 @@ mod tq19_narrowing {
             let weights: Vec<i16> = (0..n).map(|i| ((i as i64 * 48_271 % 59_049) - 29_524) as i16).collect();
             let acts: Vec<i32> = (0..n).map(|i| ((i as i64 * 40_503 % 8_191) - 4_095) as i32).collect();
             let acc = reference(&weights, &acts);
-            assert_eq!(tq19_dot(&weights, &acts) as i128, acc / SCALE as i128, "n = {n}");
-            assert_eq!(tq19_dot_q2f(&weights, &acts) as i128, (acc << FRAC_BITS) / SCALE as i128, "n = {n}");
+            assert_eq!(tq19_dot(&weights, FixedPoint::from_raw_slice(&acts)).raw() as i128, acc / SCALE as i128, "n = {n}");
+            assert_eq!(tq19_dot_q2f(&weights, FixedPoint::from_raw_slice(&acts)) as i128, (acc << FRAC_BITS) / SCALE as i128, "n = {n}");
             let m = TQ19Matrix::new(1, n, weights.clone());
             let batch: Vec<&[i32]> = vec![&acts[..], &acts[..]];
-            let expected = vec![vec![(acc / SCALE as i128) as i32]; 2];
-            assert_eq!(m.matvec_batch(&batch), expected, "n = {n}");
-            assert_eq!(m.matvec_batch_par(&batch), expected, "n = {n}");
+            let expected = vec![vec![FixedPoint::from_raw((acc / SCALE as i128) as i32)]; 2];
+            assert_eq!(m.matvec_batch(&(&batch).iter().map(|v| FixedPoint::from_raw_slice(v)).collect::<Vec<_>>()), expected, "n = {n}");
+            assert_eq!(m.matvec_batch_par(&(&batch).iter().map(|v| FixedPoint::from_raw_slice(v)).collect::<Vec<_>>()), expected, "n = {n}");
         }
     }
 
@@ -251,6 +252,6 @@ mod tq19_narrowing {
     #[should_panic(expected = "exceeds")]
     fn long_row_accumulator_overflow_panics() {
         let n = (1usize << 17) + 8;
-        let _ = tq19_dot(&vec![i16::MIN; n], &vec![i32::MIN; n]);
+        let _ = tq19_dot(&vec![i16::MIN; n], FixedPoint::from_raw_slice(&vec![i32::MIN; n]));
     }
 }

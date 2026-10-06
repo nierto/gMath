@@ -22,7 +22,7 @@
 //! - [`packed_trit_dot`]: zero-multiply dot for packed trits (5/byte)
 //! - [`packed_trit_matvec`]: matvec for packed trit format with per-row scales
 //!
-//! All operations accumulate at ComputeStorage (tier N+1) with a single
+//! All operations accumulate at Compute<Fixed<S, F>> (tier N+1) with a single
 //! division/downscale at the end, matching gMath's precision contract.
 //!
 //! ## Parallelism
@@ -54,15 +54,11 @@ pub(crate) mod simd;
 
 pub use hybrid::{HybridTQ19, HYBRID_LOW_TRITS, LOW_BIAS, LOW_MOD};
 pub use planar::{PlanarTQ19, PlaneData, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT};
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+pub use ops::{TqWord, WideOutput};
 pub use rowscaled::RowScaledTQ19;
-#[cfg(table_format = "q16_16")]
 pub use tq5::{RowScaledTQ5, TQ5_MAX};
 
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
-use crate::fixed_point::imperative::FixedPoint;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 
 // ============================================================================
 // Constants
@@ -184,11 +180,14 @@ impl TQ19Matrix {
 
     /// Matrix-vector product: `result[i] = sum_j(W[i][j] * x[j]) / SCALE`
     ///
-    /// Accumulates at ComputeStorage (tier N+1). Single division per row.
+    /// Accumulates at Compute<Fixed<S, F>> (tier N+1). Single division per row.
     ///
     /// # Panics
     /// Panics if `activations.len() != self.cols()`.
-    pub fn matvec(&self, activations: &[BinaryStorage]) -> Vec<BinaryStorage> {
+    pub fn matvec<S: TqWord, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Fixed<S, F>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec: activation length mismatch");
         ops::tq19_matvec(&self.data, self.rows, self.cols, activations)
     }
@@ -200,7 +199,10 @@ impl TQ19Matrix {
     ///
     /// # Panics
     /// Panics if any activation vector length != `self.cols()`.
-    pub fn matvec_batch(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>> {
+    pub fn matvec_batch<S: TqWord, const F: u32>(&self, batch: &[&[Fixed<S, F>]]) -> Vec<Vec<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_batch: activation[{i}] length mismatch");
         }
@@ -208,8 +210,11 @@ impl TQ19Matrix {
     }
 
     /// Convenience: matvec returning `FixedPoint` values.
-    pub fn matvec_fp(&self, activations: &[BinaryStorage]) -> Vec<FixedPoint> {
-        self.matvec(activations).into_iter().map(FixedPoint::from_raw).collect()
+    pub fn matvec_fp<S: TqWord, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Fixed<S, F>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
+        self.matvec(activations)
     }
 
     // ========================================================================
@@ -217,7 +222,10 @@ impl TQ19Matrix {
     // ========================================================================
 
     /// Row-parallel matvec. Each row computed independently via rayon.
-    pub fn matvec_par(&self, activations: &[BinaryStorage]) -> Vec<BinaryStorage> {
+    pub fn matvec_par<S: TqWord, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Fixed<S, F>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec_par: activation length mismatch");
         ops::tq19_matvec_par(&self.data, self.rows, self.cols, activations)
     }
@@ -226,7 +234,10 @@ impl TQ19Matrix {
     ///
     /// Parallelizes across rows. Each row processes all batch vectors sequentially
     /// (keeping row weights in L1 cache), then results are transposed.
-    pub fn matvec_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>> {
+    pub fn matvec_batch_par<S: TqWord, const F: u32>(&self, batch: &[&[Fixed<S, F>]]) -> Vec<Vec<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_batch_par: activation[{i}] length mismatch");
         }
@@ -241,7 +252,10 @@ impl TQ19Matrix {
     /// # Panics
     /// Panics on an activation length mismatch or if
     /// `out.len() != batch.len() * rows`.
-    pub fn matvec_batch_par_into(&self, batch: &[&[BinaryStorage]], out: &mut [BinaryStorage]) {
+    pub fn matvec_batch_par_into<S: TqWord, const F: u32>(&self, batch: &[&[Fixed<S, F>]], out: &mut [Fixed<S, F>])
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_batch_par_into: activation[{i}] length mismatch");
         }
@@ -260,22 +274,28 @@ impl TQ19Matrix {
     /// division) reproduces [`TQ19Matrix::matvec`] bit-for-bit. Same inner
     /// loops and SIMD; zero cost on the narrow path. Motivation: fine-grained
     /// MoE expert outputs can live below the storage rounding floor.
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    pub fn matvec_q2f(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+    pub fn matvec_q2f<S: WideOutput, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Compute<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec_q2f: activation length mismatch");
         ops::tq19_matvec_q2f(&self.data, self.rows, self.cols, activations)
     }
 
     /// Row-parallel wide-output matvec. See [`TQ19Matrix::matvec_q2f`].
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    pub fn matvec_q2f_par(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+    pub fn matvec_q2f_par<S: WideOutput, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Compute<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(activations.len(), self.cols, "TQ19Matrix::matvec_q2f_par: activation length mismatch");
         ops::tq19_matvec_q2f_par(&self.data, self.rows, self.cols, activations)
     }
 
     /// Row-parallel wide-output batch matvec. See [`TQ19Matrix::matvec_q2f`].
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    pub fn matvec_q2f_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<ComputeStorage>> {
+    pub fn matvec_q2f_batch_par<S: WideOutput, const F: u32>(&self, batch: &[&[Fixed<S, F>]]) -> Vec<Vec<Compute<Fixed<S, F>>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_q2f_batch_par: activation[{i}] length mismatch");
         }
@@ -289,13 +309,16 @@ impl TQ19Matrix {
 
 /// TQ1.9 dot product: `sum(weights[i] * activations[i]) / SCALE`
 ///
-/// Accumulates at ComputeStorage (tier N+1). Single division at end.
+/// Accumulates at Compute<Fixed<S, F>> (tier N+1). Single division at end.
 /// On x86_64 realtime profile, dispatches to AVX2 when available.
 ///
 /// # Panics
 /// Panics (debug) if lengths differ.
 #[inline]
-pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage {
+pub fn tq19_dot<S: TqWord, const F: u32>(weights: &[i16], activations: &[Fixed<S, F>]) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     ops::tq19_dot(weights, activations)
 }
 
@@ -303,9 +326,11 @@ pub fn tq19_dot(weights: &[i16], activations: &[BinaryStorage]) -> BinaryStorage
 ///
 /// `trunc(sum(weights[i]·activations[i]) · 2^FRAC_BITS / SCALE)`: exactly one
 /// rounding. `q2f / (1 << FRAC_BITS)` reproduces [`tq19_dot`] bit-for-bit.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[inline]
-pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeStorage {
+pub fn tq19_dot_q2f<S: WideOutput, const F: u32>(weights: &[i16], activations: &[Fixed<S, F>]) -> Compute<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     ops::tq19_dot_q2f(weights, activations)
 }
 
@@ -317,7 +342,10 @@ pub fn tq19_dot_q2f(weights: &[i16], activations: &[BinaryStorage]) -> ComputeSt
 /// # Panics
 /// Panics (debug) if lengths differ.
 #[inline]
-pub fn trit_dot(trits: &[i8], activations: &[BinaryStorage]) -> BinaryStorage {
+pub fn trit_dot<S: TqWord, const F: u32>(trits: &[i8], activations: &[Fixed<S, F>]) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     ops::trit_dot(trits, activations)
 }
 
@@ -325,36 +353,45 @@ pub fn trit_dot(trits: &[i8], activations: &[BinaryStorage]) -> BinaryStorage {
 ///
 /// Unpacks 5 trits per byte from base-3 encoding, applies zero-multiply,
 /// then multiplies the accumulated result by `scale` at compute tier.
-pub fn packed_trit_dot(
+pub fn packed_trit_dot<S: TqWord, const F: u32>(
     packed: &[u8],
     count: usize,
-    activations: &[BinaryStorage],
-    scale: BinaryStorage,
-) -> BinaryStorage {
+    activations: &[Fixed<S, F>],
+    scale: Fixed<S, F>,
+) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     ops::packed_trit_dot(packed, count, activations, scale)
 }
 
 /// Packed trit matrix-vector product with per-row scale factors.
 ///
 /// Each row: unpack trits, zero-multiply dot against activations, apply scale.
-pub fn packed_trit_matvec(
+pub fn packed_trit_matvec<S: TqWord, const F: u32>(
     packed_trits: &[u8],
     rows: usize,
     cols: usize,
-    activations: &[BinaryStorage],
-    scales: &[BinaryStorage],
-) -> Vec<BinaryStorage> {
+    activations: &[Fixed<S, F>],
+    scales: &[Fixed<S, F>],
+) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     ops::packed_trit_matvec(packed_trits, rows, cols, activations, scales)
 }
 
 /// Row-parallel packed trit matvec.
-pub fn packed_trit_matvec_par(
+pub fn packed_trit_matvec_par<S: TqWord, const F: u32>(
     packed_trits: &[u8],
     rows: usize,
     cols: usize,
-    activations: &[BinaryStorage],
-    scales: &[BinaryStorage],
-) -> Vec<BinaryStorage> {
+    activations: &[Fixed<S, F>],
+    scales: &[Fixed<S, F>],
+) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     ops::packed_trit_matvec_par(packed_trits, rows, cols, activations, scales)
 }
 
@@ -365,6 +402,8 @@ pub fn packed_trit_matvec_par(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::fixed_point::FixedPoint;
 
     #[test]
     fn trit_decode_table_spot_check() {

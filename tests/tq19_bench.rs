@@ -40,13 +40,13 @@ fn bench_tq19_dot_4096() {
 
     // Warmup
     for _ in 0..100 {
-        let _ = tq19_dot(&weights, &activations);
+        let _ = tq19_dot(&weights, FixedPoint::from_raw_slice(&activations));
     }
 
     let iters = 10_000;
     let start = Instant::now();
     for _ in 0..iters {
-        black_box(tq19_dot(black_box(&weights), black_box(&activations)));
+        black_box(tq19_dot(black_box(&weights), black_box(FixedPoint::from_raw_slice(&activations))));
     }
     let elapsed = start.elapsed();
     let per_dot_ns = elapsed.as_nanos() as f64 / iters as f64;
@@ -64,13 +64,13 @@ fn bench_trit_dot_4096() {
     let activations = make_activations(n);
 
     for _ in 0..100 {
-        let _ = trit_dot(&trits, &activations);
+        let _ = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
     }
 
     let iters = 10_000;
     let start = Instant::now();
     for _ in 0..iters {
-        black_box(trit_dot(black_box(&trits), black_box(&activations)));
+        black_box(trit_dot(black_box(&trits), black_box(FixedPoint::from_raw_slice(&activations))));
     }
     let elapsed = start.elapsed();
     let per_dot_ns = elapsed.as_nanos() as f64 / iters as f64;
@@ -87,12 +87,12 @@ fn bench_matvec_4096x4096() {
     let activations = make_activations(dim);
 
     // Warmup
-    let _ = m.matvec(&activations);
+    let _ = m.matvec(FixedPoint::from_raw_slice(&activations));
 
     let iters = 5;
     let start = Instant::now();
     for _ in 0..iters {
-        let _ = m.matvec(&activations);
+        let _ = m.matvec(FixedPoint::from_raw_slice(&activations));
     }
     let elapsed = start.elapsed();
     let per_matvec_ms = elapsed.as_millis() as f64 / iters as f64;
@@ -115,14 +115,14 @@ fn bench_matvec_batch_4096x4096() {
 
     // Sequential: 4 separate matvecs
     let start = Instant::now();
-    let _ = m.matvec(&v1);
-    let _ = m.matvec(&v2);
-    let _ = m.matvec(&v3);
-    let _ = m.matvec(&v4);
+    let _ = m.matvec(FixedPoint::from_raw_slice(&v1));
+    let _ = m.matvec(FixedPoint::from_raw_slice(&v2));
+    let _ = m.matvec(FixedPoint::from_raw_slice(&v3));
+    let _ = m.matvec(FixedPoint::from_raw_slice(&v4));
     let seq_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     // Batch: weight-centric
-    let batch = [v1.as_slice(), v2.as_slice(), v3.as_slice(), v4.as_slice()];
+    let batch = [FixedPoint::from_raw_slice(&v1), FixedPoint::from_raw_slice(&v2), FixedPoint::from_raw_slice(&v3), FixedPoint::from_raw_slice(&v4)];
     let start = Instant::now();
     let _ = m.matvec_batch(&batch);
     let batch_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -142,7 +142,7 @@ fn bench_matvec_sizes() {
         let iters = if dim <= 1024 { 20 } else { 3 };
         let start = Instant::now();
         for _ in 0..iters {
-            black_box(m.matvec(black_box(&activations)));
+            black_box(m.matvec(black_box(FixedPoint::from_raw_slice(&activations))));
         }
         let per_ms = start.elapsed().as_secs_f64() * 1000.0 / iters as f64;
         let gops = (dim as f64 * dim as f64 * 2.0) / (per_ms * 1e6); // multiply-accumulate = 2 ops

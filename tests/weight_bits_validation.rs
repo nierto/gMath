@@ -117,8 +117,8 @@ fn storage_raw_is_to_raw_at_the_build_split() {
                 Ok(_) => Err(OverflowDetected::TierOverflow),
                 Err(e) => Err(e),
             };
-            assert_eq!(to_storage_raw(bits, kind), want, "{kind:?} {bits:#06x}");
-            assert_eq!(to_fixed(bits, kind).map(|v| v.raw()), want);
+            assert_eq!(to_storage_raw::<BinaryStorage, { g_math::fixed_point::frac_config::FRAC_BITS }>(bits, kind), want, "{kind:?} {bits:#06x}");
+            assert_eq!(to_fixed::<BinaryStorage, { g_math::fixed_point::frac_config::FRAC_BITS }>(bits, kind).map(|v| v.raw()), want);
             if want.is_ok() { ok += 1 } else { refused += 1 }
         }
     }

@@ -372,10 +372,17 @@ let v = evaluate::<Q64_64>(&e)?;          // or: let v: StackValue<Q64_64> = eva
   operator); the hook runs over the slice instead and `rms_norm` is 12
   percent faster than 0.6.7.
 
-- **tq19 and the inference module**: today the 32- and 64-bit profiles only, AVX2
-  kernels on 32 only. They become generic over `Fixed<i32, F>` and
-  `Fixed<i64, 32>`; the AVX2 kernels work on any `F` because they operate on
-  raw integers.
+- **tq19 and the inference module** (phase 4d, done): activations are
+  `&[Fixed<S, F>]` and results `Vec<Fixed<S, F>>` (owner decision: the
+  format travels with the data, no turbofish, mixing splits is a compile
+  error; raw buffers are viewed through `Fixed::from_raw_slice`). Weights,
+  trit codes, Q32.32 scales and the wide outputs stay raw. Two public
+  sealed traits in `tq19`: `TqWord` (every word; hidden hooks for the i32
+  AVX2 and exact paths and the per-word scale rounding) and `WideOutput`
+  (i32 and i64: the wide matvec and the row-scaled forms), so `matvec_q2f`
+  and `RowScaledTQ19` are absent on the wide words by trait bound. The
+  five-trit form is `Fixed<i32, F>` only (its raw kernels unchanged, the
+  wide shift `32 - F`).
 - **Serialization**: today's tag says which storage word, not which `F`, so
   bytes written at Q16.16 read back silently as Q22.10. The 0.7.0 format writes
   `[storage code, F]`. Legacy tags stay readable as "storage word, F unknown",
@@ -411,7 +418,7 @@ generic code, while new tests exercise all widths in one build.
 | 1 | `Storage` trait, uniform wide-integer surface, engines renamed to format names, `*_binary_iN` meanings frozen. IMPLEMENTED | full sweep, 5 profiles + F = 8..24, unchanged |
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
-| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d) | differential gate, certified-geometry gates |
+| 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d, IMPLEMENTED) | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |

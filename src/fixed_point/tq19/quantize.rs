@@ -8,14 +8,12 @@ use super::bits::WeightBits;
 use super::{TQ19Matrix, MAX_RAW, MIN_RAW};
 
 /// `round(num / den)` for non-negative `num`, positive `den`: half up.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[inline]
 fn half_up(num: i128, den: i128) -> i128 {
     (2 * num + den) / (2 * den)
 }
 
 /// Mantissas are below `2^MANTISSA_BITS` (11 for binary16, 8 for bfloat16).
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 const MANTISSA_BITS: i32 = 11;
 
 /// `m * 2^e > mm * 2^me` for non-zero mantissas below `2^MANTISSA_BITS`.
@@ -25,7 +23,6 @@ const MANTISSA_BITS: i32 = 11;
 /// is only ever shifted by less than that. Shifting by the gap itself left
 /// 128 bits from a gap of a little over 100, which bfloat16 rows reach
 /// (0.6.5).
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[inline]
 fn greater(m: u64, e: i32, mm: u64, me: i32) -> bool {
     let gap = e - me;
@@ -42,7 +39,6 @@ fn greater(m: u64, e: i32, mm: u64, me: i32) -> bool {
 
 /// The largest magnitude in a row as `(m, e)`, value `m * 2^e`; `None` for an
 /// all-zero row, `Err(())` for a non-finite pattern.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 fn row_max(w: &WeightBits, base: usize) -> Result<Option<(u64, i32)>, ()> {
     let mut mx: Option<(u64, i32)> = None;
     for c in 0..w.cols {
@@ -61,7 +57,6 @@ fn row_max(w: &WeightBits, base: usize) -> Result<Option<(u64, i32)>, ()> {
 }
 
 /// `round(|w| * levels / max|w|)` for one element, capped at `levels`.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[inline]
 fn row_code(m: u64, e: i32, mm: u64, me: i32, levels: i128) -> i128 {
     let d = e - me;
@@ -81,7 +76,6 @@ fn row_code(m: u64, e: i32, mm: u64, me: i32, levels: i128) -> i128 {
 /// `round(n * 2^(me + 32) / levels)` as an unsigned Q32.32 row scale, for
 /// `n < 2^26`; `None` when the scale does not fit 64 bits (a row maximum of
 /// about 2^32 or more, which no weight matrix has).
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 fn row_scale_q32(n: i128, me: i32, levels: i128) -> Option<u64> {
     let sh = me + 32;
     if sh > 64 {
@@ -124,7 +118,6 @@ pub fn quantize_tq19(w: &WeightBits) -> Option<TQ19Matrix> {
 /// `q = round(v * MAX_RAW / max|w|)` (half away from zero), and carries the
 /// scale `round(max|w| * 3^9 * 2^32 / MAX_RAW)` in unsigned Q32.32. An
 /// all-zero row gets codes 0 and scale 0.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 pub fn quantize_tq19_rowscaled(w: &WeightBits) -> Option<super::RowScaledTQ19> {
     let levels = MAX_RAW as i128;
     let mut data = vec![0i16; w.rows * w.cols];
@@ -151,7 +144,6 @@ pub fn quantize_tq19_rowscaled(w: &WeightBits) -> Option<super::RowScaledTQ19> {
 /// Quantise to five trits with a per-row scale by exact rational rounding:
 /// `s_r = max|w|_r / 121`, `code = round(w / s_r)` (half away from zero),
 /// `scale_q32 = round(s_r * 2^32)`. An all-zero row gets codes 0 and scale 0.
-#[cfg(table_format = "q16_16")]
 pub fn quantize_tq5_rowscaled(w: &WeightBits) -> Option<super::RowScaledTQ5> {
     let levels = super::TQ5_MAX as i128;
     let mut data = vec![0i8; w.rows * w.cols];

@@ -10,10 +10,8 @@
 
 // Only compile on x86_64 — ARM/RISC-V get scalar paths
 
-#[cfg(table_format = "q16_16")]
 use std::arch::x86_64::*;
 
-use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
 
 // ============================================================================
 // TQ1.9 dot product — AVX2 (realtime profile: i32 activations)
@@ -24,16 +22,15 @@ use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, Comput
 /// Processes 8 weight×activation pairs per iteration using
 /// `_mm256_mul_epi32` (signed 32×32→64 multiply on even/odd lanes).
 ///
-/// Returns ComputeStorage (i64 for Q16.16) accumulator before SCALE division.
+/// Returns i64 (i64 for Q16.16) accumulator before SCALE division.
 ///
 /// # Safety
 /// Caller must ensure AVX2 is available (`is_x86_feature_detected!("avx2")`).
-#[cfg(table_format = "q16_16")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn tq19_dot_avx2(
     weights: &[i16],
-    activations: &[BinaryStorage],  // &[i32] on Q16.16
-) -> ComputeStorage {  // i64 on Q16.16
+    activations: &[i32],
+) -> i64 {
     let n = weights.len();
     let chunks = n / 8;
 
@@ -78,14 +75,6 @@ pub(crate) unsafe fn tq19_dot_avx2(
 
 // Stub for non-q16_16 profiles — never called, exists only so that
 // the cfg(target_arch) module compiles on all profiles.
-#[cfg(not(table_format = "q16_16"))]
-#[allow(dead_code)]
-pub(crate) unsafe fn tq19_dot_avx2(
-    _weights: &[i16],
-    _activations: &[BinaryStorage],
-) -> ComputeStorage {
-    unreachable!("SIMD TQ1.9 dot only available on Q16.16 profile")
-}
 
 // ============================================================================
 // Trit dot product — AVX2 (realtime profile: i32 activations)
@@ -102,12 +91,11 @@ pub(crate) unsafe fn tq19_dot_avx2(
 ///
 /// # Safety
 /// Caller must ensure AVX2 is available.
-#[cfg(table_format = "q16_16")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn trit_dot_avx2(
     trits: &[i8],
-    activations: &[BinaryStorage],  // &[i32] on Q16.16
-) -> ComputeStorage {  // i64 on Q16.16
+    activations: &[i32],
+) -> i64 {
     let n = trits.len();
     let chunks = n / 8;
 
@@ -174,20 +162,11 @@ pub(crate) unsafe fn trit_dot_avx2(
     result
 }
 
-#[cfg(not(table_format = "q16_16"))]
-#[allow(dead_code)]
-pub(crate) unsafe fn trit_dot_avx2(
-    _trits: &[i8],
-    _activations: &[BinaryStorage],
-) -> ComputeStorage {
-    unreachable!("SIMD trit dot only available on Q16.16 profile")
-}
 
 // ============================================================================
 // Helper: horizontal sum of 4× i64 in __m256i
 // ============================================================================
 
-#[cfg(table_format = "q16_16")]
 #[target_feature(enable = "avx2")]
 #[inline]
 unsafe fn hsum_epi64(v: __m256i) -> i64 {
@@ -205,7 +184,6 @@ unsafe fn hsum_epi64(v: __m256i) -> i64 {
 // ============================================================================
 
 #[cfg(test)]
-#[cfg(table_format = "q16_16")]
 mod tests {
     use super::*;
 

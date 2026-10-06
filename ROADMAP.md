@@ -750,6 +750,16 @@ rather than accidental.
 
 ## Future: High Priority
 
+### Follow-up: the hybrid TQ1.9 matvec has two codegen states
+
+Measured 2026-10-06 (realtime Q22.10, 512 x 1024, release): `HybridTQ19::matvec`
+runs at about 480 us or about 730 us depending on the build, in the
+published 0.6.7 and in the width-types tree alike, with and without LTO.
+The dense, planar and row-scaled forms do not show it, so the sensitivity
+sits in the row reconstruction (the AVX2 block decode and its scalar
+tail). Worth pinning the fast state with an explicit kernel layout; until
+then the cost of the slow state is about 50 percent on this form only.
+
 ### Open defect: `exp` on the compact profile is one unit off for large results
 
 **Found 2026-10-05, not fixed.** On the compact profile (Q32.32) `exp` and

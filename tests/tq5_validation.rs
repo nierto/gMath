@@ -7,6 +7,7 @@
 
 #![cfg(all(feature = "inference", table_format = "q16_16"))]
 
+use g_math::fixed_point::FixedPoint;
 use g_math::fixed_point::frac_config::FRAC_BITS;
 use g_math::tq19::bits::{HalfKind, WeightBits};
 use g_math::tq19::quantize::quantize_tq5_rowscaled;
@@ -43,16 +44,16 @@ fn matvec_matches_i128_reference() {
     for &(rows, cols) in &[(1usize, 1usize), (3, 17), (64, 64), (37, 1000), (8, 4096)] {
         let m = random_matrix(&mut seed, rows, cols);
         let x = random_activation(&mut seed, cols);
-        let got = m.matvec_par(&x);
-        let wide = m.matvec_q2f_par(&x);
-        assert_eq!(m.matvec(&x), got, "sequential form, {rows}x{cols}");
-        assert_eq!(m.matvec_q2f(&x), wide, "sequential wide form, {rows}x{cols}");
+        let got = m.matvec_par(FixedPoint::from_raw_slice(&x));
+        let wide = m.matvec_q2f_par(FixedPoint::from_raw_slice(&x));
+        assert_eq!(m.matvec(FixedPoint::from_raw_slice(&x)), got, "sequential form, {rows}x{cols}");
+        assert_eq!(m.matvec_q2f(FixedPoint::from_raw_slice(&x)), wide, "sequential wide form, {rows}x{cols}");
         for r in 0..rows {
             let acc: i128 = (0..cols)
                 .map(|c| m.data()[r * cols + c] as i128 * x[c] as i128)
                 .sum();
             let want = ((acc * m.scales_q32()[r] as i128) >> 32) as i32;
-            assert_eq!(got[r], want, "row {r} of {rows}x{cols}");
+            assert_eq!(got[r], FixedPoint::from_raw(want), "row {r} of {rows}x{cols}");
             let want_wide = ((acc * m.scales_q32()[r] as i128) >> (32 - FRAC_BITS)) as i64;
             assert_eq!(wide[r], want_wide, "wide row {r} of {rows}x{cols}");
         }
@@ -65,9 +66,9 @@ fn batch_equals_single() {
     let m = random_matrix(&mut seed, 48, 300);
     let xs: Vec<Vec<i32>> = (0..5).map(|_| random_activation(&mut seed, 300)).collect();
     let refs: Vec<&[i32]> = xs.iter().map(|v| v.as_slice()).collect();
-    let batch = m.matvec_batch_par(&refs);
+    let batch = m.matvec_batch_par(&(&refs).iter().map(|v| FixedPoint::from_raw_slice(v)).collect::<Vec<_>>());
     for (b, x) in xs.iter().enumerate() {
-        assert_eq!(batch[b], m.matvec_par(x), "batch column {b}");
+        assert_eq!(batch[b], m.matvec_par(FixedPoint::from_raw_slice(x)), "batch column {b}");
     }
 }
 
@@ -104,7 +105,7 @@ fn from_parts_refuses_an_out_of_range_code() {
 fn result_past_storage_panics() {
     // 121 * (2^30 - 1) * 1.0 is far past i32
     let m = RowScaledTQ5::from_parts(1, 1, vec![121], vec![1u64 << 32]);
-    let _ = m.matvec(&[(1 << 30) - 1]);
+    let _ = m.matvec(&[FixedPoint::from_raw((1 << 30) - 1)]);
 }
 
 /// `i32::MIN` has no 32-bit magnitude: the split is refused and the scalar
@@ -117,9 +118,10 @@ fn i32_min_activations_are_exact() {
     let x: Vec<i32> = (0..cols).map(|i| if i % 5 == 0 { i32::MIN } else { 77 - i as i32 }).collect();
     let acc: i128 = data.iter().zip(&x).map(|(&c, &v)| c as i128 * v as i128).sum();
     let want = ((acc * 3) >> 32) as i32;
-    assert_eq!(m.matvec(&x), vec![want]);
-    assert_eq!(m.matvec_par(&x), vec![want]);
-    assert_eq!(m.matvec_batch_par(&[&x, &x, &x, &x, &x]), vec![vec![want]; 5]);
+    let fx = FixedPoint::from_raw_slice(&x);
+    assert_eq!(m.matvec(fx), vec![FixedPoint::from_raw(want)]);
+    assert_eq!(m.matvec_par(fx), vec![FixedPoint::from_raw(want)]);
+    assert_eq!(m.matvec_batch_par(&[fx, fx, fx, fx, fx]), vec![vec![FixedPoint::from_raw(want)]; 5]);
 }
 
 /// bf16 bits for value `M * 2^E` with M in [128, 255] (a normal bf16 mantissa) and sign.
@@ -223,13 +225,13 @@ fn extreme_activations_and_lengths_match_reference() {
             (0..cols).map(|_| -65536).collect(),
         ];
         for x in &patterns {
-            let got = m.matvec_par(x);
+            let got = m.matvec_par(FixedPoint::from_raw_slice(x));
             for (r, &g) in got.iter().enumerate() {
                 let acc: i128 = (0..cols)
                     .map(|c| m.data()[r * cols + c] as i128 * x[c] as i128)
                     .sum();
                 let want = ((acc * m.scales_q32()[r] as i128) >> 32) as i32;
-                assert_eq!(g, want, "row {r} of {rows}x{cols}");
+                assert_eq!(g, FixedPoint::from_raw(want), "row {r} of {rows}x{cols}");
             }
         }
     }
@@ -273,9 +275,9 @@ fn batch_paths_match_reference_on_realistic_activations() {
                 .map(|k| act(&mut seed, cols, [0u8, 1, 0, 2, 1, 3, 0, 1][k % 8]))
                 .collect();
             let refs: Vec<&[i32]> = xs.iter().map(|v| v.as_slice()).collect();
-            let got = m.matvec_batch_par(&refs);
+            let got = m.matvec_batch_par(&(&refs).iter().map(|v| FixedPoint::from_raw_slice(v)).collect::<Vec<_>>());
             for (k, x) in xs.iter().enumerate() {
-                let single = m.matvec_par(x);
+                let single = m.matvec_par(FixedPoint::from_raw_slice(x));
                 for r in 0..rows {
                     let row = &m.data()[r * cols..(r + 1) * cols];
                     let acc: i128 = row
@@ -285,11 +287,11 @@ fn batch_paths_match_reference_on_realistic_activations() {
                         .sum();
                     let want = ((acc * m.scales_q32()[r] as i128) >> 32) as i32;
                     assert_eq!(
-                        got[k][r], want,
+                        got[k][r], FixedPoint::from_raw(want),
                         "batch: rows {rows} cols {cols} bs {bs} token {k} row {r}"
                     );
                     assert_eq!(
-                        single[r], want,
+                        single[r], FixedPoint::from_raw(want),
                         "single: rows {rows} cols {cols} token {k} row {r}"
                     );
                 }

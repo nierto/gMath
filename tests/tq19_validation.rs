@@ -113,14 +113,14 @@ fn tq19_dot_unity_weight() {
     // Weight = SCALE → TQ1.9 value = 1.0
     // dot([SCALE], [x]) / SCALE = x
     let x = raw("2.5");
-    let result = tq19_dot(&[SCALE as i16], &[x]);
-    assert_ulp(result, x, 1, "unity weight dot");
+    let result = tq19_dot(&[SCALE as i16], &[FixedPoint::from_raw(x)]);
+    assert_ulp((result).raw(), x, 1, "unity weight dot");
 }
 
 #[test]
 fn tq19_dot_zero_weight() {
-    let result = tq19_dot(&[0i16, 0, 0], &[raw("1.0"), raw("2.0"), raw("3.0")]);
-    assert_ulp(result, raw("0.0"), 0, "zero weights");
+    let result = tq19_dot(&[0i16, 0, 0], &[FixedPoint::from_raw(raw("1.0")), FixedPoint::from_raw(raw("2.0")), FixedPoint::from_raw(raw("3.0"))]);
+    assert_ulp((result).raw(), raw("0.0"), 0, "zero weights");
 }
 
 #[test]
@@ -129,8 +129,8 @@ fn tq19_dot_negative_weight() {
     // dot([-SCALE], [x]) / SCALE = -x
     let x = raw("3.0");
     let neg_x = raw("-3.0");
-    let result = tq19_dot(&[-(SCALE as i16)], &[x]);
-    assert_ulp(result, neg_x, 1, "negative unity weight");
+    let result = tq19_dot(&[-(SCALE as i16)], &[FixedPoint::from_raw(x)]);
+    assert_ulp((result).raw(), neg_x, 1, "negative unity weight");
 }
 
 #[test]
@@ -139,9 +139,9 @@ fn tq19_dot_half_weight() {
     // TQ1.9 quantization: 0.5 - 9841/19683 ≈ 2.5e-5 relative error
     let half_scale = (SCALE / 2) as i16;
     let x = raw("4.0");
-    let result = tq19_dot(&[half_scale], &[x]);
+    let result = tq19_dot(&[half_scale], &[FixedPoint::from_raw(x)]);
     let expected = raw("2.0");
-    assert_tq19_close(result, expected, "half weight (TQ1.9 quantized)");
+    assert_tq19_close((result).raw(), expected, "half weight (TQ1.9 quantized)");
 }
 
 #[test]
@@ -153,9 +153,9 @@ fn tq19_dot_accumulation_precision() {
     let a = raw("1.0");
     let weights = vec![w; 100];
     let activations = vec![a; 100];
-    let result = tq19_dot(&weights, &activations);
+    let result = tq19_dot(&weights, FixedPoint::from_raw_slice(&activations));
     let expected = raw("10.0");
-    assert_tq19_close(result, expected, "accumulation of 100 terms");
+    assert_tq19_close((result).raw(), expected, "accumulation of 100 terms");
 }
 
 // ============================================================================
@@ -166,24 +166,24 @@ fn tq19_dot_accumulation_precision() {
 fn trit_dot_all_positive() {
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
     let trits = vec![1i8, 1, 1];
-    let result = trit_dot(&trits, &activations);
-    assert_ulp(result, raw("6.0"), 1, "all-positive trits");
+    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
+    assert_ulp((result).raw(), raw("6.0"), 1, "all-positive trits");
 }
 
 #[test]
 fn trit_dot_all_negative() {
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
     let trits = vec![-1i8, -1, -1];
-    let result = trit_dot(&trits, &activations);
-    assert_ulp(result, raw("-6.0"), 1, "all-negative trits");
+    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
+    assert_ulp((result).raw(), raw("-6.0"), 1, "all-negative trits");
 }
 
 #[test]
 fn trit_dot_all_zero() {
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
     let trits = vec![0i8, 0, 0];
-    let result = trit_dot(&trits, &activations);
-    assert_ulp(result, raw("0.0"), 0, "all-zero trits");
+    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
+    assert_ulp((result).raw(), raw("0.0"), 0, "all-zero trits");
 }
 
 #[test]
@@ -191,8 +191,8 @@ fn trit_dot_mixed_signs() {
     // [+1, 0, -1] · [1.0, 2.0, 3.0] = 1.0 - 3.0 = -2.0
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
     let trits = vec![1i8, 0, -1];
-    let result = trit_dot(&trits, &activations);
-    assert_ulp(result, raw("-2.0"), 1, "mixed trits");
+    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
+    assert_ulp((result).raw(), raw("-2.0"), 1, "mixed trits");
 }
 
 #[test]
@@ -201,9 +201,9 @@ fn trit_dot_large_vector() {
     let n = 1024;
     let activations: Vec<BinaryStorage> = (0..n).map(|_| raw("0.001")).collect();
     let trits: Vec<i8> = (0..n).map(|i| if i % 2 == 0 { 1 } else { -1 }).collect();
-    let result = trit_dot(&trits, &activations);
+    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
     // Even count: 512 × 0.001 - 512 × 0.001 = 0
-    assert_ulp(result, raw("0.0"), 1, "large alternating trit dot");
+    assert_ulp((result).raw(), raw("0.0"), 1, "large alternating trit dot");
 }
 
 // ============================================================================
@@ -218,8 +218,8 @@ fn packed_trit_dot_basic() {
     let scale = raw("1.0");
 
     // Expected: 1.0 - 2.0 + 0 + 4.0 + 5.0 = 8.0, × 1.0 = 8.0
-    let result = packed_trit_dot(&packed, 5, &activations, scale);
-    assert_ulp(result, raw("8.0"), 2, "packed trit dot basic");
+    let result = packed_trit_dot(&packed, 5, FixedPoint::from_raw_slice(&activations), FixedPoint::from_raw(scale));
+    assert_ulp((result).raw(), raw("8.0"), 2, "packed trit dot basic");
 }
 
 #[test]
@@ -230,8 +230,8 @@ fn packed_trit_dot_with_scale() {
     let scale = raw("0.5");
 
     // Expected: (1+2+3) × 0.5 = 3.0
-    let result = packed_trit_dot(&packed, 3, &activations, scale);
-    assert_ulp(result, raw("3.0"), 2, "packed trit dot with scale");
+    let result = packed_trit_dot(&packed, 3, FixedPoint::from_raw_slice(&activations), FixedPoint::from_raw(scale));
+    assert_ulp((result).raw(), raw("3.0"), 2, "packed trit dot with scale");
 }
 
 // ============================================================================
@@ -244,10 +244,10 @@ fn matrix_matvec_identity() {
     let n = 4;
     let m = TQ19Matrix::from_fn(n, n, |r, c| if r == c { SCALE as i16 } else { 0 });
     let activations: Vec<BinaryStorage> = vec![raw("1.0"), raw("2.0"), raw("3.0"), raw("4.0")];
-    let result = m.matvec(&activations);
+    let result = m.matvec(FixedPoint::from_raw_slice(&activations));
 
     for i in 0..n {
-        assert_ulp(result[i], activations[i], 1, &format!("identity row {i}"));
+        assert_ulp((result[i]).raw(), activations[i], 1, &format!("identity row {i}"));
     }
 }
 
@@ -255,9 +255,9 @@ fn matrix_matvec_identity() {
 fn matrix_matvec_zero_matrix() {
     let m = TQ19Matrix::new(3, 3, vec![0i16; 9]);
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
-    let result = m.matvec(&activations);
+    let result = m.matvec(FixedPoint::from_raw_slice(&activations));
     for i in 0..3 {
-        assert_ulp(result[i], raw("0.0"), 0, &format!("zero matrix row {i}"));
+        assert_ulp((result[i]).raw(), raw("0.0"), 0, &format!("zero matrix row {i}"));
     }
 }
 
@@ -266,15 +266,15 @@ fn matrix_matvec_single_row() {
     // 1×3 matrix: [SCALE, SCALE, SCALE] → dot = sum of activations
     let m = TQ19Matrix::new(1, 3, vec![SCALE as i16; 3]);
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
-    let result = m.matvec(&activations);
-    assert_ulp(result[0], raw("6.0"), 1, "sum-row matvec");
+    let result = m.matvec(FixedPoint::from_raw_slice(&activations));
+    assert_ulp((result[0]).raw(), raw("6.0"), 1, "sum-row matvec");
 }
 
 #[test]
 fn matrix_matvec_fp_convenience() {
     let m = TQ19Matrix::from_fn(2, 2, |r, c| if r == c { SCALE as i16 } else { 0 });
     let activations = vec![raw("1.5"), raw("2.5")];
-    let result = m.matvec_fp(&activations);
+    let result = m.matvec_fp(FixedPoint::from_raw_slice(&activations));
     assert_eq!(result.len(), 2);
     // Check that results are FixedPoint instances (type system guarantees this)
     let _: FixedPoint = result[0];
@@ -296,13 +296,13 @@ fn batch_matvec_matches_sequential() {
     let v3: Vec<BinaryStorage> = (0..n).map(|_| raw("0.1")).collect();
 
     let seq = vec![
-        TQ19Matrix::new(n, n, data.clone()).matvec(&v1),
-        TQ19Matrix::new(n, n, data.clone()).matvec(&v2),
-        TQ19Matrix::new(n, n, data.clone()).matvec(&v3),
+        TQ19Matrix::new(n, n, data.clone()).matvec(FixedPoint::from_raw_slice(&v1)),
+        TQ19Matrix::new(n, n, data.clone()).matvec(FixedPoint::from_raw_slice(&v2)),
+        TQ19Matrix::new(n, n, data.clone()).matvec(FixedPoint::from_raw_slice(&v3)),
     ];
 
     let m = TQ19Matrix::new(n, n, data);
-    let batch = m.matvec_batch(&[&v1, &v2, &v3]);
+    let batch = m.matvec_batch(&[FixedPoint::from_raw_slice(&v1), FixedPoint::from_raw_slice(&v2), FixedPoint::from_raw_slice(&v3)]);
 
     for b in 0..3 {
         assert_eq!(batch[b], seq[b], "batch[{b}] must match sequential");
@@ -329,9 +329,9 @@ fn packed_trit_matvec_basic() {
     let activations = vec![raw("1.0"), raw("2.0"), raw("3.0")];
     let scales = vec![raw("1.0"), raw("1.0")];
 
-    let result = packed_trit_matvec(&packed, 2, 3, &activations, &scales);
-    assert_ulp(result[0], raw("6.0"), 2, "packed matvec row 0");
-    assert_ulp(result[1], raw("-1.0"), 2, "packed matvec row 1");
+    let result = packed_trit_matvec(&packed, 2, 3, FixedPoint::from_raw_slice(&activations), FixedPoint::from_raw_slice(&scales));
+    assert_ulp((result[0]).raw(), raw("6.0"), 2, "packed matvec row 0");
+    assert_ulp((result[1]).raw(), raw("-1.0"), 2, "packed matvec row 1");
 }
 
 // ============================================================================
@@ -340,27 +340,27 @@ fn packed_trit_matvec_basic() {
 
 #[test]
 fn empty_dot_product() {
-    let result = tq19_dot(&[], &[]);
-    assert_ulp(result, raw("0.0"), 0, "empty dot");
+    let result = tq19_dot(&[], &[] as &[FixedPoint]);
+    assert_ulp((result).raw(), raw("0.0"), 0, "empty dot");
 }
 
 #[test]
 fn single_element_dot() {
-    let result = tq19_dot(&[SCALE as i16], &[raw("7.25")]);
-    assert_ulp(result, raw("7.25"), 1, "single element dot");
+    let result = tq19_dot(&[SCALE as i16], &[FixedPoint::from_raw(raw("7.25"))]);
+    assert_ulp((result).raw(), raw("7.25"), 1, "single element dot");
 }
 
 #[test]
 fn max_weight_dot() {
     // MAX_RAW = 29524 → represents 29524/19683 ≈ 1.49987 (not exactly 1.5)
-    let result = tq19_dot(&[g_math::fixed_point::tq19::MAX_RAW], &[raw("1.0")]);
+    let result = tq19_dot(&[g_math::fixed_point::tq19::MAX_RAW], &[FixedPoint::from_raw(raw("1.0"))]);
     let expected = raw("1.5");
-    assert_tq19_close(result, expected, "max weight value");
+    assert_tq19_close((result).raw(), expected, "max weight value");
 }
 
 #[test]
 #[should_panic(expected = "activation length mismatch")]
 fn matvec_dimension_mismatch() {
     let m = TQ19Matrix::new(2, 3, vec![0i16; 6]);
-    m.matvec(&[raw("1.0"), raw("2.0")]); // wrong length
+    m.matvec(&[FixedPoint::from_raw(raw("1.0")), FixedPoint::from_raw(raw("2.0"))]); // wrong length
 }

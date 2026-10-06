@@ -17,10 +17,8 @@
 //! target range is `TierOverflow`.
 
 use crate::fixed_point::core_types::errors::OverflowDetected;
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-use crate::fixed_point::imperative::FixedPoint;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::width::Storage;
 
 /// Which 16-bit float format a bit pattern is in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -94,25 +92,27 @@ pub fn to_q64_raw(bits: u16, kind: HalfKind) -> Result<i128, OverflowDetected> {
 /// The value at the build's storage format: `trunc(v * 2^FRAC_BITS)` toward
 /// zero. `Err(TierOverflow)` when the magnitude exceeds the largest storage
 /// value.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-pub fn to_storage_raw(bits: u16, kind: HalfKind) -> Result<BinaryStorage, OverflowDetected> {
-    #[cfg(table_format = "q16_16")]
-    let frac_bits = crate::fixed_point::frac_config::FRAC_BITS;
-    #[cfg(table_format = "q32_32")]
-    let frac_bits = 32;
-    let raw = to_raw(bits, kind, frac_bits)?;
-    // the magnitude is compared, so -2^(W-1) is refused like +2^(W-1)
-    if raw > BinaryStorage::MAX as i128 || raw < -(BinaryStorage::MAX as i128) {
-        return Err(OverflowDetected::TierOverflow);
+/// The value as a raw storage word of `F` fraction bits (truncated toward
+/// zero), `TierOverflow` when its magnitude does not fit the word (so
+/// -2^(W-1) is refused like +2^(W-1)).
+pub fn to_storage_raw<S: Storage, const F: u32>(bits: u16, kind: HalfKind) -> Result<S, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let raw = to_raw(bits, kind, F)?;
+    match (S::from_i128_checked(raw), raw.checked_neg().and_then(S::from_i128_checked)) {
+        (Some(v), Some(_)) => Ok(v),
+        _ => Err(OverflowDetected::TierOverflow),
     }
-    Ok(raw as BinaryStorage)
 }
 
-/// The value as a `FixedPoint`, truncated toward zero; see [`to_storage_raw`].
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+/// The value as a `Fixed<S, F>` (truncated toward zero), `TierOverflow` past the word.
 #[inline]
-pub fn to_fixed(bits: u16, kind: HalfKind) -> Result<FixedPoint, OverflowDetected> {
-    Ok(FixedPoint::from_raw(to_storage_raw(bits, kind)?))
+pub fn to_fixed<S: Storage, const F: u32>(bits: u16, kind: HalfKind) -> Result<Fixed<S, F>, OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    Ok(Fixed::from_raw(to_storage_raw::<S, F>(bits, kind)?))
 }
 
 /// TQ1.9 raw value: `round(v * 3^9)`, half away from zero, unclamped (the
@@ -157,10 +157,12 @@ impl WeightBits {
     }
 
     /// Storage raw of element `i`; see [`to_storage_raw`].
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    #[inline]
-    pub fn storage_raw(&self, i: usize) -> Result<BinaryStorage, OverflowDetected> {
-        to_storage_raw(self.bits[i], self.kind)
+        #[inline]
+    pub fn storage_raw<S: Storage, const F: u32>(&self, i: usize) -> Result<S, OverflowDetected>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+    {
+        to_storage_raw::<S, F>(self.bits[i], self.kind)
     }
 
     /// TQ1.9 raw of element `i`; see [`to_tq19_raw`].

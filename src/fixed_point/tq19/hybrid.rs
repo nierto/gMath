@@ -28,12 +28,10 @@
 //! to their exact i16 weights, then the standard `tq19_dot` runs.
 
 use super::ops::tq19_dot;
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 use super::ops::tq19_dot_q2f;
 use super::{TQ19Matrix, MAX_RAW, MIN_RAW};
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
+use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
+use super::ops::{TqWord, WideOutput};
 
 use rayon::prelude::*;
 
@@ -273,7 +271,10 @@ impl HybridTQ19 {
     ///
     /// # Panics
     /// Panics if `activations.len() != self.cols()`.
-    pub fn matvec(&self, activations: &[BinaryStorage]) -> Vec<BinaryStorage> {
+    pub fn matvec<S: TqWord, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Fixed<S, F>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(
             activations.len(),
             self.cols,
@@ -289,7 +290,10 @@ impl HybridTQ19 {
     }
 
     /// Row-parallel matvec (rayon). One reconstruction buffer per worker.
-    pub fn matvec_par(&self, activations: &[BinaryStorage]) -> Vec<BinaryStorage> {
+    pub fn matvec_par<S: TqWord, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Fixed<S, F>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(
             activations.len(),
             self.cols,
@@ -311,7 +315,10 @@ impl HybridTQ19 {
     ///
     /// # Panics
     /// Panics if any activation vector length != `self.cols()`.
-    pub fn matvec_batch(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>> {
+    pub fn matvec_batch<S: TqWord, const F: u32>(&self, batch: &[&[Fixed<S, F>]]) -> Vec<Vec<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(
                 v.len(),
@@ -320,7 +327,7 @@ impl HybridTQ19 {
             );
         }
         let mut buf = vec![0i16; self.buf_len()];
-        let by_row: Vec<Vec<BinaryStorage>> = (0..self.rows)
+        let by_row: Vec<Vec<Fixed<S, F>>> = (0..self.rows)
             .map(|row| {
                 self.reconstruct_row_into(row, &mut buf);
                 let w = &buf[..self.cols];
@@ -331,7 +338,10 @@ impl HybridTQ19 {
     }
 
     /// Row-parallel batch matvec.
-    pub fn matvec_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<BinaryStorage>> {
+    pub fn matvec_batch_par<S: TqWord, const F: u32>(&self, batch: &[&[Fixed<S, F>]]) -> Vec<Vec<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(
                 v.len(),
@@ -339,7 +349,7 @@ impl HybridTQ19 {
                 "HybridTQ19::matvec_batch_par: activation[{i}] length mismatch"
             );
         }
-        let by_row: Vec<Vec<BinaryStorage>> = (0..self.rows)
+        let by_row: Vec<Vec<Fixed<S, F>>> = (0..self.rows)
             .into_par_iter()
             .map_init(
                 || vec![0i16; self.buf_len()],
@@ -361,7 +371,10 @@ impl HybridTQ19 {
     /// # Panics
     /// Panics on an activation length mismatch or if
     /// `out.len() != batch.len() * rows`.
-    pub fn matvec_batch_par_into(&self, batch: &[&[BinaryStorage]], out: &mut [BinaryStorage]) {
+    pub fn matvec_batch_par_into<S: TqWord, const F: u32>(&self, batch: &[&[Fixed<S, F>]], out: &mut [Fixed<S, F>])
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(
                 v.len(),
@@ -390,8 +403,10 @@ impl HybridTQ19 {
     /// Wide-output matvec: each row at 2·FRAC_BITS precision, exactly one rounding.
     ///
     /// `q2f / (1 << FRAC_BITS)` reproduces [`HybridTQ19::matvec`] bit-for-bit.
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    pub fn matvec_q2f(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+    pub fn matvec_q2f<S: WideOutput, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Compute<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(activations.len(), self.cols, "HybridTQ19::matvec_q2f: activation length mismatch");
         let mut buf = vec![0i16; self.buf_len()];
         (0..self.rows)
@@ -403,8 +418,10 @@ impl HybridTQ19 {
     }
 
     /// Row-parallel wide-output matvec. See [`HybridTQ19::matvec_q2f`].
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    pub fn matvec_q2f_par(&self, activations: &[BinaryStorage]) -> Vec<ComputeStorage> {
+    pub fn matvec_q2f_par<S: WideOutput, const F: u32>(&self, activations: &[Fixed<S, F>]) -> Vec<Compute<Fixed<S, F>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         assert_eq!(activations.len(), self.cols, "HybridTQ19::matvec_q2f_par: activation length mismatch");
         (0..self.rows)
             .into_par_iter()
@@ -419,12 +436,14 @@ impl HybridTQ19 {
     }
 
     /// Row-parallel wide-output batch matvec. See [`HybridTQ19::matvec_q2f`].
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    pub fn matvec_q2f_batch_par(&self, batch: &[&[BinaryStorage]]) -> Vec<Vec<ComputeStorage>> {
+    pub fn matvec_q2f_batch_par<S: WideOutput, const F: u32>(&self, batch: &[&[Fixed<S, F>]]) -> Vec<Vec<Compute<Fixed<S, F>>>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+        {
         for (i, v) in batch.iter().enumerate() {
             assert_eq!(v.len(), self.cols, "HybridTQ19::matvec_q2f_batch_par: activation[{i}] length mismatch");
         }
-        let by_row: Vec<Vec<ComputeStorage>> = (0..self.rows)
+        let by_row: Vec<Vec<Compute<Fixed<S, F>>>> = (0..self.rows)
             .into_par_iter()
             .map_init(
                 || vec![0i16; self.buf_len()],
@@ -453,8 +472,10 @@ fn transpose<T: Copy>(by_row: Vec<Vec<T>>, batch_len: usize) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(table_format = "q16_16"))]
-    use crate::fixed_point::imperative::FixedPoint;
+    #[allow(unused_imports)]
+    use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
+    #[allow(unused_imports)]
+    use crate::fixed_point::FixedPoint;
 
     struct Lcg(u64);
     impl Lcg {
@@ -476,7 +497,10 @@ mod tests {
         /// storage range at every split up to Q8.24. With integers the dot
         /// left the range from 20 fractional bits up and, until 0.6.5, both
         /// sides of the comparison wrapped to the same wrong value.
-        fn activation(&mut self) -> BinaryStorage {
+        fn activation(&mut self) -> FixedPoint {
+            FixedPoint::from_raw(self.activation_raw())
+        }
+        fn activation_raw(&mut self) -> BinaryStorage {
             let n = (self.next() % 2001) as i32 - 1000;
             #[cfg(table_format = "q16_16")]
             { ((n as i64) << crate::fixed_point::frac_config::FRAC_BITS >> 12) as i32 }
@@ -512,15 +536,15 @@ mod tests {
         let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
         let m = TQ19Matrix::new(rows, cols, data);
         let h = HybridTQ19::from_tq19(&m);
-        let x: Vec<BinaryStorage> = (0..cols).map(|_| rng.activation()).collect();
+        let x: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
         let narrow = h.matvec(&x);
         let wide = h.matvec_q2f(&x);
         for r in 0..rows {
-            assert_eq!(narrow_q2f(wide[r]), narrow[r], "row {r}");
+            assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}");
         }
         assert_eq!(wide, m.matvec_q2f(&x), "hybrid wide != dense wide");
         assert_eq!(wide, h.matvec_q2f_par(&x));
-        let batch: Vec<&[BinaryStorage]> = vec![&x];
+        let batch: Vec<&[FixedPoint]> = vec![&x];
         assert_eq!(h.matvec_q2f_batch_par(&batch)[0], wide);
     }
 
@@ -572,7 +596,7 @@ mod tests {
             let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
             let m = TQ19Matrix::new(rows, cols, data);
             let h = HybridTQ19::from_tq19(&m);
-            let acts: Vec<BinaryStorage> = (0..cols).map(|_| rng.activation()).collect();
+            let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
             assert_eq!(h.matvec(&acts), m.matvec(&acts), "{rows}x{cols} mismatch");
         }
     }
@@ -584,7 +608,7 @@ mod tests {
         let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
         let m = TQ19Matrix::new(rows, cols, data);
         let h = HybridTQ19::from_tq19(&m);
-        let acts: Vec<BinaryStorage> = (0..cols).map(|_| rng.activation()).collect();
+        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
         assert_eq!(h.matvec(&acts), m.matvec(&acts));
     }
 
@@ -596,14 +620,14 @@ mod tests {
         let m = TQ19Matrix::new(rows, cols, data);
         let h = HybridTQ19::from_tq19(&m);
 
-        let acts: Vec<BinaryStorage> = (0..cols).map(|_| rng.activation()).collect();
+        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
         assert_eq!(h.matvec_par(&acts), h.matvec(&acts));
 
-        let batch_data: Vec<Vec<BinaryStorage>> = (0..4)
+        let batch_data: Vec<Vec<FixedPoint>> = (0..4)
             .map(|_| (0..cols).map(|_| rng.activation()).collect())
             .collect();
-        let batch: Vec<&[BinaryStorage]> = batch_data.iter().map(|v| v.as_slice()).collect();
-        let expected: Vec<Vec<BinaryStorage>> = batch.iter().map(|v| m.matvec(v)).collect();
+        let batch: Vec<&[FixedPoint]> = batch_data.iter().map(|v| v.as_slice()).collect();
+        let expected: Vec<Vec<FixedPoint>> = batch.iter().map(|v| m.matvec(v)).collect();
         assert_eq!(h.matvec_batch(&batch), expected);
         assert_eq!(h.matvec_batch_par(&batch), expected);
     }

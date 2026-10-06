@@ -15,16 +15,14 @@
 //! Profile support: realtime (i32 activations, any `GMATH_FRAC_BITS`). The
 //! SIMD kernels split a 32-bit activation into 16-bit halves.
 
-#![cfg(table_format = "q16_16")]
 
-use crate::fixed_point::frac_config::FRAC_BITS;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use rayon::prelude::*;
 
 /// Largest code: `(3^5 - 1) / 2`.
 pub const TQ5_MAX: i8 = 121;
 /// The wide output keeps `FRAC_BITS` extra fractional bits: the Q32.32 scale
 /// is shifted out by `32 - FRAC_BITS` instead of 32.
-const Q2F_SHIFT: u32 = 32 - FRAC_BITS;
 
 /// A row-major matrix of five-trit codes with a per-row scale.
 ///
@@ -323,7 +321,7 @@ impl RowScaledTQ5 {
     ///
     /// # Panics
     /// Panics if `x.len() != self.cols()` or a result leaves the storage range.
-    pub fn matvec(&self, x: &[i32]) -> Vec<i32> {
+    fn matvec_raw(&self, x: &[i32]) -> Vec<i32> {
         assert_eq!(x.len(), self.cols, "RowScaledTQ5::matvec: activation length mismatch");
         let split = SplitActivation::new(x);
         (0..self.rows)
@@ -335,7 +333,7 @@ impl RowScaledTQ5 {
     }
 
     /// Row-parallel [`matvec`](Self::matvec): the same results.
-    pub fn matvec_par(&self, x: &[i32]) -> Vec<i32> {
+    fn matvec_par_raw(&self, x: &[i32]) -> Vec<i32> {
         assert_eq!(
             x.len(),
             self.cols,
@@ -356,10 +354,10 @@ impl RowScaledTQ5 {
     /// chunks sized so a chunk's low halves stay in L2; the rest (dense high halves, values
     /// too large to split, rows past the last full group of 4, no AVX2) take the per-row dot.
     /// Every path computes the same integer `sum(code * x)` before the row scale.
-    pub fn matvec_batch_par(&self, batch: &[&[i32]]) -> Vec<Vec<i32>> {
+    fn matvec_batch_par_raw(&self, batch: &[&[i32]]) -> Vec<Vec<i32>> {
         let rows = self.rows;
         let mut flat = vec![0i32; batch.len() * rows];
-        self.matvec_batch_par_into(batch, &mut flat);
+        self.matvec_batch_par_into_raw(batch, &mut flat);
         if rows == 0 {
             return vec![Vec::new(); batch.len()];
         }
@@ -374,7 +372,7 @@ impl RowScaledTQ5 {
     /// # Panics
     /// Panics on an activation length mismatch or if
     /// `out.len() != batch.len() * rows`.
-    pub fn matvec_batch_par_into(&self, batch: &[&[i32]], out: &mut [i32]) {
+    fn matvec_batch_par_into_raw(&self, batch: &[&[i32]], out: &mut [i32]) {
         for x in batch {
             assert_eq!(
                 x.len(),
@@ -466,8 +464,8 @@ impl RowScaledTQ5 {
 
     /// `floor(acc * s / 2^(32 - FRAC_BITS))`; fails loud past the compute range.
     #[inline(always)]
-    fn scale_row_q2f(acc: i64, s_q32: u64) -> i64 {
-        let wide = (acc as i128 * s_q32 as i128) >> Q2F_SHIFT;
+    fn scale_row_q2f(acc: i64, s_q32: u64, q2f_shift: u32) -> i64 {
+        let wide = (acc as i128 * s_q32 as i128) >> q2f_shift;
         if wide > i64::MAX as i128 || wide < i64::MIN as i128 {
             panic!("RowScaledTQ5: q2f scaled output exceeds compute range");
         }
@@ -479,19 +477,19 @@ impl RowScaledTQ5 {
     ///
     /// # Panics
     /// Panics if `x.len() != self.cols()` or a result leaves the compute range.
-    pub fn matvec_q2f(&self, x: &[i32]) -> Vec<i64> {
+    fn matvec_q2f_raw(&self, x: &[i32], q2f_shift: u32) -> Vec<i64> {
         assert_eq!(x.len(), self.cols, "RowScaledTQ5::matvec_q2f: activation length mismatch");
         let split = SplitActivation::new(x);
         (0..self.rows)
             .map(|r| {
                 let row = &self.data[r * self.cols..(r + 1) * self.cols];
-                Self::scale_row_q2f(Self::dot_any(row, x, split.as_ref()), self.scales_q32[r])
+                Self::scale_row_q2f(Self::dot_any(row, x, split.as_ref()), self.scales_q32[r], q2f_shift)
             })
             .collect()
     }
 
     /// Row-parallel [`matvec_q2f`](Self::matvec_q2f): the same results.
-    pub fn matvec_q2f_par(&self, x: &[i32]) -> Vec<i64> {
+    fn matvec_q2f_par_raw(&self, x: &[i32], q2f_shift: u32) -> Vec<i64> {
         assert_eq!(
             x.len(),
             self.cols,
@@ -502,7 +500,7 @@ impl RowScaledTQ5 {
             .into_par_iter()
             .map(|r| {
                 let row = &self.data[r * self.cols..(r + 1) * self.cols];
-                Self::scale_row_q2f(Self::dot_any(row, x, split.as_ref()), self.scales_q32[r])
+                Self::scale_row_q2f(Self::dot_any(row, x, split.as_ref()), self.scales_q32[r], q2f_shift)
             })
             .collect()
     }
@@ -544,3 +542,56 @@ impl RowScaledTQ5 {
         Ok(Self::from_parts(rows, cols, data, scales))
     }
 }
+
+/// The public forms over the activations' format `Fixed<i32, F>`: the raw
+/// kernels above run on the 32-bit words, the wide output keeps `F` extra
+/// fractional bits (the Q32.32 scale is shifted out by `32 - F`).
+impl RowScaledTQ5 {
+    /// `y = W x` with per-row scales: `floor(sum(code * x) * s_r / 2^32)`.
+    pub fn matvec<const F: u32>(&self, x: &[Fixed<i32, F>]) -> Vec<Fixed<i32, F>>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        self.matvec_raw(Fixed::raw_slice(x)).into_iter().map(Fixed::from_raw).collect()
+    }
+    /// [`RowScaledTQ5::matvec`] with the rows in parallel.
+    pub fn matvec_par<const F: u32>(&self, x: &[Fixed<i32, F>]) -> Vec<Fixed<i32, F>>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        self.matvec_par_raw(Fixed::raw_slice(x)).into_iter().map(Fixed::from_raw).collect()
+    }
+    /// A batch of activations, rows in parallel, one result vector per activation.
+    pub fn matvec_batch_par<const F: u32>(&self, batch: &[&[Fixed<i32, F>]]) -> Vec<Vec<Fixed<i32, F>>>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        let raw: Vec<&[i32]> = batch.iter().map(|x| Fixed::raw_slice(x)).collect();
+        self.matvec_batch_par_raw(&raw).into_iter().map(|v| v.into_iter().map(Fixed::from_raw).collect()).collect()
+    }
+    /// [`RowScaledTQ5::matvec_batch_par`] into a caller buffer of `batch.len() * rows`
+    /// values, activation-major.
+    pub fn matvec_batch_par_into<const F: u32>(&self, batch: &[&[Fixed<i32, F>]], out: &mut [Fixed<i32, F>])
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        let raw: Vec<&[i32]> = batch.iter().map(|x| Fixed::raw_slice(x)).collect();
+        self.matvec_batch_par_into_raw(&raw, Fixed::raw_slice_mut(out))
+    }
+    /// Wide-output matvec at `2F` fractional bits:
+    /// `floor(sum(code * x) * s_r / 2^(32 - F))`, one rounding.
+    pub fn matvec_q2f<const F: u32>(&self, x: &[Fixed<i32, F>]) -> Vec<i64>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        self.matvec_q2f_raw(Fixed::raw_slice(x), 32 - F)
+    }
+    /// [`RowScaledTQ5::matvec_q2f`] with the rows in parallel.
+    pub fn matvec_q2f_par<const F: u32>(&self, x: &[Fixed<i32, F>]) -> Vec<i64>
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        self.matvec_q2f_par_raw(Fixed::raw_slice(x), 32 - F)
+    }
+}
+

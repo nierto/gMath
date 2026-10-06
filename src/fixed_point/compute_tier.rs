@@ -34,8 +34,8 @@
 //! use g_math::fixed_point::FixedPoint;
 //!
 //! let x = ct::from_fixed(FixedPoint::from_str("0.5"));
-//! let y = ct::sigmoid(x);                 // stays at 2×FRAC_BITS precision
-//! let s = ct::to_fixed(y);                // single rounding, back to storage
+//! let y = ct::sigmoid::<FixedPoint>(x);                 // stays at 2×FRAC_BITS precision
+//! let s = ct::to_fixed::<FixedPoint>(y);                // single rounding, back to storage
 //! # let _ = s;
 //! # }
 //! ```

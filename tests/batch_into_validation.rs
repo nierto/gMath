@@ -59,20 +59,21 @@ fn tq19_matrix_forms_write_what_they_return() {
         let hybrid = HybridTQ19::from_tq19(&dense);
         for &nb in BATCHES {
             let batch = rng.batch(nb, cols);
-            let refs: Vec<&[Raw]> = batch.iter().map(|v| &v[..]).collect();
+            let fbatch: Vec<Vec<FixedPoint>> = batch.iter().map(|v| v.iter().map(|&r| FixedPoint::from_raw(r)).collect()).collect();
+            let refs: Vec<&[FixedPoint]> = fbatch.iter().map(|v| &v[..]).collect();
             let want = flat(dense.matvec_batch_par(&refs));
             assert_eq!(want.len(), nb * rows);
 
-            let mut out = vec![FixedPoint::ZERO.raw(); nb * rows];
+            let mut out = vec![FixedPoint::ZERO; nb * rows];
             dense.matvec_batch_par_into(&refs, &mut out);
             assert_eq!(out, want, "TQ19Matrix {rows}x{cols} batch {nb}");
 
-            let mut out = vec![FixedPoint::ZERO.raw(); nb * rows];
+            let mut out = vec![FixedPoint::ZERO; nb * rows];
             planar.matvec_batch_par_into(&refs, &mut out);
             assert_eq!(out, flat(planar.matvec_batch_par(&refs)), "PlanarTQ19 {rows}x{cols} batch {nb}");
             assert_eq!(out, want);
 
-            let mut out = vec![FixedPoint::ZERO.raw(); nb * rows];
+            let mut out = vec![FixedPoint::ZERO; nb * rows];
             hybrid.matvec_batch_par_into(&refs, &mut out);
             assert_eq!(out, flat(hybrid.matvec_batch_par(&refs)), "HybridTQ19 {rows}x{cols} batch {nb}");
             assert_eq!(out, want);
@@ -90,8 +91,9 @@ fn row_scaled_tq19_writes_what_it_returns() {
         let m = RowScaledTQ19::from_parts(rows, cols, rng.weights(rows * cols), scales);
         for &nb in BATCHES {
             let batch = rng.batch(nb, cols);
-            let refs: Vec<&[Raw]> = batch.iter().map(|v| &v[..]).collect();
-            let mut out = vec![FixedPoint::ZERO.raw(); nb * rows];
+            let fbatch: Vec<Vec<FixedPoint>> = batch.iter().map(|v| v.iter().map(|&r| FixedPoint::from_raw(r)).collect()).collect();
+            let refs: Vec<&[FixedPoint]> = fbatch.iter().map(|v| &v[..]).collect();
+            let mut out = vec![FixedPoint::ZERO; nb * rows];
             m.matvec_batch_par_into(&refs, &mut out);
             assert_eq!(out, flat(m.matvec_batch_par(&refs)), "RowScaledTQ19 {rows}x{cols} batch {nb}");
         }
@@ -120,9 +122,10 @@ fn row_scaled_tq5_writes_what_it_returns() {
                         .collect()
                 })
                 .collect();
-            let refs: Vec<&[i32]> = batch.iter().map(|v| &v[..]).collect();
-            let each: Vec<i32> = refs.iter().flat_map(|x| m.matvec(x)).collect();
-            let mut out = vec![0i32; nb * rows];
+            let fbatch: Vec<Vec<FixedPoint>> = batch.iter().map(|v| v.iter().map(|&r| FixedPoint::from_raw(r)).collect()).collect();
+            let refs: Vec<&[FixedPoint]> = fbatch.iter().map(|v| &v[..]).collect();
+            let each: Vec<FixedPoint> = refs.iter().flat_map(|x| m.matvec(x)).collect();
+            let mut out = vec![FixedPoint::ZERO; nb * rows];
             m.matvec_batch_par_into(&refs, &mut out);
             assert_eq!(out, each, "RowScaledTQ5 {rows}x{cols} batch {nb}: buffer form against single matvecs");
             assert_eq!(flat(m.matvec_batch_par(&refs)), each, "RowScaledTQ5 {rows}x{cols} batch {nb}: allocating form");
@@ -136,7 +139,7 @@ fn a_wrong_buffer_length_panics() {
     let m = TQ19Matrix::new(2, 2, vec![1, 2, 3, 4]);
     let x = [FixedPoint::one().raw(), FixedPoint::one().raw()];
     let mut out = vec![FixedPoint::ZERO.raw(); 3];
-    m.matvec_batch_par_into(&[&x[..]], &mut out);
+    m.matvec_batch_par_into(&[FixedPoint::from_raw_slice(&x[..])], FixedPoint::from_raw_slice_mut(&mut out));
 }
 
 #[test]
