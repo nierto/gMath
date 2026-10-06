@@ -3,6 +3,8 @@
 //! Converts between i128 and profile-specific BinaryStorage,
 //! handles decimal-to-rational reduction and trailing zero detection.
 
+use super::format::FascFormat;
+use crate::fixed_point::fixed_num::ProfileFormat;
 use super::BinaryStorage;
 #[allow(unused_imports)]
 use crate::fixed_point::i256::I256;
@@ -15,20 +17,7 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalN
 /// unchecked `as` casts this replaced wrapped silently.
 #[inline(always)]
 pub(crate) fn try_to_binary_storage(val: i128) -> Result<BinaryStorage, OverflowDetected> {
-    #[cfg(table_format = "q256_256")]
-    { Ok(I512::from_i128(val)) }
-
-    #[cfg(table_format = "q128_128")]
-    { Ok(I256::from_i128(val)) }
-
-    #[cfg(table_format = "q64_64")]
-    { Ok(val) }
-
-    #[cfg(table_format = "q32_32")]
-    { i64::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
-
-    #[cfg(table_format = "q16_16")]
-    { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+    <ProfileFormat as FascFormat>::try_to_binary_storage(val)
 }
 
 /// Profile-specific extraction to i128 from BinaryStorage
@@ -36,21 +25,7 @@ pub(crate) fn try_to_binary_storage(val: i128) -> Result<BinaryStorage, Overflow
 /// **PURPOSE**: Extract i128 value for operations that need native i128
 #[inline(always)]
 pub(super) fn binary_storage_to_i128(val: &BinaryStorage) -> i128 {
-    #[cfg(table_format = "q256_256")]
-    { val.as_i512().as_i256().as_i128() }
-
-    #[cfg(table_format = "q128_128")]
-    { val.as_i256().as_i128() }
-
-    #[cfg(table_format = "q64_64")]
-    { *val }
-
-    #[cfg(table_format = "q32_32")]
-    { *val as i128 }
-
-    #[cfg(table_format = "q16_16")]
-    { *val as i128 }
-
+    <ProfileFormat as FascFormat>::binary_storage_to_i128(val)
 }
 
 /// Reduce a decimal rational (scaled_value / 10^dp) by common factors of 2 and 5.
@@ -72,7 +47,6 @@ pub(super) fn reduce_decimal_to_rational(raw_num: i128, decimals: u8) -> Result<
 }
 
 /// Count trailing zero bits in I256 (little-endian words)
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 #[allow(dead_code)]
 pub(super) fn trailing_zeros_i256(val: &I256) -> u32 {
     let w = val.words;
@@ -84,7 +58,6 @@ pub(super) fn trailing_zeros_i256(val: &I256) -> u32 {
 }
 
 /// Count trailing zero bits in I512 (little-endian words)
-#[cfg(table_format = "q256_256")]
 pub(super) fn trailing_zeros_i512(val: &I512) -> u32 {
     let w = val.words;
     for i in 0..8 {

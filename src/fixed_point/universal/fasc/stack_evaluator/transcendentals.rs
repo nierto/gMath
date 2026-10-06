@@ -6,7 +6,9 @@
 //! and conversion helpers (to_compute_storage, to_binary_storage).
 
 #[allow(unused_imports)]
-use super::{BinaryStorage, ComputeStorage, StackValue, StackEvaluator, DECIMAL_DP_PROMOTION_THRESHOLD};
+use super::format::FascFormat;
+use crate::fixed_point::fixed_num::ProfileFormat;
+use super::{BinaryStorage, ComputeStorage, StackValue, StackEvaluator};
 use super::compute::*;
 #[allow(unused_imports)]
 use super::conversion::{try_to_binary_storage, reduce_decimal_to_rational};
@@ -920,81 +922,7 @@ impl StackEvaluator {
     /// before any range check: a symbolic 1e20 coerced to binary on
     /// embedded wrapped mod 2^64 and produced a plausible WRONG value.
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<BinaryStorage, OverflowDetected> {
-        if den == 0 {
-            return Err(OverflowDetected::DivisionByZero);
-        }
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-        {
-            #[cfg(table_format = "q16_16")]
-            let fb: usize = crate::fixed_point::frac_config::FRAC_BITS as usize;
-            #[cfg(table_format = "q32_32")]
-            let fb: usize = 32;
-            #[cfg(table_format = "q64_64")]
-            let fb: usize = 64;
-            let n = I256::from_i128(num) << fb;
-            let d = I256::from_i128(den);
-            let (mut q, r) = crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256(n, d);
-            let r_abs = if r.is_negative() { -r } else { r };
-            let d_abs = if d.is_negative() { -d } else { d };
-            let positive = n.is_negative() == d.is_negative();
-            let r2 = r_abs + r_abs;
-            if if positive { r2 >= d_abs } else { r2 > d_abs } {
-                q = if positive { q + I256::from_i128(1) } else { q - I256::from_i128(1) };
-            }
-            if !q.fits_in_i128() {
-                return Err(OverflowDetected::TierOverflow);
-            }
-            let q128 = q.as_i128();
-            #[cfg(table_format = "q64_64")]
-            { Ok(q128) }
-            #[cfg(table_format = "q32_32")]
-            {
-                i64::try_from(q128).map_err(|_| OverflowDetected::TierOverflow)
-            }
-            #[cfg(table_format = "q16_16")]
-            {
-                i32::try_from(q128).map_err(|_| OverflowDetected::TierOverflow)
-            }
-        }
-        #[cfg(table_format = "q128_128")]
-        {
-            let n = I512::from_i256(I256::from_i128(num)) << 128;
-            let d = I512::from_i256(I256::from_i128(den));
-            let (mut q, r) = crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(n, d);
-            let r_abs = if r.is_negative() { -r } else { r };
-            let d_abs = if d.is_negative() { -d } else { d };
-            let positive = n.is_negative() == d.is_negative();
-            let r2 = r_abs + r_abs;
-            if if positive { r2 >= d_abs } else { r2 > d_abs } {
-                q = if positive { q + I512::from_i128(1) } else { q - I512::from_i128(1) };
-            }
-            if !q.fits_in_i256() {
-                return Err(OverflowDetected::TierOverflow);
-            }
-            Ok(q.as_i256())
-        }
-        #[cfg(table_format = "q256_256")]
-        {
-            use crate::fixed_point::I1024;
-            let n = I1024::from_i512(I512::from_i256(I256::from_i128(num))) << 256;
-            let d = I1024::from_i512(I512::from_i256(I256::from_i128(den)));
-            let mut q = n / d;
-            let r = n % d;
-            let r_neg = (r.words[15] as i64) < 0;
-            let d_neg = (d.words[15] as i64) < 0;
-            let n_neg = (n.words[15] as i64) < 0;
-            let r_abs = if r_neg { -r } else { r };
-            let d_abs = if d_neg { -d } else { d };
-            let positive = n_neg == d_neg;
-            let r2 = r_abs + r_abs;
-            if if positive { r2 >= d_abs } else { r2 > d_abs } {
-                q = if positive { q + I1024::from_i128(1) } else { q - I1024::from_i128(1) };
-            }
-            if !q.fits_in_i512() {
-                return Err(OverflowDetected::TierOverflow);
-            }
-            Ok(q.as_i512())
-        }
+        <ProfileFormat as FascFormat>::rational_i128_to_storage_checked(num, den)
     }
 
     /// Convert any StackValue to profile-specific BinaryStorage format
@@ -1334,25 +1262,11 @@ impl StackEvaluator {
 /// exceeds i128 range (e.g., large-numerator rationals from multiply_via_rational).
 /// On Q256.256, falls back to I512 arithmetic for Ultra-tier rationals.
 pub(super) fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected> {
-    // Try i128 extraction (works for all profiles ≤ Q128.128 and reduced rationals)
-    if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
-        return rational_to_decimal_components_i128(num, den);
-    }
-
-    // Q256.256 fallback: extract as I512 for Ultra-tier rationals
-    #[cfg(table_format = "q256_256")]
-    {
-        let parts = rational.extract_native();
-        if let Some((num, den)) = parts.try_as_i512_pair() {
-            return rational_to_decimal_components_i512(num, den);
-        }
-    }
-
-    Err(OverflowDetected::Overflow)
+    <ProfileFormat as FascFormat>::rational_to_decimal_components(rational)
 }
 
 /// i128 path for rational_to_decimal_components (original algorithm)
-fn rational_to_decimal_components_i128(num: i128, den: i128) -> Result<(u8, i128), OverflowDetected> {
+pub(super) fn rational_to_decimal_components_i128(num: i128, den: i128) -> Result<(u8, i128), OverflowDetected> {
     if den == 0 {
         return Err(OverflowDetected::DivisionByZero);
     }
@@ -1402,8 +1316,7 @@ fn rational_to_decimal_components_i128(num: i128, den: i128) -> Result<(u8, i128
 /// I512 path for rational_to_decimal_components (Q256.256 Ultra-tier fallback).
 /// Computes num * 10^decimals / den using I512 arithmetic, splitting into
 /// integer_part and fractional_part to avoid overflow.
-#[cfg(table_format = "q256_256")]
-fn rational_to_decimal_components_i512(num: I512, den: I512) -> Result<(u8, i128), OverflowDetected> {
+pub(super) fn rational_to_decimal_components_i512(num: I512, den: I512) -> Result<(u8, i128), OverflowDetected> {
     if den.is_zero() {
         return Err(OverflowDetected::DivisionByZero);
     }

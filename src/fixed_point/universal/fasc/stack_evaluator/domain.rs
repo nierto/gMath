@@ -4,80 +4,25 @@
 //! (UniversalTernaryFixed, UniversalDecimalTiered, UniversalBinaryFixed).
 //! Also maintains CompactShadow precision during arithmetic operations.
 
+use super::format::FascFormat;
+use crate::fixed_point::fixed_num::ProfileFormat;
 use super::BinaryStorage;
+#[cfg(test)]
 use crate::fixed_point::i256::I256;
+#[cfg(test)]
 use crate::fixed_point::i512::I512;
+#[cfg(test)]
 use crate::fixed_point::I1024;
-use crate::fixed_point::domains::balanced_ternary::ternary_types::{UniversalTernaryFixed, TernaryRaw};
-use crate::fixed_point::domains::binary_fixed::binary_types::{UniversalBinaryFixed, BinaryRaw};
+use crate::fixed_point::domains::balanced_ternary::ternary_types::UniversalTernaryFixed;
+#[cfg(test)]
+use crate::fixed_point::domains::balanced_ternary::ternary_types::TernaryRaw;
+use crate::fixed_point::domains::binary_fixed::binary_types::UniversalBinaryFixed;
 use crate::fixed_point::domains::decimal_fixed::decimal_types::UniversalDecimalTiered;
 use crate::fixed_point::universal::tier_types::CompactShadow;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
-use super::conversion::binary_storage_to_i128;
 
 pub(super) fn ternary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<UniversalTernaryFixed, OverflowDetected> {
-    match tier {
-        1..=3 => {
-            // Tiers 1-3 fit in i128
-            let val = binary_storage_to_i128(storage);
-            UniversalTernaryFixed::from_tier_value(tier, val)
-        }
-        4 => {
-            // Tier 4 uses I256
-            #[cfg(table_format = "q256_256")]
-            { UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(storage.as_i256())) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(*storage)) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(I256::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(I256::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(I256::from_i128(*storage as i128))) }
-
-        }
-        5 => {
-            // Tier 5 uses I512
-            #[cfg(table_format = "q256_256")]
-            { UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(*storage)) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i256(*storage))) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i128(*storage as i128))) }
-
-        }
-        6 => {
-            // Tier 6 uses I1024
-            #[cfg(table_format = "q256_256")]
-            { UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i512(*storage))) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i256(*storage))) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i128(*storage as i128))) }
-
-        }
-        _ => Err(OverflowDetected::InvalidInput)
-    }
+    <ProfileFormat as FascFormat>::ternary_from_storage(tier, storage)
 }
 
 /// Checked narrowing of an i128 tier raw into BinaryStorage.
@@ -86,20 +31,7 @@ pub(super) fn ternary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<
 /// casts this replaces silently corrupted Tier-2+ ternary values on the
 /// realtime/compact profiles (wrap-defect class, fixed 0.4.33).
 fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDetected> {
-    #[cfg(table_format = "q256_256")]
-    { Ok(I512::from_i128(val)) }
-
-    #[cfg(table_format = "q128_128")]
-    { Ok(I256::from_i128(val)) }
-
-    #[cfg(table_format = "q64_64")]
-    { Ok(val) }
-
-    #[cfg(table_format = "q32_32")]
-    { i64::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
-
-    #[cfg(table_format = "q16_16")]
-    { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+    <ProfileFormat as FascFormat>::i128_to_binary_storage_checked(val)
 }
 
 /// Convert UniversalTernaryFixed result back to (tier, BinaryStorage): full precision.
@@ -108,62 +40,7 @@ fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDe
 /// TierOverflow error, never a silent wrap (e.g. `0t3281` parses to Tier 2
 /// with raw 3281·3^16 ≈ 1.4e11, which cannot live in realtime\'s i32).
 pub(super) fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
-    let (tier, raw) = ternary.to_tier_raw();
-    let storage = match raw {
-        TernaryRaw::Small(v) => i128_to_binary_storage_checked(v)?,
-        TernaryRaw::Medium(v) => {
-            // I256 → BinaryStorage
-            #[cfg(table_format = "q256_256")]
-            { I512::from_i256(v) }
-
-            #[cfg(table_format = "q128_128")]
-            { v }
-
-            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
-            {
-                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-                i128_to_binary_storage_checked(v.as_i128())?
-            }
-        }
-        TernaryRaw::Large(v) => {
-            // I512 → BinaryStorage
-            #[cfg(table_format = "q256_256")]
-            { v }
-
-            #[cfg(table_format = "q128_128")]
-            {
-                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
-                v.as_i256()
-            }
-
-            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
-            {
-                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-                i128_to_binary_storage_checked(v.as_i128())?
-            }
-        }
-        TernaryRaw::XLarge(v) => {
-            // I1024 → BinaryStorage
-            #[cfg(table_format = "q256_256")]
-            {
-                if !v.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
-                v.as_i512()
-            }
-
-            #[cfg(table_format = "q128_128")]
-            {
-                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
-                v.as_i256()
-            }
-
-            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
-            {
-                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-                i128_to_binary_storage_checked(v.as_i128())?
-            }
-        }
-    };
-    Ok((tier, storage))
+    <ProfileFormat as FascFormat>::ternary_to_storage(ternary)
 }
 
 /// Convert ternary StackValue fields to RationalNumber.
@@ -171,130 +48,7 @@ pub(super) fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> Result<(u8,
 /// **PURPOSE**: Ternary stores `value * 3^frac_trits`. This converts to `value / 3^frac_trits`
 /// as a RationalNumber. Used by to_rational(), to_compute_storage(), to_binary_storage(), Display.
 pub(super) fn ternary_to_rational(tier: u8, value: &BinaryStorage) -> Result<RationalNumber, OverflowDetected> {
-    let ternary = ternary_from_storage(tier, value)?;
-    let (ternary_tier, _raw) = ternary.to_tier_raw();
-
-    let frac_trits: u32 = match ternary_tier {
-        1 => 10,   // TQ10.10
-        2 => 20,   // TQ20.20
-        3 => 40,   // TQ40.40
-        4 => 80,   // TQ80.80
-        5 => 160,  // TQ160.160
-        6 => 320,  // TQ320.320
-        _ => 40,
-    };
-
-    // Tiers 1-3 stay on the i128 fast path: 3^40 = 1.2e19 fits i128.
-    if frac_trits <= 40 {
-        let mut denom = 1i128;
-        for _ in 0..frac_trits {
-            denom *= 3;
-        }
-        let val_i128 = binary_storage_to_i128(value);
-        return Ok(RationalNumber::new(val_i128, denom as u128));
-    }
-
-    #[cfg(table_format = "q256_256")]
-    {
-        let val = *value;
-
-        // GCD-reduce: ternary denominators are 3^N, divide out common 3s
-        // from numerator to minimize the rational tier required.
-        // E.g., 10 * 3^128 / 3^128 reduces to 10/1 (Huge tier, not Ultra).
-        let three = I512::from_i128(3);
-        let zero = I512::zero();
-        let mut reduced_num = val;
-        let mut remaining_pow = frac_trits;
-        while remaining_pow > 0 && (reduced_num % three) == zero {
-            reduced_num = reduced_num / three;
-            remaining_pow -= 1;
-        }
-
-        // Select smallest RationalNumber tier that fits
-        if remaining_pow == 0 {
-            if reduced_num.fits_in_i128() {
-                return Ok(RationalNumber::new(reduced_num.as_i128(), 1));
-            }
-            if reduced_num.fits_in_i256() {
-                return Ok(RationalNumber::from_i256_pair(reduced_num.as_i256(), I256::from_i128(1)));
-            }
-            return Ok(RationalNumber::from_i512_pair(reduced_num, I512::from_i128(1)));
-        }
-
-        // Rebuild reduced denominator (3^remaining_pow)
-        let mut reduced_den = I512::from_i128(1);
-        for _ in 0..remaining_pow {
-            reduced_den = reduced_den * three;
-        }
-        if reduced_num.fits_in_i128() && reduced_den.fits_in_i128() {
-            return Ok(RationalNumber::new(reduced_num.as_i128(), reduced_den.as_i128() as u128));
-        }
-        if reduced_num.fits_in_i256() && reduced_den.fits_in_i256() {
-            return Ok(RationalNumber::from_i256_pair(reduced_num.as_i256(), reduced_den.as_i256()));
-        }
-        return Ok(RationalNumber::from_i512_pair(reduced_num, reduced_den));
-    }
-
-    #[cfg(table_format = "q128_128")]
-    {
-        let val = *value;
-
-        // GCD-reduce: divide out common powers of 3
-        let three = I256::from_i128(3);
-        let zero = I256::zero();
-        let mut reduced_num = val;
-        let mut remaining_pow = frac_trits;
-        while remaining_pow > 0 && (reduced_num % three) == zero {
-            reduced_num = reduced_num / three;
-            remaining_pow -= 1;
-        }
-
-        if remaining_pow == 0 {
-            if reduced_num.fits_in_i128() {
-                return Ok(RationalNumber::new(reduced_num.as_i128(), 1));
-            }
-            return Ok(RationalNumber::from_i256_pair(reduced_num, I256::from_i128(1)));
-        }
-
-        let mut reduced_den = I256::from_i128(1);
-        for _ in 0..remaining_pow {
-            reduced_den = reduced_den * three;
-        }
-        if reduced_num.fits_in_i128() && reduced_den.fits_in_i128() {
-            return Ok(RationalNumber::new(reduced_num.as_i128(), reduced_den.as_i128() as u128));
-        }
-        return Ok(RationalNumber::from_i256_pair(reduced_num, reduced_den));
-    }
-
-    #[cfg(table_format = "q64_64")]
-    {
-        let val_i128 = *value;
-        let mut denom = 1i128;
-        for _ in 0..frac_trits {
-            denom *= 3;
-        }
-        return Ok(RationalNumber::new(val_i128, denom as u128));
-    }
-
-    #[cfg(table_format = "q32_32")]
-    {
-        let val_i128 = *value as i128;
-        let mut denom = 1i128;
-        for _ in 0..frac_trits {
-            denom *= 3;
-        }
-        return Ok(RationalNumber::new(val_i128, denom as u128));
-    }
-
-    #[cfg(table_format = "q16_16")]
-    {
-        let val_i128 = *value as i128;
-        let mut denom = 1i128;
-        for _ in 0..frac_trits {
-            denom *= 3;
-        }
-        return Ok(RationalNumber::new(val_i128, denom as u128));
-    }
+    <ProfileFormat as FascFormat>::ternary_to_rational(tier, value)
 }
 
 /// Create UniversalDecimalTiered from StackValue decimal storage: full precision
@@ -303,91 +57,7 @@ pub(super) fn ternary_to_rational(tier: u8, value: &BinaryStorage) -> Result<Rat
 /// Decimal values are stored as (decimal_places, BinaryStorage) in the evaluator.
 /// This function determines the appropriate tier and creates a properly typed value.
 pub(super) fn decimal_from_storage(decimal_places: u8, storage: &BinaryStorage) -> Result<UniversalDecimalTiered, OverflowDetected> {
-    use crate::fixed_point::domains::decimal_fixed::decimal_types::{DecimalRaw, tier_for_decimal_places};
-    let tier = tier_for_decimal_places(decimal_places);
-
-    match tier {
-        1..=4 => {
-            // UGOD: on wider profiles, the BinaryStorage (I256/I512) may exceed i128
-            // even when tier_for_decimal_places suggests tiers 1-4 based on dp alone.
-            // Check actual value magnitude and promote to tier 5/6 if needed.
-            #[cfg(table_format = "q128_128")]
-            {
-                if !storage.fits_in_i128() {
-                    // Value exceeds i128 — promote to tier 5 (I256)
-                    return UniversalDecimalTiered::from_tier_raw(
-                        5, decimal_places, DecimalRaw::Medium(*storage)
-                    );
-                }
-            }
-            #[cfg(table_format = "q256_256")]
-            {
-                if !storage.fits_in_i128() {
-                    if storage.fits_in_i256() {
-                        // Value fits in I256 — promote to tier 5
-                        return UniversalDecimalTiered::from_tier_raw(
-                            5, decimal_places, DecimalRaw::Medium(storage.as_i256())
-                        );
-                    } else {
-                        // Value needs full I512 — promote to tier 6
-                        return UniversalDecimalTiered::from_tier_raw(
-                            6, decimal_places, DecimalRaw::Large(*storage)
-                        );
-                    }
-                }
-            }
-
-            // Value fits in i128 — standard tier 1-4 path
-            let val = binary_storage_to_i128(storage);
-            for t in tier..=4 {
-                match UniversalDecimalTiered::from_tier_raw(t, decimal_places, DecimalRaw::Small(val)) {
-                    Ok(v) => return Ok(v),
-                    Err(OverflowDetected::TierOverflow) => continue,
-                    Err(e) => return Err(e),
-                }
-            }
-            // Doesn't fit in tiers 1-4, promote to tier 5
-            UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Medium(I256::from_i128(val)))
-                .or_else(|_| UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Small(val)))
-        }
-        5 => {
-            // Tier 5: I256 backing
-            #[cfg(table_format = "q256_256")]
-            { UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Medium(storage.as_i256())) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Medium(*storage)) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Medium(I256::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Medium(I256::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalDecimalTiered::from_tier_raw(5, decimal_places, DecimalRaw::Medium(I256::from_i128(*storage as i128))) }
-
-        }
-        6 => {
-            // Tier 6: I512 backing
-            #[cfg(table_format = "q256_256")]
-            { UniversalDecimalTiered::from_tier_raw(6, decimal_places, DecimalRaw::Large(*storage)) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalDecimalTiered::from_tier_raw(6, decimal_places, DecimalRaw::Large(I512::from_i256(*storage))) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalDecimalTiered::from_tier_raw(6, decimal_places, DecimalRaw::Large(I512::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalDecimalTiered::from_tier_raw(6, decimal_places, DecimalRaw::Large(I512::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalDecimalTiered::from_tier_raw(6, decimal_places, DecimalRaw::Large(I512::from_i128(*storage as i128))) }
-
-        }
-        _ => Err(OverflowDetected::InvalidInput)
-    }
+    <ProfileFormat as FascFormat>::decimal_from_storage(decimal_places, storage)
 }
 
 /// Convert UniversalDecimalTiered result back to (decimal_places, BinaryStorage): full precision
@@ -397,39 +67,7 @@ pub(super) fn decimal_from_storage(decimal_places: u8, storage: &BinaryStorage) 
 /// truncating cast, so a decimal result beyond storage (realtime:
 /// `214748.3647 + 1`) wrapped into a wrong value on every profile.
 pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> Result<(u8, BinaryStorage), OverflowDetected> {
-    use crate::fixed_point::domains::decimal_fixed::decimal_types::DecimalRaw;
-    use super::conversion::try_to_binary_storage;
-    let (_tier, raw) = decimal.to_tier_raw();
-    let decimal_places = decimal.decimal_places();
-    let overflow = OverflowDetected::TierOverflow;
-    let storage = match raw {
-        DecimalRaw::Small(v) => try_to_binary_storage(v)?,
-        DecimalRaw::Medium(v) => {
-            #[cfg(table_format = "q256_256")]
-            { I512::from_i256(v) }
-            #[cfg(table_format = "q128_128")]
-            { v }
-            #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-            { if v.fits_in_i128() { try_to_binary_storage(v.as_i128())? } else { return Err(overflow) } }
-        }
-        DecimalRaw::Large(v) => {
-            #[cfg(table_format = "q256_256")]
-            { v }
-            #[cfg(table_format = "q128_128")]
-            { if v.fits_in_i256() { v.as_i256() } else { return Err(overflow) } }
-            #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-            { if v.fits_in_i128() { try_to_binary_storage(v.as_i128())? } else { return Err(overflow) } }
-        }
-        DecimalRaw::XLarge(v) => {
-            #[cfg(table_format = "q256_256")]
-            { if v.fits_in_i512() { v.as_i512() } else { return Err(overflow) } }
-            #[cfg(table_format = "q128_128")]
-            { if v.fits_in_i256() { v.as_i256() } else { return Err(overflow) } }
-            #[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-            { if v.fits_in_i128() { try_to_binary_storage(v.as_i128())? } else { return Err(overflow) } }
-        }
-    };
-    Ok((decimal_places, storage))
+    <ProfileFormat as FascFormat>::decimal_to_storage(decimal)
 }
 
 /// Create UniversalBinaryFixed from StackValue binary storage: full precision
@@ -438,68 +76,7 @@ pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> Result<(u8
 /// Binary values are stored as (tier, BinaryStorage) in the evaluator.
 /// This function converts to the typed tier system for proper UGOD arithmetic.
 pub(super) fn binary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<UniversalBinaryFixed, OverflowDetected> {
-    match tier {
-        1..=3 => {
-            // Tiers 1-3 fit in i128
-            let val = binary_storage_to_i128(storage);
-            UniversalBinaryFixed::from_tier_value(tier, val)
-        }
-        4 => {
-            // Tier 4 uses I256
-            #[cfg(table_format = "q256_256")]
-            { UniversalBinaryFixed::from_tier_raw(4, BinaryRaw::Medium(storage.as_i256())) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalBinaryFixed::from_tier_raw(4, BinaryRaw::Medium(*storage)) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalBinaryFixed::from_tier_raw(4, BinaryRaw::Medium(I256::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalBinaryFixed::from_tier_raw(4, BinaryRaw::Medium(I256::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalBinaryFixed::from_tier_raw(4, BinaryRaw::Medium(I256::from_i128(*storage as i128))) }
-
-        }
-        5 => {
-            // Tier 5 uses I512
-            #[cfg(table_format = "q256_256")]
-            { UniversalBinaryFixed::from_tier_raw(5, BinaryRaw::Large(*storage)) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalBinaryFixed::from_tier_raw(5, BinaryRaw::Large(I512::from_i256(*storage))) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalBinaryFixed::from_tier_raw(5, BinaryRaw::Large(I512::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalBinaryFixed::from_tier_raw(5, BinaryRaw::Large(I512::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalBinaryFixed::from_tier_raw(5, BinaryRaw::Large(I512::from_i128(*storage as i128))) }
-
-        }
-        6 => {
-            // Tier 6 uses I1024
-            #[cfg(table_format = "q256_256")]
-            { UniversalBinaryFixed::from_tier_raw(6, BinaryRaw::XLarge(I1024::from_i512(*storage))) }
-
-            #[cfg(table_format = "q128_128")]
-            { UniversalBinaryFixed::from_tier_raw(6, BinaryRaw::XLarge(I1024::from_i256(*storage))) }
-
-            #[cfg(table_format = "q64_64")]
-            { UniversalBinaryFixed::from_tier_raw(6, BinaryRaw::XLarge(I1024::from_i128(*storage))) }
-
-            #[cfg(table_format = "q32_32")]
-            { UniversalBinaryFixed::from_tier_raw(6, BinaryRaw::XLarge(I1024::from_i128(*storage as i128))) }
-
-            #[cfg(table_format = "q16_16")]
-            { UniversalBinaryFixed::from_tier_raw(6, BinaryRaw::XLarge(I1024::from_i128(*storage as i128))) }
-
-        }
-        _ => Err(OverflowDetected::InvalidInput)
-    }
+    <ProfileFormat as FascFormat>::binary_from_storage(tier, storage)
 }
 
 /// Convert UniversalBinaryFixed result back to (tier, BinaryStorage): full precision
@@ -509,16 +86,7 @@ pub(super) fn binary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<U
 /// Tier-4 result wrapped through as_i128; binary twin of the 0.4.33
 /// ternary_to_storage fix).
 fn i128_to_binary_storage_checked_b(val: i128) -> Result<BinaryStorage, OverflowDetected> {
-    #[cfg(table_format = "q256_256")]
-    { Ok(I512::from_i128(val)) }
-    #[cfg(table_format = "q128_128")]
-    { Ok(I256::from_i128(val)) }
-    #[cfg(table_format = "q64_64")]
-    { Ok(val) }
-    #[cfg(table_format = "q32_32")]
-    { i64::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
-    #[cfg(table_format = "q16_16")]
-    { i32::try_from(val).map_err(|_| OverflowDetected::TierOverflow) }
+    <ProfileFormat as FascFormat>::i128_to_binary_storage_checked_b(val)
 }
 
 /// Convert UniversalBinaryFixed back to (tier, BinaryStorage): checked.
@@ -528,62 +96,7 @@ fn i128_to_binary_storage_checked_b(val: i128) -> Result<BinaryStorage, Overflow
 /// arithmetic arms catch that error and fall back to the exact rational
 /// path: the true top of the UGOD ladder.
 pub(super) fn binary_to_storage(binary: &UniversalBinaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
-    let (tier, raw) = binary.to_tier_raw();
-    let storage = match raw {
-        BinaryRaw::Small(v) => i128_to_binary_storage_checked_b(v)?,
-        BinaryRaw::Medium(v) => {
-            // I256 → BinaryStorage
-            #[cfg(table_format = "q256_256")]
-            { I512::from_i256(v) }
-
-            #[cfg(table_format = "q128_128")]
-            { v }
-
-            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
-            {
-                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-                i128_to_binary_storage_checked_b(v.as_i128())?
-            }
-        }
-        BinaryRaw::Large(v) => {
-            // I512 → BinaryStorage
-            #[cfg(table_format = "q256_256")]
-            { v }
-
-            #[cfg(table_format = "q128_128")]
-            {
-                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
-                v.as_i256()
-            }
-
-            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
-            {
-                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-                i128_to_binary_storage_checked_b(v.as_i128())?
-            }
-        }
-        BinaryRaw::XLarge(v) => {
-            // I1024 → BinaryStorage
-            #[cfg(table_format = "q256_256")]
-            {
-                if !v.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
-                v.as_i512()
-            }
-
-            #[cfg(table_format = "q128_128")]
-            {
-                if !v.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
-                v.as_i256()
-            }
-
-            #[cfg(not(any(table_format = "q256_256", table_format = "q128_128")))]
-            {
-                if !v.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-                i128_to_binary_storage_checked_b(v.as_i128())?
-            }
-        }
-    };
-    Ok((tier, storage))
+    <ProfileFormat as FascFormat>::binary_to_storage(binary)
 }
 
 /// Euclid's gcd for shadow normalization.

@@ -3,11 +3,11 @@
 //! All functions operate at tier N+1 (ComputeStorage) for maximum precision.
 
 #[allow(unused_imports)]
+use super::format::FascFormat;
+use crate::fixed_point::fixed_num::ProfileFormat;
 use super::{BinaryStorage, ComputeStorage};
 
 // Build-time Q-format constants (FRAC_BITS, COMPUTE_FRAC_BITS, etc.)
-#[cfg(table_format = "q16_16")]
-use crate::fixed_point::frac_config;
 #[allow(unused_imports)]
 use crate::fixed_point::i256::I256;
 #[allow(unused_imports)]
@@ -39,54 +39,7 @@ pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage,
 /// For Q256.256 profile: converts to Q512.512 (I1024) instead of Q256.256→upscale
 #[inline]
 pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) -> Result<ComputeStorage, OverflowDetected> {
-    if decimals == 0 {
-        // Integer value — shift directly into compute Q-format
-        #[cfg(table_format = "q256_256")]
-        { return Ok(I1024::from_i512(scaled) << 512); }
-        #[cfg(table_format = "q128_128")]
-        { return Ok(I512::from_i256(scaled) << 256); }
-        #[cfg(table_format = "q64_64")]
-        { return Ok(I256::from_i128(scaled) << 128); }
-        #[cfg(table_format = "q32_32")]
-        { return Ok((scaled as i128) << 64); }
-        #[cfg(table_format = "q16_16")]
-        {
-            // checked: at 24 fraction bits the compute tier holds +-2^15
-            let v = (scaled as i128) << frac_config::COMPUTE_FRAC_BITS;
-            return i64::try_from(v).map_err(|_| OverflowDetected::TierOverflow);
-        }
-    }
-
-    let den = pow10_compute(decimals)?;
-
-    #[cfg(table_format = "q256_256")]
-    {
-        let num = I1024::from_i512(scaled) << 512;
-        Ok(num / den)
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        let num = I512::from_i256(scaled) << 256;
-        Ok(num / den)
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        let num = I256::from_i128(scaled) << 128;
-        Ok(num / den)
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        // BinaryStorage=i64 → promote to i128, shift by 64 (Q64.64 compute format)
-        let num = (scaled as i128) << 64;
-        Ok(num / den)
-    }
-    #[cfg(table_format = "q16_16")]
-    {
-        // i128: scaled << 2F can pass i64 at high fraction bits (it wrapped:
-        // "100.1234" at 24 fraction bits is 1001234 * 2^48; before 0.6.4)
-        let num = (scaled as i128) << frac_config::COMPUTE_FRAC_BITS;
-        i64::try_from(num / den as i128).map_err(|_| OverflowDetected::TierOverflow)
-    }
+    <ProfileFormat as FascFormat>::decimal_to_compute_storage(decimals, scaled)
 }
 
 /// Compute 10^exp at ComputeStorage precision: O(1) via const lookup table.
@@ -96,61 +49,7 @@ pub(super) fn decimal_to_compute_storage(decimals: u8, scaled: BinaryStorage) ->
 /// Returns `Err(Overflow)` if exponent exceeds the type's safe representable range.
 #[inline]
 pub(super) fn pow10_compute(exp: u8) -> Result<ComputeStorage, OverflowDetected> {
-    #[cfg(table_format = "q64_64")]
-    {
-        // ComputeStorage = I256. Table covers 0..=38. I256 safe max ~10^76.
-        const TABLE: [I256; 39] = pow10_table_i256();
-        if (exp as usize) < TABLE.len() {
-            Ok(TABLE[exp as usize])
-        } else if exp <= 76 {
-            Ok(pow10_compute_fallback_i256(exp))
-        } else {
-            Err(OverflowDetected::Overflow)
-        }
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        // ComputeStorage = I512. Table covers 0..=76. I512 safe max ~10^153.
-        const TABLE: [I512; 77] = pow10_table_i512();
-        if (exp as usize) < TABLE.len() {
-            Ok(TABLE[exp as usize])
-        } else if exp <= 153 {
-            Ok(pow10_compute_fallback_i512(exp))
-        } else {
-            Err(OverflowDetected::Overflow)
-        }
-    }
-    #[cfg(table_format = "q256_256")]
-    {
-        // ComputeStorage = I1024. Table covers 0..=154. I1024 safe max ~10^307.
-        // u8 max is 255 < 308, so all fallback values are safe.
-        const TABLE: [I1024; 155] = pow10_table_i1024();
-        if (exp as usize) < TABLE.len() {
-            Ok(TABLE[exp as usize])
-        } else {
-            Ok(pow10_compute_fallback_i1024(exp))
-        }
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        // ComputeStorage = i128. i128 safe max ~10^38.
-        const TABLE: [i128; 39] = pow10_table_i128();
-        if (exp as usize) < TABLE.len() {
-            Ok(TABLE[exp as usize])
-        } else {
-            Err(OverflowDetected::Overflow)
-        }
-    }
-    #[cfg(table_format = "q16_16")]
-    {
-        // ComputeStorage = i64. i64 safe max ~10^18.
-        const TABLE: [i64; 19] = pow10_table_i64();
-        if (exp as usize) < TABLE.len() {
-            Ok(TABLE[exp as usize])
-        } else {
-            Err(OverflowDetected::Overflow)
-        }
-    }
+    <ProfileFormat as FascFormat>::pow10_compute(exp)
 }
 
 // ============================================================================
@@ -189,7 +88,6 @@ pub(super) const fn pow10_table_i256() -> [I256; 39] {
 }
 
 /// Build const pow10 table for I512 (8 words, covers 10^0..10^76)
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
 pub(super) const fn pow10_table_i512() -> [I512; 77] {
     let mut table = [I512::from_words([0; 8]); 77];
     let mut words = [0u64; 8];
@@ -205,7 +103,6 @@ pub(super) const fn pow10_table_i512() -> [I512; 77] {
 }
 
 /// Build const pow10 table for I1024 (16 words, covers 10^0..10^154)
-#[cfg(table_format = "q256_256")]
 pub(super) const fn pow10_table_i1024() -> [I1024; 155] {
     let mut table = [I1024::from_words([0; 16]); 155];
     let mut words = [0u64; 16];
@@ -221,7 +118,6 @@ pub(super) const fn pow10_table_i1024() -> [I1024; 155] {
 }
 
 /// Build const pow10 table for i128 (covers 10^0..10^38)
-#[cfg(table_format = "q32_32")]
 pub(super) const fn pow10_table_i128() -> [i128; 39] {
     let mut table = [0i128; 39];
     table[0] = 1;
@@ -234,7 +130,6 @@ pub(super) const fn pow10_table_i128() -> [i128; 39] {
 }
 
 /// Build const pow10 table for i64 (covers 10^0..10^18)
-#[cfg(table_format = "q16_16")]
 pub(super) const fn pow10_table_i64() -> [i64; 19] {
     let mut table = [0i64; 19];
     table[0] = 1;
@@ -249,7 +144,7 @@ pub(super) const fn pow10_table_i64() -> [i64; 19] {
 // Fallback loops for exponents beyond the precomputed table
 #[cold]
 #[allow(dead_code)]
-fn pow10_compute_fallback_i256(exp: u8) -> I256 {
+pub(super) fn pow10_compute_fallback_i256(exp: u8) -> I256 {
     let mut result = I256::from_i128(1);
     let ten = I256::from_i128(10);
     for _ in 0..exp { result = result * ten; }
@@ -257,8 +152,7 @@ fn pow10_compute_fallback_i256(exp: u8) -> I256 {
 }
 
 #[cold]
-#[cfg(table_format = "q128_128")]
-fn pow10_compute_fallback_i512(exp: u8) -> I512 {
+pub(super) fn pow10_compute_fallback_i512(exp: u8) -> I512 {
     let mut result = I512::from_i128(1);
     let ten = I512::from_i128(10);
     for _ in 0..exp { result = result * ten; }
@@ -266,8 +160,7 @@ fn pow10_compute_fallback_i512(exp: u8) -> I512 {
 }
 
 #[cold]
-#[cfg(table_format = "q256_256")]
-fn pow10_compute_fallback_i1024(exp: u8) -> I1024 {
+pub(super) fn pow10_compute_fallback_i1024(exp: u8) -> I1024 {
     let mut result = I1024::from_i128(1);
     let ten = I1024::from_i128(10);
     for _ in 0..exp { result = result * ten; }
@@ -277,44 +170,7 @@ fn pow10_compute_fallback_i1024(exp: u8) -> I1024 {
 /// Convert a Symbolic rational (num/den as i128) directly to ComputeStorage at full compute-tier precision.
 #[inline]
 pub(super) fn symbolic_to_compute_storage(num: i128, den: i128) -> Result<ComputeStorage, OverflowDetected> {
-    #[cfg(table_format = "q256_256")]
-    {
-        let n = I1024::from_i512(I512::from_i256(I256::from_i128(num))) << 512;
-        let d = I1024::from_i512(I512::from_i256(I256::from_i128(den)));
-        Ok(n / d)
-    }
-    #[cfg(table_format = "q128_128")]
-    {
-        let n = I512::from_i256(I256::from_i128(num)) << 256;
-        let d = I512::from_i256(I256::from_i128(den));
-        Ok(n / d)
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        let n = I256::from_i128(num) << 128;
-        let d = I256::from_i128(den);
-        Ok(n / d)
-    }
-    #[cfg(table_format = "q32_32")]
-    {
-        // ComputeStorage = i128 (Q64.64). Use I256 intermediate for (num << 64) / den.
-        let n = I256::from_i128(num) << 64;
-        let d = I256::from_i128(den);
-        let q = n / d;
-        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-        Ok(q.as_i128())
-    }
-    #[cfg(table_format = "q16_16")]
-    {
-        // ComputeStorage = i64. I256 intermediate: num << 2F can pass i128.
-        // Range-checked: the bare `as i64` wrapped a symbolic value beyond
-        // the realtime compute range (atan(999999999) at 24 fraction bits
-        // came out as -pi/2; before 0.6.4).
-        let n = I256::from_i128(num) << (frac_config::COMPUTE_FRAC_BITS as usize);
-        let q = n / I256::from_i128(den);
-        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-        i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow)
-    }
+    <ProfileFormat as FascFormat>::symbolic_to_compute_storage(num, den)
 }
 
 /// Convert Symbolic rational (Massive I256 or Ultra I512) to ComputeStorage.
@@ -322,90 +178,7 @@ pub(super) fn symbolic_to_compute_storage(num: i128, den: i128) -> Result<Comput
 pub(super) fn symbolic_wide_to_compute_storage(
     rational: &crate::fixed_point::domains::symbolic::rational::RationalNumber,
 ) -> Result<ComputeStorage, OverflowDetected> {
-    let parts = rational.extract_native();
-
-    #[cfg(table_format = "q128_128")]
-    {
-        // Try I256 extraction (Massive tier)
-        if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            let n = I512::from_i256(num_i256) << 256;
-            let d = I512::from_i256(den_i256);
-            return Ok(n / d);
-        }
-        // Try I512 extraction (Ultra tier)
-        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
-            let n = I1024::from_i512(num_i512) << 256;
-            let d = I1024::from_i512(den_i512);
-            let q = n / d;
-            if !q.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
-            return Ok(q.as_i512());
-        }
-    }
-
-    #[cfg(table_format = "q256_256")]
-    {
-        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
-            let n = I1024::from_i512(num_i512) << 512;
-            let d = I1024::from_i512(den_i512);
-            return Ok(n / d);
-        }
-    }
-
-    #[cfg(table_format = "q64_64")]
-    {
-        if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            // I512: an I256 numerator shifted by 128 (was truncated to i128)
-            let q = (I512::from_i256(num_i256) << 128) / I512::from_i256(den_i256);
-            if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
-            return Ok(q.as_i256());
-        }
-        // Ultra tier (I512): mathematical constants (e, π, etc.) are stored at
-        // 77-digit precision as I512/I512 rationals. Use I1024 intermediate to
-        // convert to Q128.128 (ComputeStorage for q64_64) without overflow.
-        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
-            let n = I1024::from_i512(num_i512) << 128;
-            let d = I1024::from_i512(den_i512);
-            let q = n / d;
-            if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
-            return Ok(q.as_i256());
-        }
-    }
-
-    #[cfg(table_format = "q32_32")]
-    {
-        // ComputeStorage = i128 (Q64.64). I256 intermediate for shift+divide.
-        if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            let q = (I512::from_i256(num_i256) << 64) / I512::from_i256(den_i256);
-            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-            return Ok(q.as_i128());
-        }
-        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
-            let n = I1024::from_i512(num_i512) << 64;
-            let d = I1024::from_i512(den_i512);
-            let q = n / d;
-            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-            return Ok(q.as_i512().as_i256().as_i128());
-        }
-    }
-
-    #[cfg(table_format = "q16_16")]
-    {
-        // ComputeStorage = i64. Use I256 intermediate for shift+divide → i64.
-        if let Some((num_i256, den_i256)) = parts.try_as_i256_pair() {
-            let q = (I512::from_i256(num_i256) << (frac_config::COMPUTE_FRAC_BITS as usize)) / I512::from_i256(den_i256);
-            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-            return i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow);
-        }
-        if let Some((num_i512, den_i512)) = parts.try_as_i512_pair() {
-            let n = I1024::from_i512(num_i512) << (frac_config::COMPUTE_FRAC_BITS as usize);
-            let d = I1024::from_i512(den_i512);
-            let q = n / d;
-            if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
-            return i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow);
-        }
-    }
-
-    Err(OverflowDetected::TierOverflow)
+    <ProfileFormat as FascFormat>::symbolic_wide_to_compute_storage(rational)
 }
 
 // ============================================================================
@@ -435,10 +208,7 @@ pub(crate) fn compute_checked_subtract(
 
 /// `-a` at the compute tier, `Err(TierOverflow)` for the tier's minimum.
 pub(crate) fn compute_checked_negate(a: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    #[cfg(not(table_format = "q256_256"))]
-    { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
-    #[cfg(table_format = "q256_256")]
-    { if a == I1024::min_value() { Err(OverflowDetected::TierOverflow) } else { Ok(-a) } }
+    <ProfileFormat as FascFormat>::compute_checked_negate(a)
 }
 /// True when an exp engine result sits at its overflow sentinel.
 ///
@@ -497,31 +267,13 @@ pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
 /// Check if a compute-tier value is zero
 #[inline]
 pub(crate) fn compute_is_zero(a: &ComputeStorage) -> bool {
-    #[cfg(table_format = "q256_256")]
-    { *a == I1024::zero() }
-    #[cfg(table_format = "q128_128")]
-    { *a == I512::zero() }
-    #[cfg(table_format = "q64_64")]
-    { *a == I256::zero() }
-    #[cfg(table_format = "q32_32")]
-    { *a == 0i128 }
-    #[cfg(table_format = "q16_16")]
-    { *a == 0i64 }
+    <ProfileFormat as FascFormat>::compute_is_zero(a)
 }
 
 /// Check if a compute-tier value is negative
 #[inline]
 pub(crate) fn compute_is_negative(a: &ComputeStorage) -> bool {
-    #[cfg(table_format = "q256_256")]
-    { (a.words[15] & 0x8000_0000_0000_0000) != 0 }
-    #[cfg(table_format = "q128_128")]
-    { *a < I512::zero() }
-    #[cfg(table_format = "q64_64")]
-    { *a < I256::zero() }
-    #[cfg(table_format = "q32_32")]
-    { *a < 0i128 }
-    #[cfg(table_format = "q16_16")]
-    { *a < 0i64 }
+    <ProfileFormat as FascFormat>::compute_is_negative(a)
 }
 
 // ============================================================================
