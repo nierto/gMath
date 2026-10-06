@@ -28,3 +28,4 @@ NOTE_FROM_*.md
 *MISSION*.md
 g_math_macros/
 tests/gmath_macro_test.rs
+NOTE_FOR_*.md

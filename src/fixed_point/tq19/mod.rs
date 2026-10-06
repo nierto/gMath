@@ -233,6 +233,21 @@ impl TQ19Matrix {
         ops::tq19_matvec_batch_par(&self.data, self.rows, self.cols, batch)
     }
 
+    /// [`matvec_batch_par`](Self::matvec_batch_par) writing into a
+    /// caller-provided buffer, flat and batch-major: `out[b * rows + r]` is
+    /// row `r` of the result for `batch[b]`. The same values; no result
+    /// vector is allocated.
+    ///
+    /// # Panics
+    /// Panics on an activation length mismatch or if
+    /// `out.len() != batch.len() * rows`.
+    pub fn matvec_batch_par_into(&self, batch: &[&[BinaryStorage]], out: &mut [BinaryStorage]) {
+        for (i, v) in batch.iter().enumerate() {
+            assert_eq!(v.len(), self.cols, "TQ19Matrix::matvec_batch_par_into: activation[{i}] length mismatch");
+        }
+        ops::tq19_matvec_batch_par_into(&self.data, self.rows, self.cols, batch, out)
+    }
+
     // ========================================================================
     // Wide-output (q2f) variants — exact accumulator at 2·FRAC_BITS precision
     // ========================================================================

@@ -357,6 +357,24 @@ impl RowScaledTQ5 {
     /// too large to split, rows past the last full group of 4, no AVX2) take the per-row dot.
     /// Every path computes the same integer `sum(code * x)` before the row scale.
     pub fn matvec_batch_par(&self, batch: &[&[i32]]) -> Vec<Vec<i32>> {
+        let rows = self.rows;
+        let mut flat = vec![0i32; batch.len() * rows];
+        self.matvec_batch_par_into(batch, &mut flat);
+        if rows == 0 {
+            return vec![Vec::new(); batch.len()];
+        }
+        flat.chunks_exact(rows).map(<[i32]>::to_vec).collect()
+    }
+
+    /// [`matvec_batch_par`](Self::matvec_batch_par) writing into a
+    /// caller-provided buffer, flat and batch-major: `out[b * rows + r]` is
+    /// row `r` of the result for `batch[b]`. The same values; no result
+    /// vector is allocated.
+    ///
+    /// # Panics
+    /// Panics on an activation length mismatch or if
+    /// `out.len() != batch.len() * rows`.
+    pub fn matvec_batch_par_into(&self, batch: &[&[i32]], out: &mut [i32]) {
         for x in batch {
             assert_eq!(
                 x.len(),
@@ -365,7 +383,7 @@ impl RowScaledTQ5 {
             );
         }
         let (rows, cols) = (self.rows, self.cols);
-        let mut out: Vec<Vec<i32>> = (0..batch.len()).map(|_| vec![0i32; rows]).collect();
+        let sink = super::ops::BatchOut::new(out, rows, batch.len(), "RowScaledTQ5::matvec_batch_par_into");
         let splits: Vec<Option<SplitActivation>> =
             batch.iter().map(|x| SplitActivation::new(x)).collect();
         let tile_ok = cfg!(target_arch = "x86_64") && avx2_available();
@@ -376,84 +394,74 @@ impl RowScaledTQ5 {
         // tokens per chunk: their low halves (2 bytes per element) within ~256 KiB, a multiple of 4
         let chunk = ((256 * 1024) / (2 * cols.max(1))).clamp(4, 64) / 4 * 4;
         for toks in fast.chunks(chunk) {
-            let per_group: Vec<Vec<[i32; 4]>> = (0..groups)
-                .into_par_iter()
-                .map(|g| {
-                    let r0 = g * 4;
-                    let rs = [row(r0), row(r0 + 1), row(r0 + 2), row(r0 + 3)];
-                    let mut res = vec![[0i32; 4]; toks.len()];
-                    for (bi, blk) in toks.chunks(4).enumerate() {
-                        for (t, &k) in blk.iter().enumerate() {
-                            if blk.len() < 4 {
-                                for r in 0..4 {
-                                    res[bi * 4 + t][r] = Self::scale_row(
-                                        Self::dot_any(rs[r], batch[k], splits[k].as_ref()),
-                                        self.scales_q32[r0 + r],
-                                    );
-                                }
+            // SAFETY (every write below): each token index appears once in
+            // `fast` or `slow`, and each parallel task owns its rows (a group
+            // of four here, one row in the per-row path), so no two
+            // concurrent writes name the same (token, row).
+            (0..groups).into_par_iter().for_each(|g| {
+                let r0 = g * 4;
+                let rs = [row(r0), row(r0 + 1), row(r0 + 2), row(r0 + 3)];
+                for blk in toks.chunks(4) {
+                    if blk.len() < 4 {
+                        for &k in blk {
+                            for r in 0..4 {
+                                let v = Self::scale_row(
+                                    Self::dot_any(rs[r], batch[k], splits[k].as_ref()),
+                                    self.scales_q32[r0 + r],
+                                );
+                                unsafe { sink.write(k, r0 + r, v) };
                             }
                         }
-                        if blk.len() == 4 {
-                            let sp: Vec<&SplitActivation> =
-                                blk.iter().map(|&k| splits[k].as_ref().unwrap()).collect();
-                            #[cfg(target_arch = "x86_64")]
-                            // SAFETY: tile_ok checked AVX2; rows and activations have `cols` elements.
-                            let acc = unsafe {
-                                tile_lo_4x4(rs, [&sp[0].lo, &sp[1].lo, &sp[2].lo, &sp[3].lo], cols)
-                            };
-                            #[cfg(not(target_arch = "x86_64"))]
-                            let acc = [[0i64; 4]; 4];
-                            for t in 0..4 {
-                                for r in 0..4 {
-                                    res[bi * 4 + t][r] = Self::scale_row(
-                                        acc[r][t] + sp[t].hi_correction(rs[r]),
-                                        self.scales_q32[r0 + r],
-                                    );
-                                }
+                    } else {
+                        let sp = [
+                            splits[blk[0]].as_ref().unwrap(),
+                            splits[blk[1]].as_ref().unwrap(),
+                            splits[blk[2]].as_ref().unwrap(),
+                            splits[blk[3]].as_ref().unwrap(),
+                        ];
+                        #[cfg(target_arch = "x86_64")]
+                        // SAFETY: tile_ok checked AVX2; rows and activations have `cols` elements.
+                        let acc = unsafe {
+                            tile_lo_4x4(rs, [&sp[0].lo, &sp[1].lo, &sp[2].lo, &sp[3].lo], cols)
+                        };
+                        #[cfg(not(target_arch = "x86_64"))]
+                        let acc = [[0i64; 4]; 4];
+                        for t in 0..4 {
+                            for r in 0..4 {
+                                let v = Self::scale_row(
+                                    acc[r][t] + sp[t].hi_correction(rs[r]),
+                                    self.scales_q32[r0 + r],
+                                );
+                                unsafe { sink.write(blk[t], r0 + r, v) };
                             }
                         }
                     }
-                    res
-                })
-                .collect();
-            for (g, res) in per_group.iter().enumerate() {
-                for (i, &k) in toks.iter().enumerate() {
-                    out[k][g * 4..g * 4 + 4].copy_from_slice(&res[i]);
                 }
-            }
+            });
             // rows past the last full group of 4
             for r in groups * 4..rows {
                 for &k in toks {
-                    out[k][r] = Self::scale_row(
+                    let v = Self::scale_row(
                         Self::dot_any(row(r), batch[k], splits[k].as_ref()),
                         self.scales_q32[r],
                     );
+                    unsafe { sink.write(k, r, v) };
                 }
             }
         }
         // the per-row path: each row is read once per tile of 8 such tokens, so the row stays in L1
         const TILE: usize = 8;
         for tile in slow.chunks(TILE) {
-            let per_row: Vec<[i32; TILE]> = (0..rows)
-                .into_par_iter()
-                .map(|r| {
-                    let mut o = [0i32; TILE];
-                    for (i, &k) in tile.iter().enumerate() {
-                        o[i] = Self::scale_row(
-                            Self::dot_any(row(r), batch[k], splits[k].as_ref()),
-                            self.scales_q32[r],
-                        );
-                    }
-                    o
-                })
-                .collect();
-            for (i, &k) in tile.iter().enumerate() {
-                for r in 0..rows {
-                    out[k][r] = per_row[r][i];
+            (0..rows).into_par_iter().for_each(|r| {
+                for &k in tile {
+                    let v = Self::scale_row(
+                        Self::dot_any(row(r), batch[k], splits[k].as_ref()),
+                        self.scales_q32[r],
+                    );
+                    unsafe { sink.write(k, r, v) };
                 }
-            }
+            });
         }
-        out
     }
 
     /// `floor(acc * s / 2^(32 - FRAC_BITS))`; fails loud past the compute range.

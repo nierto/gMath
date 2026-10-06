@@ -68,6 +68,10 @@ assert_eq!(planar.matvec(&acts), dense);
   patterns decoded to fixed point by integer shifts, and the quantisers from
   those bits to `TQ19Matrix`, `RowScaledTQ19` and `RowScaledTQ5` by exact
   rational rounding. No float type is involved.
+  `matvec_batch_par_into` (0.6.7, on `TQ19Matrix`, `PlanarTQ19`,
+  `HybridTQ19`, `RowScaledTQ19` and `RowScaledTQ5`) writes a batch into one
+  caller-provided buffer, flat and batch-major (`out[b * rows + r]`), with
+  the same integers as `matvec_batch_par` and no result vectors allocated.
   Rows may mix values of any magnitude: an element too small to reach half a
   step of its row's scale quantises to 0 (0.6.6; a gap of a little over 100 binary
   orders inside one bfloat16 row overflowed in 0.6.5).

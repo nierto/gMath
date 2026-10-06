@@ -479,6 +479,51 @@ pub fn softmax_mix_flat(
     softmax_mix_core(scores, dim, true, |j| &values_flat[j * dim..(j + 1) * dim])
 }
 
+/// [`softmax_mix_flat`] writing into caller-provided slices: the mix into
+/// `out` and the observer weights into `weights`. The same values as
+/// [`softmax_mix_flat`]; neither result is allocated (the exponentials and
+/// the numerators still use scratch memory of `scores.len() + dim` values).
+///
+/// With empty `scores` nothing is written. On an error the slices may hold
+/// partial results.
+///
+/// # Panics
+/// Panics if `values_flat.len() != scores.len() * dim`, `out.len() != dim`
+/// or `weights.len() != scores.len()`.
+pub fn softmax_mix_flat_into(
+    scores: &[FixedPoint],
+    values_flat: &[FixedPoint],
+    dim: usize,
+    out: &mut [FixedPoint],
+    weights: &mut [FixedPoint],
+) -> Result<(), OverflowDetected> {
+    assert_eq!(values_flat.len(), scores.len() * dim, "softmax_mix_flat_into: values_flat length is not scores.len() * dim");
+    assert_eq!(out.len(), dim, "softmax_mix_flat_into: out length is not dim");
+    assert_eq!(weights.len(), scores.len(), "softmax_mix_flat_into: weights length is not scores.len()");
+    if scores.is_empty() {
+        return Ok(());
+    }
+    softmax_mix_core_into(scores, dim, out, Some(weights), |j| &values_flat[j * dim..(j + 1) * dim])
+}
+
+/// [`softmax_mix_flat_into`] without the observer weights.
+///
+/// # Panics
+/// Panics if `values_flat.len() != scores.len() * dim` or `out.len() != dim`.
+pub fn softmax_mix_flat_values_into(
+    scores: &[FixedPoint],
+    values_flat: &[FixedPoint],
+    dim: usize,
+    out: &mut [FixedPoint],
+) -> Result<(), OverflowDetected> {
+    assert_eq!(values_flat.len(), scores.len() * dim, "softmax_mix_flat_values_into: values_flat length is not scores.len() * dim");
+    assert_eq!(out.len(), dim, "softmax_mix_flat_values_into: out length is not dim");
+    if scores.is_empty() {
+        return Ok(());
+    }
+    softmax_mix_core_into(scores, dim, out, None, |j| &values_flat[j * dim..(j + 1) * dim])
+}
+
 /// [`softmax_mix_flat`] without the observer weights.
 pub fn softmax_mix_flat_values(scores: &[FixedPoint], values_flat: &[FixedPoint], dim: usize) -> Result<Vec<FixedPoint>, OverflowDetected> {
     assert_eq!(values_flat.len(), scores.len() * dim, "softmax_mix_flat: values_flat length is not scores.len() * dim");
@@ -494,6 +539,22 @@ fn softmax_mix_core<'a>(
     if scores.is_empty() {
         return Ok((vec![], vec![]));
     }
+    let mut out = vec![FixedPoint::ZERO; dim];
+    let mut weights = vec![FixedPoint::ZERO; if want_weights { scores.len() } else { 0 }];
+    softmax_mix_core_into(scores, dim, &mut out, want_weights.then_some(&mut weights[..]), row)?;
+    Ok((out, weights))
+}
+
+/// The mix written into `out` (`dim` elements) and, when asked for, the
+/// observer weights into `weights` (`scores.len()` elements). `scores` is
+/// not empty. On an error the slices may hold partial results.
+fn softmax_mix_core_into<'a>(
+    scores: &[FixedPoint],
+    dim: usize,
+    out: &mut [FixedPoint],
+    weights: Option<&mut [FixedPoint]>,
+    row: impl Fn(usize) -> &'a [FixedPoint],
+) -> Result<(), OverflowDetected> {
 
     // Phase 1: find max at storage tier
     let mut max_raw = scores[0].raw();
@@ -540,21 +601,18 @@ fn softmax_mix_core<'a>(
     }
 
     // Phase 4: single downscale per output element
-    let mut out = Vec::with_capacity(dim);
-    for n in &num {
-        out.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*n, sum)?)?));
+    for (o, n) in out.iter_mut().zip(&num) {
+        *o = FixedPoint::from_raw(downscale_to_storage(compute_divide(*n, sum)?)?);
     }
 
     // Phase 5: observer weights (storage-quantized, NOT used by the mix)
-    let mut weights = Vec::new();
-    if want_weights {
-        weights.reserve(scores.len());
-        for e in &exp_values {
-            weights.push(FixedPoint::from_raw(downscale_to_storage(compute_divide(*e, sum)?)?));
+    if let Some(weights) = weights {
+        for (w, e) in weights.iter_mut().zip(&exp_values) {
+            *w = FixedPoint::from_raw(downscale_to_storage(compute_divide(*e, sum)?)?);
         }
     }
 
-    Ok((out, weights))
+    Ok(())
 }
 
 /// Realtime numerators in plain i64, where bounds prove that nothing can
@@ -585,6 +643,135 @@ fn mix_numerators_i64<'a>(exps: &[i64], row: &impl Fn(usize) -> &'a [FixedPoint]
     true
 }
 
+/// `sigmoid(gate)` at the wide tier for one storage value.
+///
+/// Realtime and compact: Q64.64 (`wide::sigmoid_q64`), returned with its 64
+/// fractional bits. Wider profiles: the compute tier (`2F` fractional bits).
+#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+#[inline]
+fn gate_sigmoid(gate: FixedPoint) -> i128 {
+    let shift = 64 - crate::fixed_point::frac_config::FRAC_BITS;
+    crate::fixed_point::wide::sigmoid_q64((gate.raw() as i128) << shift)
+}
+
+#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+#[inline]
+fn gate_sigmoid(gate: FixedPoint) -> ComputeStorage {
+    // sign-split: the exponential argument is never positive and the
+    // denominator stays in [1, 2]
+    let g = upscale_to_compute(gate.raw());
+    let one = compute_one();
+    let (num, e) = if compute_is_negative(&g) {
+        let e = exp_at_compute_tier(g);
+        (e, e)
+    } else {
+        (one, exp_at_compute_tier(compute_negate(g)))
+    };
+    compute_divide(num, sum_add(one, e)).expect("sigmoid: denominator in [1, 2]")
+}
+
+/// `x * sigmoid(gate)`: the sigmoid at the wide tier, the product exact, one
+/// rounding to storage (nearest, ties toward +infinity).
+///
+/// The sigmoid is evaluated at Q64.64 on the realtime and compact profiles
+/// and at the compute tier on the wider ones, so its error reaches the
+/// result scaled by `|x|` and stays far below one storage unit for any `x`
+/// the profile can hold with a few integer bits to spare. Since
+/// `|x * sigmoid(gate)| <= |x|` the result always fits: this cannot fail.
+pub fn sigmoid_mul(x: FixedPoint, gate: FixedPoint) -> FixedPoint {
+    #[cfg(table_format = "q16_16")]
+    {
+        // |x| < 2^31 and 0 <= s <= 2^64: the product fits i128
+        let p = (x.raw() as i128) * gate_sigmoid(gate);
+        FixedPoint::from_raw(((p >> 64) + ((p >> 63) & 1)) as i32)
+    }
+    #[cfg(table_format = "q32_32")]
+    {
+        let p = crate::fixed_point::i256::mul_i128_to_i256(x.raw() as i128, gate_sigmoid(gate));
+        let mut q = p >> 64u32;
+        if p.words[0] >= 1u64 << 63 {
+            q = q + crate::fixed_point::I256::from_i128(1);
+        }
+        FixedPoint::from_raw(q.as_i128() as i64)
+    }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    {
+        let p = widen_product(super::wide_acc::widen_storage(x.raw()), gate_sigmoid(gate));
+        FixedPoint::from_raw(narrow_triple_nearest(p).expect("sigmoid_mul: |x * sigmoid| <= |x|"))
+    }
+}
+
+/// [`sigmoid_mul`] element by element: `out[i] = x[i] * sigmoid(gate[i])`.
+///
+/// # Panics
+/// Panics if the slices differ in length.
+pub fn sigmoid_mul_slice(x: &[FixedPoint], gate: &[FixedPoint]) -> Vec<FixedPoint> {
+    assert_eq!(x.len(), gate.len(), "sigmoid_mul_slice: length mismatch");
+    x.iter().zip(gate).map(|(&x, &g)| sigmoid_mul(x, g)).collect()
+}
+
+/// [`sigmoid_mul`] in place: `x[i] *= sigmoid(gate[i])`.
+///
+/// # Panics
+/// Panics if the slices differ in length.
+pub fn sigmoid_mul_in_place(x: &mut [FixedPoint], gate: &[FixedPoint]) {
+    assert_eq!(x.len(), gate.len(), "sigmoid_mul_in_place: length mismatch");
+    for (x, &g) in x.iter_mut().zip(gate) {
+        *x = sigmoid_mul(*x, g);
+    }
+}
+
+/// Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the
+/// wide tier and the sum rounded to storage once. A zero weight contributes
+/// zero. The weights are used as given: they are not normalised.
+///
+/// The terms are formed at Q64.64 on the realtime and compact profiles and
+/// at the compute tier on the wider ones.
+///
+/// `Err(DomainError)` if a weight is negative, `Err(TierOverflow)` if the
+/// sum or the result leaves its tier.
+pub fn entropy(weights: &[FixedPoint]) -> Result<FixedPoint, OverflowDetected> {
+    if weights.iter().any(|w| w.is_negative()) {
+        return Err(OverflowDetected::DomainError);
+    }
+    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+    {
+        use crate::fixed_point::frac_config::FRAC_BITS;
+        use crate::fixed_point::wide::{ln_q64, narrow_q64};
+        let mut sum: i128 = 0;
+        for w in weights {
+            let w_q64 = (w.raw() as i128) << (64 - FRAC_BITS);
+            if let Some(ln) = ln_q64(w_q64) {
+                // round(w * ln(w)) at Q64.64 from the exact 256-bit product
+                let p = crate::fixed_point::i256::mul_i128_to_i256(w_q64, ln);
+                let mut term = p >> 64u32;
+                if p.words[0] >= 1u64 << 63 {
+                    term = term + crate::fixed_point::I256::from_i128(1);
+                }
+                if !term.fits_in_i128() {
+                    return Err(OverflowDetected::TierOverflow);
+                }
+                sum = sum.checked_add(term.as_i128()).ok_or(OverflowDetected::TierOverflow)?;
+            }
+        }
+        let rounded = narrow_q64(sum.checked_neg().ok_or(OverflowDetected::TierOverflow)?, FRAC_BITS);
+        rounded.try_into().map(FixedPoint::from_raw).map_err(|_| OverflowDetected::TierOverflow)
+    }
+    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
+    {
+        use crate::fixed_point::universal::fasc::stack_evaluator::compute::{compute_checked_negate, ln_at_compute_tier};
+        let mut sum = compute_zero();
+        for w in weights {
+            if w.is_zero() {
+                continue;
+            }
+            let wc = upscale_to_compute(w.raw());
+            sum = compute_checked_add(sum, compute_checked_multiply(wc, ln_at_compute_tier(wc))?)?;
+        }
+        Ok(FixedPoint::from_raw(downscale_to_storage(compute_checked_negate(sum)?)?))
+    }
+}
+
 /// One query against many keys stored in one contiguous buffer: element `k`
 /// of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each
 /// accumulated at the compute tier and rounded to storage once, exactly as
@@ -604,6 +791,23 @@ pub fn dot_many(query: &[FixedPoint], keys_flat: &[FixedPoint], dim: usize) -> V
         return Vec::new();
     }
     assert_eq!(keys_flat.len() % dim, 0, "dot_many: keys_flat length is not a multiple of dim");
+    let mut out = vec![FixedPoint::ZERO; keys_flat.len() / dim];
+    dot_many_into(query, keys_flat, dim, &mut out);
+    out
+}
+
+/// [`dot_many`] writing into a caller-provided slice: `out[k]` is the dot of
+/// the query with key `k`. The same values; nothing is allocated.
+///
+/// # Panics
+/// Panics if `dim != query.len()`, if `keys_flat.len() != out.len() * dim`,
+/// or if a result leaves the storage range.
+pub fn dot_many_into(query: &[FixedPoint], keys_flat: &[FixedPoint], dim: usize, out: &mut [FixedPoint]) {
+    assert_eq!(query.len(), dim, "dot_many_into: query length is not dim");
+    assert_eq!(keys_flat.len(), out.len() * dim, "dot_many_into: keys_flat length is not out.len() * dim");
+    if dim == 0 {
+        return;
+    }
     #[cfg(all(table_format = "q16_16", target_arch = "x86_64"))]
     {
         use super::linalg::{max_abs_avx2, unchecked_dot_avx2};
@@ -612,15 +816,17 @@ pub fn dot_many(query: &[FixedPoint], keys_flat: &[FixedPoint], dim: usize) -> V
             // SAFETY: AVX2 was just detected.
             let q_max = unsafe { max_abs_avx2(q) };
             if (dim as u128) * (q_max as u128) * (1u128 << 31) < 1u128 << 63 {
-                return FixedPoint::raw_slice(keys_flat)
-                    .chunks_exact(dim)
+                for (o, key) in out.iter_mut().zip(FixedPoint::raw_slice(keys_flat).chunks_exact(dim)) {
                     // SAFETY: AVX2 detected; the bound above holds for every key.
-                    .map(|key| FixedPoint::from_raw(round_to_storage(unsafe { unchecked_dot_avx2(q, key) })))
-                    .collect();
+                    *o = FixedPoint::from_raw(round_to_storage(unsafe { unchecked_dot_avx2(q, key) }));
+                }
+                return;
             }
         }
     }
-    keys_flat.chunks_exact(dim).map(|key| super::linalg::compute_tier_dot(query, key)).collect()
+    for (o, key) in out.iter_mut().zip(keys_flat.chunks_exact(dim)) {
+        *o = super::linalg::compute_tier_dot(query, key);
+    }
 }
 
 /// RMS normalisation with a learned scale:

@@ -68,7 +68,7 @@ jobs:
         run: |
           cargo test --features inference --lib fused
           cargo test --features inference --test fused_ops_validation softmax_mix
-          cargo test --features inference --test defects_065_validation
+          cargo test --features inference --test defects_065_validation --test wide_gates_validation --test batch_into_validation
           cargo test --features inference --test tq5_validation --test weight_bits_validation --test layout_and_rotation_validation
 
   tq19-exactness:
@@ -93,7 +93,7 @@ jobs:
       - name: 0.6.5 defect regressions (${{ matrix.profile }})
         env:
           GMATH_PROFILE: ${{ matrix.profile }}
-        run: cargo test --features inference --test defects_065_validation
+        run: cargo test --features inference --test defects_065_validation --test wide_gates_validation --test batch_into_validation
 
       - name: 0.6.5 inference additions - TQ5, weight bits, layout (${{ matrix.profile }})
         env:

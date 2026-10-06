@@ -1,6 +1,6 @@
 [package]
 name = "g_math"
-version = "0.6.6"
+version = "0.6.7"
 edition = "2021"
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — pure Rust, zero-float, deterministic"
 authors = ["Niels Erik Toren"]
@@ -39,9 +39,9 @@ proptest = "1.0"
 approx = "0.5"
 num-bigint = "0.4"
 num-rational = "0.4"
-# The published crate before width became a type: the differential gate
+# The published crate before width became a type (0.6.7; the scalar surface is unchanged since 0.6.5): the differential gate
 # (tests/differential_065_validation.rs) compares every result with it.
-g_math_065 = { package = "g_math", version = "=0.6.5" }
+g_math_065 = { package = "g_math", version = "=0.6.7" }
 
 [features]
 default = []

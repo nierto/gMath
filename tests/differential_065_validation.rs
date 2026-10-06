@@ -1,6 +1,6 @@
-//! Differential gate: bit-identity with the published 0.6.5.
+//! Differential gate: bit-identity with the published 0.6.7 (the scalar surface is unchanged since 0.6.5).
 //!
-//! `g_math` 0.6.5 from crates.io is a dev-dependency (`g_math_065`). Both
+//! `g_math` 0.6.7 from crates.io is a dev-dependency (`g_math_065`). Both
 //! crates read the same `GMATH_PROFILE` / `GMATH_FRAC_BITS`, so in each build
 //! the old `FixedPoint` and the new one are the same format, and every
 //! operation is run on both with the same raw inputs. Required: the same

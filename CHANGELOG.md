@@ -5,6 +5,74 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-10-05
+
+### Upgrading
+
+Additions only. No existing function changes a result: everything in 0.6.6
+returns the same integers. Nothing to do unless you want the new functions.
+
+### Added
+
+**Wide tier (`g_math::wide`, every profile)**
+
+- `sigmoid_q64`, `softplus_q64`, `silu_q64`: gate functions on Q64.64
+  integers, built on the Q64.64 `exp` and `ln` engines in sign-split forms
+  that cannot overflow. Measured against mpmath on 400 inputs each
+  (`|x| <= 40`): within 3, 9 and 79 units of `2^-64` (silu's error is the
+  sigmoid's times `|x|`).
+- `narrow_q64(v, frac_bits)`: one rounding of a Q64.64 value to fewer
+  fractional bits, nearest with ties toward +infinity. Narrowed to 40 and to
+  20 fractional bits, the three functions above were the nearest value on
+  every tested input. They are not proven correctly rounded: a result can
+  differ from the nearest value when the exact value lies within the
+  Q64.64 error of a rounding boundary.
+- `sqrt_q64` and `sqrt_q64_to(x, frac_bits)`: the square root correctly
+  rounded, by exact integer arithmetic on the radicand. `sqrt_q64_to` rounds
+  once at the precision asked for. Narrowing `sqrt_q64` afterwards rounds
+  twice and can differ (`sqrt(1 + 2^-40)` at 40 bits does).
+- `mul_div_floor`, `mul_div_nearest` (`i128`) and `mul_div_floor_u128`:
+  `a * b / d` with the product formed exactly at double width.
+  `Err(DivisionByZero)` or `Err(TierOverflow)`, never a wrapped product.
+- `try_ratio_from_str`: a decimal literal as the exact fraction it denotes,
+  in lowest terms (`"0.25"` gives `(1, 4)`, `"10000000.0"` gives
+  `(10000000, 1)`). An integer literal is one whose denominator is 1. With
+  `mul_div_floor` this covers exact scaling by a parsed ratio. No rational
+  type is added.
+
+**Fused**
+
+- `fused::sigmoid_mul(x, gate)`, `sigmoid_mul_slice`, `sigmoid_mul_in_place`:
+  `x * sigmoid(gate)` with the sigmoid at the wide tier (Q64.64 on realtime
+  and compact, the compute tier on wider profiles), the product exact and
+  one rounding. Infallible, since `|x * sigmoid| <= |x|`. 0 units from
+  mpmath on 240 cases on every profile and on realtime at 8 to 24
+  fractional bits.
+- `fused::entropy(weights)`: `-sum(w ln w)` in nats, terms at the wide tier,
+  one rounding. 0 units from mpmath on 60 cases (up to 300 weights) on every
+  build. `Err(DomainError)` for a negative weight.
+
+**Caller-provided output buffers**
+
+- `fused::dot_many_into`, `softmax_mix_flat_into`,
+  `softmax_mix_flat_values_into`: the existing functions writing into slices.
+- `matvec_batch_par_into` on `TQ19Matrix`, `PlanarTQ19`, `HybridTQ19`,
+  `RowScaledTQ19` and `RowScaledTQ5` (feature `inference`): a batch written
+  into one flat, batch-major buffer (`out[b * rows + r]`). No result vector
+  is allocated; rows are still computed in parallel.
+- Each returns the integers its allocating twin returns
+  (`tests/batch_into_validation.rs`, batch sizes across the kernels' tile
+  boundaries). `RowScaledTQ5::matvec_batch_par` is now built on the buffer
+  form: same outputs as 0.6.6, and measured 2 to 18 percent faster on a
+  1024 x 4096 matrix; the buffer form a further 4 to 16 percent on the
+  vectorised path.
+
+### Verification
+
+`scripts/generate_gate_refs.py` (mpmath at 140 digits, exact integers and
+`Fraction`) and `tests/wide_gates_validation.rs`: 1,600 Q64.64 references,
+600 signed and 300 unsigned `mul_div` triples, 200 ratio literals.
+
 ## [0.6.6] - 2026-10-05
 
 ### Upgrading
