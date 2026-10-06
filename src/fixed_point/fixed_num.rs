@@ -260,6 +260,7 @@ macro_rules! nearest {
 /// fraction bits and `exponent_bits` exponent bits: rounded to
 /// `fraction_bits + 1` significant bits, nearest with ties to even; subnormal
 /// or zero below the normal range, infinite above it. Integer operations only.
+#[inline(always)]
 fn ieee_bits(negative: bool, magnitude: &[u64], frac_bits: i32, fraction_bits: u32, exponent_bits: u32) -> u64 {
     let length = word_bit_length(magnitude);
     if length == 0 {
@@ -302,6 +303,7 @@ fn ieee_bits(negative: bool, magnitude: &[u64], frac_bits: i32, fraction_bits: u
     sign | ((biased as u64) << fraction_bits) | (significand & ((1u64 << fraction_bits) - 1))
 }
 
+#[inline]
 fn word_bit_length(words: &[u64]) -> u32 {
     for i in (0..words.len()).rev() {
         if words[i] != 0 {
@@ -311,11 +313,13 @@ fn word_bit_length(words: &[u64]) -> u32 {
     0
 }
 
+#[inline]
 fn word_bit(words: &[u64], i: u32) -> bool {
     words.get((i / 64) as usize).map_or(false, |w| (w >> (i % 64)) & 1 == 1)
 }
 
 /// Any bit below position `i` set.
+#[inline]
 fn word_any_below(words: &[u64], i: u32) -> bool {
     let (w, b) = ((i / 64) as usize, i % 64);
     words.iter().take(w.min(words.len())).any(|&x| x != 0)
@@ -323,6 +327,7 @@ fn word_any_below(words: &[u64], i: u32) -> bool {
 }
 
 /// The magnitude shifted right by `i`, low 64 bits (callers keep at most 54).
+#[inline]
 fn word_bits_from(words: &[u64], i: u32) -> u64 {
     let (w, b) = ((i / 64) as usize, i % 64);
     let low = words.get(w).map_or(0, |&x| x >> b);
@@ -339,23 +344,57 @@ fn word_bits_from(words: &[u64], i: u32) -> u64 {
 // oversized result stays at the i64 ceiling for the storage downscale to
 // refuse).
 
-/// A compute value of the 32-bit width at Q64.64.
-#[inline(always)]
-fn q64_from_c32<const F: u32>(val: i64) -> i128 {
-    (val as i128) << (64 - 2 * <Fixed<i32, F> as FixedNum>::FRAC_BITS)
-}
+/// The 32-bit width's engine wrappers, generic over the split so that the
+/// upshift `64 - 2F` is an immediate, as the old per-profile constant was. A compute value is shifted up to Q64.64, the engine evaluated,
+/// and the result rounded back (saturating, so an oversized result stays at
+/// the i64 ceiling for the storage downscale to refuse).
+mod c32 {
+    use super::*;
 
-/// A Q64.64 value rounded to the compute tier of the 32-bit width,
-/// saturating at the i64 range.
-#[inline(always)]
-fn c32_from_q64<const F: u32>(val: i128) -> i64 {
-    let shift = 64 - 2 * <Fixed<i32, F> as FixedNum>::FRAC_BITS;
-    let round_bit = (val & (1i128 << (shift - 1))) != 0;
-    let mut result = val >> shift;
-    if round_bit { result += 1; }
-    if result > i64::MAX as i128 { i64::MAX }
-    else if result < i64::MIN as i128 { i64::MIN }
-    else { result as i64 }
+    #[inline(always)]
+    fn up<const F: u32>(val: i64) -> i128 {
+        (val as i128) << (64 - 2 * F)
+    }
+
+    #[inline(always)]
+    fn down<const F: u32>(val: i128) -> i64 {
+        const { assert!(F >= 2 && F <= 30) }
+        let s = 64 - 2 * F;
+        let round_bit = (val & (1i128 << (s - 1))) != 0;
+        let mut result = val >> s;
+        if round_bit { result += 1; }
+        if result > i64::MAX as i128 { i64::MAX }
+        else if result < i64::MIN as i128 { i64::MIN }
+        else { result as i64 }
+    }
+
+    #[inline(always)]
+    pub(super) fn exp<const F: u32>(x: i64) -> i64 { down::<F>(exp_q64_64_native(up::<F>(x))) }
+    #[inline(always)]
+    pub(super) fn ln<const F: u32>(x: i64) -> i64 {
+        if x <= 0 {
+            return i64::MIN;
+        }
+        down::<F>(ln_q64_64_native(up::<F>(x)))
+    }
+    #[inline(always)]
+    pub(super) fn sqrt<const F: u32>(x: i64) -> i64 {
+        if x < 0 { return i64::MIN; }
+        down::<F>(sqrt_q64_64_native(up::<F>(x)))
+    }
+    #[inline(always)]
+    pub(super) fn sin<const F: u32>(x: i64) -> i64 { down::<F>(sincos_q64_64_native(up::<F>(x)).0) }
+    #[inline(always)]
+    pub(super) fn cos<const F: u32>(x: i64) -> i64 { down::<F>(sincos_q64_64_native(up::<F>(x)).1) }
+    #[inline(always)]
+    pub(super) fn sincos<const F: u32>(x: i64) -> (i64, i64) {
+        let (s, c) = sincos_q64_64_native(up::<F>(x));
+        (down::<F>(s), down::<F>(c))
+    }
+    #[inline(always)]
+    pub(super) fn atan<const F: u32>(x: i64) -> i64 { down::<F>(atan_q64_64_native(up::<F>(x))) }
+    #[inline(always)]
+    pub(super) fn atan2<const F: u32>(y: i64, x: i64) -> i64 { down::<F>(atan2_q64_64_native(up::<F>(y), up::<F>(x))) }
 }
 
 impl<const F: u32> sealed::Sealed for Fixed<i32, F> {}
@@ -505,6 +544,7 @@ impl<const F: u32> FixedNum for Fixed<i32, F> {
     fn try_to_int(raw: i32) -> Result<i32, OverflowDetected> {
         Ok(raw >> Self::FRAC_BITS)
     }
+    #[inline]
     fn float_bits(raw: i32, fraction_bits: u32, exponent_bits: u32) -> u64 {
         let magnitude = (raw as i128).unsigned_abs();
         let words = [magnitude as u64, (magnitude >> 64) as u64];
@@ -512,37 +552,19 @@ impl<const F: u32> FixedNum for Fixed<i32, F> {
     }
 
     #[inline]
-    fn direct_exp(x: i64) -> i64 {
-        c32_from_q64::<F>(exp_q64_64_native(q64_from_c32::<F>(x)))
-    }
+    fn direct_exp(x: i64) -> i64 { c32::exp::<F>(x) }
     #[inline]
-    fn direct_ln(x: i64) -> i64 {
-        if x <= 0 {
-            return i64::MIN;
-        }
-        c32_from_q64::<F>(ln_q64_64_native(q64_from_c32::<F>(x)))
-    }
+    fn direct_ln(x: i64) -> i64 { c32::ln::<F>(x) }
     #[inline]
-    fn direct_sqrt(x: i64) -> i64 {
-        if x < 0 { return i64::MIN; }
-        c32_from_q64::<F>(sqrt_q64_64_native(q64_from_c32::<F>(x)))
-    }
+    fn direct_sqrt(x: i64) -> i64 { c32::sqrt::<F>(x) }
     #[inline]
-    fn direct_sin(x: i64) -> i64 {
-        c32_from_q64::<F>(sincos_q64_64_native(q64_from_c32::<F>(x)).0)
-    }
+    fn direct_sin(x: i64) -> i64 { c32::sin::<F>(x) }
     #[inline]
-    fn direct_cos(x: i64) -> i64 {
-        c32_from_q64::<F>(sincos_q64_64_native(q64_from_c32::<F>(x)).1)
-    }
+    fn direct_cos(x: i64) -> i64 { c32::cos::<F>(x) }
     #[inline]
-    fn direct_atan(x: i64) -> i64 {
-        c32_from_q64::<F>(atan_q64_64_native(q64_from_c32::<F>(x)))
-    }
+    fn direct_atan(x: i64) -> i64 { c32::atan::<F>(x) }
     #[inline]
-    fn direct_atan2(y: i64, x: i64) -> i64 {
-        c32_from_q64::<F>(atan2_q64_64_native(q64_from_c32::<F>(y), q64_from_c32::<F>(x)))
-    }
+    fn direct_atan2(y: i64, x: i64) -> i64 { c32::atan2::<F>(y, x) }
     #[inline]
     fn compute_pi_half() -> i64 {
         // Shift the Q64.64 constant down with nearest rounding.
@@ -563,10 +585,7 @@ impl<const F: u32> FixedNum for Fixed<i32, F> {
     #[inline]
     fn cos_at_compute_tier(x: i64) -> i64 { Self::direct_cos(x) }
     #[inline]
-    fn sincos_at_compute_tier(x: i64) -> (i64, i64) {
-        let (sin_val, cos_val) = sincos_q64_64_native(q64_from_c32::<F>(x));
-        (c32_from_q64::<F>(sin_val), c32_from_q64::<F>(cos_val))
-    }
+    fn sincos_at_compute_tier(x: i64) -> (i64, i64) { c32::sincos::<F>(x) }
     #[inline]
     fn atan_at_compute_tier(x: i64) -> i64 { Self::direct_atan(x) }
     #[inline]
@@ -719,6 +738,7 @@ impl FixedNum for Fixed<i64, 32> {
     fn try_to_int(raw: i64) -> Result<i32, OverflowDetected> {
         i32::try_from(raw >> 32).map_err(|_| OverflowDetected::TierOverflow)
     }
+    #[inline]
     fn float_bits(raw: i64, fraction_bits: u32, exponent_bits: u32) -> u64 {
         let magnitude = (raw as i128).unsigned_abs();
         let words = [magnitude as u64, (magnitude >> 64) as u64];
@@ -919,6 +939,7 @@ impl FixedNum for Fixed<i128, 64> {
     fn try_to_int(raw: i128) -> Result<i32, OverflowDetected> {
         i32::try_from(raw >> 64).map_err(|_| OverflowDetected::TierOverflow)
     }
+    #[inline]
     fn float_bits(raw: i128, fraction_bits: u32, exponent_bits: u32) -> u64 {
         let magnitude = (raw as i128).unsigned_abs();
         let words = [magnitude as u64, (magnitude >> 64) as u64];
@@ -1145,6 +1166,7 @@ impl FixedNum for Fixed<I256, 128> {
     fn try_to_int(raw: I256) -> Result<i32, OverflowDetected> {
         i32::try_from((raw >> 128u32).as_i128()).map_err(|_| OverflowDetected::TierOverflow)
     }
+    #[inline]
     fn float_bits(raw: I256, fraction_bits: u32, exponent_bits: u32) -> u64 {
         let negative = raw.is_negative();
         // two's complement negation wraps at the minimum, whose words then
@@ -1381,6 +1403,7 @@ impl FixedNum for Fixed<I512, 256> {
         }
         i32::try_from(floor.as_i128()).map_err(|_| OverflowDetected::TierOverflow)
     }
+    #[inline]
     fn float_bits(raw: I512, fraction_bits: u32, exponent_bits: u32) -> u64 {
         let negative = raw.is_negative();
         // two's complement negation wraps at the minimum, whose words then
