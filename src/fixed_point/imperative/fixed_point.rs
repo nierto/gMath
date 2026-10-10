@@ -8,7 +8,7 @@ use std::fmt;
 use std::ops::{Add, Sub, Mul, Div, Neg, AddAssign, SubAssign, MulAssign, DivAssign};
 
 use crate::fixed_point::canonical::{
-    LazyExpr, StackValue, evaluate, gmath_parse, CompactShadow,
+    LazyExpr, StackValue, evaluate_in, gmath_parse_in, CompactShadow, FascFormat,
 };
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::fixed_num::{Compute, FixedNum};
@@ -679,7 +679,10 @@ where
 // Display
 // ============================================================================
 
-impl FixedPoint {
+impl<S: Storage, const F: u32> Fixed<S, F>
+where
+    Self: FascFormat + FixedNum<Storage = S>,
+{
     /// Parse from a decimal string (e.g., "3.14159", "1e-06").
     ///
     /// Panics where [`try_from_str`](Self::try_from_str) returns an error.
@@ -700,8 +703,8 @@ impl FixedPoint {
     /// `Err(ParseError)` for a malformed string, `Err(TierOverflow)` when the
     /// value does not fit storage.
     pub fn try_from_str(s: &str) -> Result<Self, OverflowDetected> {
-        match super::decimal_literal::parse(s, crate::fixed_point::frac_config::FRAC_BITS, crate::fixed_point::frac_config::STORAGE_BITS) {
-            Some(converted) => converted.map(|c| Self { raw: super::decimal_literal::to_storage(&c) }),
+        match <Self as FascFormat>::literal_to_storage(s) {
+            Some(converted) => converted.map(|raw| Self { raw }),
             None => Self::try_from_str_canonical(s),
         }
     }
@@ -714,7 +717,7 @@ impl FixedPoint {
             compute: mode::ComputeMode::Binary,
             output: mode::OutputMode::Binary,
         });
-        let result = gmath_parse(s).and_then(|expr| evaluate(&expr));
+        let result = gmath_parse_in::<Self>(s).and_then(|expr| evaluate_in(&expr));
         mode::set_mode(old_mode);
 
         Self::try_from_stack_value(result?)
@@ -724,7 +727,7 @@ impl FixedPoint {
         let sv1 = self.to_stack_value();
         let sv2 = exponent.to_stack_value();
         let expr = LazyExpr::from(sv1).pow(LazyExpr::from(sv2));
-        let result = evaluate(&expr)?;
+        let result = evaluate_in(&expr)?;
         Self::try_from_stack_value(result)
     }
     /// Fallible atan2(self=y, x).
@@ -732,21 +735,21 @@ impl FixedPoint {
         let sv_y = self.to_stack_value();
         let sv_x = x.to_stack_value();
         let expr = LazyExpr::from(sv_y).atan2(LazyExpr::from(sv_x));
-        let result = evaluate(&expr)?;
+        let result = evaluate_in(&expr)?;
         Self::try_from_stack_value(result)
     }
     #[inline]
-    pub(crate) fn to_stack_value(self) -> StackValue {
-        StackValue::Binary(<Self as FixedNum>::STORAGE_TIER, self.raw, CompactShadow::None)
+    pub(crate) fn to_stack_value(self) -> StackValue<Self> {
+        StackValue::<Self>::Binary(<Self as FixedNum>::STORAGE_TIER, self.raw, CompactShadow::None)
     }
-    pub(crate) fn try_from_stack_value(sv: StackValue) -> Result<Self, OverflowDetected> {
+    pub(crate) fn try_from_stack_value(sv: StackValue<Self>) -> Result<Self, OverflowDetected> {
         match sv.as_binary_storage() {
             Some(raw) => Ok(Self { raw }),
             None => {
                 // Non-binary domain — force conversion by adding binary zero
-                let zero_sv = StackValue::Binary(<Self as FixedNum>::STORAGE_TIER, Self::ZERO.raw, CompactShadow::None);
+                let zero_sv = StackValue::<Self>::Binary(<Self as FixedNum>::STORAGE_TIER, Self::ZERO.raw, CompactShadow::None);
                 let expr = LazyExpr::from(sv) + LazyExpr::from(zero_sv);
-                let result = evaluate(&expr)?;
+                let result = evaluate_in(&expr)?;
                 result.as_binary_storage()
                     .map(|raw| Self { raw })
                     .ok_or(OverflowDetected::InvalidInput)
@@ -754,13 +757,13 @@ impl FixedPoint {
         }
     }
     #[allow(dead_code)]
-    fn apply_unary(self, f: fn(LazyExpr) -> LazyExpr) -> Self {
+    fn apply_unary(self, f: fn(LazyExpr<Self>) -> LazyExpr<Self>) -> Self {
         self.try_apply_unary(f).expect("transcendental: overflow or domain error")
     }
-    fn try_apply_unary(self, f: fn(LazyExpr) -> LazyExpr) -> Result<Self, OverflowDetected> {
+    fn try_apply_unary(self, f: fn(LazyExpr<Self>) -> LazyExpr<Self>) -> Result<Self, OverflowDetected> {
         let sv = self.to_stack_value();
         let expr = f(LazyExpr::from(sv));
-        let result = evaluate(&expr)?;
+        let result = evaluate_in(&expr)?;
         Self::try_from_stack_value(result)
     }
 }
@@ -825,7 +828,10 @@ impl Fixed<i64, 32> {
     }
 }
 
-impl fmt::Display for FixedPoint {
+impl<S: Storage, const F: u32> fmt::Display for Fixed<S, F>
+where
+    Self: FascFormat + FixedNum<Storage = S>,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sv = self.to_stack_value();
         fmt::Display::fmt(&sv, f)

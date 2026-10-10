@@ -28,7 +28,9 @@ use crate::fixed_point::imperative::compute_matrix::{ComputeMatrix, compute_lu_d
 use crate::fixed_point::imperative::matrix_functions::{
     matrix_exp_compute, matrix_log_compute, matrix_sqrt_compute,
 };
-use crate::fixed_point::imperative::linalg::upscale_to_compute;
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::imperative::matrix_functions::MatrixFunctions;
+use crate::fixed_point::width::Storage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
 // ============================================================================
@@ -40,54 +42,54 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// All intermediates stay at compute tier (ComputeMatrix) during evaluation.
 /// Single downscale to FixedMatrix via `evaluate_matrix()` at the top level.
 #[derive(Debug, Clone)]
-pub enum LazyMatrixExpr {
+pub enum LazyMatrixExpr<T = FixedPoint> {
     /// A concrete matrix (leaf node).
-    Literal(FixedMatrix),
+    Literal(FixedMatrix<T>),
 
     /// Identity matrix of given dimension.
     Identity(usize),
 
     /// Matrix addition: A + B
-    Add(Box<LazyMatrixExpr>, Box<LazyMatrixExpr>),
+    Add(Box<LazyMatrixExpr<T>>, Box<LazyMatrixExpr<T>>),
 
     /// Matrix subtraction: A - B
-    Sub(Box<LazyMatrixExpr>, Box<LazyMatrixExpr>),
+    Sub(Box<LazyMatrixExpr<T>>, Box<LazyMatrixExpr<T>>),
 
     /// Matrix multiplication (matmul): A * B
-    Mul(Box<LazyMatrixExpr>, Box<LazyMatrixExpr>),
+    Mul(Box<LazyMatrixExpr<T>>, Box<LazyMatrixExpr<T>>),
 
     /// Scalar-matrix multiplication: s * A
-    ScalarMul(FixedPoint, Box<LazyMatrixExpr>),
+    ScalarMul(T, Box<LazyMatrixExpr<T>>),
 
     /// Matrix transpose: Aᵀ
-    Transpose(Box<LazyMatrixExpr>),
+    Transpose(Box<LazyMatrixExpr<T>>),
 
     /// Matrix negation: -A
-    Negate(Box<LazyMatrixExpr>),
+    Negate(Box<LazyMatrixExpr<T>>),
 
     /// Matrix inverse: A⁻¹ via compute-tier LU
-    Inverse(Box<LazyMatrixExpr>),
+    Inverse(Box<LazyMatrixExpr<T>>),
 
     /// Matrix exponential: exp(A) via Padé [6/6] at compute tier
-    Exp(Box<LazyMatrixExpr>),
+    Exp(Box<LazyMatrixExpr<T>>),
 
     /// Matrix logarithm: log(A) via inverse scaling-and-squaring at compute tier
-    Log(Box<LazyMatrixExpr>),
+    Log(Box<LazyMatrixExpr<T>>),
 
     /// Matrix square root: A^{1/2} via Denman-Beavers at compute tier
-    Sqrt(Box<LazyMatrixExpr>),
+    Sqrt(Box<LazyMatrixExpr<T>>),
 
     /// Matrix power: A^p = exp(p * log(A)): entire chain at compute tier
-    Pow(Box<LazyMatrixExpr>, FixedPoint),
+    Pow(Box<LazyMatrixExpr<T>>, T),
 }
 
 // ============================================================================
 // Constructor helpers
 // ============================================================================
 
-impl LazyMatrixExpr {
+impl<T> LazyMatrixExpr<T> {
     /// Create from a concrete FixedMatrix.
-    pub fn literal(m: FixedMatrix) -> Self {
+    pub fn literal(m: FixedMatrix<T>) -> Self {
         LazyMatrixExpr::Literal(m)
     }
 
@@ -112,7 +114,7 @@ impl LazyMatrixExpr {
     }
 
     /// Matrix power: self^p
-    pub fn pow(self, p: FixedPoint) -> Self {
+    pub fn pow(self, p: T) -> Self {
         LazyMatrixExpr::Pow(Box::new(self), p)
     }
 
@@ -127,7 +129,7 @@ impl LazyMatrixExpr {
     }
 
     /// Scalar-matrix multiply: s * self
-    pub fn scale(self, s: FixedPoint) -> Self {
+    pub fn scale(self, s: T) -> Self {
         LazyMatrixExpr::ScalarMul(s, Box::new(self))
     }
 
@@ -170,52 +172,52 @@ impl LazyMatrixExpr {
 // Operator overloading for natural matrix expression syntax
 // ============================================================================
 
-impl From<FixedMatrix> for LazyMatrixExpr {
-    fn from(m: FixedMatrix) -> Self {
+impl<T> From<FixedMatrix<T>> for LazyMatrixExpr<T> {
+    fn from(m: FixedMatrix<T>) -> Self {
         LazyMatrixExpr::Literal(m)
     }
 }
 
-impl Add for LazyMatrixExpr {
-    type Output = LazyMatrixExpr;
+impl<T> Add for LazyMatrixExpr<T> {
+    type Output = LazyMatrixExpr<T>;
     fn add(self, other: Self) -> Self::Output {
         LazyMatrixExpr::Add(Box::new(self), Box::new(other))
     }
 }
 
-impl Sub for LazyMatrixExpr {
-    type Output = LazyMatrixExpr;
+impl<T> Sub for LazyMatrixExpr<T> {
+    type Output = LazyMatrixExpr<T>;
     fn sub(self, other: Self) -> Self::Output {
         LazyMatrixExpr::Sub(Box::new(self), Box::new(other))
     }
 }
 
-impl Mul for LazyMatrixExpr {
-    type Output = LazyMatrixExpr;
+impl<T> Mul for LazyMatrixExpr<T> {
+    type Output = LazyMatrixExpr<T>;
     fn mul(self, other: Self) -> Self::Output {
         LazyMatrixExpr::Mul(Box::new(self), Box::new(other))
     }
 }
 
-impl Neg for LazyMatrixExpr {
-    type Output = LazyMatrixExpr;
+impl<T> Neg for LazyMatrixExpr<T> {
+    type Output = LazyMatrixExpr<T>;
     fn neg(self) -> Self::Output {
         LazyMatrixExpr::Negate(Box::new(self))
     }
 }
 
 /// Scalar * LazyMatrixExpr
-impl Mul<LazyMatrixExpr> for FixedPoint {
-    type Output = LazyMatrixExpr;
-    fn mul(self, matrix: LazyMatrixExpr) -> Self::Output {
+impl<S: Storage, const F: u32> Mul<LazyMatrixExpr<Fixed<S, F>>> for Fixed<S, F> {
+    type Output = LazyMatrixExpr<Fixed<S, F>>;
+    fn mul(self, matrix: LazyMatrixExpr<Fixed<S, F>>) -> Self::Output {
         LazyMatrixExpr::ScalarMul(self, Box::new(matrix))
     }
 }
 
 /// LazyMatrixExpr * Scalar
-impl Mul<FixedPoint> for LazyMatrixExpr {
-    type Output = LazyMatrixExpr;
-    fn mul(self, scalar: FixedPoint) -> Self::Output {
+impl<T> Mul<T> for LazyMatrixExpr<T> {
+    type Output = LazyMatrixExpr<T>;
+    fn mul(self, scalar: T) -> Self::Output {
         LazyMatrixExpr::ScalarMul(scalar, Box::new(self))
     }
 }
@@ -224,7 +226,7 @@ impl Mul<FixedPoint> for LazyMatrixExpr {
 // Display
 // ============================================================================
 
-impl core::fmt::Display for LazyMatrixExpr {
+impl<T: core::fmt::Display> core::fmt::Display for LazyMatrixExpr<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LazyMatrixExpr::Literal(_) => write!(f, "Matrix"),
@@ -250,7 +252,10 @@ impl core::fmt::Display for LazyMatrixExpr {
 
 /// Evaluate a LazyMatrixExpr entirely at compute tier (tier N+1),
 /// returning a ComputeMatrix. No intermediate downscales.
-fn eval_compute(expr: &LazyMatrixExpr) -> Result<ComputeMatrix, OverflowDetected> {
+fn eval_compute<S: Storage, const F: u32>(expr: &LazyMatrixExpr<Fixed<S, F>>) -> Result<ComputeMatrix<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: MatrixFunctions + FixedNum<Storage = S>,
+{
     match expr {
         LazyMatrixExpr::Literal(m) => Ok(ComputeMatrix::from_fixed_matrix(m)),
 
@@ -276,7 +281,7 @@ fn eval_compute(expr: &LazyMatrixExpr) -> Result<ComputeMatrix, OverflowDetected
 
         LazyMatrixExpr::ScalarMul(s, inner) => {
             let mc = eval_compute(inner)?;
-            let s_compute = upscale_to_compute(s.raw());
+            let s_compute = Fixed::<S, F>::upscale_to_compute(s.raw());
             Ok(mc.scalar_mul(s_compute))
         }
 
@@ -315,7 +320,7 @@ fn eval_compute(expr: &LazyMatrixExpr) -> Result<ComputeMatrix, OverflowDetected
             // A^p = exp(p * log(A)) — entire chain at compute tier
             let mc = eval_compute(inner)?;
             let log_a = matrix_log_compute(&mc)?;
-            let p_compute = upscale_to_compute(p.raw());
+            let p_compute = Fixed::<S, F>::upscale_to_compute(p.raw());
             let p_log_a = log_a.scalar_mul(p_compute);
             matrix_exp_compute(&p_log_a)
         }
@@ -337,9 +342,18 @@ fn eval_compute(expr: &LazyMatrixExpr) -> Result<ComputeMatrix, OverflowDetected
 /// // Entire chain at compute tier, no intermediate materializations
 /// let result = evaluate_matrix(&(a.exp() * b.exp())).unwrap();
 /// ```
-pub fn evaluate_matrix(expr: &LazyMatrixExpr) -> Result<FixedMatrix, OverflowDetected> {
+/// Evaluate a matrix tree of one format: the whole tree at the compute
+/// tier, one rounding to storage at the end.
+pub fn evaluate_matrix_in<S: Storage, const F: u32>(expr: &LazyMatrixExpr<Fixed<S, F>>) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected>
+where
+    Fixed<S, F>: MatrixFunctions + FixedNum<Storage = S>,
+{
     let compute_result = eval_compute(expr)?;
     Ok(compute_result.to_fixed_matrix())
+}
+
+pub fn evaluate_matrix(expr: &LazyMatrixExpr) -> Result<FixedMatrix, OverflowDetected> {
+    evaluate_matrix_in(expr)
 }
 
 // ============================================================================
@@ -352,8 +366,8 @@ mod tests {
 
     #[test]
     fn test_lazy_matrix_expr_building() {
-        let a = LazyMatrixExpr::from(FixedMatrix::identity(2));
-        let b = LazyMatrixExpr::from(FixedMatrix::identity(2));
+        let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
+        let b = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
         let expr = a * b;
         assert_eq!(expr.depth(), 2);
         assert_eq!(expr.operation_count(), 1);
@@ -361,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_lazy_matrix_identity_eval() {
-        let expr = LazyMatrixExpr::Identity(3);
+        let expr = LazyMatrixExpr::<FixedPoint>::Identity(3);
         let result = evaluate_matrix(&expr).unwrap();
         assert_eq!(result.rows(), 3);
         assert_eq!(result.cols(), 3);
@@ -378,8 +392,8 @@ mod tests {
 
     #[test]
     fn test_lazy_matrix_add() {
-        let a = FixedMatrix::identity(2);
-        let expr = LazyMatrixExpr::from(a.clone()) + LazyMatrixExpr::from(a);
+        let a = FixedMatrix::<FixedPoint>::identity(2);
+        let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) + LazyMatrixExpr::<FixedPoint>::from(a);
         let result = evaluate_matrix(&expr).unwrap();
         // I + I = 2I
         let two = FixedPoint::from_int(2);
@@ -390,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_lazy_matrix_chain_depth() {
-        let a = LazyMatrixExpr::from(FixedMatrix::identity(2));
+        let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
         let expr = a.exp().log(); // exp then log — should roundtrip to ~identity
         assert_eq!(expr.depth(), 3);
         assert_eq!(expr.operation_count(), 2);
@@ -398,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_lazy_matrix_display() {
-        let a = LazyMatrixExpr::from(FixedMatrix::identity(2));
+        let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
         let expr = a.exp();
         let s = format!("{}", expr);
         assert!(s.contains("exp"));

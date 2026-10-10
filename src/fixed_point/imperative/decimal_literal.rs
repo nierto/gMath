@@ -7,7 +7,6 @@
 //! accepted; digits that cannot affect the rounding only set a sticky flag.
 
 use crate::fixed_point::core_types::errors::OverflowDetected;
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 #[cfg(table_format = "q128_128")]
 use crate::fixed_point::I256;
 #[cfg(table_format = "q256_256")]
@@ -226,22 +225,3 @@ pub(crate) fn to_i128(c: &Converted) -> i128 {
     if c.negative { magnitude.wrapping_neg() } else { magnitude }
 }
 
-/// A converted literal (range-checked for the storage width) as a storage raw.
-pub(crate) fn to_storage(c: &Converted) -> BinaryStorage {
-    let w = &c.words;
-    // the minimum's magnitude 2^(W-1) reads as the minimum, its own negation
-    #[cfg(table_format = "q16_16")]
-    let magnitude = w[0] as u32 as i32;
-    #[cfg(table_format = "q32_32")]
-    let magnitude = w[0] as i64;
-    #[cfg(table_format = "q64_64")]
-    let magnitude = ((w[1] as u128) << 64 | w[0] as u128) as i128;
-    #[cfg(table_format = "q128_128")]
-    let magnitude = I256::from_words([w[0], w[1], w[2], w[3]]);
-    #[cfg(table_format = "q256_256")]
-    let magnitude = I512::from_words([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-    { if c.negative { magnitude.wrapping_neg() } else { magnitude } }
-    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-    { if c.negative { -magnitude } else { magnitude } }
-}

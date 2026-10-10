@@ -27,12 +27,13 @@
 //! ```
 
 use crate::fixed_point::imperative::{FixedPoint, FixedMatrix};
-use crate::fixed_point::universal::fasc::stack_evaluator::{StackValue, StackEvaluator, evaluate};
+use crate::fixed_point::universal::fasc::stack_evaluator::{evaluate_in, with_evaluator as registry_evaluator, FascFormat, StackEvaluator, StackValue};
+use crate::fixed_point::fixed_num::{Fixed, FixedNum};
+use crate::fixed_point::width::Storage;
 use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
 use crate::fixed_point::universal::ugod::DomainType;
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
-use core::cell::RefCell;
 
 // ============================================================================
 // DomainMatrix — StackValue-tagged matrix
@@ -44,35 +45,38 @@ use core::cell::RefCell;
 /// Operations preserve domain when possible, falling back through rational
 /// for cross-domain arithmetic.
 #[derive(Debug, Clone)]
-pub struct DomainMatrix {
+pub struct DomainMatrix<T: FascFormat = FixedPoint> {
     rows: usize,
     cols: usize,
-    data: Vec<StackValue>,
+    data: Vec<StackValue<T>>,
 }
 
-impl DomainMatrix {
-    /// Create a new DomainMatrix from a flat vector of StackValues (row-major).
-    pub fn from_values(rows: usize, cols: usize, data: Vec<StackValue>) -> Self {
-        assert_eq!(data.len(), rows * cols, "DomainMatrix: data length mismatch");
+impl<S: Storage, const F: u32> DomainMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FascFormat + FixedNum<Storage = S>,
+{
+    /// Create a new DomainMatrix<Fixed<S, F>> from a flat vector of StackValues (row-major).
+    pub fn from_values(rows: usize, cols: usize, data: Vec<StackValue<Fixed<S, F>>>) -> Self {
+        assert_eq!(data.len(), rows * cols, "DomainMatrix<Fixed<S, F>>: data length mismatch");
         Self { rows, cols, data }
     }
 
-    /// Create a DomainMatrix by evaluating string literals through FASC.
+    /// Create a DomainMatrix<Fixed<S, F>> by evaluating string literals through FASC.
     ///
     /// Each string is parsed and routed to its natural domain:
     /// - "0.10" → Decimal (exact base-10)
     /// - "256" → Binary (exact integer)
     /// - "1/3" → Symbolic (exact rational)
     pub fn from_strings(rows: usize, cols: usize, values: &[&'static str]) -> Result<Self, OverflowDetected> {
-        assert_eq!(values.len(), rows * cols, "DomainMatrix: values length mismatch");
-        let data: Result<Vec<StackValue>, OverflowDetected> = values.iter()
-            .map(|s| evaluate(&LazyExpr::Literal(s)))
+        assert_eq!(values.len(), rows * cols, "DomainMatrix<Fixed<S, F>>: values length mismatch");
+        let data: Result<Vec<StackValue<Fixed<S, F>>>, OverflowDetected> = values.iter()
+            .map(|s| evaluate_in(&LazyExpr::<Fixed<S, F>>::Literal(s)))
             .collect();
         Ok(Self { rows, cols, data: data? })
     }
 
-    /// Create from a FixedMatrix: all entries become Binary domain.
-    pub fn from_fixed_matrix(m: &FixedMatrix) -> Self {
+    /// Create from a FixedMatrix<Fixed<S, F>>: all entries become Binary domain.
+    pub fn from_fixed_matrix(m: &FixedMatrix<Fixed<S, F>>) -> Self {
         let mut data = Vec::with_capacity(m.rows() * m.cols());
         for r in 0..m.rows() {
             for c in 0..m.cols() {
@@ -82,21 +86,21 @@ impl DomainMatrix {
         Self { rows: m.rows(), cols: m.cols(), data }
     }
 
-    /// Convert to FixedMatrix: all entries materialized to binary storage tier.
+    /// Convert to FixedMatrix<Fixed<S, F>>: all entries materialized to binary storage tier.
     ///
     /// Non-binary entries are converted through the evaluator's binary conversion path.
-    pub fn to_fixed_matrix(&self) -> Result<FixedMatrix, OverflowDetected> {
+    pub fn to_fixed_matrix(&self) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected> {
         with_evaluator(|eval| {
             let mut data = Vec::with_capacity(self.rows * self.cols);
             for sv in &self.data {
                 match sv.as_binary_storage() {
-                    Some(raw) => data.push(FixedPoint::from_raw(raw)),
+                    Some(raw) => data.push(Fixed::<S, F>::from_raw(raw)),
                     None => {
                         // Convert to binary via evaluator's domain conversion
                         let binary_sv = eval.to_compute_value(sv)?;
                         let materialized = eval.materialize_compute(binary_sv)?;
                         match materialized.as_binary_storage() {
-                            Some(raw) => data.push(FixedPoint::from_raw(raw)),
+                            Some(raw) => data.push(Fixed::<S, F>::from_raw(raw)),
                             None => return Err(OverflowDetected::InvalidInput),
                         }
                     }
@@ -113,12 +117,12 @@ impl DomainMatrix {
     pub fn cols(&self) -> usize { self.cols }
 
     /// Get element at (row, col).
-    pub fn get(&self, row: usize, col: usize) -> &StackValue {
+    pub fn get(&self, row: usize, col: usize) -> &StackValue<Fixed<S, F>> {
         &self.data[row * self.cols + col]
     }
 
     /// Set element at (row, col).
-    pub fn set(&mut self, row: usize, col: usize, val: StackValue) {
+    pub fn set(&mut self, row: usize, col: usize, val: StackValue<Fixed<S, F>>) {
         self.data[row * self.cols + col] = val;
     }
 
@@ -173,9 +177,9 @@ impl DomainMatrix {
     // ========================================================================
 
     /// Element-wise addition. Cross-domain pairs route through rational.
-    pub fn add(&self, other: &DomainMatrix) -> Result<DomainMatrix, OverflowDetected> {
-        assert_eq!(self.rows, other.rows, "DomainMatrix add: row mismatch");
-        assert_eq!(self.cols, other.cols, "DomainMatrix add: col mismatch");
+    pub fn add(&self, other: &DomainMatrix<Fixed<S, F>>) -> Result<DomainMatrix<Fixed<S, F>>, OverflowDetected> {
+        assert_eq!(self.rows, other.rows, "DomainMatrix<Fixed<S, F>> add: row mismatch");
+        assert_eq!(self.cols, other.cols, "DomainMatrix<Fixed<S, F>> add: col mismatch");
         with_evaluator(|eval| {
             let mut data = Vec::with_capacity(self.rows * self.cols);
             for i in 0..self.data.len() {
@@ -187,9 +191,9 @@ impl DomainMatrix {
     }
 
     /// Element-wise subtraction. Cross-domain pairs route through rational.
-    pub fn sub(&self, other: &DomainMatrix) -> Result<DomainMatrix, OverflowDetected> {
-        assert_eq!(self.rows, other.rows, "DomainMatrix sub: row mismatch");
-        assert_eq!(self.cols, other.cols, "DomainMatrix sub: col mismatch");
+    pub fn sub(&self, other: &DomainMatrix<Fixed<S, F>>) -> Result<DomainMatrix<Fixed<S, F>>, OverflowDetected> {
+        assert_eq!(self.rows, other.rows, "DomainMatrix<Fixed<S, F>> sub: row mismatch");
+        assert_eq!(self.cols, other.cols, "DomainMatrix<Fixed<S, F>> sub: col mismatch");
         with_evaluator(|eval| {
             let mut data = Vec::with_capacity(self.rows * self.cols);
             for i in 0..self.data.len() {
@@ -202,8 +206,8 @@ impl DomainMatrix {
 
     /// Matrix multiplication. Each output element is a dot product
     /// computed via the FASC evaluator's domain-aware arithmetic.
-    pub fn mat_mul(&self, other: &DomainMatrix) -> Result<DomainMatrix, OverflowDetected> {
-        assert_eq!(self.cols, other.rows, "DomainMatrix matmul: dimension mismatch");
+    pub fn mat_mul(&self, other: &DomainMatrix<Fixed<S, F>>) -> Result<DomainMatrix<Fixed<S, F>>, OverflowDetected> {
+        assert_eq!(self.cols, other.rows, "DomainMatrix<Fixed<S, F>> matmul: dimension mismatch");
         let k = self.cols;
         with_evaluator(|eval| {
             let mut data = Vec::with_capacity(self.rows * other.cols);
@@ -230,7 +234,7 @@ impl DomainMatrix {
     }
 
     /// Element-wise negation. Preserves domain.
-    pub fn neg(&self) -> Result<DomainMatrix, OverflowDetected> {
+    pub fn neg(&self) -> Result<DomainMatrix<Fixed<S, F>>, OverflowDetected> {
         with_evaluator(|eval| {
             let mut data = Vec::with_capacity(self.data.len());
             for sv in &self.data {
@@ -240,8 +244,8 @@ impl DomainMatrix {
         })
     }
 
-    /// Scalar-matrix multiplication. Scalar is a StackValue (any domain).
-    pub fn scalar_mul(&self, s: &StackValue) -> Result<DomainMatrix, OverflowDetected> {
+    /// Scalar-matrix multiplication. Scalar is a StackValue<Fixed<S, F>> (any domain).
+    pub fn scalar_mul(&self, s: &StackValue<Fixed<S, F>>) -> Result<DomainMatrix<Fixed<S, F>>, OverflowDetected> {
         with_evaluator(|eval| {
             let mut data = Vec::with_capacity(self.data.len());
             for sv in &self.data {
@@ -252,8 +256,8 @@ impl DomainMatrix {
     }
 
     /// Trace: sum of diagonal elements (cross-domain accumulation).
-    pub fn trace(&self) -> Result<StackValue, OverflowDetected> {
-        assert_eq!(self.rows, self.cols, "DomainMatrix trace: not square");
+    pub fn trace(&self) -> Result<StackValue<Fixed<S, F>>, OverflowDetected> {
+        assert_eq!(self.rows, self.cols, "DomainMatrix<Fixed<S, F>> trace: not square");
         with_evaluator(|eval| {
             let mut acc = self.data[0].clone();
             for i in 1..self.rows {
@@ -265,29 +269,21 @@ impl DomainMatrix {
 }
 
 // ============================================================================
-// Thread-local evaluator access for DomainMatrix arithmetic
+// Thread-local evaluator access for DomainMatrix<Fixed<S, F>> arithmetic
 // ============================================================================
 
-thread_local! {
-    static DOMAIN_EVALUATOR: RefCell<StackEvaluator> = RefCell::new(
-        StackEvaluator::new()
-    );
-}
-
-/// Execute a closure with access to the thread-local evaluator.
-fn with_evaluator<T>(f: impl FnOnce(&mut StackEvaluator) -> Result<T, OverflowDetected>) -> Result<T, OverflowDetected> {
-    DOMAIN_EVALUATOR.with(|eval| {
-        let mut evaluator = eval.borrow_mut();
+/// This thread's evaluator for `T`, reset for a fresh computation.
+fn with_evaluator<T: FascFormat, R>(f: impl FnOnce(&mut StackEvaluator<T>) -> Result<R, OverflowDetected>) -> Result<R, OverflowDetected> {
+    registry_evaluator(|evaluator: &mut StackEvaluator<T>| {
         evaluator.reset();
-        f(&mut evaluator)
+        f(evaluator)
     })
 }
 
-// ============================================================================
-// Display
-// ============================================================================
-
-impl core::fmt::Display for DomainMatrix {
+impl<S: Storage, const F: u32> core::fmt::Display for DomainMatrix<Fixed<S, F>>
+where
+    Fixed<S, F>: FascFormat + FixedNum<Storage = S>,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "DomainMatrix({}x{}, {:?})", self.rows, self.cols, self.dominant_domain())
     }
@@ -300,10 +296,12 @@ impl core::fmt::Display for DomainMatrix {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::fixed_point::imperative::FixedPoint;
 
     #[test]
     fn test_domain_matrix_from_strings_binary() {
-        let m = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+        let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
         assert_eq!(m.rows(), 2);
         assert_eq!(m.cols(), 2);
         assert!(m.is_uniform_domain());
@@ -311,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_domain_matrix_from_strings_decimal() {
-        let m = DomainMatrix::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+        let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
         assert_eq!(m.rows(), 2);
         assert!(m.is_uniform_domain());
         assert_eq!(m.dominant_domain(), Some(DomainType::Decimal));
@@ -319,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_domain_matrix_transpose() {
-        let m = DomainMatrix::from_strings(2, 3, &["1", "2", "3", "4", "5", "6"]).unwrap();
+        let m = DomainMatrix::<FixedPoint>::from_strings(2, 3, &["1", "2", "3", "4", "5", "6"]).unwrap();
         let mt = m.transpose();
         assert_eq!(mt.rows(), 3);
         assert_eq!(mt.cols(), 2);
@@ -327,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_domain_matrix_identity() {
-        let id = DomainMatrix::identity_binary(3);
+        let id = DomainMatrix::<FixedPoint>::identity_binary(3);
         assert_eq!(id.rows(), 3);
         assert_eq!(id.cols(), 3);
         assert!(id.is_uniform_domain());
@@ -335,8 +333,8 @@ mod tests {
 
     #[test]
     fn test_domain_matrix_add() {
-        let a = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-        let b = DomainMatrix::from_strings(2, 2, &["10", "20", "30", "40"]).unwrap();
+        let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+        let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["10", "20", "30", "40"]).unwrap();
         let c = a.add(&b).unwrap();
         assert_eq!(c.rows(), 2);
         assert_eq!(c.cols(), 2);
@@ -345,8 +343,8 @@ mod tests {
     #[test]
     fn test_domain_matrix_decimal_matmul() {
         // Decimal 2x2 identity * decimal vector-like
-        let id = DomainMatrix::from_strings(2, 2, &["1.00", "0.00", "0.00", "1.00"]).unwrap();
-        let v = DomainMatrix::from_strings(2, 1, &["0.10", "0.20"]).unwrap();
+        let id = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1.00", "0.00", "0.00", "1.00"]).unwrap();
+        let v = DomainMatrix::<FixedPoint>::from_strings(2, 1, &["0.10", "0.20"]).unwrap();
         let result = id.mat_mul(&v).unwrap();
         assert_eq!(result.rows(), 2);
         assert_eq!(result.cols(), 1);

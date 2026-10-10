@@ -46,7 +46,7 @@ fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
 
 #[test]
 fn test_binary_domain_matrix_identity() {
-    let id = DomainMatrix::identity_binary(3);
+    let id = DomainMatrix::<FixedPoint>::identity_binary(3);
     assert_eq!(id.rows(), 3);
     assert_eq!(id.cols(), 3);
     assert!(id.is_uniform_domain());
@@ -55,15 +55,15 @@ fn test_binary_domain_matrix_identity() {
 
 #[test]
 fn test_binary_domain_matrix_from_strings() {
-    let m = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
     assert_eq!(m.rows(), 2);
     assert_eq!(m.cols(), 2);
 }
 
 #[test]
 fn test_binary_domain_matrix_add() {
-    let a = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-    let b = DomainMatrix::from_strings(2, 2, &["10", "20", "30", "40"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["10", "20", "30", "40"]).unwrap();
     let c = a.add(&b).unwrap();
     // [1+10, 2+20; 3+30, 4+40] = [11, 22; 33, 44]
     assert_fp(sv_to_fp(c.get(0, 0)), fp("11"), tight(), "binary_add[0,0]");
@@ -75,8 +75,8 @@ fn test_binary_domain_matrix_add() {
 #[test]
 fn test_binary_domain_matrix_matmul() {
     // [[1, 2], [3, 4]] * [[5, 6], [7, 8]] = [[19, 22], [43, 50]]
-    let a = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-    let b = DomainMatrix::from_strings(2, 2, &["5", "6", "7", "8"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["5", "6", "7", "8"]).unwrap();
     let c = a.mat_mul(&b).unwrap();
     assert_fp(sv_to_fp(c.get(0, 0)), fp("19"), tight(), "matmul[0,0]");
     assert_fp(sv_to_fp(c.get(0, 1)), fp("22"), tight(), "matmul[0,1]");
@@ -90,7 +90,7 @@ fn test_binary_domain_matrix_matmul() {
 
 #[test]
 fn test_decimal_domain_matrix_creation() {
-    let m = DomainMatrix::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
     assert_eq!(m.rows(), 2);
     assert!(m.is_uniform_domain());
     assert_eq!(m.dominant_domain(), Some(DomainType::Decimal));
@@ -99,8 +99,8 @@ fn test_decimal_domain_matrix_creation() {
 #[test]
 fn test_decimal_domain_matrix_add() {
     // Decimal addition should be exact
-    let a = DomainMatrix::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
-    let b = DomainMatrix::from_strings(2, 2, &["0.01", "0.02", "0.03", "0.04"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.01", "0.02", "0.03", "0.04"]).unwrap();
     let c = a.add(&b).unwrap();
     // 0.10 + 0.01 = 0.11 (exact in decimal domain)
     let r = c.to_fixed_matrix().unwrap();
@@ -110,8 +110,8 @@ fn test_decimal_domain_matrix_add() {
 
 #[test]
 fn test_decimal_domain_matrix_sub() {
-    let a = DomainMatrix::from_strings(2, 2, &["0.50", "0.60", "0.70", "0.80"]).unwrap();
-    let b = DomainMatrix::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.50", "0.60", "0.70", "0.80"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
     let c = a.sub(&b).unwrap();
     let r = c.to_fixed_matrix().unwrap();
     assert_fp(r.get(0, 0), fp("0.40"), tight(), "decimal_sub[0,0]");
@@ -121,8 +121,8 @@ fn test_decimal_domain_matrix_sub() {
 #[test]
 fn test_decimal_identity_matmul() {
     // Decimal identity * decimal matrix = same matrix
-    let id = DomainMatrix::from_strings(2, 2, &["1.00", "0.00", "0.00", "1.00"]).unwrap();
-    let v = DomainMatrix::from_strings(2, 1, &["0.10", "0.20"]).unwrap();
+    let id = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1.00", "0.00", "0.00", "1.00"]).unwrap();
+    let v = DomainMatrix::<FixedPoint>::from_strings(2, 1, &["0.10", "0.20"]).unwrap();
     let result = id.mat_mul(&v).unwrap();
     let r = result.to_fixed_matrix().unwrap();
     assert_fp(r.get(0, 0), fp("0.10"), tight(), "decimal_id_mul[0]");
@@ -136,8 +136,8 @@ fn test_decimal_identity_matmul() {
 #[test]
 fn test_cross_domain_add() {
     // Binary + Decimal — should route through rational and produce correct result
-    let a = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-    let b = DomainMatrix::from_strings(2, 2, &["0.50", "0.50", "0.50", "0.50"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.50", "0.50", "0.50", "0.50"]).unwrap();
     let c = a.add(&b).unwrap();
     let r = c.to_fixed_matrix().unwrap();
     assert_fp(r.get(0, 0), fp("1.5"), tight(), "cross_add[0,0]");
@@ -147,8 +147,8 @@ fn test_cross_domain_add() {
 #[test]
 fn test_cross_domain_matmul() {
     // Binary matrix * Decimal matrix
-    let a = DomainMatrix::from_strings(2, 2, &["2", "0", "0", "3"]).unwrap();
-    let b = DomainMatrix::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["2", "0", "0", "3"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
     let c = a.mat_mul(&b).unwrap();
     let r = c.to_fixed_matrix().unwrap();
     // [[2,0],[0,3]] * [[0.1,0.2],[0.3,0.4]] = [[0.2,0.4],[0.9,1.2]]
@@ -165,7 +165,7 @@ fn test_cross_domain_matmul() {
 #[test]
 fn test_symbolic_domain_matrix() {
     // Rational entries: 1/3, 2/3 — exact symbolic representation
-    let m = DomainMatrix::from_strings(2, 2, &["1/3", "2/3", "1/6", "5/6"]).unwrap();
+    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1/3", "2/3", "1/6", "5/6"]).unwrap();
     assert_eq!(m.rows(), 2);
     assert!(m.is_uniform_domain());
     assert_eq!(m.dominant_domain(), Some(DomainType::Symbolic));
@@ -174,8 +174,8 @@ fn test_symbolic_domain_matrix() {
 #[test]
 fn test_symbolic_domain_add() {
     // 1/3 + 1/6 = 1/2 (exact)
-    let a = DomainMatrix::from_strings(1, 1, &["1/3"]).unwrap();
-    let b = DomainMatrix::from_strings(1, 1, &["1/6"]).unwrap();
+    let a = DomainMatrix::<FixedPoint>::from_strings(1, 1, &["1/3"]).unwrap();
+    let b = DomainMatrix::<FixedPoint>::from_strings(1, 1, &["1/6"]).unwrap();
     let c = a.add(&b).unwrap();
     let r = c.to_fixed_matrix().unwrap();
     assert_fp(r.get(0, 0), fp("0.5"), tight(), "symbolic_1/3+1/6=1/2");
@@ -187,7 +187,7 @@ fn test_symbolic_domain_add() {
 
 #[test]
 fn test_domain_matrix_transpose() {
-    let m = DomainMatrix::from_strings(2, 3, &["1", "2", "3", "4", "5", "6"]).unwrap();
+    let m = DomainMatrix::<FixedPoint>::from_strings(2, 3, &["1", "2", "3", "4", "5", "6"]).unwrap();
     let mt = m.transpose();
     assert_eq!(mt.rows(), 3);
     assert_eq!(mt.cols(), 2);
@@ -195,7 +195,7 @@ fn test_domain_matrix_transpose() {
 
 #[test]
 fn test_domain_matrix_neg() {
-    let m = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
     let neg = m.neg().unwrap();
     let r = neg.to_fixed_matrix().unwrap();
     assert_fp(r.get(0, 0), fp("-1"), tight(), "neg[0,0]");
@@ -204,7 +204,7 @@ fn test_domain_matrix_neg() {
 
 #[test]
 fn test_domain_matrix_scalar_mul() {
-    let m = DomainMatrix::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
     let s = evaluate(&gmath("3")).unwrap();
     let scaled = m.scalar_mul(&s).unwrap();
     let r = scaled.to_fixed_matrix().unwrap();
@@ -214,7 +214,7 @@ fn test_domain_matrix_scalar_mul() {
 
 #[test]
 fn test_domain_matrix_trace() {
-    let m = DomainMatrix::from_strings(3, 3, &[
+    let m = DomainMatrix::<FixedPoint>::from_strings(3, 3, &[
         "1", "0", "0",
         "0", "2", "0",
         "0", "0", "3",
@@ -225,8 +225,8 @@ fn test_domain_matrix_trace() {
 
 #[test]
 fn test_domain_matrix_to_from_fixed() {
-    let fm = FixedMatrix::from_fn(2, 2, |r, c| fp(&format!("{}", (r * 2 + c + 1))));
-    let dm = DomainMatrix::from_fixed_matrix(&fm);
+    let fm = FixedMatrix::<FixedPoint>::from_fn(2, 2, |r, c| fp(&format!("{}", (r * 2 + c + 1))));
+    let dm = DomainMatrix::<FixedPoint>::from_fixed_matrix(&fm);
     let roundtrip = dm.to_fixed_matrix().unwrap();
     for r in 0..2 {
         for c in 0..2 {

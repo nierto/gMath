@@ -78,6 +78,7 @@ pub use super::universal::fasc::{
     evaluate,
     evaluate_in,
     evaluate_matrix,
+    evaluate_matrix_in,
     evaluate_sincos,
     evaluate_sincos_in,
     evaluate_sinhcosh,

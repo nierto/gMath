@@ -125,3 +125,70 @@ fn display_follows_the_format_digits() {
     let wide = format!("{}", evaluate_in::<Fixed<I256, 128>>(&(gmath_in("1") / gmath_in("4"))).unwrap());
     assert!(wide.starts_with("0.25"), "{wide}");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5c: the matrix layer and the last scalar methods on every format
+// ---------------------------------------------------------------------------
+
+use g_math::canonical::{evaluate_matrix_in, DomainMatrix, LazyMatrixExpr};
+use g_math::fixed_point::FixedMatrix;
+
+#[test]
+fn matrix_trees_evaluate_in_every_format() {
+    fn run<S: g_math::fixed_point::Storage, const F: u32>(label: &str) -> String
+    where
+        Fixed<S, F>: FascFormat + g_math::fixed_point::imperative::matrix_functions::MatrixFunctions + g_math::fixed_point::FixedNum<Storage = S>,
+    {
+        let a = FixedMatrix::<Fixed<S, F>>::from_fn(2, 2, |r, c| if r == c { Fixed::<S, F>::from_int(2) } else { Fixed::<S, F>::from_int(1) });
+        let tree = (LazyMatrixExpr::from(a.clone()) * LazyMatrixExpr::from(a)).scale(Fixed::<S, F>::from_int(3)) + LazyMatrixExpr::identity(2);
+        let m = evaluate_matrix_in(&tree).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        // [[2,1],[1,2]]^2 = [[5,4],[4,5]]; x3 + I = [[16,12],[12,16]]
+        assert_eq!(m.get(0, 0), Fixed::<S, F>::from_int(16), "{label}");
+        assert_eq!(m.get(0, 1), Fixed::<S, F>::from_int(12), "{label}");
+        format!("{}", m.get(1, 1))
+    }
+    for s in [run::<i32, 10>("Q22.10"), run::<i64, 32>("Q32.32"), run::<i128, 64>("Q64.64"), run::<I256, 128>("Q128.128")] {
+        assert!(s.starts_with("16"), "{s}");
+    }
+}
+
+#[test]
+fn domain_matrices_keep_their_format() {
+    let m = DomainMatrix::<Fixed<i64, 32>>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+    let doubled = m.add(&m).unwrap();
+    let tr = doubled.trace().unwrap();
+    assert_eq!(rational(&tr), RationalNumber::new(1, 1));
+    let fixed = doubled.to_fixed_matrix().unwrap();
+    assert_eq!(fixed.get(1, 1), Fixed::<i64, 32>::from_str("0.8"));
+    // binary values round-trip as the binary raw, not the decimal literal
+    let back = DomainMatrix::from_fixed_matrix(&fixed);
+    assert_eq!(back.get(0, 0).as_binary_storage(), Some(Fixed::<i64, 32>::from_str("0.2").raw()));
+}
+
+#[test]
+fn scalar_parse_display_pow_atan2_on_every_format() {
+    fn run<S: g_math::fixed_point::Storage, const F: u32>(label: &str)
+    where
+        Fixed<S, F>: FascFormat + g_math::fixed_point::FixedNum<Storage = S>,
+    {
+        let x = Fixed::<S, F>::from_str("1.25");
+        assert_eq!(x, Fixed::<S, F>::from_int(5) / Fixed::<S, F>::from_int(4), "{label}");
+        assert!(format!("{x}").starts_with("1.25"), "{label}: {x}");
+        // the canonical fallback: a fraction literal
+        let quarter = Fixed::<S, F>::try_from_str("1/4").unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        assert_eq!(quarter, x / Fixed::<S, F>::from_int(5), "{label}");
+        let p = x.try_pow(Fixed::<S, F>::from_int(2)).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        let direct = x * x;
+        let diff = if p > direct { p - direct } else { direct - p };
+        assert!(diff <= Fixed::<S, F>::from_raw(S::from_i128(2)), "{label}: pow {p} vs {direct}");
+        let a = Fixed::<S, F>::from_int(1).try_atan2(Fixed::<S, F>::from_int(1)).unwrap();
+        assert!(format!("{a}").starts_with("0.78"), "{label}: atan2 {a}");
+        assert!(Fixed::<S, F>::try_from_str("abc").is_err(), "{label}");
+    }
+    run::<i32, 10>("Q22.10");
+    run::<i32, 16>("Q16.16");
+    run::<i64, 32>("Q32.32");
+    run::<i128, 64>("Q64.64");
+    run::<I256, 128>("Q128.128");
+    run::<I512, 256>("Q256.256");
+}

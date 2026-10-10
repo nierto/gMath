@@ -379,10 +379,24 @@ Refined for the build (2026-10-06, after phase 4), in three sub-phases:
   `gmath!` integer literals beyond the storage's integer range now fall
   back to the exact rational like the runtime parser (they wrapped);
   `StackEvaluator::new()` takes no profile.
-- **5c, the matrix layer and the last scalar methods.** `DomainMatrix<T>`,
-  `LazyMatrixExpr<T>`, `evaluate_matrix_in`, `evaluate_sincos_in`; the
-  `gmath!` helpers emit exact decimal values; `from_str`, `Display`,
-  `try_pow`, `try_atan2` on every `Fixed<S, F>` through `evaluate_in`.
+- **5c, the matrix layer and the last scalar methods.** IMPLEMENTED
+  (2026-10-10): `LazyMatrixExpr<T = FixedPoint>` and `DomainMatrix<T:
+  FascFormat = FixedPoint>` on the container pattern of phase 3 (the impls
+  on `Fixed<S, F>`), `evaluate_matrix_in`; `from_str`, `try_from_str`,
+  `Display`, `try_pow`, `try_atan2` on every `Fixed<S, F>` that is a
+  `FascFormat` (the literal path through `literal_to_storage`, the
+  canonical fallback through `gmath_parse_in` + `evaluate_in`); the
+  profile-bound `decimal_literal::to_storage` gone. As in phase 3, the
+  default type does not drive inference on a generic constructor, so a
+  bare `DomainMatrix::from_strings(..)` names its format
+  (`DomainMatrix::<FixedPoint>::`); the profile-bound tests were annotated.
+  The `gmath!` helpers stay profile-bound (they return `LazyExpr<FixedPoint>`)
+  until phase 7 decides the inference story for a literal that is only
+  displayed; an exact-decimal value variant was not added. Gates: the
+  all-widths gate gained a matrix tree on four formats, a decimal
+  `DomainMatrix` round trip and the scalar paths on six formats; the lib,
+  matrix, differential and ugod suites green on realtime Q22.10 and
+  embedded.
 
 ## 8. Other modules
 
@@ -444,6 +458,62 @@ Refined for the build (2026-10-06, after phase 4), in three sub-phases:
   `&[Fixed<S, F>]` and `&[S]` views are sound (`bytemuck`-style casts without the
   dependency: two `unsafe` fns with the layout argument in their docs).
 
+Refined for the build (2026-10-10, after phase 5), in two sub-phases:
+
+- **6a, the decimal compute word from `D`.** IMPLEMENTED (2026-10-10).
+  The decimal engines are generic over their compute word (phase 5b,
+  `DecimalWord`), so `DecimalFixed<D>` picks the word through a marker:
+  `Dp<D>: DecimalTier` with `type Word`, one impl per `D` from 0 to 77; the
+  transcendental block of `DecimalFixed` carries the bound (a generic
+  function over `D` that calls one writes `where Dp<D>: DecimalTier`);
+  arithmetic, parsing and formatting stay unbounded. The rule was measured,
+  not assumed (`tests/decimal_tier_by_d_validation.rs`: every word at every
+  `D` against mpmath, 1105 cases): a word with fewer than about ten guard
+  digits beyond `D` misrounds (i64 at D = 4 by one unit through double
+  rounding, at D = 9 by 20; i128 at D = 19 by 14; I256 at D = 38 by 12),
+  and a word whose integer range is below the i128 storage range at `D`
+  overflows on results that fit storage (i128 at 19 digits holds 1.7e19,
+  storage at D = 9 holds 1.7e29: embedded's `exp` at D = 9 from 45 to 67
+  would have become `TierOverflow`). So: I256 (38 digits) up to D = 19,
+  I512 (77) to 38, I1024 (154) to 77; every case correctly rounded, the
+  full storage range at every `D`. Behaviour change, stated: on realtime
+  and compact the decimal transcendentals now run on I256 (slower, see the
+  perf note) and return the correctly rounded value with the full storage
+  range (0.6.7's realtime results at D = 4 carried double-rounding errors,
+  at D above 9 they were coarse; the `PrecisionLimit` those profiles raised
+  is gone); on embedded (I256, D <= 19) and balanced (I512, D from 20 to
+  38) the results are identical to 0.6.7; on balanced below D = 20 and on
+  scientific the word is narrower than 0.6.7's but both are correctly
+  rounded. Gates: the differential gate per build at nine `D` (identical
+  outcomes required wherever 0.6.7's word had ten guard digits, differences
+  counted and an error-to-value change allowed where it had not), the
+  mpmath gate over `D` in one build, the exp-range references regenerated
+  for the `D`-selected words (one table for every build, tops at the
+  storage range), the decimal suites with their profile-bound expectations
+  rewritten (the tan pole, the atanh next to one, the huge-ratio atan2,
+  the compute-tier argument cases).
+- **6b, serialization v2.** IMPLEMENTED (2026-10-10). `to_bytes` on every
+  `Fixed<S, F>` writes `[0x20 | storage code, F][raw big-endian]` (codes 1
+  to 5 for i32, i64, i128, I256, I512; `format_tag()` returns the pair);
+  `from_bytes` accepts only that pair; `from_bytes_legacy` reads the 0.6.x
+  tags (0x01 to 0x05 and 0x80 | F) when the storage word matches and, where
+  the tag names a split, the split matches too (0x05 is taken for the
+  reader's split, as every realtime split wrote it up to 0.6.4);
+  `legacy_tag()` is what a 0.6.x build of the format wrote and
+  `FixedPoint::profile_tag()` keeps returning it. The vector, matrix,
+  tensor, manifold-point and compact forms keep their 0.6.x layout (no tag,
+  elements raw) and are generic over the format through hidden `Storage`
+  items (`CODE`, `BYTES`, `to_be_vec`, `from_be_slice`); `ManifoldPoint<T =
+  FixedPoint>`; the serde impls generic. One defect fixed on the way: the
+  compact form of the word's minimum panicked in `abs` up to 0.6.7, it is
+  now the full class with the two's complement bytes. Gates: the
+  differential gate reads 0.6.7's scalar bytes through the legacy entry and
+  refuses them through `from_bytes` (and 0.6.7 refuses the new tag), the
+  raw and compact scalar bytes and the vector, matrix, tensor and
+  manifold-point bytes are identical and readable in both directions; the
+  lib, `linalg_validation`, `s1_serialization_extended` and `defects_065`
+  pins moved to the new tag.
+
 ## 9. Cargo features
 
 `w32`, `w64`, `w128`, `w256`, `w512`, one per storage word, additive. A feature
@@ -472,8 +542,8 @@ generic code, while new tests exercise all widths in one build.
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
 | 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d, IMPLEMENTED) | differential gate, certified-geometry gates |
-| 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-format evaluators), canonical API. 5a, 5b IMPLEMENTED; 5c open | differential gate on the FASC corpus |
-| 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
+| 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-format evaluators), canonical API. IMPLEMENTED (5a format trait, 5b typed value + registry, 5c matrix layer + scalar string paths) | differential gate on the FASC corpus |
+| 6 | DecimalFixed compute tier by D (6a); serialization v2 (6b). IMPLEMENTED | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |
 | 8 | Docs (README, PUBLIC_API regen, CHANGELOG, CONTRACT, ROADMAP), consumer upgrade notes, 0.7.0 | release checklist |
 
@@ -558,6 +628,27 @@ measurement band). Two real costs were found and removed:
 Phase 3 changed no scalar kernel; the scalar `div` re-read +7.7 percent at
 Q22.10 without LTO, +2.8 under LTO, +1.6 at Q16.16 and -0.8 on compact,
 which is the band of a 14 ns operation in this method.
+
+Measured for the canonical layer after phase 5 (2026-10-06 to 2026-10-10,
+realtime Q22.10, compact, embedded, balanced; same method, scratch
+`perf3/src/bin/fasc.rs`): the cheapest tree (an integer add, 207 ns in
+0.6.7) read +6.2 percent with the evaluator registry alone and -6 percent
+with a one-entry last-used cache in front of it; decimal mix and chain,
+division, parse, exp and display at parity or faster on every profile;
+after 5c `from_str`, `Display` and `try_pow` within 1 percent, `from_str`
+of a fraction 11 percent faster. One false regression was chased to the
+end: `sqrt` and `atan2` read +28 to +31 percent at Q22.10 on the tree
+while the engine and the I256 division it runs are byte-identical in both
+binaries, and a bisect over the phase commits is bimodal (phase 4b and 5a
+at parity, phase 2, 4a, 5b and 5c slow) with no engine change between
+them. With `-C llvm-args=-x86-branches-within-32B-boundaries` both crates
+read the same (the tree 2 to 3 percent faster) and both 10 to 25 percent
+faster than unpadded: the bit-serial I256 division (256 data-dependent
+branches per quotient, 7 quotients per square root) is branch-bound and
+its cost follows the consumer's link layout on Skylake-family cores. The
+balanced `sqrt` note of phase 5b (I512, same shape) is the same effect.
+The lasting fix is a word-serial division (ROADMAP follow-up), not a
+change to the generic layers.
 
 ### 11.4 Size
 

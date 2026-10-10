@@ -750,15 +750,24 @@ rather than accidental.
 
 ## Future: High Priority
 
-### Follow-up: the balanced square root reads 7 percent slower than 0.6.7
+### Follow-up: the wide division is bit-serial, so `sqrt` and `atan2` cost follows the link layout
 
-Measured 2026-10-06 (balanced Q128.128, release, perf3 `ops` and `fasc`):
-`FixedPoint::sqrt` 114.7 us against 107.5 us in 0.6.7, and the canonical
-`sqrt` 123.5 us against 115.5 us; embedded reads 13 percent faster, realtime
-and compact at parity. Both crates call the same engine
-(`sqrt_q256_256_native`), so the difference is codegen of the engine as it
-is compiled on every profile since phase 1, not the generic layers. Owner
-decision: profile the engine's inlining on balanced before 0.7.0, or accept.
+Measured 2026-10-06 and 2026-10-10 (release, no LTO, i7-7700): on balanced
+`FixedPoint::sqrt` read 114.7 us against 107.5 us in 0.6.7; on realtime
+Q22.10 it read 5.31 us against 4.04 us and `atan2` 2.08 us against 1.74 us,
+while a bisect over the width-types commits gives the same two readings
+for unchanged engine code and the kernels (`sqrt_q64_64_native`,
+`divmod_i256_by_i256`) are byte-identical in both binaries. With
+`-C llvm-args=-x86-branches-within-32B-boundaries` both crates read the
+same (the tree 2 to 3 percent faster) and both 10 to 25 percent faster
+than unpadded. Cause: `divmod_i256_by_i256` (and the I512, I1024, I2048
+divisions) decide one quotient bit per iteration with a data-dependent
+branch, 256 per quotient and 7 quotients per square root, so the loop is
+branch-bound and sensitive to where the consumer's link puts its jumps.
+Fix: a word-serial division (Knuth algorithm D on u64 limbs, exact, so
+bit-identical) for the four wide integers; it also closes the scientific
+"I1024/I2048 division slow" note (binary div 131 us per op in debug).
+Not done on the width-types branch, which changes no engine.
 
 ### Follow-up: the hybrid TQ1.9 matvec has two codegen states
 

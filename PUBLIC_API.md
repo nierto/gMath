@@ -30,6 +30,7 @@ Modules: g_math::canonical
 | `evaluate` | `super::universal::fasc` |
 | `evaluate_in` | `super::universal::fasc` |
 | `evaluate_matrix` | `super::universal::fasc` |
+| `evaluate_matrix_in` | `super::universal::fasc` |
 | `evaluate_sincos` | `super::universal::fasc` |
 | `evaluate_sincos_in` | `super::universal::fasc` |
 | `evaluate_sinhcosh` | `super::universal::fasc` |
@@ -45,6 +46,10 @@ Modules: g_math::canonical
 ## FixedPoint
 
 Modules: FixedPoint (re-exported at g_math::fixed_point)
+
+| Item | Kind | Summary |
+| --- | --- | --- |
+| `FixedPoint` | type | The fixed-point format this build's profile selects (`GMATH_PROFILE`, and `GMATH_FRAC_BITS` on the realtime profile). |
 
 **Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
@@ -115,6 +120,10 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
 | `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1. |
 | `try_atanh` | Fallible atanh(x) = ln((1+x)/(1-x)) / 2: `Err(DomainError)` if \|x\| >= 1. |
+| `from_str` | Parse from a decimal string (e.g., "3.14159", "1e-06"). |
+| `try_from_str` | Parse from a string without panicking. |
+| `try_pow` | Fallible x^y = exp(y * ln(x)). |
+| `try_atan2` | Fallible atan2(self=y, x). |
 | `sincos_wide` | Fused sin+cos for wide-range angles that exceed storage-tier integer range. |
 | `sincos_wide_q64` | Fused sin+cos of a Q64.64 angle (`radians * 2^64`), rounded to storage. |
 | `try_add` | `self + rhs`, `Err(TierOverflow)` when the sum leaves storage. |
@@ -122,17 +131,6 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_neg` | `-self`, `Err(TierOverflow)` for the storage minimum (no positive twin). |
 | `try_mul` | `self * rhs`, rounded to nearest (ties toward +infinity) from the exact product; `Err(TierOverflow)` when it leaves storage. |
 | `try_div` | `self / rhs`, rounded to nearest (ties toward +infinity) from the exact quotient; `Err(DivisionByZero)` or `Err(TierOverflow)`. |
-
-### FixedPoint
-
-The fixed-point format this build's profile selects (`GMATH_PROFILE`, and `GMATH_FRAC_BITS` on the realtime profile).
-
-| Method | Summary |
-| --- | --- |
-| `from_str` | Parse from a decimal string (e.g., "3.14159", "1e-06"). |
-| `try_from_str` | Parse from a string without panicking. |
-| `try_pow` | Fallible x^y = exp(y * ln(x)). |
-| `try_atan2` | Fallible atan2(self=y, x). |
 
 ## FixedVector
 
