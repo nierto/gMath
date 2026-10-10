@@ -9,6 +9,7 @@
 //! integer arithmetic. No floats.
 
 use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute::{
+    ComputeStorage,
     decimal_compute_div_int, decimal_compute_from_int, decimal_compute_neg, decimal_compute_to_i128,
     i128_upscale_to_compute, try_decimal_compute_to_i128, try_i128_upscale_to_compute,
     DECIMAL_COMPUTE_DP,
@@ -57,8 +58,8 @@ fn decimal_exp_beyond_i128_panics() {
 fn decimal_compute_to_i128_reports_overflow() {
     // 10^10 * 10^10 = 10^20 at compute dp, 10^39 raw at 19 decimals
     let big = g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute_mul(
-        decimal_compute_from_int(10_000_000_000),
-        decimal_compute_from_int(10_000_000_000),
+        decimal_compute_from_int::<ComputeStorage>(10_000_000_000),
+        decimal_compute_from_int::<ComputeStorage>(10_000_000_000),
     );
     assert_eq!(try_decimal_compute_to_i128(big, 19), Err(OverflowDetected::TierOverflow));
     assert_eq!(try_decimal_compute_to_i128(big, 0), Ok(100_000_000_000_000_000_000));
@@ -68,14 +69,14 @@ fn decimal_compute_to_i128_reports_overflow() {
 /// from zero before 0.6.4: 2.5 -> 3, -2.5 -> -3).
 #[test]
 fn decimal_compute_to_i128_rounds_half_to_even() {
-    let half_of = |n: i64| decimal_compute_div_int(decimal_compute_from_int(n), 2);
+    let half_of = |n: i64| decimal_compute_div_int(decimal_compute_from_int::<ComputeStorage>(n), 2);
     assert_eq!(decimal_compute_to_i128(half_of(5), 0), 2);
     assert_eq!(decimal_compute_to_i128(half_of(7), 0), 4);
     assert_eq!(decimal_compute_to_i128(decimal_compute_neg(half_of(5)), 0), -2);
     assert_eq!(decimal_compute_to_i128(decimal_compute_neg(half_of(7)), 0), -4);
     assert_eq!(decimal_compute_to_i128(half_of(5), 1), 25);
     // not ties: 2.5 + 0.1 and 2.5 - 0.1
-    let tenth = decimal_compute_div_int(decimal_compute_from_int(1), 10);
+    let tenth = decimal_compute_div_int(decimal_compute_from_int::<ComputeStorage>(1), 10);
     assert_eq!(decimal_compute_to_i128(half_of(5) + tenth, 0), 3);
     assert_eq!(decimal_compute_to_i128(half_of(5) - tenth, 0), 2);
 }
@@ -108,7 +109,7 @@ fn narrow_profile_decimal_input_beyond_compute_panics() {
 #[test]
 fn narrow_profile_upscale_reports_overflow() {
     assert_eq!(
-        try_i128_upscale_to_compute(100_000_000_000_000_000_000, 0),
+        try_i128_upscale_to_compute::<ComputeStorage>(100_000_000_000_000_000_000, 0),
         Err(OverflowDetected::TierOverflow)
     );
 }
@@ -118,16 +119,16 @@ fn narrow_profile_upscale_reports_overflow() {
 #[test]
 fn upscale_past_compute_dp_rounds_half_to_even() {
     let dp = DECIMAL_COMPUTE_DP + 1;
-    let unit = |n: i128| i128_upscale_to_compute(n * 10, dp);
-    assert_eq!(i128_upscale_to_compute(15, dp), unit(2));
-    assert_eq!(i128_upscale_to_compute(25, dp), unit(2));
-    assert_eq!(i128_upscale_to_compute(16, dp), unit(2));
-    assert_eq!(i128_upscale_to_compute(14, dp), unit(1));
-    assert_eq!(i128_upscale_to_compute(-15, dp), unit(-2));
-    assert_eq!(i128_upscale_to_compute(-16, dp), unit(-2));
+    let unit = |n: i128| i128_upscale_to_compute::<ComputeStorage>(n * 10, dp);
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(15, dp), unit(2));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(25, dp), unit(2));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(16, dp), unit(2));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(14, dp), unit(1));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(-15, dp), unit(-2));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(-16, dp), unit(-2));
     // beyond 38 extra digits every i128 rounds to zero
-    assert_eq!(i128_upscale_to_compute(i128::MAX, DECIMAL_COMPUTE_DP + 39), unit(0));
-    assert_eq!(try_i128_upscale_to_compute(-15, dp), Ok(unit(-2)));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(i128::MAX, DECIMAL_COMPUTE_DP + 39), unit(0));
+    assert_eq!(try_i128_upscale_to_compute::<ComputeStorage>(-15, dp), Ok(unit(-2)));
 }
 
 // ============================================================================

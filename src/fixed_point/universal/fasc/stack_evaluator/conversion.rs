@@ -20,14 +20,6 @@ pub(crate) fn try_to_binary_storage(val: i128) -> Result<BinaryStorage, Overflow
     <ProfileFormat as FascFormat>::try_to_binary_storage(val)
 }
 
-/// Profile-specific extraction to i128 from BinaryStorage
-///
-/// **PURPOSE**: Extract i128 value for operations that need native i128
-#[inline(always)]
-pub(super) fn binary_storage_to_i128(val: &BinaryStorage) -> i128 {
-    <ProfileFormat as FascFormat>::binary_storage_to_i128(val)
-}
-
 /// Reduce a decimal rational (scaled_value / 10^dp) by common factors of 2 and 5.
 pub(super) fn reduce_decimal_to_rational(raw_num: i128, decimals: u8) -> Result<RationalNumber, OverflowDetected> {
     if raw_num == 0 {

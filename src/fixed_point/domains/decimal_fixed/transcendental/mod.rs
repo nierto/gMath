@@ -31,6 +31,8 @@
 //! `tests/decimal_transcendental_validation.rs`.
 
 pub mod decimal_compute;
+pub mod word;
+mod cache;
 mod hp;
 pub mod exp;
 pub mod ln;
@@ -38,6 +40,7 @@ pub mod sqrt;
 pub mod sin_cos;
 pub mod atan;
 
+pub use word::DecimalWord;
 pub use decimal_compute::{
     DECIMAL_COMPUTE_DP,
     DECIMAL_STORAGE_MAX_DP,

@@ -3,29 +3,22 @@
 //! Each operation attempts native-domain UGOD arithmetic first,
 //! falling back to rational for cross-domain operations.
 
-#[allow(unused_imports)]
-use super::{BinaryStorage, ComputeStorage, StackValue, StackEvaluator, DECIMAL_DP_PROMOTION_THRESHOLD};
-use super::compute::{upscale_to_compute, compute_checked_add, compute_checked_subtract, compute_checked_multiply, compute_divide, compute_checked_negate};
-use super::domain::{
-    binary_from_storage, binary_to_storage,
-    decimal_from_storage, decimal_to_storage,
-    ternary_from_storage, ternary_to_storage,
-    shadow_negate, shadow_add, shadow_subtract, shadow_multiply, shadow_divide,
-};
+use super::format::FascFormat;
+use super::{StackValue, StackEvaluator};
+use super::domain::{shadow_negate, shadow_add, shadow_subtract, shadow_multiply, shadow_divide};
 use crate::fixed_point::universal::tier_types::CompactShadow;
 #[allow(unused_imports)]
-use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
-use crate::deployment_profiles::DeploymentProfile;
+use crate::fixed_point::domains::symbolic::rational::rational_number::{OverflowDetected};
 use crate::fixed_point::router::fractal_topology::{
     classify, route_binary_op, coerce_to_decimal, OpId, DomainChoice,
 };
 
-impl StackEvaluator {
+impl<T: FascFormat> StackEvaluator<T> {
     /// Negate value with overflow handling
-    pub(crate) fn negate_value(&mut self, value: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn negate_value(&mut self, value: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, ref shadow) => {
-                Ok(StackValue::BinaryCompute(tier, compute_checked_negate(val)?, shadow_negate(shadow)))
+                Ok(StackValue::BinaryCompute(tier, T::compute_checked_negate(val)?, shadow_negate(shadow)))
             }
             StackValue::DecimalCompute(tier, val, ref shadow) => {
                 use crate::fixed_point::domains::decimal_fixed::transcendental::try_decimal_compute_neg;
@@ -33,23 +26,23 @@ impl StackEvaluator {
             }
             StackValue::Binary(tier, val, ref shadow) => {
                 // Full-precision binary negation with UGOD tier promotion
-                let binary = binary_from_storage(tier, &val)?;
+                let binary = T::binary_from_storage(tier, &val)?;
                 let result = binary.negate()?;
-                let (new_tier, storage) = binary_to_storage(&result)?;
+                let (new_tier, storage) = T::binary_to_storage(&result)?;
                 Ok(StackValue::Binary(new_tier, storage, shadow_negate(shadow)))
             }
             StackValue::Decimal(dec, val, ref shadow) => {
                 // Full-precision decimal negation with UGOD tier promotion
-                let decimal = decimal_from_storage(dec, &val)?;
+                let decimal = T::decimal_from_storage(dec, &val)?;
                 let result = decimal.negate()?;
-                let (new_dec, storage) = decimal_to_storage(&result)?;
+                let (new_dec, storage) = T::decimal_to_storage(&result)?;
                 Ok(StackValue::Decimal(new_dec, storage, shadow_negate(shadow)))
             }
             StackValue::Ternary(tier, val, ref shadow) => {
                 // Full-precision ternary negation with UGOD tier promotion
-                let ternary = ternary_from_storage(tier, &val)?;
+                let ternary = T::ternary_from_storage(tier, &val)?;
                 let result = ternary.negate()?;
-                let (new_tier, storage) = ternary_to_storage(&result)?;
+                let (new_tier, storage) = T::ternary_to_storage(&result)?;
                 Ok(StackValue::Ternary(new_tier, storage, shadow_negate(shadow)))
             }
             StackValue::Symbolic(s) => {
@@ -60,7 +53,7 @@ impl StackEvaluator {
     }
 
     /// Add values with UGOD overflow handling
-    pub(crate) fn add_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn add_values(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         // Handle DecimalCompute: if both operands are decimal-domain, stay at decimal compute tier
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
             try_decimal_compute_add, decimal_upscale_to_compute,
@@ -82,20 +75,20 @@ impl StackEvaluator {
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_add(*v1, *v2)?, shadow_add(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_add(*v1, *v2)?, shadow_add(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
-                let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_add(*v1, v2_compute)?, shadow_add(s1, s2)));
+                let v2_compute = T::upscale_to_compute(*v2);
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_add(*v1, v2_compute)?, shadow_add(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
-                let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_checked_add(v1_compute, *v2)?, shadow_add(s1, s2)));
+                let v1_compute = T::upscale_to_compute(*v1);
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_checked_add(v1_compute, *v2)?, shadow_add(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) | (other, StackValue::BinaryCompute(t1, v1, s1)) => {
                 // BinaryCompute + non-binary: convert other directly to compute tier (full precision)
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_add(*v1, other_compute)?, shadow_add(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_add(*v1, other_compute)?, shadow_add(s1, &other.shadow())));
             }
             _ => {}
         }
@@ -105,14 +98,14 @@ impl StackEvaluator {
             match (&left, &right) {
                 (StackValue::Binary(t1, v1, s1), StackValue::Binary(t2, v2, s2)) => {
                     // Full-precision binary addition with UGOD tier promotion
-                    let binary_a = binary_from_storage(*t1, v1)?;
-                    let binary_b = binary_from_storage(*t2, v2)?;
+                    let binary_a = T::binary_from_storage(*t1, v1)?;
+                    let binary_b = T::binary_from_storage(*t2, v2)?;
                     // Ladder top (0.5.0 item 1): if the promoted result
                     // cannot fit the profile storage — or the UGOD ladder
                     // itself overflows — fall back to the exact rational
                     // path instead of erroring (and never wrapping; the
                     // storage conversion is checked now).
-                    match binary_a.add(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                    match binary_a.add(&binary_b).and_then(|r| T::binary_to_storage(&r)) {
                         Ok((tier, storage)) => {
                             Ok(StackValue::Binary(tier, storage, shadow_add(s1, s2)))
                         }
@@ -126,9 +119,9 @@ impl StackEvaluator {
                     // Full-precision decimal addition with UGOD tier promotion
                     // dp alignment handled inside decimal add (align_decimal_places_and_tier)
                     // On overflow, fall through to rational for exact result
-                    match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
+                    match (T::decimal_from_storage(*d1, v1), T::decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
-                            match decimal_a.add(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                            match decimal_a.add(&decimal_b).and_then(|r| T::decimal_to_storage(&r)) {
                                 Ok((dec, storage)) => Ok(StackValue::Decimal(dec, storage, shadow_add(s1, s2))),
                                 Err(_) => self.add_via_rational(left, right),
                             }
@@ -138,10 +131,10 @@ impl StackEvaluator {
                 }
                 (StackValue::Ternary(t1, v1, s1), StackValue::Ternary(t2, v2, s2)) => {
                     // Full-precision ternary addition with UGOD tier promotion
-                    let ternary_a = ternary_from_storage(*t1, v1)?;
-                    let ternary_b = ternary_from_storage(*t2, v2)?;
+                    let ternary_a = T::ternary_from_storage(*t1, v1)?;
+                    let ternary_b = T::ternary_from_storage(*t2, v2)?;
                     let result = ternary_a.add(&ternary_b)?;
-                    let (tier, storage) = ternary_to_storage(&result)?;
+                    let (tier, storage) = T::ternary_to_storage(&result)?;
                     Ok(StackValue::Ternary(tier, storage, shadow_add(s1, s2)))
                 }
                 _ => {
@@ -163,7 +156,7 @@ impl StackEvaluator {
     }
 
     /// Subtract values with UGOD overflow handling
-    pub(crate) fn subtract_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn subtract_values(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         // DecimalCompute propagation
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
             try_decimal_compute_sub, decimal_upscale_to_compute,
@@ -185,23 +178,23 @@ impl StackEvaluator {
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_subtract(*v1, *v2)?, shadow_subtract(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_subtract(*v1, *v2)?, shadow_subtract(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
-                let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_subtract(*v1, v2_compute)?, shadow_subtract(s1, s2)));
+                let v2_compute = T::upscale_to_compute(*v2);
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_subtract(*v1, v2_compute)?, shadow_subtract(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
-                let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_checked_subtract(v1_compute, *v2)?, shadow_subtract(s1, s2)));
+                let v1_compute = T::upscale_to_compute(*v1);
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_checked_subtract(v1_compute, *v2)?, shadow_subtract(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_subtract(*v1, other_compute)?, shadow_subtract(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_subtract(*v1, other_compute)?, shadow_subtract(s1, &other.shadow())));
             }
             (other, StackValue::BinaryCompute(t2, v2, s2)) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t2, compute_checked_subtract(other_compute, *v2)?, shadow_subtract(&other.shadow(), s2)));
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_checked_subtract(other_compute, *v2)?, shadow_subtract(&other.shadow(), s2)));
             }
             _ => {}
         }
@@ -211,10 +204,10 @@ impl StackEvaluator {
             match (&left, &right) {
                 (StackValue::Binary(t1, v1, s1), StackValue::Binary(t2, v2, s2)) => {
                     // Full-precision binary subtraction with UGOD tier promotion
-                    let binary_a = binary_from_storage(*t1, v1)?;
-                    let binary_b = binary_from_storage(*t2, v2)?;
+                    let binary_a = T::binary_from_storage(*t1, v1)?;
+                    let binary_b = T::binary_from_storage(*t2, v2)?;
                     // Ladder top: rational fallback (see add arm).
-                    match binary_a.subtract(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                    match binary_a.subtract(&binary_b).and_then(|r| T::binary_to_storage(&r)) {
                         Ok((tier, storage)) => {
                             Ok(StackValue::Binary(tier, storage, shadow_subtract(s1, s2)))
                         }
@@ -228,9 +221,9 @@ impl StackEvaluator {
                     // Full-precision decimal subtraction with UGOD tier promotion
                     // dp alignment handled inside decimal subtract (align_decimal_places_and_tier)
                     // On overflow, fall through to rational for exact result
-                    match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
+                    match (T::decimal_from_storage(*d1, v1), T::decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
-                            match decimal_a.subtract(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                            match decimal_a.subtract(&decimal_b).and_then(|r| T::decimal_to_storage(&r)) {
                                 Ok((dec, storage)) => Ok(StackValue::Decimal(dec, storage, shadow_subtract(s1, s2))),
                                 Err(_) => self.subtract_via_rational(left, right),
                             }
@@ -240,10 +233,10 @@ impl StackEvaluator {
                 }
                 (StackValue::Ternary(t1, v1, s1), StackValue::Ternary(t2, v2, s2)) => {
                     // Full-precision ternary subtraction with UGOD tier promotion
-                    let ternary_a = ternary_from_storage(*t1, v1)?;
-                    let ternary_b = ternary_from_storage(*t2, v2)?;
+                    let ternary_a = T::ternary_from_storage(*t1, v1)?;
+                    let ternary_b = T::ternary_from_storage(*t2, v2)?;
                     let result = ternary_a.subtract(&ternary_b)?;
-                    let (tier, storage) = ternary_to_storage(&result)?;
+                    let (tier, storage) = T::ternary_to_storage(&result)?;
                     Ok(StackValue::Ternary(tier, storage, shadow_subtract(s1, s2)))
                 }
                 _ => {
@@ -261,7 +254,7 @@ impl StackEvaluator {
     }
 
     /// Multiply values with UGOD overflow handling
-    pub(crate) fn multiply_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn multiply_values(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         // DecimalCompute propagation
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
             try_decimal_compute_mul, decimal_upscale_to_compute,
@@ -283,23 +276,23 @@ impl StackEvaluator {
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_multiply(*v1, *v2)?, shadow_multiply(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_multiply(*v1, *v2)?, shadow_multiply(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
-                let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_multiply(*v1, v2_compute)?, shadow_multiply(s1, s2)));
+                let v2_compute = T::upscale_to_compute(*v2);
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_multiply(*v1, v2_compute)?, shadow_multiply(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
-                let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_checked_multiply(v1_compute, *v2)?, shadow_multiply(s1, s2)));
+                let v1_compute = T::upscale_to_compute(*v1);
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_checked_multiply(v1_compute, *v2)?, shadow_multiply(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_checked_multiply(*v1, other_compute)?, shadow_multiply(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_checked_multiply(*v1, other_compute)?, shadow_multiply(s1, &other.shadow())));
             }
             (other, StackValue::BinaryCompute(t2, v2, s2)) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t2, compute_checked_multiply(other_compute, *v2)?, shadow_multiply(&other.shadow(), s2)));
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_checked_multiply(other_compute, *v2)?, shadow_multiply(&other.shadow(), s2)));
             }
             _ => {}
         }
@@ -308,14 +301,14 @@ impl StackEvaluator {
             match (&left, &right) {
                 (StackValue::Binary(t1, v1, s1), StackValue::Binary(t2, v2, s2)) => {
                     // Full-precision binary multiplication with UGOD tier promotion
-                    let binary_a = binary_from_storage(*t1, v1)?;
-                    let binary_b = binary_from_storage(*t2, v2)?;
+                    let binary_a = T::binary_from_storage(*t1, v1)?;
+                    let binary_b = T::binary_from_storage(*t2, v2)?;
                     // Ladder top (0.5.0 item 1): if the promoted result
                     // cannot fit the profile storage — or the UGOD ladder
                     // itself overflows — fall back to the exact rational
                     // path instead of erroring (and never wrapping; the
                     // storage conversion is checked now).
-                    match binary_a.multiply(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                    match binary_a.multiply_with_tier1_frac(&binary_b, T::TIER1_FRAC_BITS).and_then(|r| T::binary_to_storage(&r)) {
                         Ok((tier, storage)) => {
                             Ok(StackValue::Binary(tier, storage, shadow_multiply(s1, s2)))
                         }
@@ -327,7 +320,7 @@ impl StackEvaluator {
                 }
                 (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                     let dp_result = *d1 as u16 + *d2 as u16;
-                    if dp_result > DECIMAL_DP_PROMOTION_THRESHOLD {
+                    if dp_result > T::DECIMAL_DP_PROMOTION_THRESHOLD {
                         // Decimal places would exceed profile precision — promote to Symbolic.
                         // Rational representation is always exact: (a/10^dp_a) × (b/10^dp_b)
                         // = (a×b) / (10^(dp_a+dp_b)). No rounding, no ULP error.
@@ -335,9 +328,9 @@ impl StackEvaluator {
                     }
                     // dp fits within profile precision — normal decimal multiply
                     // On overflow (storage or arithmetic), fall through to rational
-                    match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
+                    match (T::decimal_from_storage(*d1, v1), T::decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
-                            match decimal_a.multiply(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                            match decimal_a.multiply(&decimal_b).and_then(|r| T::decimal_to_storage(&r)) {
                                 Ok((dp, storage)) => Ok(StackValue::Decimal(dp, storage, shadow_multiply(s1, s2))),
                                 Err(_) => self.multiply_via_rational(left, right),
                             }
@@ -347,10 +340,10 @@ impl StackEvaluator {
                 }
                 (StackValue::Ternary(t1, v1, s1), StackValue::Ternary(t2, v2, s2)) => {
                     // Full-precision ternary multiplication with UGOD tier promotion
-                    let ternary_a = ternary_from_storage(*t1, v1)?;
-                    let ternary_b = ternary_from_storage(*t2, v2)?;
+                    let ternary_a = T::ternary_from_storage(*t1, v1)?;
+                    let ternary_b = T::ternary_from_storage(*t2, v2)?;
                     let result = ternary_a.multiply(&ternary_b)?;
-                    let (tier, storage) = ternary_to_storage(&result)?;
+                    let (tier, storage) = T::ternary_to_storage(&result)?;
                     Ok(StackValue::Ternary(tier, storage, shadow_multiply(s1, s2)))
                 }
                 _ => {
@@ -368,7 +361,7 @@ impl StackEvaluator {
     }
 
     /// Divide values with UGOD overflow handling
-    pub(crate) fn divide_values(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn divide_values(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         // DecimalCompute propagation
         use crate::fixed_point::domains::decimal_fixed::transcendental::{
             decimal_compute_div, decimal_upscale_to_compute,
@@ -390,23 +383,23 @@ impl StackEvaluator {
         // Handle BinaryCompute: if either operand is BinaryCompute, operate at compute tier
         match (&left, &right) {
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::BinaryCompute(_t2, v2, s2)) => {
-                return Ok(StackValue::BinaryCompute(*t1, compute_divide(*v1, *v2)?, shadow_divide(s1, s2)));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_divide(*v1, *v2)?, shadow_divide(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), StackValue::Binary(_, v2, s2)) => {
-                let v2_compute = upscale_to_compute(*v2);
-                return Ok(StackValue::BinaryCompute(*t1, compute_divide(*v1, v2_compute)?, shadow_divide(s1, s2)));
+                let v2_compute = T::upscale_to_compute(*v2);
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_divide(*v1, v2_compute)?, shadow_divide(s1, s2)));
             }
             (StackValue::Binary(_, v1, s1), StackValue::BinaryCompute(t2, v2, s2)) => {
-                let v1_compute = upscale_to_compute(*v1);
-                return Ok(StackValue::BinaryCompute(*t2, compute_divide(v1_compute, *v2)?, shadow_divide(s1, s2)));
+                let v1_compute = T::upscale_to_compute(*v1);
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_divide(v1_compute, *v2)?, shadow_divide(s1, s2)));
             }
             (StackValue::BinaryCompute(t1, v1, s1), other) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t1, compute_divide(*v1, other_compute)?, shadow_divide(s1, &other.shadow())));
+                return Ok(StackValue::BinaryCompute(*t1, T::compute_divide(*v1, other_compute)?, shadow_divide(s1, &other.shadow())));
             }
             (other, StackValue::BinaryCompute(t2, v2, s2)) => {
                 let other_compute = self.to_compute_storage(other)?;
-                return Ok(StackValue::BinaryCompute(*t2, compute_divide(other_compute, *v2)?, shadow_divide(&other.shadow(), s2)));
+                return Ok(StackValue::BinaryCompute(*t2, T::compute_divide(other_compute, *v2)?, shadow_divide(&other.shadow(), s2)));
             }
             _ => {}
         }
@@ -418,10 +411,10 @@ impl StackEvaluator {
             }
             (StackValue::Binary(t1, v1, s1), StackValue::Binary(t2, v2, s2)) => {
                 // Full-precision binary division with UGOD tier promotion
-                let binary_a = binary_from_storage(*t1, v1)?;
-                let binary_b = binary_from_storage(*t2, v2)?;
+                let binary_a = T::binary_from_storage(*t1, v1)?;
+                let binary_b = T::binary_from_storage(*t2, v2)?;
                 // Ladder top: rational fallback (see add arm).
-                match binary_a.divide(&binary_b).and_then(|r| binary_to_storage(&r)) {
+                match binary_a.divide_with_tier1_frac(&binary_b, T::TIER1_FRAC_BITS).and_then(|r| T::binary_to_storage(&r)) {
                     Ok((tier, storage)) => {
                         Ok(StackValue::Binary(tier, storage, shadow_divide(s1, s2)))
                     }
@@ -434,9 +427,9 @@ impl StackEvaluator {
             (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                 // Full-precision decimal division with UGOD tier promotion
                 // On overflow or inexact result, fall through to rational for exact answer
-                match (decimal_from_storage(*d1, v1), decimal_from_storage(*d2, v2)) {
+                match (T::decimal_from_storage(*d1, v1), T::decimal_from_storage(*d2, v2)) {
                     (Ok(decimal_a), Ok(decimal_b)) => {
-                        match decimal_a.divide(&decimal_b).and_then(|r| decimal_to_storage(&r)) {
+                        match decimal_a.divide(&decimal_b).and_then(|r| T::decimal_to_storage(&r)) {
                             Ok((dp, storage)) => Ok(StackValue::Decimal(dp, storage, shadow_divide(s1, s2))),
                             Err(_) => self.divide_via_rational(left, right),
                         }
@@ -446,10 +439,10 @@ impl StackEvaluator {
             }
             (StackValue::Ternary(t1, v1, s1), StackValue::Ternary(t2, v2, s2)) => {
                 // Full-precision ternary division with UGOD tier promotion
-                let ternary_a = ternary_from_storage(*t1, v1)?;
-                let ternary_b = ternary_from_storage(*t2, v2)?;
+                let ternary_a = T::ternary_from_storage(*t1, v1)?;
+                let ternary_b = T::ternary_from_storage(*t2, v2)?;
                 let result = ternary_a.divide(&ternary_b)?;
-                let (tier, storage) = ternary_to_storage(&result)?;
+                let (tier, storage) = T::ternary_to_storage(&result)?;
                 Ok(StackValue::Ternary(tier, storage, shadow_divide(s1, s2)))
             }
             _ => {
@@ -467,21 +460,21 @@ impl StackEvaluator {
     // RATIONAL FALLBACK OPERATIONS FOR CROSS-DOMAIN AND OVERFLOW
     // ============================================================================
 
-    pub(crate) fn add_via_rational(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn add_via_rational(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         let l_rational = left.to_rational()?;
         let r_rational = right.to_rational()?;
         let result = l_rational.try_add(&r_rational)?;
         Ok(StackValue::Symbolic(result))
     }
 
-    pub(crate) fn subtract_via_rational(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn subtract_via_rational(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         let l_rational = left.to_rational()?;
         let r_rational = right.to_rational()?;
         let result = l_rational.try_subtract(&r_rational)?;
         Ok(StackValue::Symbolic(result))
     }
 
-    pub(crate) fn multiply_via_rational(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn multiply_via_rational(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         let l_rational = left.to_rational()?;
         let r_rational = right.to_rational()?;
         match l_rational.try_multiply(&r_rational) {
@@ -491,13 +484,13 @@ impl StackEvaluator {
                 let tier = self.profile_max_binary_tier();
                 let l_compute = self.to_compute_storage(&left)?;
                 let r_compute = self.to_compute_storage(&right)?;
-                Ok(StackValue::BinaryCompute(tier, compute_checked_multiply(l_compute, r_compute)?, CompactShadow::None))
+                Ok(StackValue::BinaryCompute(tier, T::compute_checked_multiply(l_compute, r_compute)?, CompactShadow::None))
             }
             Err(e) => Err(e),
         }
     }
 
-    pub(crate) fn divide_via_rational(&mut self, left: StackValue, right: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn divide_via_rational(&mut self, left: StackValue<T>, right: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         let l_rational = left.to_rational()?;
         let r_rational = right.to_rational()?;
         match l_rational.try_divide(&r_rational) {
@@ -507,7 +500,7 @@ impl StackEvaluator {
                 let tier = self.profile_max_binary_tier();
                 let l_compute = self.to_compute_storage(&left)?;
                 let r_compute = self.to_compute_storage(&right)?;
-                Ok(StackValue::BinaryCompute(tier, compute_divide(l_compute, r_compute)?, CompactShadow::None))
+                Ok(StackValue::BinaryCompute(tier, T::compute_divide(l_compute, r_compute)?, CompactShadow::None))
             }
             Err(e) => Err(e),
         }
@@ -527,9 +520,9 @@ impl StackEvaluator {
     fn try_route_coerce(
         &self,
         op: OpId,
-        left: &StackValue,
-        right: &StackValue,
-    ) -> Option<(StackValue, StackValue)> {
+        left: &StackValue<T>,
+        right: &StackValue<T>,
+    ) -> Option<(StackValue<T>, StackValue<T>)> {
         let lc = classify(left);
         let rc = classify(right);
         match route_binary_op(op, lc, rc) {
@@ -559,16 +552,16 @@ impl StackEvaluator {
         }
     }
 
-    /// Coerce a StackValue to Binary domain.
+    /// Coerce a StackValue<T> to Binary domain.
     ///
     /// - Binary/BinaryCompute: pass through
     /// - Decimal: use decimal_to_binary_storage (Q-format conversion)
     /// - Other: use to_binary_storage (general conversion via shadow/rational)
-    fn coerce_to_binary_sv(&self, value: &StackValue) -> Result<StackValue, OverflowDetected> {
+    fn coerce_to_binary_sv(&self, value: &StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         match value {
             StackValue::Binary(..) | StackValue::BinaryCompute(..) => Ok(value.clone()),
             StackValue::Decimal(dp, scaled, shadow) => {
-                let binary_storage = super::decimal_to_binary_storage(*dp, *scaled)?;
+                let binary_storage = T::decimal_to_binary_storage(*dp, *scaled)?;
                 let tier = self.profile_max_binary_tier();
                 Ok(StackValue::Binary(tier, binary_storage, *shadow))
             }
@@ -596,14 +589,7 @@ impl StackEvaluator {
     /// **RATIONALE**: exp/ln/sin/cos benefit from maximum precision upfront
     /// **CONTRAST**: Basic ops (add/mul/sub/div) promote on overflow detection
     pub(crate) fn profile_max_binary_tier(&self) -> u8 {
-        match self.deployment_profile {
-            DeploymentProfile::Realtime => 1,      // Q16.16 (i32)
-            DeploymentProfile::Compact => 2,       // Q32.32 (i64)
-            DeploymentProfile::Embedded => 3,      // Q64.64 (i128)
-            DeploymentProfile::Balanced => 4,      // Q128.128 (I256)
-            DeploymentProfile::Scientific => 5,    // Q256.256 (I512)
-            DeploymentProfile::Custom => 3,        // Default to Q64.64 for custom
-        }
+        T::MAX_BINARY_TIER
     }
 
     /// Get the maximum ternary tier for the current deployment profile
@@ -615,13 +601,6 @@ impl StackEvaluator {
     ///   - Balanced (I256)             → Tier 4 TQ80.80 (I256, 64 frac trits ≈ 30 decimals)
     ///   - Scientific (I512)           → Tier 5 TQ160.160 (I512, 128 frac trits ≈ 61 decimals)
     pub(crate) fn profile_max_ternary_tier(&self) -> u8 {
-        match self.deployment_profile {
-            DeploymentProfile::Realtime => 1,      // TQ10.10 (i32, 8 frac trits)
-            DeploymentProfile::Compact => 2,       // TQ20.20 (i64, 16 frac trits)
-            DeploymentProfile::Embedded => 3,      // TQ40.40 (i128, 32 frac trits)
-            DeploymentProfile::Balanced => 4,      // TQ80.80 (I256, 64 frac trits)
-            DeploymentProfile::Scientific => 5,    // TQ160.160 (I512, 128 frac trits)
-            DeploymentProfile::Custom => 3,        // Default TQ40.40
-        }
+        T::MAX_TERNARY_TIER
     }
 }

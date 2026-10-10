@@ -1175,3 +1175,83 @@ fn inference_kernels_are_bit_identical_to_0_6_5() {
         t.report();
     }
 }
+
+// ============================================================================
+// The canonical layer: expression strings through both crates (phase 5b)
+// ============================================================================
+
+/// Both crates evaluate the same tree; the outcome is the displayed value
+/// plus 30 decimal digits, or the error, or a panic.
+macro_rules! fasc_case {
+    ($tally:expr, $label:expr, |$p:ident| $e:expr) => {{
+        let old = fallible(|| -> Result<(String, String), String> {
+            let $p = |s: &str| g_math_065::canonical::gmath_parse(s).map_err(|e| format!("{e:?}"));
+            let tree = $e;
+            g_math_065::canonical::evaluate(&tree)
+                .map(|v| (format!("{v}"), v.to_decimal_string(30)))
+                .map_err(|e| format!("{e:?}"))
+        });
+        let new = fallible(|| -> Result<(String, String), String> {
+            let $p = |s: &str| g_math::canonical::gmath_parse(s).map_err(|e| format!("{e:?}"));
+            let tree = $e;
+            g_math::canonical::evaluate(&tree)
+                .map(|v| (format!("{v}"), v.to_decimal_string(30)))
+                .map_err(|e| format!("{e:?}"))
+        });
+        $tally.check(old, new, &$label);
+    }};
+}
+
+#[test]
+fn fasc_evaluation_is_identical_to_0_6_7() {
+    silence_panics();
+    let literals = [
+        "0", "1", "-1", "42", "0.1", "0.2", "-0.5", "2.75", "1.5", "2.5", "3.14159265358979323846264338327950288",
+        "0.000000001", "214748.3647", "214748.3648", "467295.6470", "1000000", "99999999999999999999999999999999999999999.5",
+        "1/3", "-2/7", "22/7", "0x1F", "0b101", "0t10", "0t-12", "pi", "e", "sqrt2", "1e-5", "abc", "", "1.2.3",
+    ];
+    let mut parse = Tally::new("fasc parse");
+    for s in literals {
+        fasc_case!(parse, s, |p| p(s)?);
+    }
+    parse.report();
+
+    let operands = ["0.1", "0.2", "1.5", "2.5", "-0.5", "3", "7", "1/3", "0t12", "pi", "0.000000001", "214748.3647", "0x10"];
+    let mut arith = Tally::new("fasc arithmetic");
+    for a in operands {
+        for b in operands {
+            fasc_case!(arith, format!("{a} + {b}"), |p| p(a)? + p(b)?);
+            fasc_case!(arith, format!("{a} - {b}"), |p| p(a)? - p(b)?);
+            fasc_case!(arith, format!("{a} * {b}"), |p| p(a)? * p(b)?);
+            fasc_case!(arith, format!("{a} / {b}"), |p| p(a)? / p(b)?);
+        }
+    }
+    arith.report_in_domain();
+
+    let args = ["0", "0.1", "0.5", "1", "1.5", "2", "-0.5", "-2", "10", "0.25", "1/3", "pi", "0t1", "100", "0.000000001"];
+    let mut unary = Tally::new("fasc transcendental");
+    for a in args {
+        fasc_case!(unary, format!("exp({a})"), |p| p(a)?.exp());
+        fasc_case!(unary, format!("ln({a})"), |p| p(a)?.ln());
+        fasc_case!(unary, format!("sqrt({a})"), |p| p(a)?.sqrt());
+        fasc_case!(unary, format!("sin({a})"), |p| p(a)?.sin());
+        fasc_case!(unary, format!("cos({a})"), |p| p(a)?.cos());
+        fasc_case!(unary, format!("tan({a})"), |p| p(a)?.tan());
+        fasc_case!(unary, format!("atan({a})"), |p| p(a)?.atan());
+        fasc_case!(unary, format!("asin({a})"), |p| p(a)?.asin());
+        fasc_case!(unary, format!("acos({a})"), |p| p(a)?.acos());
+        fasc_case!(unary, format!("sinh({a})"), |p| p(a)?.sinh());
+        fasc_case!(unary, format!("cosh({a})"), |p| p(a)?.cosh());
+        fasc_case!(unary, format!("tanh({a})"), |p| p(a)?.tanh());
+        fasc_case!(unary, format!("asinh({a})"), |p| p(a)?.asinh());
+        fasc_case!(unary, format!("acosh({a})"), |p| p(a)?.acosh());
+        fasc_case!(unary, format!("atanh({a})"), |p| p(a)?.atanh());
+        fasc_case!(unary, format!("exp(ln({a}))"), |p| p(a)?.ln().exp());
+        fasc_case!(unary, format!("sin(exp({a}))"), |p| p(a)?.exp().sin());
+        fasc_case!(unary, format!("sqrt({a}) * sqrt({a})"), |p| p(a)?.sqrt() * p(a)?.sqrt());
+        fasc_case!(unary, format!("pow({a}, 0.5)"), |p| p(a)?.pow(p("0.5")?));
+        fasc_case!(unary, format!("pow({a}, 3)"), |p| p(a)?.pow(p("3")?));
+        fasc_case!(unary, format!("atan2({a}, 2)"), |p| p(a)?.atan2(p("2")?));
+    }
+    unary.report_in_domain();
+}

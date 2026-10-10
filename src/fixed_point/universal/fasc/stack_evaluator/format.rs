@@ -17,7 +17,7 @@ use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::{I1024, I2048, I256, I512};
 
 /// Every format's evaluator-facing constants and raw-word conversions.
-pub(crate) trait FascFormat: FixedNum {
+pub trait FascFormat: FixedNum + 'static {
     /// Decimal places beyond which a decimal literal promotes to the next tier.
     const DECIMAL_DP_PROMOTION_THRESHOLD: u16;
     /// Decimal places of the decimal compute tier.
@@ -36,33 +36,76 @@ pub(crate) trait FascFormat: FixedNum {
     const MAX_TERNARY_TIER: u8;
     /// The deployment profile this format was.
     const DEPLOYMENT_PROFILE: DeploymentProfile;
+    /// Fraction bits of UGOD tier 1 for this format: `F` on a 32-bit word,
+    /// 16 for the internal Q16.16 tier elsewhere.
+    const TIER1_FRAC_BITS: u32;
+    /// Fraction bits a tier-1 raw carries in `to_rational`: `F` on a 32-bit
+    /// word (tier 1 is its storage tier), 0 elsewhere (a raw integer).
+    const TIER1_RATIONAL_FRAC_BITS: u32;
+    /// Whether decimal literals past the fractional budget fall back to the
+    /// exact rational (narrow words) or to an exact binary (wide words).
+    const NARROW_DECIMAL: bool;
 
+    #[doc(hidden)]
     fn decimal_to_binary_storage(dp: u8, scaled: Self::Storage) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
     fn decimal_compute_to_binary_storage(val: Compute<Self>) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
     fn ternary_from_storage(tier: u8, storage: &Self::Storage) -> Result<UniversalTernaryFixed, OverflowDetected>;
+    #[doc(hidden)]
     fn i128_to_binary_storage_checked(val: i128) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
     fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> Result<(u8, Self::Storage), OverflowDetected>;
+    #[doc(hidden)]
     fn ternary_to_rational(tier: u8, value: &Self::Storage) -> Result<RationalNumber, OverflowDetected>;
+    #[doc(hidden)]
     fn decimal_from_storage(decimal_places: u8, storage: &Self::Storage) -> Result<UniversalDecimalTiered, OverflowDetected>;
+    #[doc(hidden)]
     fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> Result<(u8, Self::Storage), OverflowDetected>;
+    #[doc(hidden)]
     fn binary_from_storage(tier: u8, storage: &Self::Storage) -> Result<UniversalBinaryFixed, OverflowDetected>;
+    #[doc(hidden)]
     fn i128_to_binary_storage_checked_b(val: i128) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
     fn binary_to_storage(binary: &UniversalBinaryFixed) -> Result<(u8, Self::Storage), OverflowDetected>;
+    #[doc(hidden)]
     fn try_to_binary_storage(val: i128) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
     fn binary_storage_to_i128(val: &Self::Storage) -> i128;
+    #[doc(hidden)]
     fn binary_storage_to_decimal_string(val: Self::Storage, max_digits: usize) -> String;
+    #[doc(hidden)]
     fn decimal_storage_to_string(dec: u8, val: &Self::Storage) -> String;
+    #[doc(hidden)]
     fn decimal_to_compute_storage(decimals: u8, scaled: Self::Storage) -> Result<Compute<Self>, OverflowDetected>;
+    #[doc(hidden)]
     fn pow10_compute(exp: u8) -> Result<Compute<Self>, OverflowDetected>;
+    #[doc(hidden)]
     fn symbolic_to_compute_storage(num: i128, den: i128) -> Result<Compute<Self>, OverflowDetected>;
+    #[doc(hidden)]
     fn symbolic_wide_to_compute_storage(
     rational: &crate::fixed_point::domains::symbolic::rational::RationalNumber,
     ) -> Result<Compute<Self>, OverflowDetected>;
-    fn compute_checked_negate(a: Compute<Self>) -> Result<Compute<Self>, OverflowDetected>;
-    fn compute_is_zero(a: &Compute<Self>) -> bool;
-    fn compute_is_negative(a: &Compute<Self>) -> bool;
+    #[doc(hidden)]
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
     fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected>;
+    #[doc(hidden)]
+    fn binary_to_rational(frac_bits: u32, value: &Self::Storage) -> Result<RationalNumber, OverflowDetected>;
+    #[doc(hidden)]
+    fn decimal_to_rational(decimals: u8, scaled: &Self::Storage) -> Result<RationalNumber, OverflowDetected>;
+    #[doc(hidden)]
+    fn integer_value(value: i128) -> Option<Self::Storage>;
+    #[doc(hidden)]
+    fn storage_to_i128_opt(storage: &Self::Storage) -> Option<i128>;
+    #[doc(hidden)]
+    fn literal_to_storage(s: &str) -> Option<Result<Self::Storage, OverflowDetected>>;
+    #[doc(hidden)]
+    fn divide_storage(num: Self::Storage, den: Self::Storage) -> Result<Self::Storage, OverflowDetected>;
+    #[doc(hidden)]
+    fn decimal_compute_to_binary_compute(val: &Compute<Self>) -> Result<Compute<Self>, OverflowDetected>;
+    #[doc(hidden)]
+    fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, Self::Storage), OverflowDetected>>;
 }
 
 impl<const F: u32> FascFormat for Fixed<i32, F> {
@@ -74,6 +117,9 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
     const MAX_DECIMAL_DIGITS: usize = ((F as u64 * 30103) / 100000) as usize;
     const MAX_BINARY_TIER: u8 = 1;
     const MAX_TERNARY_TIER: u8 = 1;
+    const TIER1_FRAC_BITS: u32 = F;
+    const TIER1_RATIONAL_FRAC_BITS: u32 = F;
+    const NARROW_DECIMAL: bool = true;
     const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Realtime;
     fn decimal_to_binary_storage(dp: u8, scaled: i32) -> Result<i32, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
@@ -460,17 +506,7 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
 
         Err(OverflowDetected::TierOverflow)
     }
-    fn compute_checked_negate(a: i64) -> Result<i64, OverflowDetected> {
-        { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
-    }
     #[inline]
-    fn compute_is_zero(a: &i64) -> bool {
-        { *a == 0i64 }
-    }
-    #[inline]
-    fn compute_is_negative(a: &i64) -> bool {
-        { *a < 0i64 }
-    }
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<i32, OverflowDetected> {
         if den == 0 {
             return Err(OverflowDetected::DivisionByZero);
@@ -506,6 +542,66 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
 
         Err(OverflowDetected::Overflow)
     }
+    fn binary_to_rational(frac_bits: u32, value: &i32) -> Result<RationalNumber, OverflowDetected> {
+        if *value == 0 {
+            return Ok(RationalNumber::new(0, 1));
+        }
+        let trailing = (*value as u32).trailing_zeros().min(frac_bits);
+        let reduced_num = (*value >> trailing) as i128;
+        let reduced_den = 1u128 << (frac_bits - trailing);
+        return Ok(RationalNumber::new(reduced_num, reduced_den));
+
+    }
+    fn decimal_to_rational(decimals: u8, scaled: &i32) -> Result<RationalNumber, OverflowDetected> {
+        return super::conversion::reduce_decimal_to_rational(*scaled as i128, decimals);
+
+    }
+    fn integer_value(value: i128) -> Option<i32> {
+        // Integer range check: max integer = 2^(STORAGE_BITS - FRAC_BITS - 1) - 1
+        let max_int = (1i128 << (31 - F)) - 1;
+        let min_int = -(1i128 << (31 - F));
+        // Out-of-range integers fall back to Symbolic (see q64_64 arm).
+        if value > max_int || value < min_int {
+            return None;
+        }
+        let q_value = (value as i32) << F;
+        Some(q_value)
+
+    }
+    fn storage_to_i128_opt(storage: &i32) -> Option<i128> {
+        Some(*storage as i128)
+    }
+    fn literal_to_storage(s: &str) -> Option<Result<i32, OverflowDetected>> {
+        use crate::fixed_point::imperative::decimal_literal;
+        Some(decimal_literal::parse(s, F, 32)?.map(|c| {
+            let w = &c.words;
+            // the minimum's magnitude 2^(W-1) reads as the minimum, its own negation
+            let magnitude = w[0] as u32 as i32;
+            if c.negative { magnitude.wrapping_neg() } else { magnitude }
+        }))
+    }
+    fn divide_storage(num: i32, den: i32) -> Result<i32, OverflowDetected> {
+        let num_wide = (num as i64) << F;
+        let den_wide = den as i64;
+        if den_wide == 0 { return Err(OverflowDetected::DivisionByZero); }
+        let result = (num_wide / den_wide) as i32;
+        Ok(result)
+
+    }
+    fn decimal_compute_to_binary_compute(val: &i64) -> Result<i64, OverflowDetected> {
+        // I256: val << 2F can pass i128 at high fraction bits
+        let num = I256::from_i128(*val as i128) << ((2 * F) as usize);
+        let mut den: i128 = 1;
+        for _ in 0..Self::DECIMAL_COMPUTE_DP { den *= 10; }
+        let q = num / I256::from_i128(den);
+        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+        i64::try_from(q.as_i128()).map_err(|_| OverflowDetected::TierOverflow)
+
+    }
+    fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, i32), OverflowDetected>> {
+        let _ = (tier, rational);
+        None
+    }
 }
 
 impl FascFormat for Fixed<i64, 32> {
@@ -517,6 +613,9 @@ impl FascFormat for Fixed<i64, 32> {
     const MAX_DECIMAL_DIGITS: usize = 9;
     const MAX_BINARY_TIER: u8 = 2;
     const MAX_TERNARY_TIER: u8 = 2;
+    const TIER1_FRAC_BITS: u32 = 16;
+    const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
+    const NARROW_DECIMAL: bool = true;
     const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Compact;
     fn decimal_to_binary_storage(dp: u8, scaled: i64) -> Result<i64, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
@@ -903,17 +1002,7 @@ impl FascFormat for Fixed<i64, 32> {
 
         Err(OverflowDetected::TierOverflow)
     }
-    fn compute_checked_negate(a: i128) -> Result<i128, OverflowDetected> {
-        { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
-    }
     #[inline]
-    fn compute_is_zero(a: &i128) -> bool {
-        { *a == 0i128 }
-    }
-    #[inline]
-    fn compute_is_negative(a: &i128) -> bool {
-        { *a < 0i128 }
-    }
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<i64, OverflowDetected> {
         if den == 0 {
             return Err(OverflowDetected::DivisionByZero);
@@ -949,6 +1038,66 @@ impl FascFormat for Fixed<i64, 32> {
 
         Err(OverflowDetected::Overflow)
     }
+    fn binary_to_rational(frac_bits: u32, value: &i64) -> Result<RationalNumber, OverflowDetected> {
+        if *value == 0 {
+            return Ok(RationalNumber::new(0, 1));
+        }
+        let trailing = (*value as u64).trailing_zeros().min(frac_bits);
+        let reduced_num = (*value >> trailing) as i128;
+        let reduced_den = 1u128 << (frac_bits - trailing);
+        return Ok(RationalNumber::new(reduced_num, reduced_den));
+
+    }
+    fn decimal_to_rational(decimals: u8, scaled: &i64) -> Result<RationalNumber, OverflowDetected> {
+        return super::conversion::reduce_decimal_to_rational(*scaled as i128, decimals);
+
+    }
+    fn integer_value(value: i128) -> Option<i64> {
+        // Q32.32 has 32 integer bits (signed), valid range is i32.
+        // Out-of-range integers fall back to Symbolic (see q64_64 arm).
+        if value > i32::MAX as i128 || value < i32::MIN as i128 {
+            return None;
+        }
+        let q_value = (value as i64) << 32;
+        Some(q_value)
+
+    }
+    fn storage_to_i128_opt(storage: &i64) -> Option<i128> {
+        Some(*storage as i128)
+    }
+    fn literal_to_storage(s: &str) -> Option<Result<i64, OverflowDetected>> {
+        use crate::fixed_point::imperative::decimal_literal;
+        Some(decimal_literal::parse(s, 32, 64)?.map(|c| {
+            let w = &c.words;
+            // the minimum's magnitude 2^(W-1) reads as the minimum, its own negation
+            let magnitude = w[0] as i64;
+            if c.negative { magnitude.wrapping_neg() } else { magnitude }
+        }))
+    }
+    fn divide_storage(num: i64, den: i64) -> Result<i64, OverflowDetected> {
+        // Q32.32: (num << 32) / den — use i128 intermediate
+        let num_wide = (num as i128) << 32;
+        let den_wide = den as i128;
+        if den_wide == 0 { return Err(OverflowDetected::DivisionByZero); }
+        let result = (num_wide / den_wide) as i64;
+        Ok(result)
+
+    }
+    fn decimal_compute_to_binary_compute(val: &i128) -> Result<i128, OverflowDetected> {
+        // val: i128 at dp=19. Target: Q64.64 i128.
+        let num = I256::from_i128(*val) << 64usize;
+        let mut den = I256::from_i128(1);
+        let ten = I256::from_i128(10);
+        for _ in 0..Self::DECIMAL_COMPUTE_DP { den = den * ten; }
+        let q = num / den;
+        if !q.fits_in_i128() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i128())
+
+    }
+    fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, i64), OverflowDetected>> {
+        let _ = (tier, rational);
+        None
+    }
 }
 
 impl FascFormat for Fixed<i128, 64> {
@@ -960,6 +1109,9 @@ impl FascFormat for Fixed<i128, 64> {
     const MAX_DECIMAL_DIGITS: usize = 19;
     const MAX_BINARY_TIER: u8 = 3;
     const MAX_TERNARY_TIER: u8 = 3;
+    const TIER1_FRAC_BITS: u32 = 16;
+    const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
+    const NARROW_DECIMAL: bool = false;
     const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Embedded;
     fn decimal_to_binary_storage(dp: u8, scaled: i128) -> Result<i128, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
@@ -1346,17 +1498,7 @@ impl FascFormat for Fixed<i128, 64> {
 
         Err(OverflowDetected::TierOverflow)
     }
-    fn compute_checked_negate(a: I256) -> Result<I256, OverflowDetected> {
-        { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
-    }
     #[inline]
-    fn compute_is_zero(a: &I256) -> bool {
-        { *a == I256::zero() }
-    }
-    #[inline]
-    fn compute_is_negative(a: &I256) -> bool {
-        { *a < I256::zero() }
-    }
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<i128, OverflowDetected> {
         if den == 0 {
             return Err(OverflowDetected::DivisionByZero);
@@ -1390,6 +1532,70 @@ impl FascFormat for Fixed<i128, 64> {
 
         Err(OverflowDetected::Overflow)
     }
+    fn binary_to_rational(frac_bits: u32, value: &i128) -> Result<RationalNumber, OverflowDetected> {
+        if *value == 0 {
+            return Ok(RationalNumber::new(0, 1));
+        }
+        let trailing = (*value as u128).trailing_zeros().min(frac_bits);
+        let reduced_num = *value >> trailing;
+        let reduced_den = 1u128 << (frac_bits - trailing);
+        return Ok(RationalNumber::new(reduced_num, reduced_den));
+
+    }
+    fn decimal_to_rational(decimals: u8, scaled: &i128) -> Result<RationalNumber, OverflowDetected> {
+        return super::conversion::reduce_decimal_to_rational(*scaled, decimals);
+
+    }
+    fn integer_value(value: i128) -> Option<i128> {
+        // Guard: value << 64 wraps silently for |value| > i64::MAX.
+        // Q64.64 has 64 integer bits (signed), so valid range is i64.
+        // Out-of-range integers fall back to the Symbolic domain — the
+        // UGOD ladder top never fails (0.5.0 item 0: parse used to
+        // error with Overflow here, so e.g. evaluate("1000000" * ...)
+        // failed on narrow profiles while succeeding everywhere else).
+        if value > i64::MAX as i128 || value < i64::MIN as i128 {
+            return None;
+        }
+        let q_value = value << 64;
+        Some(q_value)
+
+    }
+    fn storage_to_i128_opt(storage: &i128) -> Option<i128> {
+        Some(*storage)
+    }
+    fn literal_to_storage(s: &str) -> Option<Result<i128, OverflowDetected>> {
+        use crate::fixed_point::imperative::decimal_literal;
+        Some(decimal_literal::parse(s, 64, 128)?.map(|c| {
+            let w = &c.words;
+            // the minimum's magnitude 2^(W-1) reads as the minimum, its own negation
+            let magnitude = ((w[1] as u128) << 64 | w[0] as u128) as i128;
+            if c.negative { magnitude.wrapping_neg() } else { magnitude }
+        }))
+    }
+    fn divide_storage(num: i128, den: i128) -> Result<i128, OverflowDetected> {
+        let num_wide = I256::from_i128(num) << 64;
+        let den_wide = I256::from_i128(den);
+        if den_wide == I256::zero() { return Err(OverflowDetected::DivisionByZero); }
+        let result = (num_wide / den_wide).as_i128();
+        Ok(result)
+
+    }
+    fn decimal_compute_to_binary_compute(val: &I256) -> Result<I256, OverflowDetected> {
+        // val: I256 at dp=38. Target: Q128.128 I256.
+        // result = val × 2^128 / 10^38 via I512 intermediate
+        let num = I512::from_i256(*val) << 128usize;
+        let mut den = I512::from_i128(1);
+        let ten = I512::from_i128(10);
+        for _ in 0..Self::DECIMAL_COMPUTE_DP { den = den * ten; }
+        let q = num / den;
+        if !q.fits_in_i256() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i256())
+
+    }
+    fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, i128), OverflowDetected>> {
+        let _ = (tier, rational);
+        None
+    }
 }
 
 impl FascFormat for Fixed<I256, 128> {
@@ -1401,6 +1607,9 @@ impl FascFormat for Fixed<I256, 128> {
     const MAX_DECIMAL_DIGITS: usize = 38;
     const MAX_BINARY_TIER: u8 = 4;
     const MAX_TERNARY_TIER: u8 = 4;
+    const TIER1_FRAC_BITS: u32 = 16;
+    const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
+    const NARROW_DECIMAL: bool = false;
     const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Balanced;
     fn decimal_to_binary_storage(dp: u8, scaled: I256) -> Result<I256, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
@@ -1814,17 +2023,7 @@ impl FascFormat for Fixed<I256, 128> {
 
         Err(OverflowDetected::TierOverflow)
     }
-    fn compute_checked_negate(a: I512) -> Result<I512, OverflowDetected> {
-        { a.checked_neg().ok_or(OverflowDetected::TierOverflow) }
-    }
     #[inline]
-    fn compute_is_zero(a: &I512) -> bool {
-        { *a == I512::zero() }
-    }
-    #[inline]
-    fn compute_is_negative(a: &I512) -> bool {
-        { *a < I512::zero() }
-    }
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<I256, OverflowDetected> {
         if den == 0 {
             return Err(OverflowDetected::DivisionByZero);
@@ -1856,6 +2055,73 @@ impl FascFormat for Fixed<I256, 128> {
 
         Err(OverflowDetected::Overflow)
     }
+    fn binary_to_rational(frac_bits: u32, value: &I256) -> Result<RationalNumber, OverflowDetected> {
+        if value.is_zero() {
+            return Ok(RationalNumber::new(0, 1));
+        }
+        let tz = super::conversion::trailing_zeros_i256(value);
+        let tz = if tz > frac_bits { frac_bits } else { tz };
+        let reduced_num = *value >> tz;
+        let remaining_frac = frac_bits - tz;
+        if remaining_frac == 0 && reduced_num.fits_in_i128() {
+            return Ok(RationalNumber::new(reduced_num.as_i128(), 1));
+        } else if remaining_frac <= 127 && reduced_num.fits_in_i128() {
+            return Ok(RationalNumber::new(reduced_num.as_i128(), 1u128 << remaining_frac));
+        } else {
+            let denom = I256::from_i128(1) << (remaining_frac as usize);
+            return Ok(RationalNumber::from_i256_pair(reduced_num, denom));
+        }
+
+    }
+    fn decimal_to_rational(decimals: u8, scaled: &I256) -> Result<RationalNumber, OverflowDetected> {
+        if scaled.fits_in_i128() {
+            return super::conversion::reduce_decimal_to_rational(scaled.as_i128(), decimals);
+        }
+        let mut denom = I256::from_i128(1);
+        for _ in 0..decimals { denom = denom * I256::from_i128(10); }
+        return Ok(RationalNumber::from_i256_pair(*scaled, denom));
+
+    }
+    fn integer_value(value: i128) -> Option<I256> {
+        let q_value = I256::from_i128(value) << 128;
+        Some(q_value)
+
+    }
+    fn storage_to_i128_opt(storage: &I256) -> Option<i128> {
+        if storage.fits_in_i128() { Some(storage.as_i128()) } else { None }
+    }
+    fn literal_to_storage(s: &str) -> Option<Result<I256, OverflowDetected>> {
+        use crate::fixed_point::imperative::decimal_literal;
+        Some(decimal_literal::parse(s, 128, 256)?.map(|c| {
+            let w = &c.words;
+            // the minimum's magnitude 2^(W-1) reads as the minimum, its own negation
+            let magnitude = I256::from_words([w[0], w[1], w[2], w[3]]);
+            if c.negative { -magnitude } else { magnitude }
+        }))
+    }
+    fn divide_storage(num: I256, den: I256) -> Result<I256, OverflowDetected> {
+        let num_wide = I512::from_i256(num) << 128;
+        let den_wide = I512::from_i256(den);
+        if den_wide == I512::zero() { return Err(OverflowDetected::DivisionByZero); }
+        let result = (num_wide / den_wide).as_i256();
+        Ok(result)
+
+    }
+    fn decimal_compute_to_binary_compute(val: &I512) -> Result<I512, OverflowDetected> {
+        // val: I512 at dp=77. Target: Q256.256 I512.
+        let num = I1024::from_i512(*val) << 256usize;
+        let mut den = I1024::from_i128(1);
+        let ten = I1024::from_i128(10);
+        for _ in 0..Self::DECIMAL_COMPUTE_DP { den = den * ten; }
+        let q = num / den;
+        if !q.fits_in_i512() { return Err(OverflowDetected::TierOverflow); }
+        Ok(q.as_i512())
+
+    }
+    fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, I256), OverflowDetected>> {
+        let _ = (tier, rational);
+        None
+    }
 }
 
 impl FascFormat for Fixed<I512, 256> {
@@ -1867,6 +2133,9 @@ impl FascFormat for Fixed<I512, 256> {
     const MAX_DECIMAL_DIGITS: usize = 77;
     const MAX_BINARY_TIER: u8 = 5;
     const MAX_TERNARY_TIER: u8 = 5;
+    const TIER1_FRAC_BITS: u32 = 16;
+    const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
+    const NARROW_DECIMAL: bool = false;
     const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Scientific;
     fn decimal_to_binary_storage(dp: u8, scaled: I512) -> Result<I512, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
@@ -2308,17 +2577,7 @@ impl FascFormat for Fixed<I512, 256> {
 
         Err(OverflowDetected::TierOverflow)
     }
-    fn compute_checked_negate(a: I1024) -> Result<I1024, OverflowDetected> {
-        { if a == I1024::min_value() { Err(OverflowDetected::TierOverflow) } else { Ok(-a) } }
-    }
     #[inline]
-    fn compute_is_zero(a: &I1024) -> bool {
-        { *a == I1024::zero() }
-    }
-    #[inline]
-    fn compute_is_negative(a: &I1024) -> bool {
-        { (a.words[15] & 0x8000_0000_0000_0000) != 0 }
-    }
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<I512, OverflowDetected> {
         if den == 0 {
             return Err(OverflowDetected::DivisionByZero);
@@ -2360,5 +2619,120 @@ impl FascFormat for Fixed<I512, 256> {
         }
 
         Err(OverflowDetected::Overflow)
+    }
+    fn binary_to_rational(frac_bits: u32, value: &I512) -> Result<RationalNumber, OverflowDetected> {
+        if value.is_zero() {
+            return Ok(RationalNumber::new(0, 1));
+        }
+        let tz = super::conversion::trailing_zeros_i512(value);
+        let tz = if tz > frac_bits { frac_bits } else { tz };
+        let reduced_num = *value >> (tz as usize);
+        let remaining_frac = frac_bits - tz;
+        if remaining_frac == 0 && reduced_num.fits_in_i128() {
+            return Ok(RationalNumber::new(reduced_num.as_i128(), 1));
+        } else if remaining_frac <= 127 && reduced_num.fits_in_i128() {
+            return Ok(RationalNumber::new(reduced_num.as_i128(), 1u128 << remaining_frac));
+        } else {
+            let denom = I512::from_i128(1) << (remaining_frac as usize);
+            return Ok(RationalNumber::from_i512_pair(reduced_num, denom));
+        }
+
+    }
+    fn decimal_to_rational(decimals: u8, scaled: &I512) -> Result<RationalNumber, OverflowDetected> {
+        let fits = if scaled.fits_in_i256() { let v = scaled.as_i256(); if v.fits_in_i128() { Some(v.as_i128()) } else { None } } else { None };
+        if let Some(raw) = fits {
+            return super::conversion::reduce_decimal_to_rational(raw, decimals);
+        }
+        let mut denom = I512::from_i128(1);
+        for _ in 0..decimals { denom = denom * I512::from_i128(10); }
+        return Ok(RationalNumber::from_i512_pair(*scaled, denom));
+
+    }
+    fn integer_value(value: i128) -> Option<I512> {
+        let q_value = I512::from_i128(value) << 256;
+        Some(q_value)
+
+    }
+    fn storage_to_i128_opt(storage: &I512) -> Option<i128> {
+        if storage.fits_in_i128() { Some(storage.as_i128()) } else { None }
+    }
+    fn literal_to_storage(s: &str) -> Option<Result<I512, OverflowDetected>> {
+        use crate::fixed_point::imperative::decimal_literal;
+        Some(decimal_literal::parse(s, 256, 512)?.map(|c| {
+            let w = &c.words;
+            // the minimum's magnitude 2^(W-1) reads as the minimum, its own negation
+            let magnitude = I512::from_words([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+            if c.negative { -magnitude } else { magnitude }
+        }))
+    }
+    fn divide_storage(num: I512, den: I512) -> Result<I512, OverflowDetected> {
+        // Q256.256: (num << 256) / den — use I1024 intermediate
+        let num_wide = I1024::from_i512(num) << 256;
+        let den_wide = I1024::from_i512(den);
+        if den_wide == I1024::zero() { return Err(OverflowDetected::DivisionByZero); }
+        let result = (num_wide / den_wide).as_i512();
+        Ok(result)
+
+    }
+    fn decimal_compute_to_binary_compute(val: &I1024) -> Result<I1024, OverflowDetected> {
+        // val: I1024 at dp=154. Target: Q512.512 I1024.
+        use crate::fixed_point::I2048;
+        use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
+        let num = I2048::from_i1024(*val) << 512usize;
+        let mut pow = I1024::from_i128(1);
+        let ten = I1024::from_i128(10);
+        for _ in 0..Self::DECIMAL_COMPUTE_DP { pow = pow * ten; }
+        let den = I2048::from_i1024(pow);
+        let quot = i2048_div(num, den);
+        if !quot.fits_in_i1024() { return Err(OverflowDetected::TierOverflow); }
+        Ok(I1024::from_words([
+            quot.words[0], quot.words[1], quot.words[2], quot.words[3],
+            quot.words[4], quot.words[5], quot.words[6], quot.words[7],
+            quot.words[8], quot.words[9], quot.words[10], quot.words[11],
+            quot.words[12], quot.words[13], quot.words[14], quot.words[15],
+        ]))
+
+    }
+    fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, I512), OverflowDetected>> {
+        if tier != 5 {
+            return None;
+        }
+        let wide = || -> Result<(u8, I512), OverflowDetected> {
+            let parts = rational.extract_native();
+            let (num512, den512) = parts.try_as_i512_pair()
+                .ok_or(OverflowDetected::Overflow)?;
+            if den512.is_zero() {
+                return Err(OverflowDetected::DivisionByZero);
+            }
+            let scale = {
+                let mut s = I512::from_i128(1);
+                let three = I512::from_i128(3);
+                for _ in 0..160 { s = s * three; }
+                s
+            };
+            // Split to avoid overflow: int_part * scale + (rem * scale) / den
+            let int_part = num512 / den512;
+            let remainder = num512 - int_part * den512;
+            // Nearest, ties toward +INF on the fractional part (0.5.0).
+            let sn = remainder * scale;
+            let (mut frac, rem) =
+                crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512(sn, den512);
+            {
+                let rem_abs = if rem.is_negative() { -rem } else { rem };
+                let den_abs = if den512.is_negative() { -den512 } else { den512 };
+                let positive = sn.is_negative() == den512.is_negative();
+                let rem2 = rem_abs + rem_abs;
+                if if positive { rem2 >= den_abs } else { rem2 > den_abs } {
+                    frac = if positive { frac + I512::from_i128(1) } else { frac - I512::from_i128(1) };
+                }
+            }
+            let stored = int_part * scale + frac;
+            let (t, bs) = Self::ternary_to_storage(
+                &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Large(stored))?
+            )?;
+            Ok((t, bs))
+
+        };
+        Some(wide())
     }
 }

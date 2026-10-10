@@ -11,31 +11,28 @@
 //! 4. **`ln(2)` constant**: computed once via the same `atanh` series applied to `1/3`:
 //!    `ln(2) = 2 × atanh(1/3)`. Cached thread-local.
 
-use super::decimal_compute::{
-    ComputeStorage, DECIMAL_COMPUTE_DP,
-    decimal_compute_zero, decimal_compute_one, decimal_compute_halve,
-    decimal_compute_add, decimal_compute_sub, decimal_compute_mul,
-    decimal_compute_div, decimal_compute_div_int,
-    decimal_compute_is_zero, decimal_compute_is_negative,
-    decimal_compute_from_int, decimal_compute_cmp, decimal_compute_neg,
-};
+#[allow(unused_imports)]
+use super::word::DecimalWord;
+#[allow(unused_imports)]
+use crate::fixed_point::width::WideInt;
+#[allow(unused_imports)]
+use super::decimal_compute::ComputeStorage;
+use super::decimal_compute::{decimal_compute_one, decimal_compute_halve, decimal_compute_add, decimal_compute_sub, decimal_compute_mul, decimal_compute_div, decimal_compute_cmp, decimal_compute_neg};
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
-thread_local! {
-    static LN2_CACHE: std::cell::RefCell<Option<ComputeStorage>> = const { std::cell::RefCell::new(None) };
-}
 
 /// Compute `ln(2)` at decimal compute dp, cached.
 ///
 /// Formula: `ln(2) = 2 × atanh(1/3) = 2 × (1/3 + (1/3)³/3 + (1/3)⁵/5 + ...)`
-fn ln2_at_compute() -> Result<ComputeStorage, OverflowDetected> {
-    let cached: Option<ComputeStorage> = LN2_CACHE.with(|c| c.borrow().clone());
-    if let Some(v) = cached {
-        return Ok(v);
-    }
+fn ln2_at_compute<C: DecimalWord>() -> Result<C, OverflowDetected> {
+    struct Ln2<C>(C);
+    Ok(super::cache::typed_cached(|| Ok(Ln2(compute_ln2::<C>()?)))?.0)
+}
 
-    let one = decimal_compute_one();
-    let three = decimal_compute_from_int(3);
+fn compute_ln2<C: DecimalWord>() -> Result<C, OverflowDetected> {
+
+    let one = decimal_compute_one::<C>();
+    let three = C::decimal_compute_from_int(3);
     let one_third = decimal_compute_div(one, three)?;
 
     // atanh(1/3) via direct series (|s| = 1/3, fast convergence)
@@ -46,15 +43,15 @@ fn ln2_at_compute() -> Result<ComputeStorage, OverflowDetected> {
 
     // atanh(s) = s + s³/3 + s⁵/5 + ...
     // All positive terms.
-    let max_terms = (DECIMAL_COMPUTE_DP as u32) + 20;
+    let max_terms = (C::DP as u32) + 20;
     for k in 1..=max_terms {
         term = decimal_compute_mul(term, s_sq);
-        if decimal_compute_is_zero(&term) {
+        if C::decimal_compute_is_zero(&term) {
             break;
         }
         let divisor = (2 * k as u64) + 1;
-        let contribution = decimal_compute_div_int(term, divisor);
-        if decimal_compute_is_zero(&contribution) {
+        let contribution = C::decimal_compute_div_int(term, divisor);
+        if C::decimal_compute_is_zero(&contribution) {
             break;
         }
         sum = decimal_compute_add(sum, contribution);
@@ -63,18 +60,17 @@ fn ln2_at_compute() -> Result<ComputeStorage, OverflowDetected> {
     // ln(2) = 2 × atanh(1/3)
     let ln2 = decimal_compute_add(sum, sum);
 
-    LN2_CACHE.with(|c: &std::cell::RefCell<Option<ComputeStorage>>| *c.borrow_mut() = Some(ln2));
     Ok(ln2)
 }
 
 /// Compute `ln(x)` for `x > 0` at compute dp.
-pub fn decimal_ln(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected> {
-    if decimal_compute_is_negative(&x) || decimal_compute_is_zero(&x) {
+pub fn decimal_ln<C: DecimalWord>(x: C) -> Result<C, OverflowDetected> {
+    if C::decimal_compute_is_negative(&x) || C::decimal_compute_is_zero(&x) {
         return Err(OverflowDetected::DomainError);
     }
 
-    let one = decimal_compute_one();
-    let two = decimal_compute_from_int(2);
+    let one = decimal_compute_one::<C>();
+    let two = C::decimal_compute_from_int(2);
 
     // Range reduction: find k such that x / 2^k ∈ [1, 2)
     // Halve while ≥ 2, double while < 1
@@ -105,15 +101,15 @@ pub fn decimal_ln(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected>
     let mut term = s;
     let mut atanh_sum = s;
 
-    let max_terms = (DECIMAL_COMPUTE_DP as u32) + 20;
+    let max_terms = (C::DP as u32) + 20;
     for j in 1..=max_terms {
         term = decimal_compute_mul(term, s_sq);
-        if decimal_compute_is_zero(&term) {
+        if C::decimal_compute_is_zero(&term) {
             break;
         }
         let divisor = (2 * j as u64) + 1;
-        let contribution = decimal_compute_div_int(term, divisor);
-        if decimal_compute_is_zero(&contribution) {
+        let contribution = C::decimal_compute_div_int(term, divisor);
+        if C::decimal_compute_is_zero(&contribution) {
             break;
         }
         atanh_sum = decimal_compute_add(atanh_sum, contribution);
@@ -126,44 +122,21 @@ pub fn decimal_ln(x: ComputeStorage) -> Result<ComputeStorage, OverflowDetected>
         return Ok(ln_m);
     }
 
-    let ln2 = ln2_at_compute()?;
+    let ln2 = ln2_at_compute::<C>()?;
     let k_ln2 = if k > 0 {
-        mul_compute_by_int(ln2, k as u64)
+        C::mul_compute_by_int(ln2, k as u64)
     } else {
-        decimal_compute_neg(mul_compute_by_int(ln2, (-k) as u64))
+        decimal_compute_neg(C::mul_compute_by_int(ln2, (-k) as u64))
     };
 
     Ok(decimal_compute_add(k_ln2, ln_m))
 }
 
-/// Multiply compute-tier value by a small positive integer.
-fn mul_compute_by_int(v: ComputeStorage, n: u64) -> ComputeStorage {
-    if n == 0 {
-        return decimal_compute_zero();
-    }
-    if n == 1 {
-        return v;
-    }
-
-    let n_compute: ComputeStorage = {
-        #[cfg(table_format = "q16_16")]
-        { n as i64 }
-        #[cfg(table_format = "q32_32")]
-        { n as i128 }
-        #[cfg(table_format = "q64_64")]
-        { crate::fixed_point::i256::I256::from_i128(n as i128) }
-        #[cfg(table_format = "q128_128")]
-        { crate::fixed_point::i512::I512::from_i128(n as i128) }
-        #[cfg(table_format = "q256_256")]
-        { crate::fixed_point::I1024::from_i128(n as i128) }
-    };
-
-    v * n_compute
-}
-
 #[cfg(all(test, table_format = "q64_64"))]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use super::super::decimal_compute::*;
     use super::super::decimal_compute::pow10_compute_ct;
     use crate::fixed_point::i256::I256;
 
@@ -179,25 +152,25 @@ mod tests {
 
     #[test]
     fn ln_one_is_zero() {
-        let result = decimal_ln(decimal_compute_one()).unwrap();
-        assert_eq!(result, decimal_compute_zero());
+        let result = decimal_ln(decimal_compute_one::<ComputeStorage>()).unwrap();
+        assert_eq!(result, decimal_compute_zero::<ComputeStorage>());
     }
 
     #[test]
     fn ln_negative_errors() {
-        let neg_one = decimal_compute_neg(decimal_compute_one());
+        let neg_one = decimal_compute_neg(decimal_compute_one::<ComputeStorage>());
         assert!(decimal_ln(neg_one).is_err());
     }
 
     #[test]
     fn ln_zero_errors() {
-        assert!(decimal_ln(decimal_compute_zero()).is_err());
+        assert!(decimal_ln(decimal_compute_zero::<ComputeStorage>()).is_err());
     }
 
     /// mpmath: ln(2) = 0.69314718055994530941723212145817656807550013436025...
     #[test]
     fn ln_two_mpmath() {
-        let two = decimal_compute_from_int(2);
+        let two = decimal_compute_from_int::<ComputeStorage>(2);
         let result = decimal_ln(two).unwrap();
         let expected = parse_decimal_str("69314718055994530941723212145817656808");
         let diff = if result > expected { result - expected } else { expected - result };
@@ -212,7 +185,7 @@ mod tests {
     /// mpmath: ln(10) = 2.30258509299404568401799145468436420760110148862877...
     #[test]
     fn ln_ten_mpmath() {
-        let ten = decimal_compute_from_int(10);
+        let ten = decimal_compute_from_int::<ComputeStorage>(10);
         let result = decimal_ln(ten).unwrap();
         let expected = parse_decimal_str("230258509299404568401799145468436420760");
         let diff = if result > expected { result - expected } else { expected - result };
@@ -227,7 +200,7 @@ mod tests {
     /// mpmath: ln(0.5) = -0.69314718055994530941723212145817656807550013436026...
     #[test]
     fn ln_half_mpmath() {
-        let half = pow10_compute_ct(37) * I256::from_i128(5);
+        let half = pow10_compute_ct::<ComputeStorage>(37) * I256::from_i128(5);
         let result = decimal_ln(half).unwrap();
         let expected_abs = parse_decimal_str("69314718055994530941723212145817656808");
         // result should be -expected_abs

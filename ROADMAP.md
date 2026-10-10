@@ -750,6 +750,16 @@ rather than accidental.
 
 ## Future: High Priority
 
+### Follow-up: the balanced square root reads 7 percent slower than 0.6.7
+
+Measured 2026-10-06 (balanced Q128.128, release, perf3 `ops` and `fasc`):
+`FixedPoint::sqrt` 114.7 us against 107.5 us in 0.6.7, and the canonical
+`sqrt` 123.5 us against 115.5 us; embedded reads 13 percent faster, realtime
+and compact at parity. Both crates call the same engine
+(`sqrt_q256_256_native`), so the difference is codegen of the engine as it
+is compiled on every profile since phase 1, not the generic layers. Owner
+decision: profile the engine's inlining on balanced before 0.7.0, or accept.
+
 ### Follow-up: the hybrid TQ1.9 matvec has two codegen states
 
 Measured 2026-10-06 (realtime Q22.10, 512 x 1024, release): `HybridTQ19::matvec`

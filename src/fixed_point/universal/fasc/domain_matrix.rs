@@ -31,7 +31,6 @@ use crate::fixed_point::universal::fasc::stack_evaluator::{StackValue, StackEval
 use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
 use crate::fixed_point::universal::ugod::DomainType;
 use crate::fixed_point::core_types::errors::OverflowDetected;
-use crate::deployment_profiles::DeploymentProfile;
 
 use core::cell::RefCell;
 
@@ -271,21 +270,8 @@ impl DomainMatrix {
 
 thread_local! {
     static DOMAIN_EVALUATOR: RefCell<StackEvaluator> = RefCell::new(
-        StackEvaluator::new(compile_time_profile())
+        StackEvaluator::new()
     );
-}
-
-const fn compile_time_profile() -> DeploymentProfile {
-    #[cfg(table_format = "q256_256")]
-    { DeploymentProfile::Scientific }
-    #[cfg(table_format = "q128_128")]
-    { DeploymentProfile::Balanced }
-    #[cfg(table_format = "q64_64")]
-    { DeploymentProfile::Embedded }
-    #[cfg(table_format = "q32_32")]
-    { DeploymentProfile::Compact }
-    #[cfg(table_format = "q16_16")]
-    { DeploymentProfile::Realtime }
 }
 
 /// Execute a closure with access to the thread-local evaluator.

@@ -341,18 +341,44 @@ Refined for the build (2026-10-06, after phase 4), in three sub-phases:
   per format produced by the cfg-specialiser (arms transplanted, not
   retyped); the old functions delegate through `ProfileFormat`. Zero
   behaviour change; gate = the full suite per profile.
-- **5b, the typed value and the per-word evaluator.** The evaluator's
-  buffer holds `RawValue<S>` (tier, word, shadow: the payload depends on
-  the storage word only), so one `thread_local!` per word serves all its
-  splits; the public `StackValue<T>` is `RawValue<T::Storage>` with the
-  format as a phantom, so a result of one format cannot enter a tree of
-  another. `LazyExpr<T>`, `StackEvaluator<S>` whose methods take `F` as a
-  const parameter, `Storage::with_evaluator`. The generic entry points are
-  `evaluate_in::<T>`, `gmath_parse_in::<T>`, ... while the profile-bound
-  `evaluate`, `gmath_parse` keep their names until phase 7 (then the
-  generic forms take the names). Gates: full suite, a differential FASC
-  corpus against 0.6.7 (expression strings evaluated in both), all-widths
-  FASC identities.
+- **5b, the typed value and the evaluator registry.** IMPLEMENTED
+  (2026-10-06) with one change to the plan above: the evaluator is
+  `StackEvaluator<T: FascFormat>` over `StackValue<T>` (the payload is
+  `T::Storage` / `Compute<T>` directly), not a `RawValue<S>` buffer with `F`
+  threaded through every method as a const parameter; that threading would
+  have touched every call in the evaluator for a saving of one buffer per
+  split. The thread-local is a registry `Vec<(TypeId, Rc<dyn Any>)>` with a
+  one-entry last-used cache in front of it (`with_evaluator::<T>`), so the
+  common path is one type comparison and a `RefCell` borrow; measured
+  against 0.6.7 (realtime Q22.10, perf3 `fasc`): integer add 194 vs 207 ns,
+  decimal mix 468 vs 466, division 204 vs 218, parse 67 vs 78, exp 1372 vs
+  1381, display 384 vs 391; without the cache the registry scan cost 13 ns
+  (+6 percent on the cheapest trees). `LazyExpr<T>`, `StackValue<T>` and
+  `StackEvaluator<T>` default to the profile's format, so every existing
+  call compiles unchanged; a result of one format cannot enter a tree of
+  another. New entry points `evaluate_in`, `evaluate_sincos_in`,
+  `evaluate_sinhcosh_in`, `gmath_parse_in`, `gmath_in`, `with_evaluator`;
+  `FascFormat` is public and sealed (its items hidden). Prerequisites done
+  in the same step: the decimal compute tier is generic over its compute
+  word (`DecimalWord: WideInt` with `Narrow`, `Wide`, `Hp` and the digit
+  budgets, one impl per word, every engine `<C: DecimalWord>`, a
+  TypeId-keyed thread-local cache for the per-word constants; the profile
+  names remain as aliases) and `Storage::Compute: DecimalWord<Narrow =
+  Self>`; UGOD tier 1 takes its fraction bits as a parameter
+  (`checked_mul_with_frac`, `multiply_with_tier1_frac`), the format
+  supplies `TIER1_FRAC_BITS` (`F` on a 32-bit word, 16 elsewhere). The
+  seven remaining profile arms (integer literal range, ternary raw, the
+  two `to_rational` arms, the compute-tier divide, the decimal-compute
+  narrowing, the scientific tier-5 ternary) are `FascFormat` methods. Gates:
+  the full suite per profile, `tests/differential_065_validation.rs` FASC
+  section (literals, 676 binary operations, 315 transcendental trees:
+  value, error and panic identical to 0.6.7 on realtime Q22.10 and
+  embedded), `tests/fasc_width_validation.rs` (six formats interleaved in
+  one build: exact-domain results equal as rationals, transcendentals within
+  4 storage units plus one decimal unit of the widest). Behaviour change:
+  `gmath!` integer literals beyond the storage's integer range now fall
+  back to the exact rational like the runtime parser (they wrapped);
+  `StackEvaluator::new()` takes no profile.
 - **5c, the matrix layer and the last scalar methods.** `DomainMatrix<T>`,
   `LazyMatrixExpr<T>`, `evaluate_matrix_in`, `evaluate_sincos_in`; the
   `gmath!` helpers emit exact decimal values; `from_str`, `Display`,
@@ -446,7 +472,7 @@ generic code, while new tests exercise all widths in one build.
 | 2 | `Fixed<S, F>`, `FixedNum`, operators, conversions, 18 transcendentals; `FixedPoint` aliased. IMPLEMENTED | differential gate (11.1) on scalars, all widths |
 | 3 | FixedVector/FixedMatrix/ComputeMatrix, linalg, decompositions, matrix functions. IMPLEMENTED (3a kernels, 3b containers, 3c compute matrix + decompositions + derived, 3d matrix functions + the 32-bit wide matrix) | differential gate on linear algebra |
 | 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d, IMPLEMENTED) | differential gate, certified-geometry gates |
-| 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-word evaluators), canonical API | differential gate on the FASC corpus |
+| 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-format evaluators), canonical API. 5a, 5b IMPLEMENTED; 5c open | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D; serialization v2 | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |
 | 8 | Docs (README, PUBLIC_API regen, CHANGELOG, CONTRACT, ROADMAP), consumer upgrade notes, 0.7.0 | release checklist |

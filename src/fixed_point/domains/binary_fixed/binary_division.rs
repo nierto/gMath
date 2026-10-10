@@ -4,6 +4,7 @@
 //! **UGOD**: UniversalBinaryFixed::divide() with overflow promotion
 
 use super::binary_types::*;
+use super::binary_types::TIER1_DEFAULT_FRAC_BITS;
 use crate::fixed_point::{I256, I512, I1024};
 use crate::fixed_point::core_types::errors::OverflowDetected;
 
@@ -13,12 +14,12 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 
 impl BinaryTier1 {
     pub fn checked_div(&self, other: &Self) -> Option<Self> {
-        let fb: u32 = {
-            #[cfg(table_format = "q16_16")]
-            { crate::fixed_point::frac_config::FRAC_BITS as u32 }
-            #[cfg(not(table_format = "q16_16"))]
-            { 16 }
-        };
+        self.checked_div_with_frac(other, TIER1_DEFAULT_FRAC_BITS)
+    }
+
+    /// `self / other` at `fb` fraction bits, nearest with ties toward +infinity,
+    /// `None` for a zero divisor or a quotient outside the tier.
+    pub fn checked_div_with_frac(&self, other: &Self, fb: u32) -> Option<Self> {
         if other.value == 0 { return None; }
         let a_wide = (self.value as i64) << fb;
         let b_wide = other.value as i64;
@@ -191,6 +192,12 @@ impl BinaryTier6 {
 
 impl UniversalBinaryFixed {
     pub fn divide(&self, other: &Self) -> Result<Self, OverflowDetected> {
+        self.divide_with_tier1_frac(other, TIER1_DEFAULT_FRAC_BITS)
+    }
+
+    /// [`Self::divide`] with tier 1 at `tier1_frac` fraction bits (the storage
+    /// format's `F` on a 32-bit word, 16 for the internal Q16.16 tier).
+    pub fn divide_with_tier1_frac(&self, other: &Self, tier1_frac: u32) -> Result<Self, OverflowDetected> {
         let (a, b) = self.align_to_common_tier(other);
         // 0.5.0 item 1: decide DivisionByZero ONCE here, so every tier
         // function's None below unambiguously means quotient overflow —
@@ -209,7 +216,7 @@ impl UniversalBinaryFixed {
         }
         match (&a.value, &b.value) {
             (BinaryValue::Tier1(x), BinaryValue::Tier1(y)) => {
-                match x.checked_div(y) {
+                match x.checked_div_with_frac(y, tier1_frac) {
                     Some(r) => Ok(Self { value: BinaryValue::Tier1(r), current_tier: 1 }),
                     None => {
                         let x2 = x.to_tier2();

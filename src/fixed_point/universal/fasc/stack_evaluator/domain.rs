@@ -4,8 +4,11 @@
 //! (UniversalTernaryFixed, UniversalDecimalTiered, UniversalBinaryFixed).
 //! Also maintains CompactShadow precision during arithmetic operations.
 
+#[cfg(test)]
 use super::format::FascFormat;
+#[cfg(test)]
 use crate::fixed_point::fixed_num::ProfileFormat;
+#[cfg(test)]
 use super::BinaryStorage;
 #[cfg(test)]
 use crate::fixed_point::i256::I256;
@@ -13,27 +16,16 @@ use crate::fixed_point::i256::I256;
 use crate::fixed_point::i512::I512;
 #[cfg(test)]
 use crate::fixed_point::I1024;
+#[cfg(test)]
 use crate::fixed_point::domains::balanced_ternary::ternary_types::UniversalTernaryFixed;
 #[cfg(test)]
 use crate::fixed_point::domains::balanced_ternary::ternary_types::TernaryRaw;
-use crate::fixed_point::domains::binary_fixed::binary_types::UniversalBinaryFixed;
-use crate::fixed_point::domains::decimal_fixed::decimal_types::UniversalDecimalTiered;
 use crate::fixed_point::universal::tier_types::CompactShadow;
-use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
+#[cfg(test)]
+use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
-pub(super) fn ternary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<UniversalTernaryFixed, OverflowDetected> {
-    <ProfileFormat as FascFormat>::ternary_from_storage(tier, storage)
-}
-
-/// Checked narrowing of an i128 tier raw into BinaryStorage.
-///
-/// Returns TierOverflow instead of wrapping: the bare `as i32`/`as i64`
-/// casts this replaces silently corrupted Tier-2+ ternary values on the
-/// realtime/compact profiles (wrap-defect class, fixed 0.4.33).
-fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDetected> {
-    <ProfileFormat as FascFormat>::i128_to_binary_storage_checked(val)
-}
-
+#[cfg(test)]
+#[allow(dead_code)]
 /// Convert UniversalTernaryFixed result back to (tier, BinaryStorage): full precision.
 ///
 /// Fallible: a tier raw that does not fit the profile\'s BinaryStorage is a
@@ -41,62 +33,6 @@ fn i128_to_binary_storage_checked(val: i128) -> Result<BinaryStorage, OverflowDe
 /// with raw 3281·3^16 ≈ 1.4e11, which cannot live in realtime\'s i32).
 pub(super) fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
     <ProfileFormat as FascFormat>::ternary_to_storage(ternary)
-}
-
-/// Convert ternary StackValue fields to RationalNumber.
-///
-/// **PURPOSE**: Ternary stores `value * 3^frac_trits`. This converts to `value / 3^frac_trits`
-/// as a RationalNumber. Used by to_rational(), to_compute_storage(), to_binary_storage(), Display.
-pub(super) fn ternary_to_rational(tier: u8, value: &BinaryStorage) -> Result<RationalNumber, OverflowDetected> {
-    <ProfileFormat as FascFormat>::ternary_to_rational(tier, value)
-}
-
-/// Create UniversalDecimalTiered from StackValue decimal storage: full precision
-///
-/// **PURPOSE**: Bridge BinaryStorage → typed decimal representation for UGOD dispatch.
-/// Decimal values are stored as (decimal_places, BinaryStorage) in the evaluator.
-/// This function determines the appropriate tier and creates a properly typed value.
-pub(super) fn decimal_from_storage(decimal_places: u8, storage: &BinaryStorage) -> Result<UniversalDecimalTiered, OverflowDetected> {
-    <ProfileFormat as FascFormat>::decimal_from_storage(decimal_places, storage)
-}
-
-/// Convert UniversalDecimalTiered result back to (decimal_places, BinaryStorage): full precision
-///
-/// `Err(TierOverflow)` when the scaled value does not fit storage; callers
-/// fall back to the exact rational. Every arm used to narrow with a
-/// truncating cast, so a decimal result beyond storage (realtime:
-/// `214748.3647 + 1`) wrapped into a wrong value on every profile.
-pub(super) fn decimal_to_storage(decimal: &UniversalDecimalTiered) -> Result<(u8, BinaryStorage), OverflowDetected> {
-    <ProfileFormat as FascFormat>::decimal_to_storage(decimal)
-}
-
-/// Create UniversalBinaryFixed from StackValue binary storage: full precision
-///
-/// **PURPOSE**: Bridge BinaryStorage → typed binary representation for UGOD dispatch.
-/// Binary values are stored as (tier, BinaryStorage) in the evaluator.
-/// This function converts to the typed tier system for proper UGOD arithmetic.
-pub(super) fn binary_from_storage(tier: u8, storage: &BinaryStorage) -> Result<UniversalBinaryFixed, OverflowDetected> {
-    <ProfileFormat as FascFormat>::binary_from_storage(tier, storage)
-}
-
-/// Convert UniversalBinaryFixed result back to (tier, BinaryStorage): full precision
-/// Checked narrowing of an i128 binary tier raw into BinaryStorage.
-/// TierOverflow instead of the silent wrap the bare casts produced
-/// (0.5.0 item 1: 9e18 + 9e18 on embedded returned 0.0: the promoted
-/// Tier-4 result wrapped through as_i128; binary twin of the 0.4.33
-/// ternary_to_storage fix).
-fn i128_to_binary_storage_checked_b(val: i128) -> Result<BinaryStorage, OverflowDetected> {
-    <ProfileFormat as FascFormat>::i128_to_binary_storage_checked_b(val)
-}
-
-/// Convert UniversalBinaryFixed back to (tier, BinaryStorage): checked.
-///
-/// Fallible (0.5.0 item 1): a promoted tier raw that does not fit the
-/// profile's BinaryStorage is a TierOverflow, never a wrap. FASC's
-/// arithmetic arms catch that error and fall back to the exact rational
-/// path: the true top of the UGOD ladder.
-pub(super) fn binary_to_storage(binary: &UniversalBinaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
-    <ProfileFormat as FascFormat>::binary_to_storage(binary)
 }
 
 /// Euclid's gcd for shadow normalization.

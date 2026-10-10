@@ -19,7 +19,6 @@ mod tests;
 use super::lazy_expr::{LazyExpr, ConstantId, StackRef};
 use crate::fixed_point::universal::ugod::DomainType;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
-use crate::deployment_profiles::DeploymentProfile;
 use crate::fixed_point::universal::tier_types::CompactShadow;
 #[allow(unused_imports)]
 use crate::fixed_point::i256::I256;
@@ -29,20 +28,21 @@ use crate::fixed_point::i512::I512;
 use crate::fixed_point::I1024;
 
 use core::cell::RefCell;
+#[cfg(test)]
 use crate::fixed_point::fixed_num::ProfileFormat;
-use format::FascFormat;
+use core::marker::PhantomData;
+use std::any::{Any, TypeId};
+use std::rc::Rc;
+use crate::fixed_point::fixed_num::Compute;
+use crate::fixed_point::imperative::FixedPoint;
+pub use format::FascFormat;
 use core::fmt::{self, Display};
 
 // Re-export sub-module functions used by sibling modules and tests
 #[allow(unused_imports)]
 pub(crate) use conversion::try_to_binary_storage;
 #[allow(unused_imports)]
-pub(crate) use compute::{
-    downscale_to_storage, upscale_to_compute, sqrt_at_compute_tier,
-    sinhcosh_at_compute_tier,
-    compute_divide,
-    compute_halve, compute_is_zero, compute_is_negative,
-};
+pub(crate) use compute::{downscale_to_storage};
 
 // ============================================================================
 // PROFILE-SPECIFIC STORAGE TYPES (TIER N+1 PRECISION PRESERVATION)
@@ -105,38 +105,14 @@ pub type ComputeStorage = i64;    // Q32.32 (tier N+1 for Q16.16)
 /// Matches each profile's meaningful decimal precision.
 /// Beyond this threshold, the scaled integer exceeds BinaryStorage range,
 /// so we promote to binary fixed-point (which has FIXED fractional bits, no dp growth).
-#[cfg(table_format = "q16_16")]
-const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = crate::fixed_point::frac_config::MAX_DECIMAL_DIGITS as u16;
-#[cfg(table_format = "q32_32")]
-const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 9;
-#[cfg(table_format = "q64_64")]
-const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 18;
-#[cfg(table_format = "q128_128")]
-const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 38;
-#[cfg(table_format = "q256_256")]
-const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 76;
 
 // ============================================================================
 // DECIMAL → BINARY STORAGE HELPER (used by as_binary_storage)
 // ============================================================================
 
-/// Convert a Decimal (dp, scaled) to the profile's BinaryStorage type via
-/// `(scaled << frac_bits) / 10^dp` with round-to-nearest.
-///
-/// `Err(TierOverflow)` when the result does not fit storage. Before 0.6.4
-/// every arm narrowed with a truncating cast, so an out-of-range decimal
-/// wrapped (realtime Q22.10: "-3745932.2" became 448372.2).
-///
-/// Mirrors `StackEvaluator::to_binary_storage` but is callable without `&mut self`.
-pub(crate) fn decimal_to_binary_storage(dp: u8, scaled: BinaryStorage) -> Result<BinaryStorage, OverflowDetected> {
-    <ProfileFormat as FascFormat>::decimal_to_binary_storage(dp, scaled)
-}
-
-/// Public wrapper for use from sibling modules (transcendentals.rs).
-pub(crate) fn decimal_compute_to_binary_storage_pub(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    decimal_compute_to_binary_storage(val)
-}
-
+#[cfg(test)]
+#[cfg(test)]
+#[allow(dead_code)]
 /// Convert a DecimalCompute value directly to profile BinaryStorage via
 /// `val × 2^frac_bits / 10^compute_dp`, no intermediate Decimal materialization.
 ///
@@ -156,26 +132,26 @@ fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorag
 /// **CONVERSION**: Lazy conversion between domains as needed
 /// **PRECISION**: Profile-specific storage eliminates downconversion loss
 #[derive(Debug, Clone)]
-pub enum StackValue {
+pub enum StackValue<T: FascFormat = FixedPoint> {
     /// Binary fixed-point value (tier, mantissa, shadow)
     /// **STORAGE**: Profile-specific (i128 | I256 | I512) - zero precision loss
     /// **SHADOW**: Exact rational representation for precision preservation
-    Binary(u8, BinaryStorage, CompactShadow),
+    Binary(u8, T::Storage, CompactShadow),
 
     /// Binary compute-tier value for transcendental chain persistence
     /// **STORAGE**: One tier above storage (I256 | I512 | I1024)
     /// **PURPOSE**: Keep intermediate results "hot" at compute precision between
     /// consecutive transcendentals. Materialized to Binary on non-transcendental boundary.
-    BinaryCompute(u8, ComputeStorage, CompactShadow),
+    BinaryCompute(u8, Compute<T>, CompactShadow),
 
     /// Decimal fixed-point value (decimals, scaled_value, shadow)
     /// **STORAGE**: Profile-specific (i128 | I256 | I512) - matches binary precision
     /// **SHADOW**: Exact rational representation for precision preservation
-    Decimal(u8, BinaryStorage, CompactShadow),
+    Decimal(u8, T::Storage, CompactShadow),
 
     /// Decimal compute-tier value for transcendental chain persistence.
     ///
-    /// **STORAGE**: ComputeStorage at `DECIMAL_COMPUTE_DP` scaling (10^-dp).
+    /// **STORAGE**: Compute<T> at `DECIMAL_COMPUTE_DP` scaling (10^-dp).
     /// **PURPOSE**: Decimal equivalent of BinaryCompute: keeps intermediate
     /// transcendental results at compute-tier precision between chained ops.
     /// Materialized to `Decimal` at non-transcendental boundaries (display, arithmetic
@@ -183,12 +159,12 @@ pub enum StackValue {
     ///
     /// **FIELDS**: `(storage_tier, compute_value, shadow)` where `compute_value`
     /// is scaled by `10^DECIMAL_COMPUTE_DP` (per-profile: 9, 19, 38, 77, 154).
-    DecimalCompute(u8, ComputeStorage, CompactShadow),
+    DecimalCompute(u8, Compute<T>, CompactShadow),
 
     /// Balanced ternary value (precision_tier, trit_value, shadow)
     /// **STORAGE**: Profile-specific (i128 | I256 | I512) - matches binary precision
     /// **SHADOW**: Exact rational representation for precision preservation
-    Ternary(u8, BinaryStorage, CompactShadow),
+    Ternary(u8, T::Storage, CompactShadow),
 
     /// Symbolic rational value (owned for stack storage)
     /// Symbolic IS exact, no shadow needed
@@ -198,35 +174,35 @@ pub enum StackValue {
     Error(OverflowDetected),
 }
 
-impl StackValue {
+impl<T: FascFormat> StackValue<T> {
     /// Get domain type for routing decisions
     pub fn domain_type(&self) -> Option<DomainType> {
         match self {
-            StackValue::Binary(..) => Some(DomainType::Binary),
-            StackValue::BinaryCompute(..) => Some(DomainType::Binary),
-            StackValue::Decimal(..) => Some(DomainType::Decimal),
-            StackValue::DecimalCompute(..) => Some(DomainType::Decimal),
-            StackValue::Ternary(..) => Some(DomainType::Ternary),
-            StackValue::Symbolic(_) => Some(DomainType::Symbolic),
-            StackValue::Error(_) => None,
+            StackValue::<T>::Binary(..) => Some(DomainType::Binary),
+            StackValue::<T>::BinaryCompute(..) => Some(DomainType::Binary),
+            StackValue::<T>::Decimal(..) => Some(DomainType::Decimal),
+            StackValue::<T>::DecimalCompute(..) => Some(DomainType::Decimal),
+            StackValue::<T>::Ternary(..) => Some(DomainType::Ternary),
+            StackValue::<T>::Symbolic(_) => Some(DomainType::Symbolic),
+            StackValue::<T>::Error(_) => None,
         }
     }
 
     /// Check if value represents an error state
     pub fn is_error(&self) -> bool {
-        matches!(self, StackValue::Error(_))
+        matches!(self, StackValue::<T>::Error(_))
     }
 
     /// Get the compact shadow for precision preservation
     pub fn shadow(&self) -> CompactShadow {
         match self {
-            StackValue::Binary(_, _, s) => s.clone(),
-            StackValue::BinaryCompute(_, _, s) => s.clone(),
-            StackValue::Decimal(_, _, s) => s.clone(),
-            StackValue::DecimalCompute(_, _, s) => s.clone(),
-            StackValue::Ternary(_, _, s) => s.clone(),
-            StackValue::Symbolic(_) => CompactShadow::None, // Symbolic IS exact
-            StackValue::Error(_) => CompactShadow::None,
+            StackValue::<T>::Binary(_, _, s) => s.clone(),
+            StackValue::<T>::BinaryCompute(_, _, s) => s.clone(),
+            StackValue::<T>::Decimal(_, _, s) => s.clone(),
+            StackValue::<T>::DecimalCompute(_, _, s) => s.clone(),
+            StackValue::<T>::Ternary(_, _, s) => s.clone(),
+            StackValue::<T>::Symbolic(_) => CompactShadow::None, // Symbolic IS exact
+            StackValue::<T>::Error(_) => CompactShadow::None,
         }
     }
 
@@ -238,18 +214,18 @@ impl StackValue {
     /// Ternary values are divided by 3^frac_trits.
     pub fn to_rational(&self) -> Result<RationalNumber, OverflowDetected> {
         match self {
-            StackValue::Symbolic(s) => Ok(s.clone()),
-            StackValue::BinaryCompute(tier, value, ref shadow) => {
+            StackValue::<T>::Symbolic(s) => Ok(s.clone()),
+            StackValue::<T>::BinaryCompute(tier, value, ref shadow) => {
                 // Shadow fast path: O(1) when shadow exists
                 if let Some((num, den)) = shadow.as_rational() {
                     return Ok(RationalNumber::new(num, den));
                 }
                 // Materialize to storage tier first, then convert
-                let storage_val = downscale_to_storage(*value)?;
-                let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                let storage_val = T::downscale_to_storage(*value)?;
+                let materialized = StackValue::<T>::Binary(*tier, storage_val, shadow.clone());
                 materialized.to_rational()
             }
-            StackValue::DecimalCompute(_tier, value, ref shadow) => {
+            StackValue::<T>::DecimalCompute(_tier, value, ref shadow) => {
                 // Shadow fast path
                 if let Some((num, den)) = shadow.as_rational() {
                     return Ok(RationalNumber::new(num, den));
@@ -257,11 +233,11 @@ impl StackValue {
                 // DecimalCompute holds raw × 10^-COMPUTE_DP. Materialize at
                 // the highest dp that fits (adaptive — 0.5.0 item 0d fix).
                 let (target_dp, storage_val) =
-                    StackEvaluator::materialize_decimal_compute_adaptive(*value)?;
-                let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
+                    StackEvaluator::<T>::materialize_decimal_compute_adaptive(*value)?;
+                let materialized = StackValue::<T>::Decimal(target_dp, storage_val, shadow.clone());
                 materialized.to_rational()
             }
-            StackValue::Binary(tier, value, ref shadow) => {
+            StackValue::<T>::Binary(tier, value, ref shadow) => {
                 // Shadow fast path: O(1) when shadow exists
                 if let Some((num, den)) = shadow.as_rational() {
                     return Ok(RationalNumber::new(num, den));
@@ -274,10 +250,7 @@ impl StackValue {
                         // It follows GMATH_FRAC_BITS; a fixed 16 read every
                         // shadowless realtime value 64x too small at Q22.10
                         // (before 0.6.4: -1000 + 1/1 became -999/64).
-                        #[cfg(table_format = "q16_16")]
-                        { crate::fixed_point::frac_config::FRAC_BITS }
-                        #[cfg(not(table_format = "q16_16"))]
-                        { 0 }
+                        T::TIER1_RATIONAL_FRAC_BITS
                     }
                     2 => 32,   // Q32.32
                     3 => 64,   // Q64.64
@@ -288,130 +261,29 @@ impl StackValue {
                 };
 
                 if frac_bits == 0 {
-                    let value_i128 = conversion::binary_storage_to_i128(value);
+                    let value_i128 = T::binary_storage_to_i128(value);
                     return Ok(RationalNumber::new(value_i128, 1));
                 }
 
-                #[cfg(table_format = "q256_256")]
-                {
-                    if value.is_zero() {
-                        return Ok(RationalNumber::new(0, 1));
-                    }
-                    let tz = conversion::trailing_zeros_i512(value);
-                    let tz = if tz > frac_bits { frac_bits } else { tz };
-                    let reduced_num = *value >> (tz as usize);
-                    let remaining_frac = frac_bits - tz;
-                    if remaining_frac == 0 && reduced_num.fits_in_i128() {
-                        return Ok(RationalNumber::new(reduced_num.as_i128(), 1));
-                    } else if remaining_frac <= 127 && reduced_num.fits_in_i128() {
-                        return Ok(RationalNumber::new(reduced_num.as_i128(), 1u128 << remaining_frac));
-                    } else {
-                        let denom = I512::from_i128(1) << (remaining_frac as usize);
-                        return Ok(RationalNumber::from_i512_pair(reduced_num, denom));
-                    }
-                }
-
-                #[cfg(table_format = "q128_128")]
-                {
-                    if value.is_zero() {
-                        return Ok(RationalNumber::new(0, 1));
-                    }
-                    let tz = conversion::trailing_zeros_i256(value);
-                    let tz = if tz > frac_bits { frac_bits } else { tz };
-                    let reduced_num = *value >> tz;
-                    let remaining_frac = frac_bits - tz;
-                    if remaining_frac == 0 && reduced_num.fits_in_i128() {
-                        return Ok(RationalNumber::new(reduced_num.as_i128(), 1));
-                    } else if remaining_frac <= 127 && reduced_num.fits_in_i128() {
-                        return Ok(RationalNumber::new(reduced_num.as_i128(), 1u128 << remaining_frac));
-                    } else {
-                        let denom = I256::from_i128(1) << (remaining_frac as usize);
-                        return Ok(RationalNumber::from_i256_pair(reduced_num, denom));
-                    }
-                }
-
-                #[cfg(table_format = "q64_64")]
-                {
-                    if *value == 0 {
-                        return Ok(RationalNumber::new(0, 1));
-                    }
-                    let trailing = (*value as u128).trailing_zeros().min(frac_bits);
-                    let reduced_num = *value >> trailing;
-                    let reduced_den = 1u128 << (frac_bits - trailing);
-                    return Ok(RationalNumber::new(reduced_num, reduced_den));
-                }
-
-                #[cfg(table_format = "q32_32")]
-                {
-                    if *value == 0 {
-                        return Ok(RationalNumber::new(0, 1));
-                    }
-                    let trailing = (*value as u64).trailing_zeros().min(frac_bits);
-                    let reduced_num = (*value >> trailing) as i128;
-                    let reduced_den = 1u128 << (frac_bits - trailing);
-                    return Ok(RationalNumber::new(reduced_num, reduced_den));
-                }
-
-                #[cfg(table_format = "q16_16")]
-                {
-                    if *value == 0 {
-                        return Ok(RationalNumber::new(0, 1));
-                    }
-                    let trailing = (*value as u32).trailing_zeros().min(frac_bits);
-                    let reduced_num = (*value >> trailing) as i128;
-                    let reduced_den = 1u128 << (frac_bits - trailing);
-                    return Ok(RationalNumber::new(reduced_num, reduced_den));
-                }
+                T::binary_to_rational(frac_bits, value)
 
             }
-            StackValue::Decimal(decimals, scaled, ref shadow) => {
+            StackValue::<T>::Decimal(decimals, scaled, ref shadow) => {
                 // Shadow fast path: O(1) when shadow exists
                 if let Some((num, den)) = shadow.as_rational() {
                     return Ok(RationalNumber::new(num, den));
                 }
-                #[cfg(table_format = "q256_256")]
-                {
-                    let fits = if scaled.fits_in_i256() { let v = scaled.as_i256(); if v.fits_in_i128() { Some(v.as_i128()) } else { None } } else { None };
-                    if let Some(raw) = fits {
-                        return conversion::reduce_decimal_to_rational(raw, *decimals);
-                    }
-                    let mut denom = I512::from_i128(1);
-                    for _ in 0..*decimals { denom = denom * I512::from_i128(10); }
-                    return Ok(RationalNumber::from_i512_pair(*scaled, denom));
-                }
-                #[cfg(table_format = "q128_128")]
-                {
-                    if scaled.fits_in_i128() {
-                        return conversion::reduce_decimal_to_rational(scaled.as_i128(), *decimals);
-                    }
-                    let mut denom = I256::from_i128(1);
-                    for _ in 0..*decimals { denom = denom * I256::from_i128(10); }
-                    return Ok(RationalNumber::from_i256_pair(*scaled, denom));
-                }
-                #[cfg(table_format = "q64_64")]
-                {
-                    return conversion::reduce_decimal_to_rational(*scaled, *decimals);
-                }
-
-                #[cfg(table_format = "q32_32")]
-                {
-                    return conversion::reduce_decimal_to_rational(*scaled as i128, *decimals);
-                }
-
-                #[cfg(table_format = "q16_16")]
-                {
-                    return conversion::reduce_decimal_to_rational(*scaled as i128, *decimals);
-                }
+                T::decimal_to_rational(*decimals, scaled)
 
             }
-            StackValue::Ternary(tier, value, ref shadow) => {
+            StackValue::<T>::Ternary(tier, value, ref shadow) => {
                 // Shadow fast path: O(1) when shadow exists
                 if let Some((num, den)) = shadow.as_rational() {
                     return Ok(RationalNumber::new(num, den));
                 }
-                domain::ternary_to_rational(*tier, value)
+                T::ternary_to_rational(*tier, value)
             }
-            StackValue::Error(e) => Err(e.clone()),
+            StackValue::<T>::Error(e) => Err(e.clone()),
         }
     }
 
@@ -422,17 +294,17 @@ impl StackValue {
     /// - `BinaryCompute` → downscales to storage tier
     /// - `Decimal` → converts to binary Q-format via `(scaled << frac_bits) / 10^dp`
     /// - `DecimalCompute` → downscales to Decimal first, then converts
-    pub fn as_binary_storage(&self) -> Option<BinaryStorage> {
+    pub fn as_binary_storage(&self) -> Option<T::Storage> {
         match self {
-            StackValue::Binary(_, val, _) => Some(*val),
-            StackValue::BinaryCompute(_, val, _) => downscale_to_storage(*val).ok(),
-            StackValue::Decimal(dp, scaled, _) => {
-                decimal_to_binary_storage(*dp, *scaled).ok()
+            StackValue::<T>::Binary(_, val, _) => Some(*val),
+            StackValue::<T>::BinaryCompute(_, val, _) => T::downscale_to_storage(*val).ok(),
+            StackValue::<T>::Decimal(dp, scaled, _) => {
+                T::decimal_to_binary_storage(*dp, *scaled).ok()
             }
-            StackValue::DecimalCompute(_, val, _) => {
+            StackValue::<T>::DecimalCompute(_, val, _) => {
                 // Direct conversion: DecimalCompute value × 2^frac_bits / 10^compute_dp
                 // (no intermediate Decimal materialization — preserves full precision)
-                decimal_compute_to_binary_storage(*val).ok()
+                T::decimal_compute_to_binary_storage(*val).ok()
             }
             _ => None,
         }
@@ -443,13 +315,13 @@ impl StackValue {
     /// Returns the precision tier (1-6) for domain values, 0 for errors.
     pub fn tier(&self) -> u8 {
         match self {
-            StackValue::Binary(t, _, _) => *t,
-            StackValue::BinaryCompute(t, _, _) => *t,
-            StackValue::Decimal(t, _, _) => *t,
-            StackValue::DecimalCompute(t, _, _) => *t,
-            StackValue::Ternary(t, _, _) => *t,
-            StackValue::Symbolic(_) => 8, // Symbolic = rational tier
-            StackValue::Error(_) => 0,
+            StackValue::<T>::Binary(t, _, _) => *t,
+            StackValue::<T>::BinaryCompute(t, _, _) => *t,
+            StackValue::<T>::Decimal(t, _, _) => *t,
+            StackValue::<T>::DecimalCompute(t, _, _) => *t,
+            StackValue::<T>::Ternary(t, _, _) => *t,
+            StackValue::<T>::Symbolic(_) => 8, // Symbolic = rational tier
+            StackValue::<T>::Error(_) => 0,
         }
     }
 
@@ -461,30 +333,30 @@ impl StackValue {
     /// For non-binary values: converts to rational first, then extracts digits.
     pub fn to_decimal_string(&self, max_digits: usize) -> String {
         match self {
-            StackValue::BinaryCompute(tier, val, shadow) => {
-                match downscale_to_storage(*val) {
+            StackValue::<T>::BinaryCompute(tier, val, shadow) => {
+                match T::downscale_to_storage(*val) {
                     Ok(storage_val) => {
-                        let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                        let materialized = StackValue::<T>::Binary(*tier, storage_val, shadow.clone());
                         materialized.to_decimal_string(max_digits)
                     }
                     Err(_) => "Overflow".to_string(),
                 }
             }
-            StackValue::DecimalCompute(_tier, val, shadow) => {
+            StackValue::<T>::DecimalCompute(_tier, val, shadow) => {
                 // Materialize at the highest dp that fits (adaptive — 0d fix).
-                match StackEvaluator::materialize_decimal_compute_adaptive(*val) {
+                match StackEvaluator::<T>::materialize_decimal_compute_adaptive(*val) {
                     Ok((target_dp, storage_val)) => {
-                        let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
+                        let materialized = StackValue::<T>::Decimal(target_dp, storage_val, shadow.clone());
                         materialized.to_decimal_string(max_digits)
                     }
                     Err(_) => "Overflow".to_string(),
                 }
             }
-            StackValue::Binary(_tier, val, _) => {
-                formatting::binary_storage_to_decimal_string(*val, max_digits)
+            StackValue::<T>::Binary(_tier, val, _) => {
+                T::binary_storage_to_decimal_string(*val, max_digits)
             }
-            StackValue::Decimal(decimals, val, _) => {
-                let full = formatting::decimal_storage_to_string(*decimals, val);
+            StackValue::<T>::Decimal(decimals, val, _) => {
+                let full = T::decimal_storage_to_string(*decimals, val);
                 if max_digits < *decimals as usize {
                     if let Some(dot_pos) = full.find('.') {
                         let end = (dot_pos + 1 + max_digits).min(full.len());
@@ -496,68 +368,58 @@ impl StackValue {
                     full
                 }
             }
-            StackValue::Symbolic(r) => {
+            StackValue::<T>::Symbolic(r) => {
                 formatting::rational_to_decimal_string(r, max_digits)
             }
-            StackValue::Ternary(_, _, _) => {
+            StackValue::<T>::Ternary(_, _, _) => {
                 if let Ok(rational) = self.to_rational() {
                     formatting::rational_to_decimal_string(&rational, max_digits)
                 } else {
                     "NaN".to_string()
                 }
             }
-            StackValue::Error(_) => {
+            StackValue::<T>::Error(_) => {
                 "NaN".to_string()
             }
         }
     }
 }
 
-impl Display for StackValue {
+impl<T: FascFormat> Display for StackValue<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[cfg(table_format = "q16_16")]
-        const DEFAULT_DIGITS: usize = 5;
-        #[cfg(table_format = "q32_32")]
-        const DEFAULT_DIGITS: usize = 9;
-        #[cfg(table_format = "q64_64")]
-        const DEFAULT_DIGITS: usize = 19;
-        #[cfg(table_format = "q128_128")]
-        const DEFAULT_DIGITS: usize = 38;
-        #[cfg(table_format = "q256_256")]
-        const DEFAULT_DIGITS: usize = 77;
 
-        let precision = f.precision().unwrap_or(DEFAULT_DIGITS);
+        let precision = f.precision().unwrap_or(T::DEFAULT_DIGITS);
 
         match self {
-            StackValue::BinaryCompute(tier, val, shadow) => {
-                match downscale_to_storage(*val) {
+            StackValue::<T>::BinaryCompute(tier, val, shadow) => {
+                match T::downscale_to_storage(*val) {
                     Ok(storage_val) => {
-                        let materialized = StackValue::Binary(*tier, storage_val, shadow.clone());
+                        let materialized = StackValue::<T>::Binary(*tier, storage_val, shadow.clone());
                         write!(f, "{}", materialized.to_decimal_string(precision))
                     }
                     Err(_) => write!(f, "Overflow"),
                 }
             }
-            StackValue::DecimalCompute(_tier, val, shadow) => {
-                match StackEvaluator::materialize_decimal_compute_adaptive(*val) {
+            StackValue::<T>::DecimalCompute(_tier, val, shadow) => {
+                match StackEvaluator::<T>::materialize_decimal_compute_adaptive(*val) {
                     Ok((target_dp, storage_val)) => {
-                        let materialized = StackValue::Decimal(target_dp, storage_val, shadow.clone());
+                        let materialized = StackValue::<T>::Decimal(target_dp, storage_val, shadow.clone());
                         write!(f, "{}", materialized.to_decimal_string(precision))
                     }
                     Err(_) => write!(f, "Overflow"),
                 }
             }
-            StackValue::Binary(_, val, _) => {
-                write!(f, "{}", formatting::binary_storage_to_decimal_string(*val, precision))
+            StackValue::<T>::Binary(_, val, _) => {
+                write!(f, "{}", T::binary_storage_to_decimal_string(*val, precision))
             }
-            StackValue::Decimal(dec, val, _) => {
-                write!(f, "{}", formatting::decimal_storage_to_string(*dec, val))
+            StackValue::<T>::Decimal(dec, val, _) => {
+                write!(f, "{}", T::decimal_storage_to_string(*dec, val))
             }
-            StackValue::Ternary(_, _, _) => {
+            StackValue::<T>::Ternary(_, _, _) => {
                 write!(f, "{}", self.to_decimal_string(precision))
             }
-            StackValue::Symbolic(s) => write!(f, "{}", formatting::rational_to_decimal_string(s, precision)),
-            StackValue::Error(e) => write!(f, "Error: {:?}", e),
+            StackValue::<T>::Symbolic(s) => write!(f, "{}", formatting::rational_to_decimal_string(s, precision)),
+            StackValue::<T>::Error(e) => write!(f, "Error: {:?}", e),
         }
     }
 }
@@ -571,28 +433,34 @@ impl Display for StackValue {
 /// **ARCHITECTURE**: Fixed-size stack with domain-aware evaluation
 /// **THREAD-SAFETY**: Each thread gets its own evaluator instance
 /// **MEMORY**: Zero heap allocation during computation
-pub struct StackEvaluator {
+pub struct StackEvaluator<T: FascFormat = FixedPoint> {
     /// Current workspace offset
     offset: usize,
 
     /// Stack of computed values (fixed size)
-    value_stack: [Option<StackValue>; 256],
+    value_stack: [Option<StackValue<T>>; 256],
 
     /// Current stack pointer
     stack_ptr: usize,
 
-    /// Deployment profile for tier limits
-    deployment_profile: DeploymentProfile,
+    /// The format evaluated: its tier limits, digit budgets and words.
+    _format: PhantomData<T>,
 }
 
-impl StackEvaluator {
-    /// Create new evaluator with deployment profile
-    pub fn new(deployment_profile: DeploymentProfile) -> Self {
+impl<T: FascFormat> Default for StackEvaluator<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: FascFormat> StackEvaluator<T> {
+    /// A new evaluator for the format `T`.
+    pub fn new() -> Self {
         Self {
             offset: 0,
             value_stack: [const { None }; 256],
             stack_ptr: 0,
-            deployment_profile,
+            _format: PhantomData,
         }
     }
 
@@ -603,7 +471,7 @@ impl StackEvaluator {
     }
 
     /// Load value from stack reference
-    fn load_ref(&self, stack_ref: StackRef) -> Result<StackValue, OverflowDetected> {
+    fn load_ref(&self, stack_ref: StackRef) -> Result<StackValue<T>, OverflowDetected> {
         let idx = stack_ref.0 as usize;
         if idx >= self.stack_ptr {
             return Err(OverflowDetected::InvalidStackReference);
@@ -615,7 +483,7 @@ impl StackEvaluator {
     }
 
     /// Evaluate expression on stack
-    pub fn evaluate(&mut self, expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
+    pub fn evaluate(&mut self, expr: &LazyExpr<T>) -> Result<StackValue<T>, OverflowDetected> {
         match expr {
             LazyExpr::Literal(s) => self.parse_literal_with_mode(s),
             LazyExpr::Value(v) => Ok((**v).clone()),
@@ -742,12 +610,10 @@ impl StackEvaluator {
     /// downscale is checked, so a too-large dp errors and we retry, never
     /// a wrap.
     fn materialize_decimal_compute_adaptive(
-        val: ComputeStorage,
-    ) -> Result<(u8, BinaryStorage), OverflowDetected> {
-        use crate::fixed_point::domains::decimal_fixed::transcendental::{
-            decimal_downscale_to_storage, DECIMAL_STORAGE_MAX_DP,
-        };
-        let mut dp = DECIMAL_STORAGE_MAX_DP;
+        val: Compute<T>,
+    ) -> Result<(u8, T::Storage), OverflowDetected> {
+        use crate::fixed_point::domains::decimal_fixed::transcendental::decimal_downscale_to_storage;
+        let mut dp = T::DECIMAL_STORAGE_MAX_DP;
         loop {
             match decimal_downscale_to_storage(val, dp) {
                 Ok(v) => return Ok((dp, v)),
@@ -761,10 +627,10 @@ impl StackEvaluator {
         }
     }
 
-    pub(crate) fn materialize_compute(&self, value: StackValue) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn materialize_compute(&self, value: StackValue<T>) -> Result<StackValue<T>, OverflowDetected> {
         match value {
             StackValue::BinaryCompute(tier, val, shadow) => {
-                let storage = downscale_to_storage(val)?;
+                let storage = T::downscale_to_storage(val)?;
                 Ok(StackValue::Binary(tier, storage, shadow))
             }
             // DecimalCompute passes through — it's a valid output format.
@@ -779,40 +645,46 @@ impl StackEvaluator {
 // THREAD-LOCAL EVALUATOR INSTANCE
 // ============================================================================
 
-/// Get the compile-time deployment profile based on table format
-const fn compile_time_profile() -> DeploymentProfile {
-    #[cfg(table_format = "q256_256")]
-    { DeploymentProfile::Scientific }
-
-    #[cfg(table_format = "q128_128")]
-    { DeploymentProfile::Balanced }
-
-    #[cfg(table_format = "q64_64")]
-    { DeploymentProfile::Embedded }
-
-    #[cfg(table_format = "q32_32")]
-    { DeploymentProfile::Compact }
-
-    #[cfg(table_format = "q16_16")]
-    { DeploymentProfile::Realtime }
-}
-
 thread_local! {
-    static EVALUATOR: RefCell<StackEvaluator> = RefCell::new(
-        StackEvaluator::new(compile_time_profile())
-    );
+    /// One evaluator per format used on this thread, keyed by the format's type.
+    static EVALUATORS: RefCell<Vec<(TypeId, Rc<dyn Any>)>> = const { RefCell::new(Vec::new()) };
+    /// The entry used last: one type comparison on the common path.
+    static LAST: RefCell<Option<(TypeId, Rc<dyn Any>)>> = const { RefCell::new(None) };
 }
 
-/// Evaluate expression using thread-local evaluator
-///
-/// **MATERIALIZATION**: Any BinaryCompute results are materialized to Binary
-/// before returning, ensuring callers always receive storage-tier values.
-///
-/// **MODE ROUTING**: If a non-Auto output mode is set via `set_mode()`,
-/// the result is converted to the requested domain after materialization.
-pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
-    EVALUATOR.with(|eval| {
-        let mut evaluator = eval.borrow_mut();
+/// Run `f` on this thread's evaluator for the format `T` (created on first
+/// use). Nested calls for the same format are a borrow error, as before.
+pub fn with_evaluator<T: FascFormat, R>(f: impl FnOnce(&mut StackEvaluator<T>) -> R) -> R {
+    let id = TypeId::of::<T>();
+    let hit = LAST.with(|last| match &*last.borrow() {
+        Some((t, rc)) if *t == id => Some(rc.clone()),
+        _ => None,
+    });
+    let cell: Rc<RefCell<StackEvaluator<T>>> = match hit {
+        Some(rc) => rc.downcast::<RefCell<StackEvaluator<T>>>().expect("evaluator registry: the key is the type"),
+        None => {
+            let rc = EVALUATORS.with(|regs| {
+                let mut regs = regs.borrow_mut();
+                if let Some((_, rc)) = regs.iter().find(|(t, _)| *t == id) {
+                    return rc.clone();
+                }
+                let rc: Rc<dyn Any> = Rc::new(RefCell::new(StackEvaluator::<T>::new()));
+                regs.push((id, rc.clone()));
+                rc
+            });
+            LAST.with(|last| *last.borrow_mut() = Some((id, rc.clone())));
+            rc.downcast::<RefCell<StackEvaluator<T>>>().expect("evaluator registry: the key is the type")
+        }
+    };
+    let mut evaluator = cell.borrow_mut();
+    f(&mut evaluator)
+}
+
+/// Evaluate `expr` in the format `T`: the tree is parsed, routed and
+/// computed by this thread's evaluator for `T`, the result materialized
+/// to its storage tier, then converted per the output mode.
+pub fn evaluate_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<StackValue<T>, OverflowDetected> {
+    with_evaluator(|evaluator| {
         evaluator.reset();
         let result = evaluator.evaluate(expr)?;
         let materialized = evaluator.materialize_compute(result)?;
@@ -820,19 +692,18 @@ pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
     })
 }
 
-/// Evaluate sin and cos of the same expression with a single range reduction.
+/// Evaluate expression using thread-local evaluator
 ///
-/// More efficient than evaluating sin(x) and cos(x) separately: shares the
-/// Cody-Waite range reduction and Taylor evaluation at compute tier.
-///
-/// **USAGE**:
-/// ```rust
-/// use g_math::canonical::{gmath, evaluate_sincos};
-/// let (sin_val, cos_val) = evaluate_sincos(&gmath("0.5")).unwrap();
-/// ```
-pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
-    EVALUATOR.with(|eval| {
-        let mut evaluator = eval.borrow_mut();
+/// **ARCHITECTURE**: Thread-local StackEvaluator instance, one per thread
+/// **BENEFIT**: Zero mutex contention, no heap allocation per call
+/// **COMPUTE**: BinaryCompute results are materialized to storage tier at the top level
+pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
+    evaluate_in(expr)
+}
+
+/// `sin` and `cos` of `expr` from one range reduction, in the format `T`.
+pub fn evaluate_sincos_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackValue<T>, StackValue<T>), OverflowDetected> {
+    with_evaluator(|evaluator| {
         evaluator.reset();
         let inner_val = evaluator.evaluate(expr)?;
         let (sin_compute, cos_compute) = evaluator.evaluate_sincos(inner_val)?;
@@ -844,23 +715,17 @@ pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), Over
     })
 }
 
-/// Evaluate sinh and cosh of the same expression with a single shared exp-pair.
+/// Evaluate sin and cos of an expression simultaneously (shared range reduction).
 ///
-/// More efficient than evaluating sinh(x) and cosh(x) separately: shares one
-/// `exp(x)` + `exp(-x)` evaluation at compute tier. sinh and cosh come from the
-/// same `(ep, en)` pair, so their rounding errors are correlated and cancel
-/// in downstream expressions like `cosh(θ)·p + (sinh(θ)/θ)·v`.
-///
-/// Routes to native decimal engine for decimal inputs, binary otherwise.
-///
-/// **USAGE**:
-/// ```rust
-/// use g_math::canonical::{gmath, evaluate_sinhcosh};
-/// let (sinh_val, cosh_val) = evaluate_sinhcosh(&gmath("0.5")).unwrap();
-/// ```
-pub fn evaluate_sinhcosh(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
-    EVALUATOR.with(|eval| {
-        let mut evaluator = eval.borrow_mut();
+/// Returns `(sin, cos)` as materialized StackValues. The inner expression is
+/// evaluated once; both results come from the same compute-tier computation.
+pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
+    evaluate_sincos_in(expr)
+}
+
+/// `sinh` and `cosh` of `expr` from one exponential, in the format `T`.
+pub fn evaluate_sinhcosh_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackValue<T>, StackValue<T>), OverflowDetected> {
+    with_evaluator(|evaluator| {
         evaluator.reset();
         let inner_val = evaluator.evaluate(expr)?;
         let (sinh_compute, cosh_compute) = evaluator.evaluate_sinhcosh(inner_val)?;
@@ -872,24 +737,24 @@ pub fn evaluate_sinhcosh(expr: &LazyExpr) -> Result<(StackValue, StackValue), Ov
     })
 }
 
-/// Parse a runtime string into a StackValue
+/// Evaluate sinh and cosh of an expression simultaneously (shared exp computation).
 ///
-/// **PURPOSE**: Bridge for runtime/dynamic string inputs that cannot use
-/// `gmath()` (which requires `&'static str`). Eagerly parses through the
-/// thread-local evaluator with full mode routing support.
-///
-/// **USAGE**:
-/// ```rust
-/// use g_math::canonical::{gmath_parse, evaluate, LazyExpr};
-///
-/// let user_input = String::from("3.14");
-/// let expr = gmath_parse(&user_input).unwrap();
-/// let result = evaluate(&(expr + gmath_parse("2.0").unwrap())).unwrap();
-/// ```
-pub fn gmath_parse(s: &str) -> Result<LazyExpr, OverflowDetected> {
-    let value = EVALUATOR.with(|eval| {
-        let mut evaluator = eval.borrow_mut();
-        evaluator.parse_literal_with_mode(s)
-    })?;
+/// Returns `(sinh, cosh)` as materialized StackValues. The inner expression is
+/// evaluated once; both results come from the same compute-tier exp evaluation.
+pub fn evaluate_sinhcosh(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
+    evaluate_sinhcosh_in(expr)
+}
+
+/// Parse a runtime string into a pre-evaluated expression in the format `T`.
+pub fn gmath_parse_in<T: FascFormat>(s: &str) -> Result<LazyExpr<T>, OverflowDetected> {
+    let value = with_evaluator(|evaluator: &mut StackEvaluator<T>| evaluator.parse_literal_with_mode(s))?;
     Ok(LazyExpr::Value(Box::new(value)))
+}
+
+/// Parse a runtime string into a LazyExpr (for non-'static strings).
+///
+/// Unlike `gmath()` which requires `&'static str`, this parses immediately
+/// and returns a `LazyExpr::Value` holding the parsed StackValue.
+pub fn gmath_parse(s: &str) -> Result<LazyExpr, OverflowDetected> {
+    gmath_parse_in(s)
 }

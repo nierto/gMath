@@ -6,6 +6,8 @@
 
 use core::ops::{Add, Sub, Mul, Div, Neg};
 use core::fmt::{self, Display};
+use super::stack_evaluator::{FascFormat, StackValue};
+use crate::fixed_point::imperative::FixedPoint;
 
 /// Stack reference (index into evaluation stack)
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -27,7 +29,7 @@ pub enum ConstantId {
 /// **EVALUATION**: Deferred until explicitly requested or display
 /// **OPTIMIZATION**: Compile-time constant folding where possible
 #[derive(Debug, Clone)]
-pub enum LazyExpr {
+pub enum LazyExpr<T: FascFormat = FixedPoint> {
     /// String literal (compile-time or static reference)
     Literal(&'static str),
 
@@ -42,7 +44,7 @@ pub enum LazyExpr {
     /// // Feed result back into next expression: shadow + precision preserved
     /// let next = evaluate(&(LazyExpr::from(balance) * gmath("1.05"))).unwrap();
     /// ```
-    Value(Box<super::stack_evaluator::StackValue>),
+    Value(Box<StackValue<T>>),
 
     /// Mathematical constant by ID
     Constant(ConstantId),
@@ -51,43 +53,43 @@ pub enum LazyExpr {
     Variable(StackRef),
 
     /// Negation (unary operation)
-    Negate(Box<LazyExpr>),
+    Negate(Box<LazyExpr<T>>),
 
     /// Binary operations (Box for recursive structure only)
-    Add(Box<LazyExpr>, Box<LazyExpr>),
-    Sub(Box<LazyExpr>, Box<LazyExpr>),
-    Mul(Box<LazyExpr>, Box<LazyExpr>),
-    Div(Box<LazyExpr>, Box<LazyExpr>),
+    Add(Box<LazyExpr<T>>, Box<LazyExpr<T>>),
+    Sub(Box<LazyExpr<T>>, Box<LazyExpr<T>>),
+    Mul(Box<LazyExpr<T>>, Box<LazyExpr<T>>),
+    Div(Box<LazyExpr<T>>, Box<LazyExpr<T>>),
 
     /// Transcendental operations (unary)
-    Exp(Box<LazyExpr>),
-    Ln(Box<LazyExpr>),
-    Sqrt(Box<LazyExpr>),
+    Exp(Box<LazyExpr<T>>),
+    Ln(Box<LazyExpr<T>>),
+    Sqrt(Box<LazyExpr<T>>),
 
     /// Power function (binary): x^y = exp(y × ln(x))
-    Pow(Box<LazyExpr>, Box<LazyExpr>),
+    Pow(Box<LazyExpr<T>>, Box<LazyExpr<T>>),
 
     // Hyperbolic functions (FASC-composed from exp/ln/sqrt)
-    Sinh(Box<LazyExpr>),
-    Cosh(Box<LazyExpr>),
-    Tanh(Box<LazyExpr>),
-    Asinh(Box<LazyExpr>),
-    Acosh(Box<LazyExpr>),
-    Atanh(Box<LazyExpr>),
+    Sinh(Box<LazyExpr<T>>),
+    Cosh(Box<LazyExpr<T>>),
+    Tanh(Box<LazyExpr<T>>),
+    Asinh(Box<LazyExpr<T>>),
+    Acosh(Box<LazyExpr<T>>),
+    Atanh(Box<LazyExpr<T>>),
 
     // Trigonometric functions
-    Sin(Box<LazyExpr>),
-    Cos(Box<LazyExpr>),
-    Tan(Box<LazyExpr>),
+    Sin(Box<LazyExpr<T>>),
+    Cos(Box<LazyExpr<T>>),
+    Tan(Box<LazyExpr<T>>),
 
     // Inverse trigonometric functions
-    Asin(Box<LazyExpr>),
-    Acos(Box<LazyExpr>),
-    Atan(Box<LazyExpr>),
-    Atan2(Box<LazyExpr>, Box<LazyExpr>),
+    Asin(Box<LazyExpr<T>>),
+    Acos(Box<LazyExpr<T>>),
+    Atan(Box<LazyExpr<T>>),
+    Atan2(Box<LazyExpr<T>>, Box<LazyExpr<T>>),
 }
 
-impl LazyExpr {
+impl<T: FascFormat> LazyExpr<T> {
     /// Check if expression is a compile-time constant
     pub fn is_constant(&self) -> bool {
         match self {
@@ -144,7 +146,7 @@ impl LazyExpr {
     ///
     /// **ALGORITHM**: pow(x, y) = exp(y × ln(x))
     /// **PRECISION**: Same contractual guarantees as exp() and ln()
-    pub fn pow(self, exponent: LazyExpr) -> LazyExpr {
+    pub fn pow(self, exponent: LazyExpr<T>) -> LazyExpr<T> {
         LazyExpr::Pow(Box::new(self), Box::new(exponent))
     }
 }
@@ -152,8 +154,8 @@ impl LazyExpr {
 /// Convert a pre-evaluated StackValue into a LazyExpr for chaining.
 ///
 /// Preserves full precision and shadow, no string round-trip.
-impl From<super::stack_evaluator::StackValue> for LazyExpr {
-    fn from(val: super::stack_evaluator::StackValue) -> Self {
+impl<T: FascFormat> From<StackValue<T>> for LazyExpr<T> {
+    fn from(val: StackValue<T>) -> Self {
         LazyExpr::Value(Box::new(val))
     }
 }
@@ -167,44 +169,50 @@ pub const fn gmath(input: &'static str) -> LazyExpr {
     LazyExpr::Literal(input)
 }
 
+/// `gmath` for the format `T`: the literal is parsed when the tree is
+/// evaluated, in that format.
+pub const fn gmath_in<T: FascFormat>(input: &'static str) -> LazyExpr<T> {
+    LazyExpr::Literal(input)
+}
+
 // ============================================================================
 // OPERATOR OVERLOADING FOR NATURAL EXPRESSION SYNTAX
 // ============================================================================
 
-impl Add for LazyExpr {
-    type Output = LazyExpr;
+impl<T: FascFormat> Add for LazyExpr<T> {
+    type Output = LazyExpr<T>;
 
     fn add(self, other: Self) -> Self::Output {
         LazyExpr::Add(Box::new(self), Box::new(other))
     }
 }
 
-impl Sub for LazyExpr {
-    type Output = LazyExpr;
+impl<T: FascFormat> Sub for LazyExpr<T> {
+    type Output = LazyExpr<T>;
 
     fn sub(self, other: Self) -> Self::Output {
         LazyExpr::Sub(Box::new(self), Box::new(other))
     }
 }
 
-impl Mul for LazyExpr {
-    type Output = LazyExpr;
+impl<T: FascFormat> Mul for LazyExpr<T> {
+    type Output = LazyExpr<T>;
 
     fn mul(self, other: Self) -> Self::Output {
         LazyExpr::Mul(Box::new(self), Box::new(other))
     }
 }
 
-impl Div for LazyExpr {
-    type Output = LazyExpr;
+impl<T: FascFormat> Div for LazyExpr<T> {
+    type Output = LazyExpr<T>;
 
     fn div(self, other: Self) -> Self::Output {
         LazyExpr::Div(Box::new(self), Box::new(other))
     }
 }
 
-impl Neg for LazyExpr {
-    type Output = LazyExpr;
+impl<T: FascFormat> Neg for LazyExpr<T> {
+    type Output = LazyExpr<T>;
 
     fn neg(self) -> Self::Output {
         LazyExpr::Negate(Box::new(self))
@@ -215,7 +223,7 @@ impl Neg for LazyExpr {
 // TRANSCENDENTAL OPERATIONS
 // ============================================================================
 
-impl LazyExpr {
+impl<T: FascFormat> LazyExpr<T> {
     /// Exponential function (e^x)
     ///
     /// **ARCHITECTURE**: Lazy evaluation - builds expression tree without computation
@@ -314,7 +322,7 @@ impl LazyExpr {
     }
 
     /// Two-argument arctangent: atan2(y, x)
-    pub fn atan2(self, x: LazyExpr) -> LazyExpr {
+    pub fn atan2(self, x: LazyExpr<T>) -> LazyExpr<T> {
         LazyExpr::Atan2(Box::new(self), Box::new(x))
     }
 }
@@ -323,7 +331,7 @@ impl LazyExpr {
 // DISPLAY TRAIT - TRIGGERS LAZY EVALUATION
 // ============================================================================
 
-impl Display for LazyExpr {
+impl<T: FascFormat> Display for LazyExpr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Display shows expression structure; evaluation is handled by StackEvaluator
         match self {

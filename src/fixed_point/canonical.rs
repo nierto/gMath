@@ -69,14 +69,21 @@ pub use super::universal::fasc::{
     LazyMatrixExpr,
     DomainMatrix,
     gmath,
+    gmath_in,
     gmath_parse,
+    gmath_parse_in,
     ConstantId,
     StackEvaluator,
     StackValue,
     evaluate,
+    evaluate_in,
     evaluate_matrix,
     evaluate_sincos,
+    evaluate_sincos_in,
     evaluate_sinhcosh,
+    evaluate_sinhcosh_in,
+    with_evaluator,
+    FascFormat,
     GmathMode,
     ComputeMode,
     OutputMode,
@@ -123,36 +130,15 @@ pub fn __pre_decimal(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -
 /// Construct a pre-parsed Binary integer LazyExpr. Called by `gmath!("255")` expansion.
 #[doc(hidden)]
 pub fn __pre_integer(value: i128) -> LazyExpr {
+    use super::fixed_num::ProfileFormat;
+    use super::universal::fasc::stack_evaluator::FascFormat;
+    use super::domains::symbolic::rational::RationalNumber;
     let shadow = CompactShadow::from_rational(value, 1);
-    // Binary storage: value << frac_bits
-    #[cfg(table_format = "q256_256")]
-    let storage = {
-        use super::binary_fixed::I512;
-        I512::from_i128(value) << 256
-    };
-    #[cfg(table_format = "q128_128")]
-    let storage = {
-        use super::binary_fixed::I256;
-        I256::from_i128(value) << 128
-    };
-    #[cfg(table_format = "q64_64")]
-    let storage = value << 64;
-    #[cfg(table_format = "q32_32")]
-    let storage = (value as i64) << 32;
-    #[cfg(table_format = "q16_16")]
-    let storage = {
-        use super::frac_config;
-        (value as i32) << frac_config::FRAC_BITS
-    };
-
-    // Tier = profile's max binary tier
-    let tier = {
-        #[cfg(table_format = "q16_16")] { 1u8 }
-        #[cfg(table_format = "q32_32")] { 2u8 }
-        #[cfg(table_format = "q64_64")] { 3u8 }
-        #[cfg(table_format = "q128_128")] { 4u8 }
-        #[cfg(table_format = "q256_256")] { 5u8 }
-    };
-
-    LazyExpr::Value(Box::new(StackValue::Binary(tier, storage, shadow)))
+    let tier = <ProfileFormat as FascFormat>::MAX_BINARY_TIER;
+    match <ProfileFormat as FascFormat>::integer_value(value) {
+        Some(storage) => LazyExpr::Value(Box::new(StackValue::Binary(tier, storage, shadow))),
+        // beyond the integer range of the storage word: the exact rational,
+        // as the runtime parser does (this shifted with a wrapping cast)
+        None => LazyExpr::Value(Box::new(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)))),
+    }
 }

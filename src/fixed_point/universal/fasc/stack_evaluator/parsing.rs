@@ -3,11 +3,8 @@
 //! 5-phase parsing: fractions, repeating decimals, hex/binary, decimals, named constants, integers.
 //! Mode routing integration for compute_mode override.
 
+use super::format::FascFormat;
 use super::{StackValue, StackEvaluator};
-use super::conversion::try_to_binary_storage;
-use super::domain::ternary_to_storage;
-#[cfg(table_format = "q16_16")]
-use crate::fixed_point::frac_config;
 #[allow(unused_imports)]
 use crate::fixed_point::i256::I256;
 #[allow(unused_imports)]
@@ -16,7 +13,7 @@ use crate::fixed_point::universal::tier_types::CompactShadow;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
 use crate::fixed_point::universal::ConstantId;
 
-impl StackEvaluator {
+impl<T: FascFormat> StackEvaluator<T> {
     /// Parse literal string: single-pass byte classifier
     ///
     /// **ARCHITECTURE**: Prefix checks + single byte scan + dispatch. Zero heap allocation.
@@ -30,7 +27,7 @@ impl StackEvaluator {
     ///    b. '.' + "..." suffix → Repeating decimal → Symbolic
     ///    c. '.' found → Decimal (proven exact: 10^N = 2^N × 5^N)
     /// 4. Default → integer → Binary
-    pub(crate) fn parse_literal(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_literal(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         let bytes = s.as_bytes();
         let len = bytes.len();
         if len == 0 {
@@ -100,7 +97,7 @@ impl StackEvaluator {
     /// representable Q-format value. Do NOT truncate to profile precision
     /// before conversion: truncation introduces different rounding than
     /// the mathematically correct round-to-nearest.
-    pub(crate) fn parse_decimal(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_decimal(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         let dot_pos = s.find('.').ok_or(OverflowDetected::ParseError)?;
         if s[dot_pos + 1..].contains('.') {
             return Err(OverflowDetected::ParseError);
@@ -113,16 +110,7 @@ impl StackEvaluator {
 
         // All profiles use i128 path for ≤38 digits (10^38 fits in i128).
         // Q256.256 extends to 76 digits via two-part parsing.
-        #[cfg(table_format = "q16_16")]
-        let max_frac: usize = 4;
-        #[cfg(table_format = "q32_32")]
-        let max_frac: usize = 9;
-        #[cfg(table_format = "q64_64")]
-        let max_frac: usize = 38;
-        #[cfg(table_format = "q128_128")]
-        let max_frac: usize = 38;
-        #[cfg(table_format = "q256_256")]
-        let max_frac: usize = 76; // 77 sig digits minus integer part headroom
+        let max_frac: usize = T::PARSE_MAX_FRAC;
 
         // 0.5.0 item 1: on the narrow profiles max_frac IS the decimal
         // storage cap, so truncating here destroys information above one
@@ -136,8 +124,7 @@ impl StackEvaluator {
         // they sit far below one narrow-profile storage ulp. Only if the
         // budget cannot beat max_frac does this fall through to the old
         // truncation.
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-        if frac_len > max_frac {
+        if T::NARROW_DECIMAL && frac_len > max_frac {
             let sym_frac_full = fractional_str.trim_end_matches('0');
             let int_digits = integer_str.trim_start_matches('0').len();
             let budget = 38usize.saturating_sub(int_digits);
@@ -169,8 +156,7 @@ impl StackEvaluator {
         // wide profiles convert it exactly to binary instead of truncating it
         // (before 0.6.4 the extra digits were dropped: on balanced, where one
         // ulp is 2.9e-39, "0." + 38 zeros + "999" = 3.4 ulp parsed to 0).
-        #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-        if frac_len > max_frac {
+        if !T::NARROW_DECIMAL && frac_len > max_frac {
             return self.parse_decimal_as_binary(s);
         }
 
@@ -200,7 +186,7 @@ impl StackEvaluator {
         else {
             return self.parse_decimal_as_binary(s);
         };
-        match try_to_binary_storage(scaled) {
+        match T::try_to_binary_storage(scaled) {
             Ok(storage) => {
                 let shadow = CompactShadow::from_rational(scaled, scale as u128);
                 Ok(StackValue::Decimal(decimals, storage, shadow))
@@ -215,19 +201,17 @@ impl StackEvaluator {
     /// A decimal literal the Decimal domain cannot hold, converted exactly to
     /// binary storage: nearest, ties toward +infinity, any digit count;
     /// `TierOverflow` beyond the storage range.
-    fn parse_decimal_as_binary(&self, s: &str) -> Result<StackValue, OverflowDetected> {
-        use crate::fixed_point::frac_config::{FRAC_BITS, STORAGE_BITS};
-        use crate::fixed_point::imperative::decimal_literal;
+    fn parse_decimal_as_binary(&self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         // The canonical grammar only: digits, one '.', a leading '-'. The
         // converter also reads exponent notation, which here would land in
         // binary where "0.00001" is an exact decimal.
         if !s.strip_prefix('-').unwrap_or(s).bytes().all(|b| b.is_ascii_digit() || b == b'.') {
             return Err(OverflowDetected::ParseError);
         }
-        match decimal_literal::parse(s, FRAC_BITS, STORAGE_BITS) {
-            Some(Ok(c)) => Ok(StackValue::Binary(
+        match T::literal_to_storage(s) {
+            Some(Ok(storage)) => Ok(StackValue::Binary(
                 self.profile_max_binary_tier(),
-                decimal_literal::to_storage(&c),
+                storage,
                 CompactShadow::None,
             )),
             Some(Err(e)) => Err(e),
@@ -246,7 +230,7 @@ impl StackEvaluator {
     /// - "0.333..." → numerator = 333, denominator = 999 → reduces to 1/3
     /// - "0.142857..." → numerator = 142857, denominator = 999999 → reduces to 1/7
     /// - "2.333..." → 2 + 333/999 → 2331/999 → reduces to 7/3
-    pub(crate) fn parse_repeating_decimal(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_repeating_decimal(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         // Remove ellipsis
         let trimmed = s.trim_end_matches("...");
         let dot_pos = trimmed.find('.').ok_or(OverflowDetected::ParseError)?;
@@ -287,7 +271,7 @@ impl StackEvaluator {
     /// 255). Before 0.6.4 the digits were stored as raw storage bits at tier 1
     /// while the shadow said 255/1, so `0xFF` alone, `0xFF + 1` and the shadow
     /// disagreed, and values beyond the storage width wrapped.
-    pub(crate) fn parse_binary_hex(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_binary_hex(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         let hex_str = s.trim_start_matches("0x").trim_start_matches("0X");
         let value = i128::from_str_radix(hex_str, 16)
             .map_err(|_| OverflowDetected::ParseError)?;
@@ -295,7 +279,7 @@ impl StackEvaluator {
     }
 
     /// Parse binary literal: the integer it denotes (`0b101` is 5), as hex.
-    pub(crate) fn parse_binary_bin(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_binary_bin(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         let bin_str = s.trim_start_matches("0b").trim_start_matches("0B");
         let value = i128::from_str_radix(bin_str, 2)
             .map_err(|_| OverflowDetected::ParseError)?;
@@ -303,7 +287,7 @@ impl StackEvaluator {
     }
 
     /// Parse fraction to symbolic domain
-    pub(crate) fn parse_fraction(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_fraction(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         let slash_pos = s.find('/').ok_or(OverflowDetected::ParseError)?;
         // Reject multiple slashes (e.g. "1/2/3")
         if s[slash_pos + 1..].contains('/') {
@@ -330,7 +314,7 @@ impl StackEvaluator {
     /// - Q64.64: value << 64
     /// - Q128.128: value << 128
     /// - Q256.256: value << 256
-    pub(crate) fn parse_integer(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_integer(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         match s.parse::<i128>() {
             Ok(value) => self.integer_value(value),
             // Beyond i128: the scientific range (2^255) still holds it; before
@@ -341,63 +325,20 @@ impl StackEvaluator {
 
     /// An integer literal's value: binary storage when it fits the profile's
     /// integer range, the exact rational otherwise.
-    fn integer_value(&self, value: i128) -> Result<StackValue, OverflowDetected> {
+    fn integer_value(&self, value: i128) -> Result<StackValue<T>, OverflowDetected> {
         // Create shadow: exact rational = value/1
         let shadow = CompactShadow::from_rational(value, 1);
 
         // Convert to Q-format based on profile (shift left by fractional bits)
         let storage_tier = self.profile_max_binary_tier();
 
-        #[cfg(table_format = "q256_256")]
-        {
-            let q_value = I512::from_i128(value) << 256;
-            Ok(StackValue::Binary(storage_tier, q_value, shadow))
+        match T::integer_value(value) {
+            Some(q_value) => Ok(StackValue::Binary(storage_tier, q_value, shadow)),
+            // Out-of-range integers fall back to the exact Symbolic domain
+            // (0.5.0 item 0: the ladder top never fails).
+            None => Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1))),
         }
 
-        #[cfg(table_format = "q128_128")]
-        {
-            let q_value = I256::from_i128(value) << 128;
-            Ok(StackValue::Binary(storage_tier, q_value, shadow))
-        }
-
-        #[cfg(table_format = "q64_64")]
-        {
-            // Guard: value << 64 wraps silently for |value| > i64::MAX.
-            // Q64.64 has 64 integer bits (signed), so valid range is i64.
-            // Out-of-range integers fall back to the Symbolic domain — the
-            // UGOD ladder top never fails (0.5.0 item 0: parse used to
-            // error with Overflow here, so e.g. evaluate("1000000" * ...)
-            // failed on narrow profiles while succeeding everywhere else).
-            if value > i64::MAX as i128 || value < i64::MIN as i128 {
-                return Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)));
-            }
-            let q_value = value << 64;
-            Ok(StackValue::Binary(storage_tier, q_value, shadow))
-        }
-
-        #[cfg(table_format = "q32_32")]
-        {
-            // Q32.32 has 32 integer bits (signed), valid range is i32.
-            // Out-of-range integers fall back to Symbolic (see q64_64 arm).
-            if value > i32::MAX as i128 || value < i32::MIN as i128 {
-                return Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)));
-            }
-            let q_value = (value as i64) << 32;
-            Ok(StackValue::Binary(storage_tier, q_value, shadow))
-        }
-
-        #[cfg(table_format = "q16_16")]
-        {
-            // Integer range check: max integer = 2^(STORAGE_BITS - FRAC_BITS - 1) - 1
-            let max_int = (1i128 << frac_config::INTEGER_BITS) - 1;
-            let min_int = -(1i128 << frac_config::INTEGER_BITS);
-            // Out-of-range integers fall back to Symbolic (see q64_64 arm).
-            if value > max_int || value < min_int {
-                return Ok(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)));
-            }
-            let q_value = (value as i32) << frac_config::FRAC_BITS;
-            Ok(StackValue::Binary(storage_tier, q_value, shadow))
-        }
 
     }
 
@@ -410,7 +351,7 @@ impl StackEvaluator {
     /// 19/38/77 decimals), NOT crude rational approximations.
     ///
     /// **EXAMPLES**: "pi" → π (full precision), "e" → Euler's number, "sqrt2" → √2
-    pub(crate) fn parse_named_constant(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_named_constant(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         use crate::fixed_point::domains::symbolic::rational::mathematical_constants::SymbolicConstants;
 
         // Fast match on ASCII constant names and UTF-8 symbols.
@@ -455,10 +396,10 @@ impl StackEvaluator {
     /// **ALGORITHM**: Converts decimal string to base-3 scaled integer via UniversalTernaryFixed
     /// **STORAGE**: Ternary(tier, raw_value) where raw_value = value × 3^frac_trits
     /// **PREFIX**: `0t1.5` → parse "1.5" → base-3 fixed-point representation
-    pub(crate) fn parse_ternary_value(&mut self, s: &str) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn parse_ternary_value(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         use crate::fixed_point::domains::balanced_ternary::UniversalTernaryFixed;
         let ternary = UniversalTernaryFixed::from_str(s)?;
-        let (tier, storage) = ternary_to_storage(&ternary)?;
+        let (tier, storage) = T::ternary_to_storage(&ternary)?;
 
         // Create shadow: raw_value / 3^frac_trits (when both fit in i128/u128)
         let shadow = {
@@ -469,20 +410,7 @@ impl StackEvaluator {
             if frac_trits <= 80 {
                 let den = 3u128.pow(frac_trits);
 
-                #[cfg(table_format = "q16_16")]
-                let raw_opt: Option<i128> = Some(storage as i128);
-
-                #[cfg(table_format = "q32_32")]
-                let raw_opt: Option<i128> = Some(storage as i128);
-
-                #[cfg(table_format = "q64_64")]
-                let raw_opt: Option<i128> = Some(storage);
-
-                #[cfg(table_format = "q128_128")]
-                let raw_opt: Option<i128> = if storage.fits_in_i128() { Some(storage.as_i128()) } else { None };
-
-                #[cfg(table_format = "q256_256")]
-                let raw_opt: Option<i128> = if storage.fits_in_i128() { Some(storage.as_i128()) } else { None };
+                let raw_opt: Option<i128> = T::storage_to_i128_opt(&storage);
 
                 match raw_opt {
                     Some(raw) => CompactShadow::from_rational(raw, den),
@@ -496,7 +424,7 @@ impl StackEvaluator {
     }
 
     /// Load mathematical constant with full profile-aware precision
-    pub(crate) fn load_constant(&mut self, constant: ConstantId) -> Result<StackValue, OverflowDetected> {
+    pub(crate) fn load_constant(&mut self, constant: ConstantId) -> Result<StackValue<T>, OverflowDetected> {
         use crate::fixed_point::domains::symbolic::rational::mathematical_constants::SymbolicConstants;
 
         match constant {

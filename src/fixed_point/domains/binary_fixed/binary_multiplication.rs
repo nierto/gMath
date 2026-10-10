@@ -5,6 +5,7 @@
 //! **SIMD**: AVX2-accelerated Q64.64 multiply for transcendental hotpath
 
 use super::binary_types::*;
+use super::binary_types::TIER1_DEFAULT_FRAC_BITS;
 use super::i256::{I256, mul_i128_to_i256};
 use crate::fixed_point::{I512, I1024};
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -18,14 +19,12 @@ use std::arch::x86_64::*;
 
 impl BinaryTier1 {
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {
-        // q16_16: FRAC_BITS may be customized via GMATH_FRAC_BITS (default 16).
-        // All other profiles: BinaryTier1 is an internal UGOD tier, always Q16.16.
-        let fb: u32 = {
-            #[cfg(table_format = "q16_16")]
-            { crate::fixed_point::frac_config::FRAC_BITS as u32 }
-            #[cfg(not(table_format = "q16_16"))]
-            { 16 }
-        };
+        self.checked_mul_with_frac(other, TIER1_DEFAULT_FRAC_BITS)
+    }
+
+    /// `self * other` at `fb` fraction bits, nearest with ties toward +infinity,
+    /// `None` when the product leaves the tier.
+    pub fn checked_mul_with_frac(&self, other: &Self, fb: u32) -> Option<Self> {
         let wide = (self.value as i64) * (other.value as i64);
         let round_bit = (wide >> (fb - 1)) & 1;
         let shifted = (wide >> fb) + round_bit;
@@ -156,10 +155,16 @@ impl BinaryTier6 {
 
 impl UniversalBinaryFixed {
     pub fn multiply(&self, other: &Self) -> Result<Self, OverflowDetected> {
+        self.multiply_with_tier1_frac(other, TIER1_DEFAULT_FRAC_BITS)
+    }
+
+    /// [`Self::multiply`] with tier 1 at `tier1_frac` fraction bits (the storage
+    /// format's `F` on a 32-bit word, 16 for the internal Q16.16 tier).
+    pub fn multiply_with_tier1_frac(&self, other: &Self, tier1_frac: u32) -> Result<Self, OverflowDetected> {
         let (a, b) = self.align_to_common_tier(other);
         match (&a.value, &b.value) {
             (BinaryValue::Tier1(x), BinaryValue::Tier1(y)) => {
-                match x.checked_mul(y) {
+                match x.checked_mul_with_frac(y, tier1_frac) {
                     Some(r) => Ok(Self { value: BinaryValue::Tier1(r), current_tier: 1 }),
                     None => {
                         let x2 = x.to_tier2();

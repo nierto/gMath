@@ -1,3 +1,7 @@
+use crate::fixed_point::fixed_num::Fixed;
+use crate::fixed_point::imperative::FixedPoint;
+#[allow(unused_imports)]
+use crate::fixed_point::{I256, I512};
 use super::*;
 use crate::fixed_point::universal::fasc::lazy_expr::gmath;
 use crate::fixed_point::universal::tier_types::{CompactShadow, ShadowConstantId};
@@ -14,7 +18,7 @@ fn fitting_bin() -> (&'static str, i128) {
 
 #[test]
 fn test_literal_parsing() {
-    let mut eval = StackEvaluator::new(DeploymentProfile::default());
+    let mut eval = StackEvaluator::<FixedPoint>::new();
 
     // Test decimal parsing (domain check only, not value — value is profile-specific BinaryStorage)
     let decimal = eval.parse_literal("123.456").unwrap();
@@ -167,13 +171,13 @@ fn test_exp_from_decimal() {
 #[test]
 fn test_exp_profile_tier_selection() {
     // Test that different profiles select correct tiers
-    let eval_embedded = StackEvaluator::new(DeploymentProfile::Embedded);
+    let eval_embedded = StackEvaluator::<Fixed<i128, 64>>::new();
     assert_eq!(eval_embedded.profile_max_binary_tier(), 3);
 
-    let eval_balanced = StackEvaluator::new(DeploymentProfile::Balanced);
+    let eval_balanced = StackEvaluator::<Fixed<I256, 128>>::new();
     assert_eq!(eval_balanced.profile_max_binary_tier(), 4);
 
-    let eval_scientific = StackEvaluator::new(DeploymentProfile::Scientific);
+    let eval_scientific = StackEvaluator::<Fixed<I512, 256>>::new();
     assert_eq!(eval_scientific.profile_max_binary_tier(), 5);
 }
 
@@ -318,7 +322,7 @@ fn test_sinh_zero() {
     // sinh(0) = 0 — profile-independent
     let expr = gmath("0").sinh();
     let result = evaluate(&expr).unwrap();
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let val = eval.to_binary_storage(&result).unwrap();
     let zero = try_to_binary_storage(0).unwrap();
     assert_eq!(val, zero, "sinh(0) should be exactly 0");
@@ -329,7 +333,7 @@ fn test_cosh_zero() {
     // cosh(0) = 1 — compare using profile-native Q-format
     let expr = gmath("0").cosh();
     let result = evaluate(&expr).unwrap();
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let val = eval.to_binary_storage(&result).unwrap();
     let one_val = eval.to_binary_storage(&eval.make_binary_int(1)).unwrap();
     assert_eq!(val, one_val, "cosh(0) should be exactly 1.0");
@@ -340,7 +344,7 @@ fn test_tanh_zero() {
     // tanh(0) = 0 — profile-independent
     let expr = gmath("0").tanh();
     let result = evaluate(&expr).unwrap();
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let val = eval.to_binary_storage(&result).unwrap();
     let zero = try_to_binary_storage(0).unwrap();
     assert_eq!(val, zero, "tanh(0) should be exactly 0");
@@ -412,7 +416,7 @@ fn test_identity_cosh2_minus_sinh2() {
     let sinh_val = evaluate(&expr_sinh).unwrap();
 
     // Compute cosh² and sinh²
-    let mut eval = StackEvaluator::new(DeploymentProfile::default());
+    let mut eval = StackEvaluator::<FixedPoint>::new();
     let cosh2 = eval.multiply_values(cosh_val.clone(), cosh_val).unwrap();
     let sinh2 = eval.multiply_values(sinh_val.clone(), sinh_val).unwrap();
     let diff = eval.subtract_values(cosh2, sinh2).unwrap();
@@ -431,7 +435,7 @@ fn test_asinh_zero() {
     // asinh(0) = ln(0 + sqrt(0 + 1)) = ln(1) = 0
     let expr = gmath("0").asinh();
     let result = evaluate(&expr).unwrap();
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let _val = eval.to_binary_storage(&result).unwrap();
     let _zero = try_to_binary_storage(0).unwrap();
     // Allow small tolerance from ln(1) computation
@@ -476,7 +480,7 @@ fn test_atanh_zero() {
     // atanh(0) = ln(1/1) / 2 = 0
     let expr = gmath("0").atanh();
     let result = evaluate(&expr).unwrap();
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let _val = eval.to_binary_storage(&result).unwrap();
     let _zero = try_to_binary_storage(0).unwrap();
     #[cfg(table_format = "q256_256")]
@@ -559,7 +563,7 @@ fn test_atan2_display() {
 fn test_sin_zero() {
     let expr = gmath("0").sin();
     let result = evaluate(&expr).expect("sin(0) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let zero = eval.make_binary_int(0);
     let result_bs = eval.to_binary_storage(&result).unwrap();
     let zero_bs = eval.to_binary_storage(&zero).unwrap();
@@ -570,7 +574,7 @@ fn test_sin_zero() {
 fn test_cos_zero() {
     let expr = gmath("0").cos();
     let result = evaluate(&expr).expect("cos(0) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let one = eval.make_binary_int(1);
     let result_bs = eval.to_binary_storage(&result).unwrap();
     let one_bs = eval.to_binary_storage(&one).unwrap();
@@ -581,7 +585,7 @@ fn test_cos_zero() {
 fn test_tan_zero() {
     let expr = gmath("0").tan();
     let result = evaluate(&expr).expect("tan(0) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let zero = eval.make_binary_int(0);
     let result_bs = eval.to_binary_storage(&result).unwrap();
     let zero_bs = eval.to_binary_storage(&zero).unwrap();
@@ -592,7 +596,7 @@ fn test_tan_zero() {
 fn test_atan_zero() {
     let expr = gmath("0").atan();
     let result = evaluate(&expr).expect("atan(0) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let zero = eval.make_binary_int(0);
     let result_bs = eval.to_binary_storage(&result).unwrap();
     let zero_bs = eval.to_binary_storage(&zero).unwrap();
@@ -603,7 +607,7 @@ fn test_atan_zero() {
 fn test_asin_zero() {
     let expr = gmath("0").asin();
     let result = evaluate(&expr).expect("asin(0) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
     let zero = eval.make_binary_int(0);
     let zero_bs = eval.to_binary_storage(&zero).unwrap();
@@ -627,7 +631,7 @@ fn test_acos_zero() {
     // that becomes 1 ULP after downscale rounding.
     let expr = gmath("0").acos();
     let result = evaluate(&expr).expect("acos(0) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let _result_bs = eval.to_binary_storage(&result).unwrap();
     #[cfg(table_format = "q256_256")]
     {
@@ -669,7 +673,7 @@ fn test_sin_cos_pythagorean_identity() {
     let sin_val = evaluate(&sin_expr).expect("sin(1) should succeed");
     let cos_val = evaluate(&cos_expr).expect("cos(1) should succeed");
 
-    let mut eval = StackEvaluator::new(DeploymentProfile::default());
+    let mut eval = StackEvaluator::<FixedPoint>::new();
     let sin_sq = eval.multiply_values(sin_val.clone(), sin_val).unwrap();
     let cos_sq = eval.multiply_values(cos_val.clone(), cos_val).unwrap();
     let sum = eval.add_values(sin_sq, cos_sq).unwrap();
@@ -689,7 +693,7 @@ fn test_atan_one_is_pi_over_4() {
     // atan(1) = π/4 ≈ 0.78539816...
     let expr = gmath("1").atan();
     let result = evaluate(&expr).expect("atan(1) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
 
     // π/4 in Q64.64 ≈ 14488038916154245685 (0x C90FDAA2 2168C234)
@@ -706,7 +710,7 @@ fn test_sin_basic() {
     // sin(1) ≈ 0.8414709848... in Q64.64
     let expr = gmath("1").sin();
     let result = evaluate(&expr).expect("sin(1) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
 
     // Just verify it's positive and less than 1.0
@@ -721,7 +725,7 @@ fn test_cos_basic() {
     // cos(1) ≈ 0.5403023058... in Q64.64
     let expr = gmath("1").cos();
     let result = evaluate(&expr).expect("cos(1) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
 
     // Just verify it's positive and less than 1.0
@@ -736,7 +740,7 @@ fn test_tan_one() {
     // tan(1) ≈ 1.5574077... in Q64.64
     let expr = gmath("1").tan();
     let result = evaluate(&expr).expect("tan(1) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
 
     // tan(1) should be > 1
@@ -752,7 +756,7 @@ fn test_atan2_basic() {
     // atan2(1, 1) = π/4 ≈ 0.78539816...
     let expr = gmath("1").atan2(gmath("1"));
     let result = evaluate(&expr).expect("atan2(1,1) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
 
     let pi_over_4_approx: i128 = 14488038916154245685;
@@ -767,7 +771,7 @@ fn test_asin_roundtrip() {
     let inner_expr = gmath("0.5").sin();
     let asin_expr = inner_expr.asin();
     let result = evaluate(&asin_expr).expect("asin(sin(0.5)) should succeed");
-    let eval = StackEvaluator::new(DeploymentProfile::default());
+    let eval = StackEvaluator::<FixedPoint>::new();
     let result_bs = eval.to_binary_storage(&result).unwrap();
 
     // Should be close to 0.5 in Q64.64
@@ -1194,7 +1198,7 @@ fn test_shadow_convenience_accessors() {
 #[test]
 fn test_shadow_hex_literal() {
     // Hex literals should have shadows
-    let mut eval = StackEvaluator::new(DeploymentProfile::default());
+    let mut eval = StackEvaluator::<FixedPoint>::new();
     let (lit, value) = fitting_hex();
     let result = eval.parse_literal(lit).unwrap();
     let shadow = result.shadow();
@@ -1205,7 +1209,7 @@ fn test_shadow_hex_literal() {
 #[test]
 fn test_shadow_binary_literal() {
     // Binary literals should have shadows
-    let mut eval = StackEvaluator::new(DeploymentProfile::default());
+    let mut eval = StackEvaluator::<FixedPoint>::new();
     let (lit, value) = fitting_bin();
     let result = eval.parse_literal(lit).unwrap();
     let shadow = result.shadow();

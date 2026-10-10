@@ -7,7 +7,7 @@
 //! **ARCHITECTURE**:
 //! - Layer 1: Shadow classifier (~15 ns): factors denominator, sets exact_in bits
 //! - Layer 2: Routing table (~3 ns): static lookup in .rodata, zero sync
-//! - Layer 3: Tree walker (~200 ns): bottom-up LazyExpr annotation
+//! - Layer 3: Tree walker (~200 ns): bottom-up LazyExpr<T> annotation
 //!
 //! **INVARIANTS**:
 //! - Zero mutable state; routing table in .rodata
@@ -16,7 +16,7 @@
 //! - O(1) per-node routing decision via table lookup
 
 use crate::fixed_point::universal::tier_types::CompactShadow;
-use crate::fixed_point::universal::fasc::stack_evaluator::StackValue;
+use crate::fixed_point::universal::fasc::stack_evaluator::{FascFormat, StackValue};
 use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
 
 // ============================================================================
@@ -133,12 +133,12 @@ const NUM_OPS: usize = 21;
 // SHADOW CLASSIFIER (~15 ns)
 // ============================================================================
 
-/// Classify a StackValue by factoring its CompactShadow denominator.
+/// Classify a StackValue<T> by factoring its CompactShadow denominator.
 ///
 /// **Performance**: ~15 ns for shadow path (typical), ~5 ns for variant fallback.
 /// **Coverage**: ~95% of parsed values have shadows (from parse_literal).
 #[inline]
-pub fn classify(value: &StackValue) -> OperandClass {
+pub fn classify<T: FascFormat>(value: &StackValue<T>) -> OperandClass {
     let shadow = value.shadow();
 
     // Fast path: shadow carries rational (num, den) — factor denominator
@@ -167,7 +167,7 @@ pub fn classify(value: &StackValue) -> OperandClass {
         return OperandClass::SYMBOLIC_ONLY;
     }
 
-    // No shadow: fall back to StackValue variant
+    // No shadow: fall back to StackValue<T> variant
     classify_by_variant(value)
 }
 
@@ -221,7 +221,7 @@ pub fn classify_denominator(den: u128) -> OperandClass {
 
 /// Fallback classification when no shadow is available.
 #[inline]
-fn classify_by_variant(value: &StackValue) -> OperandClass {
+fn classify_by_variant<T: FascFormat>(value: &StackValue<T>) -> OperandClass {
     match value {
         StackValue::Binary(..) | StackValue::BinaryCompute(..) => OperandClass::BINARY_ONLY,
         StackValue::Decimal(..) | StackValue::DecimalCompute(..) => OperandClass {
@@ -353,14 +353,14 @@ pub fn route_unary_op(op: OpId, operand: OperandClass) -> DomainChoice {
 // CROSS-DOMAIN COERCION
 // ============================================================================
 
-/// Coerce a StackValue to the Decimal domain using its CompactShadow.
+/// Coerce a StackValue<T> to the Decimal domain using its CompactShadow.
 ///
 /// Returns `Some(Decimal(dp, scaled, shadow))` if the shadow's denominator
 /// has only factors of 2 and 5 (decimal-representable).
 /// Returns `None` if coercion is impossible.
 ///
 /// **Performance**: ~20 ns (shadow extraction + denominator factoring + scaling).
-pub fn coerce_to_decimal(value: &StackValue) -> Option<StackValue> {
+pub fn coerce_to_decimal<T: FascFormat>(value: &StackValue<T>) -> Option<StackValue<T>> {
     match value {
         StackValue::Decimal(..) | StackValue::DecimalCompute(..) => Some(value.clone()),
         _ => {
@@ -374,13 +374,13 @@ pub fn coerce_to_decimal(value: &StackValue) -> Option<StackValue> {
     }
 }
 
-/// Convert a rational (num/den) to a Decimal StackValue via denominator factoring.
+/// Convert a rational (num/den) to a Decimal StackValue<T> via denominator factoring.
 ///
 /// Given value = num/den where den = 2^a × 5^b:
 ///   dp = max(a, b)
 ///   scaled = num × 2^(dp-a) × 5^(dp-b)
 ///   result = Decimal(dp, to_binary_storage(scaled), shadow)
-fn shadow_to_decimal(num: i128, den: u128, shadow: CompactShadow) -> Option<StackValue> {
+fn shadow_to_decimal<T: FascFormat>(num: i128, den: u128, shadow: CompactShadow) -> Option<StackValue<T>> {
     if den == 0 {
         return None;
     }
@@ -414,9 +414,8 @@ fn shadow_to_decimal(num: i128, den: u128, shadow: CompactShadow) -> Option<Stac
         scaled = scaled.checked_mul(5)?;
     }
 
-    use crate::fixed_point::universal::fasc::stack_evaluator::conversion::try_to_binary_storage;
     // beyond the realtime / compact decimal storage: not decimal-coercible
-    let storage = try_to_binary_storage(scaled).ok()?;
+    let storage = T::try_to_binary_storage(scaled).ok()?;
     Some(StackValue::Decimal(dp as u8, storage, shadow))
 }
 
@@ -424,14 +423,14 @@ fn shadow_to_decimal(num: i128, den: u128, shadow: CompactShadow) -> Option<Stac
 // TREE WALKER — O(N) bottom-up expression routing
 // ============================================================================
 
-/// Walk a LazyExpr tree bottom-up, returning the root's OperandClass.
+/// Walk a LazyExpr<T> tree bottom-up, returning the root's OperandClass.
 ///
 /// **Complexity**: O(N) in tree size, single recursive pass.
 /// **Performance**: ~200-300 ns for typical 10-node expressions.
 ///
 /// The returned OperandClass represents the domains that can produce an
 /// exact (or best-available) result for the entire expression.
-pub fn route_expression(expr: &LazyExpr) -> OperandClass {
+pub fn route_expression<T: FascFormat>(expr: &LazyExpr<T>) -> OperandClass {
     match expr {
         LazyExpr::Literal(s) => classify_literal_string(s),
         LazyExpr::Value(v) => classify(v),
@@ -780,7 +779,7 @@ mod tests {
     #[test]
     fn tree_walker_literal_add() {
         // gmath("0.1") + gmath("255")
-        let expr = LazyExpr::Add(
+        let expr: LazyExpr = LazyExpr::Add(
             Box::new(LazyExpr::Literal("0.1")),
             Box::new(LazyExpr::Literal("255")),
         );
@@ -792,7 +791,7 @@ mod tests {
 
     #[test]
     fn tree_walker_integer_add() {
-        let expr = LazyExpr::Add(
+        let expr: LazyExpr = LazyExpr::Add(
             Box::new(LazyExpr::Literal("3")),
             Box::new(LazyExpr::Literal("6")),
         );
@@ -803,7 +802,7 @@ mod tests {
     #[test]
     fn tree_walker_transcendental() {
         // exp("0.1") → decimal engine → decimal-only class
-        let expr = LazyExpr::Exp(Box::new(LazyExpr::Literal("0.1")));
+        let expr: LazyExpr = LazyExpr::Exp(Box::new(LazyExpr::Literal("0.1")));
         let class = route_expression(&expr);
         assert_ne!(class.exact_in & DECIMAL_BIT, 0);
         assert_eq!(class.exact_in & BINARY_BIT, 0);
@@ -812,11 +811,11 @@ mod tests {
     #[test]
     fn tree_walker_mixed_chain() {
         // (0.1 + 255).exp() → decimal add → decimal exp
-        let inner = LazyExpr::Add(
+        let inner: LazyExpr = LazyExpr::Add(
             Box::new(LazyExpr::Literal("0.1")),
             Box::new(LazyExpr::Literal("255")),
         );
-        let expr = LazyExpr::Exp(Box::new(inner));
+        let expr: LazyExpr = LazyExpr::Exp(Box::new(inner));
         let class = route_expression(&expr);
         assert_ne!(class.exact_in & DECIMAL_BIT, 0);
     }

@@ -26,7 +26,7 @@
 //! GMATH_PROFILE=embedded cargo test --test decimal_exp_range_validation -- --nocapture
 //! ```
 
-use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute::BinaryStorage;
+use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute::{BinaryStorage, ComputeStorage};
 use g_math::fixed_point::domains::decimal_fixed::transcendental::{
     decimal_compute_from_int, decimal_compute_is_zero, decimal_downscale_to_storage, decimal_exp,
     decimal_upscale_to_compute, DECIMAL_STORAGE_MAX_DP,
@@ -208,7 +208,7 @@ fn engine_exp_at_canonical_storage_is_correctly_rounded() {
     let (mut errors, mut mismatches, mut max_units) = (0usize, 0usize, 0u128);
     let start = std::time::Instant::now();
     for &(x, expected) in ENGINE_EXP_REFS {
-        let xc = decimal_upscale_to_compute(storage(x), dp).expect("input upscale");
+        let xc = decimal_upscale_to_compute::<ComputeStorage>(storage(x), dp).expect("input upscale");
         match decimal_exp(xc).and_then(|r| decimal_downscale_to_storage(r, dp)) {
             Ok(v) => {
                 let u = units(v, storage(expected));
@@ -242,16 +242,16 @@ fn engine_exp_reports_overflow() {
     // one storage unit past the largest argument whose exp fits BinaryStorage:
     // the engine value exists, the narrowing reports it
     let past = storage(ENGINE_EXP_TOP) + one_unit();
-    let xc = decimal_upscale_to_compute(past, dp).expect("input upscale");
+    let xc = decimal_upscale_to_compute::<ComputeStorage>(past, dp).expect("input upscale");
     let r = decimal_exp(xc).and_then(|r| decimal_downscale_to_storage(r, dp));
     assert_eq!(r, Err(OverflowDetected::TierOverflow));
     // far past the compute tier: exp itself reports it
     for k in [COMPUTE_BITS, COMPUTE_BITS + 1, 2 * COMPUTE_BITS] {
-        assert_eq!(decimal_exp(decimal_compute_from_int(k)), Err(OverflowDetected::TierOverflow), "exp({k})");
+        assert_eq!(decimal_exp(decimal_compute_from_int::<ComputeStorage>(k)), Err(OverflowDetected::TierOverflow), "exp({k})");
     }
     // and far below zero the result is 0, not an error
     for k in [COMPUTE_BITS, COMPUTE_BITS + 1, 2 * COMPUTE_BITS] {
-        let r = decimal_exp(decimal_compute_from_int(-k)).expect("exp of a large negative");
+        let r = decimal_exp(decimal_compute_from_int::<ComputeStorage>(-k)).expect("exp of a large negative");
         assert!(decimal_compute_is_zero(&r), "exp(-{k}) should round to 0");
     }
 }

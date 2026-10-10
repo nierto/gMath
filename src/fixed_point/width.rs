@@ -205,7 +205,7 @@ word_wide_int!(I2048, 2048, usize, crate::fixed_point::domains::binary_fixed::i2
 /// `Orient` is the exact accumulator of the orientation predicates and the
 /// fused kernels (it holds the exact product of two compute values).
 pub trait Storage: WideInt {
-    type Compute: WideInt;
+    type Compute: WideInt + crate::fixed_point::domains::decimal_fixed::transcendental::DecimalWord<Narrow = Self>;
     type Orient: WideInt;
 
     /// Sign extension to the compute word (no shift; exact).

@@ -21,14 +21,21 @@ Modules: g_math::canonical
 | `LazyMatrixExpr` | `super::universal::fasc` |
 | `DomainMatrix` | `super::universal::fasc` |
 | `gmath` | `super::universal::fasc` |
+| `gmath_in` | `super::universal::fasc` |
 | `gmath_parse` | `super::universal::fasc` |
+| `gmath_parse_in` | `super::universal::fasc` |
 | `ConstantId` | `super::universal::fasc` |
 | `StackEvaluator` | `super::universal::fasc` |
 | `StackValue` | `super::universal::fasc` |
 | `evaluate` | `super::universal::fasc` |
+| `evaluate_in` | `super::universal::fasc` |
 | `evaluate_matrix` | `super::universal::fasc` |
 | `evaluate_sincos` | `super::universal::fasc` |
+| `evaluate_sincos_in` | `super::universal::fasc` |
 | `evaluate_sinhcosh` | `super::universal::fasc` |
+| `evaluate_sinhcosh_in` | `super::universal::fasc` |
+| `with_evaluator` | `super::universal::fasc` |
+| `FascFormat` | `super::universal::fasc` |
 | `GmathMode` | `super::universal::fasc` |
 | `ComputeMode` | `super::universal::fasc` |
 | `OutputMode` | `super::universal::fasc` |
@@ -146,14 +153,14 @@ A dynamically-sized vector of fixed-point values.
 | `dot` | Dot product of two vectors at compute tier (tier N+1). |
 | `length_squared` | Squared length (self . self). |
 | `length` | Length (Euclidean norm): the sum of squares and the root at the compute tier, one rounding (was `length_squared().sqrt()`: two roundings, and an overflow once the squared length left storage). |
-| `length_fused` | Fused length: sqrt(Σ x_i²) entirely at compute tier. |
-| `distance_to` | Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²) entirely at compute tier. |
 | `normalize` | Normalize in place (divide each component by length). |
 | `normalized` | Return a normalized copy. |
 | `map` | Apply a function to each component, returning a new vector. |
 | `iter` | Iterator over components. |
 | `iter_mut` | Mutable iterator over components. |
 | `metric_distance_safe` | Metric distance between two vectors (Euclidean) at compute tier. |
+| `length_fused` | Fused length: sqrt(Σ x_i²) entirely at compute tier. |
+| `distance_to` | Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²) entirely at compute tier. |
 | `dot_precise` | Compute-tier precise dot product. |
 | `cross` | Cross product (3D vectors only). |
 | `outer_product` | Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j]. |
@@ -167,7 +174,7 @@ Modules: FixedMatrix
 
 ### FixedMatrix
 
-A row-major matrix of fixed-point values.
+A row-major matrix of fixed-point values of one format.
 
 | Method | Summary |
 | --- | --- |
@@ -183,8 +190,8 @@ A row-major matrix of fixed-point values.
 | `transpose` | Transpose: Aᵀ[i][j] = A[j][i]. |
 | `trace` | Trace: sum of diagonal elements. |
 | `is_square` | Whether this is a square matrix. |
-| `row` | Extract a row as a FixedVector. |
-| `col` | Extract a column as a FixedVector. |
+| `row` | Extract a row as a FixedVector<Fixed<S, F>>. |
+| `col` | Extract a column as a FixedVector<Fixed<S, F>>. |
 | `mul_vector` | Matrix-vector multiply: y = A * x. |
 | `submatrix` | Extract a submatrix starting at (row, col) with given dimensions. |
 | `set_submatrix` | Insert a submatrix at position (row, col). |
@@ -322,7 +329,7 @@ Modules: g_math::fixed_point::imperative::fused
 | `sigmoid_mul_slice` | fn | [`sigmoid_mul`] element by element: `out[i] = x[i] * sigmoid(gate[i])`. |
 | `sigmoid_mul_in_place` | fn | [`sigmoid_mul`] in place: `x[i] *= sigmoid(gate[i])`. |
 | `entropy` | fn | Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the wide tier and the sum rounded to storage once. |
-| `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::dot` round. |
+| `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::<Fixed<S, F>>::dot` round. |
 | `dot_many_into` | fn | [`dot_many`] writing into a caller-provided slice: `out[k]` is the dot of the query with key `k`. |
 | `rms_norm` | fn | RMS normalisation with a learned scale: `out[i] = x[i] * weight[i] / sqrt(mean(x^2) + eps)`, each element rounded once (`eps` in Q64.64). |
 | `rms_norm_in_place` | fn | [`rms_norm`] in place. |
@@ -415,7 +422,7 @@ The outcome of a certified positive-definiteness test.
 
 | Method | Summary |
 | --- | --- |
-| `is_proven_positive_definite` | `true` only for [`PdVerdict::PositiveDefinite`]. |
+| `is_proven_positive_definite` | `true` only for [`PdVerdict::<Fixed<S, F>>::PositiveDefinite`]. |
 
 ## Linear algebra
 
@@ -447,10 +454,11 @@ Modules: g_math::fixed_point::imperative::decompose, g_math::fixed_point::impera
 | `rank` | fn | Numerical rank: count of singular values above threshold. |
 | `condition_number_2` | fn | 2-norm condition number: κ₂(A) = σ_max / σ_min. |
 | `nullspace` | fn | Nullspace basis: columns of V corresponding to near-zero singular values. |
-| `matrix_exp` | fn | Matrix exponential: exp(A) via Padé [6/6] with scaling-and-squaring. |
-| `matrix_sqrt` | fn | Matrix square root: A^{1/2} via Denman-Beavers iteration. |
-| `matrix_log` | fn | Matrix logarithm: log(A) via inverse scaling-and-squaring. |
-| `matrix_pow` | fn | Matrix power: A^p = exp(p * log(A)) for real scalar p. |
+| `MatrixFunctions` | trait | Compute-tier internal: exp(A) where A is already a ComputeMatrix. |
+| `matrix_exp` | fn | Matrix exponential via Pade approximation with scaling and squaring, computed on the working matrix of the format and rounded once. |
+| `matrix_sqrt` | fn | Principal matrix square root by the Denman-Beavers iteration on the working matrix of the format, rounded once. |
+| `matrix_log` | fn | Principal matrix logarithm by inverse scaling and squaring on the working matrix of the format, rounded once. |
+| `matrix_pow` | fn | `A^p = exp(p log A)`; `p` of 0, 1 and -1 are the identity, `A` and the inverse without the logarithm. |
 
 ### LUDecomposition
 
@@ -520,6 +528,18 @@ Result of Cholesky decomposition: A = LL^T.
 | `solve` |  |
 | `inverse` |  |
 
+### Fixed
+
+| Method | Summary |
+| --- | --- |
+| `exp` |  |
+| `sqrt` |  |
+| `log` |  |
+| `pow` |  |
+| `exp_compute` |  |
+| `sqrt_compute` |  |
+| `log_compute` |  |
+
 ## Geometry
 
 Modules: g_math::fixed_point::imperative::manifold, g_math::fixed_point::imperative::lie_group, g_math::fixed_point::imperative::curvature, g_math::fixed_point::imperative::projective, g_math::fixed_point::imperative::fiber_bundle
@@ -529,7 +549,7 @@ Modules: g_math::fixed_point::imperative::manifold, g_math::fixed_point::imperat
 | `Manifold` | trait | A Riemannian manifold with fixed-point arithmetic. |
 | `LieGroup` | trait | A Lie group with fixed-point arithmetic. |
 | `differentiation_step` | fn | Optimal step size for central differences: h = 2^(-FRAC_BITS/3). |
-| `MetricProvider` | trait | A metric function: given a point (as FixedVector of coordinates), returns the metric tensor g_ij as an n×n FixedMatrix. |
+| `MetricProvider` | trait | A metric function: given a point (as FixedVector<Fixed<S, F>> of coordinates), returns the metric tensor g_ij as an n×n FixedMatrix<Fixed<S, F>>. |
 | `christoffel` | fn | Compute Christoffel symbols Γ^k_{ij} at point p. |
 | `riemann_curvature` | fn | Compute Riemann curvature tensor R^l_{ijk} at point p. |
 | `ricci_tensor` | fn | Compute Ricci tensor Rᵢⱼ = R^k_{ikj} at point p. |
@@ -996,15 +1016,15 @@ A generic rank-N tensor with fixed-point entries.
 | --- | --- |
 | `new` | Create a zero-filled tensor with the given shape. |
 | `from_data` | Create a tensor from a flat data slice and shape. |
-| `rank` | Tensor rank (number of indices). |
+| `rank` | Tensor<Fixed<S, F>> rank (number of indices). |
 | `shape` | Shape: dimensions along each index. |
 | `len` | Total number of elements. |
 | `get` | Get element by multi-index. |
 | `set` | Set element by multi-index. |
 | `data` | Access the flat data slice. |
-| `to_matrix` | Convert a rank-2 tensor to FixedMatrix. |
-| `to_vector` | Convert a rank-1 tensor to FixedVector. |
-| `to_scalar` | Convert a rank-0 tensor to FixedPoint. |
+| `to_matrix` | Convert a rank-2 tensor to FixedMatrix<Fixed<S, F>>. |
+| `to_vector` | Convert a rank-1 tensor to FixedVector<Fixed<S, F>>. |
+| `to_scalar` | Convert a rank-0 tensor to Fixed<S, F>. |
 
 ### TruncatedSVD
 
@@ -1120,6 +1140,8 @@ Modules: g_math::tq19, g_math::tq19::bits, g_math::tq19::quantize _(feature: inf
 | `packed_trit_dot` | fn | Packed trit dot product with per-block scale factor. |
 | `packed_trit_matvec` | fn | Packed trit matrix-vector product with per-row scale factors. |
 | `packed_trit_matvec_par` | fn | Row-parallel packed trit matvec. |
+| `TqWord` | trait | The storage words the inference kernels run on: every word. |
+| `WideOutput` | trait | The storage words with a wide matvec output (the exact row value at 2F fractional bits, one truncation toward zero) and the row-scaled forms: i32 and i64. |
 | `tq19_matvec` | fn | TQ1.9 matrix-vector product (sequential). |
 | `tq19_matvec_batch` | fn | Batch TQ1.9 matvec with tiled accumulation. |
 | `tq19_matvec_q2f` | fn | Wide-output TQ1.9 matvec (sequential): 2·FRAC_BITS precision, one rounding. |
@@ -1139,7 +1161,7 @@ Modules: g_math::tq19, g_math::tq19::bits, g_math::tq19::quantize _(feature: inf
 | `to_raw` | fn | `trunc(v * 2^frac_bits)` toward zero as an i128. |
 | `to_q64_raw` | fn | The value at Q64.64: `trunc(v * 2^64)`. |
 | `to_storage_raw` | fn | The value at the build's storage format: `trunc(v * 2^FRAC_BITS)` toward zero. |
-| `to_fixed` | fn | The value as a `FixedPoint`, truncated toward zero; see [`to_storage_raw`]. |
+| `to_fixed` | fn | The value as a `Fixed<S, F>` (truncated toward zero), `TierOverflow` past the word. |
 | `to_tq19_raw` | fn | TQ1.9 raw value: `round(v * 3^9)`, half away from zero, unclamped (the caller clamps to `MAX_RAW` / `MIN_RAW`). |
 | `quantize_tq19` | fn | Quantise to a `TQ19Matrix` with the global TQ1.9 scale: each element is `round(v * 3^9)`, half away from zero. |
 | `quantize_tq19_rowscaled` | fn | Quantise to a row-scaled TQ1.9 matrix by exact rational rounding: each row quantises against its own largest magnitude, `q = round(v * MAX_RAW / max\|w\|)` (half away from zero), and carries the scale `round(max\|w\| * 3^9 * 2^32 / MAX_RAW)` in unsigned Q32.32. |
@@ -1167,6 +1189,27 @@ Row-major TQ1.9 weight matrix.
 | `matvec_q2f` | Wide-output matvec: each row at 2·FRAC_BITS fractional precision with exactly one rounding. |
 | `matvec_q2f_par` | Row-parallel wide-output matvec. |
 | `matvec_q2f_batch_par` | Row-parallel wide-output batch matvec. |
+
+### i64
+
+| Method | Summary |
+| --- | --- |
+| `scale_dot` |  |
+| `wide_output` |  |
+| `rowscaled_scale` |  |
+| `rowscaled_scale_q2f` |  |
+
+### i32
+
+| Method | Summary |
+| --- | --- |
+| `tq19_dot_fast` |  |
+| `trit_dot_fast` |  |
+| `unchecked_sum_fits` |  |
+| `scale_dot` |  |
+| `wide_output` |  |
+| `rowscaled_scale` |  |
+| `rowscaled_scale_q2f` |  |
 
 ### PlaneData
 
@@ -1253,14 +1296,14 @@ A row-major matrix of five-trit codes with a per-row scale.
 | `data` |  |
 | `scales_q32` |  |
 | `size_bytes` | Bytes of weight + scale storage (1 B/weight + 8 B/row). |
-| `matvec` | Matvec: `out[r] = floor(sum(code * x) * s_r / 2^32)`. |
-| `matvec_par` | Row-parallel [`matvec`](Self::matvec): the same results. |
-| `matvec_batch_par` | Batched matvec. |
-| `matvec_batch_par_into` | [`matvec_batch_par`](Self::matvec_batch_par) writing into a caller-provided buffer, flat and batch-major: `out[b * rows + r]` is row `r` of the result for `batch[b]`. |
-| `matvec_q2f` | Wide-output matvec at `2 * FRAC_BITS` fractional bits: `floor(sum(code * x) * s_r / 2^(32 - FRAC_BITS))`, one rounding. |
-| `matvec_q2f_par` | Row-parallel [`matvec_q2f`](Self::matvec_q2f): the same results. |
 | `write_to` | Serialize: `rows (u32) \| cols (u32) \| codes (i8 each) \| scales (u64 each)`, little-endian. |
 | `read_from` | Deserialize (inverse of [`write_to`](Self::write_to)). |
+| `matvec` | `y = W x` with per-row scales: `floor(sum(code * x) * s_r / 2^32)`. |
+| `matvec_par` | [`RowScaledTQ5::matvec`] with the rows in parallel. |
+| `matvec_batch_par` | A batch of activations, rows in parallel, one result vector per activation. |
+| `matvec_batch_par_into` | [`RowScaledTQ5::matvec_batch_par`] into a caller buffer of `batch.len() * rows` values, activation-major. |
+| `matvec_q2f` | Wide-output matvec at `2F` fractional bits: `floor(sum(code * x) * s_r / 2^(32 - F))`, one rounding. |
+| `matvec_q2f_par` | [`RowScaledTQ5::matvec_q2f`] with the rows in parallel. |
 
 ### WeightBits
 
@@ -1279,18 +1322,18 @@ Modules: g_math::compute_tier _(feature: inference)_
 
 | Item | Kind | Summary |
 | --- | --- | --- |
-| `one` | fn | The value `1.0` at compute-tier scale (`1 << COMPUTE_FRAC_BITS`). |
-| `ceiling` | fn | The compute tier's maximum value: the saturation ceiling for [`exp`]. |
-| `from_fixed` | fn | Promote a `FixedPoint` (storage tier) to the compute tier. |
-| `to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint` (single rounding). |
-| `try_to_fixed` | fn | Round a compute-tier value to the nearest `FixedPoint`, or `None` on storage overflow. |
-| `exp` | fn | `e^x` at the compute tier. |
-| `ln` | fn | `ln(x)` at the compute tier. |
-| `sqrt` | fn | `sqrt(x)` at the compute tier. |
-| `sinhcosh` | fn | `(sinh(x), cosh(x))` at the compute tier from one shared exponential pair. |
-| `sigmoid` | fn | `1 / (1 + e^-x)` at the compute tier. |
-| `softplus` | fn | `ln(1 + e^x)` (softplus) at the compute tier. |
-| `ln1p` | fn | `ln(1 + x)` at the compute tier. |
+| `one` | fn | 1.0 at the compute tier of the format `T`. |
+| `ceiling` | fn | The exponential's saturation value at the compute tier of `T`. |
+| `from_fixed` | fn | A storage value lifted to its compute tier (exact). |
+| `to_fixed` | fn | A compute-tier value rounded to storage (nearest, ties toward +inf). |
+| `try_to_fixed` | fn | A compute-tier value rounded to storage, `None` if it does not fit. |
+| `exp` | fn | e^x at the compute tier; saturates at [`ceiling`], never wraps. |
+| `ln` | fn | ln x at the compute tier. |
+| `sqrt` | fn | sqrt x at the compute tier. |
+| `sinhcosh` | fn | (sinh x, cosh x) at the compute tier from one exponential pair. |
+| `sigmoid` | fn | 1 / (1 + e^-x) at the compute tier (sign-split: the exponential argument is never positive and the denominator stays in [1, 2]). |
+| `softplus` | fn | ln(1 + e^x) at the compute tier (sign-split: `x + ln(1 + e^-\|x\|)` for positive x, `ln(1 + e^x)` otherwise). |
+| `ln1p` | fn | ln(1 + x) at the compute tier. |
 
 **Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 

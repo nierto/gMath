@@ -2,9 +2,6 @@
 //!
 //! All conversions are float-free, using integer long division.
 
-use super::format::FascFormat;
-use crate::fixed_point::fixed_num::ProfileFormat;
-use super::BinaryStorage;
 use crate::fixed_point::i256::I256;
 #[allow(unused_imports)]
 use crate::fixed_point::i512::I512;
@@ -86,21 +83,6 @@ pub(super) fn rational_to_decimal_string(r: &RationalNumber, max_digits: usize) 
     } else {
         format!("{}.{}", int_str, trimmed)
     }
-}
-
-/// Convert BinaryStorage to decimal string using integer-only arithmetic.
-///
-/// Profile-dispatched: uses the correct Q-format for each profile.
-pub(super) fn binary_storage_to_decimal_string(val: BinaryStorage, max_digits: usize) -> String {
-    <ProfileFormat as FascFormat>::binary_storage_to_decimal_string(val, max_digits)
-}
-
-/// Format a Decimal StackValue as "integer.fraction" using native-width arithmetic.
-///
-/// Uses BinaryStorage (i128/I256/I512) for the division so that large decimal-place
-/// counts (e.g., dec=62 from chained multiplications) don't overflow.
-pub(super) fn decimal_storage_to_string(dec: u8, val: &BinaryStorage) -> String {
-    <ProfileFormat as FascFormat>::decimal_storage_to_string(dec, val)
 }
 
 /// Compute 10^exp as I256: O(1) via const lookup table (covers 10^0..10^76)
