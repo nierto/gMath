@@ -19,143 +19,11 @@
 //!   GMATH_PROFILE=balanced   cargo test --test fasc_ulp_validation -- --nocapture
 //!   GMATH_PROFILE=scientific cargo test --test fasc_ulp_validation -- --nocapture
 
-#[allow(unused_imports)]
-use g_math::fixed_point::canonical::{gmath, evaluate, LazyExpr};
-#[allow(unused_imports)]
-use std::time::Instant;
+#[macro_use]
+mod common;
 
-// ════════════════════════════════════════════════════════════════════
-// Shared infrastructure (all profiles)
-// ════════════════════════════════════════════════════════════════════
-
-/// Build a LazyExpr from an input string, correctly handling negative values.
-///
-/// Works around a known parse_decimal issue where "-0.xxx" loses its sign.
-/// We handle ALL negative inputs via negation: "-X" → Negate(Literal("X")).
-#[allow(dead_code)]
-fn gmath_safe(input: &'static str) -> LazyExpr {
-    if input.starts_with('-') {
-        // Subslice of a &'static str is &'static str — Rust just can't infer it.
-        // Safety: the underlying bytes have 'static lifetime since input does.
-        let positive: &'static str = unsafe {
-            std::str::from_utf8_unchecked(
-                std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1)
-            )
-        };
-        -gmath(positive)
-    } else {
-        gmath(input)
-    }
-}
-
-/// ULP statistics tracker (using u128 for all profiles).
-#[allow(dead_code)]
-struct UlpStats {
-    name: &'static str,
-    max_ulp: u128,
-    sum_ulp: u128,
-    count: usize,
-    worst_label: String,
-    errors: usize,
-    ulps: Vec<u128>,
-}
-
-#[allow(dead_code)]
-impl UlpStats {
-    fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            max_ulp: 0,
-            sum_ulp: 0,
-            count: 0,
-            worst_label: String::new(),
-            errors: 0,
-            ulps: Vec::new(),
-        }
-    }
-
-    fn record(&mut self, ulp: u128, label: &str) {
-        self.ulps.push(ulp);
-        self.sum_ulp = self.sum_ulp.saturating_add(ulp);
-        self.count += 1;
-        if ulp > self.max_ulp {
-            self.max_ulp = ulp;
-            self.worst_label = label.to_string();
-        }
-    }
-
-    fn record_error(&mut self, label: &str) {
-        self.errors += 1;
-        if self.errors <= 5 {
-            eprintln!("  eval error: {}", label);
-        }
-    }
-
-    fn p99(&self) -> u128 {
-        if self.ulps.is_empty() { return 0; }
-        let mut sorted = self.ulps.clone();
-        sorted.sort();
-        let idx = (sorted.len() as f64 * 0.99).ceil() as usize;
-        sorted[idx.min(sorted.len() - 1)]
-    }
-
-    #[allow(dead_code)]
-    fn mean(&self) -> f64 {
-        if self.count == 0 { return 0.0; }
-        self.sum_ulp as f64 / self.count as f64
-    }
-
-    /// Guaranteed decimal digits = floor(frac_bits * log10(2) - log10(max_ulp)).
-    /// This is the ABSOLUTE worst-case: number of fractional decimal digits
-    /// that are always correct regardless of result magnitude.
-    fn guaranteed_decimals(&self, frac_bits: u32) -> u32 {
-        if self.max_ulp == 0 {
-            return (frac_bits as f64 * std::f64::consts::LOG10_2) as u32;
-        }
-        let total = frac_bits as f64 * std::f64::consts::LOG10_2;
-        let loss = (self.max_ulp as f64).log10();
-        let g = total - loss;
-        if g < 0.0 { 0 } else { g.floor() as u32 }
-    }
-
-    #[allow(dead_code)]
-    fn report(&self, profile: &str, frac_bits: u32) {
-        let gd = self.guaranteed_decimals(frac_bits);
-        eprintln!(
-            "FASC {:8} {}: max={:<12} mean={:<10.1} p99={:<12} points={:<5} guaranteed={}d (worst: {}){}",
-            self.name, profile, self.max_ulp, self.mean(), self.p99(),
-            self.count, gd, self.worst_label,
-            if self.errors > 0 { format!(" [{} eval errors]", self.errors) } else { String::new() }
-        );
-    }
-
-    fn report_throughput(&self, profile: &str, frac_bits: u32, elapsed: std::time::Duration) {
-        let gd = self.guaranteed_decimals(frac_bits);
-        let total_ns = elapsed.as_nanos() as f64;
-        let per_call_ns = if self.count > 0 { total_ns / self.count as f64 } else { 0.0 };
-        let ops_per_sec = if total_ns > 0.0 { self.count as f64 / (total_ns / 1e9) } else { 0.0 };
-        let (throughput_val, throughput_unit) = if ops_per_sec >= 1_000_000.0 {
-            (ops_per_sec / 1_000_000.0, "M ops/s")
-        } else if ops_per_sec >= 1_000.0 {
-            (ops_per_sec / 1_000.0, "K ops/s")
-        } else {
-            (ops_per_sec, "  ops/s")
-        };
-        eprintln!(
-            "FASC {:8} {}: max={:<4} p99={:<4} {:>5}d | {:>8.0}ns/op  {:>6.1} {} | points={}  (worst: {}){}",
-            self.name, profile, self.max_ulp, self.p99(), gd,
-            per_call_ns, throughput_val, throughput_unit, self.count,
-            self.worst_label,
-            if self.errors > 0 { format!(" [{} errors]", self.errors) } else { String::new() }
-        );
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════
-// Shared macros
-// ════════════════════════════════════════════════════════════════════
-
-#[allow(unused_macros)]
+// Helper macros of the suite, at file level (an inner macro_rules! cannot live
+// inside the suite macro: its metavariables would be read by the outer one).
 macro_rules! fasc_unary_test {
     ($test_name:ident, $func_name:expr, $refs:ident, $max_ulp:expr, $method:ident) => {
         fasc_unary_test!($test_name, $func_name, $refs, $max_ulp, $method, 0);
@@ -166,7 +34,7 @@ macro_rules! fasc_unary_test {
             let mut stats = UlpStats::new($func_name);
             // Warmup: single evaluation to prime thread-local state + instruction cache
             if let Some(&(input, _, _)) = $refs.first() {
-                let _ = evaluate(&(gmath_safe(input).$method()));
+                let _ = evaluate_in(&(gmath_safe(input).$method()));
             }
             let start = Instant::now();
             for &(input, expected, label) in $refs.iter() {
@@ -191,7 +59,6 @@ macro_rules! fasc_unary_test {
     };
 }
 
-#[allow(unused_macros)]
 macro_rules! fasc_binary_test {
     ($test_name:ident, $func_name:expr, $refs:ident, $max_ulp:expr, $method:expr) => {
         #[test]
@@ -200,7 +67,7 @@ macro_rules! fasc_binary_test {
             // Warmup: single evaluation to prime thread-local state + instruction cache
             if let Some(&(a, b, _, _)) = $refs.first() {
                 let f: fn(LazyExpr, LazyExpr) -> LazyExpr = $method;
-                let _ = evaluate(&f(gmath_safe(a), gmath_safe(b)));
+                let _ = evaluate_in(&f(gmath_safe(a), gmath_safe(b)));
             }
             let start = Instant::now();
             for &(a, b, expected, label) in $refs.iter() {
@@ -225,203 +92,369 @@ macro_rules! fasc_binary_test {
     };
 }
 
-// ════════════════════════════════════════════════════════════════════
-// Q64.64 Profile (embedded / performance)
-// ════════════════════════════════════════════════════════════════════
 
-#[cfg(table_format = "q64_64")]
-mod q64_64 {
-    use super::*;
+macro_rules! shared_items {
+    ($S:ty, $F:literal) => {
+            type FixedPoint = Fixed<$S, $F>;
+            type LazyExpr<T = FixedPoint> = g_math::fixed_point::canonical::LazyExpr<T>;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            const FRAC_BITS: u32 = $F;
+            use g_math::fixed_point::Fixed;
+            #[allow(unused_imports)]
+            use g_math::fixed_point::canonical::{gmath_in, evaluate_in};
+            #[allow(unused_imports)]
+            use std::time::Instant;
 
-    include!("data/fasc_ulp_refs_q64_64.rs");
+            // ════════════════════════════════════════════════════════════════════
+            // Shared infrastructure (all profiles)
+            // ════════════════════════════════════════════════════════════════════
 
-    const FRAC_BITS: u32 = 64;
-    const PROFILE: &str = "Q64.64";
+            /// Build a LazyExpr from an input string, correctly handling negative values.
+            ///
+            /// Works around a known parse_decimal issue where "-0.xxx" loses its sign.
+            /// We handle ALL negative inputs via negation: "-X" → Negate(Literal("X")).
+            #[allow(dead_code)]
+            fn gmath_safe(input: &'static str) -> LazyExpr {
+                if input.starts_with('-') {
+                    // Subslice of a &'static str is &'static str — Rust just can't infer it.
+                    // Safety: the underlying bytes have 'static lifetime since input does.
+                    let positive: &'static str = unsafe {
+                        std::str::from_utf8_unchecked(
+                            std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1)
+                        )
+                    };
+                    -gmath_in::<FixedPoint>(positive)
+                } else {
+                    gmath_in::<FixedPoint>(input)
+                }
+            }
 
-    fn eval_unary_ulp(input: &'static str, expected: i128, f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
-        let expr = f(gmath_safe(input));
-        let actual = evaluate(&expr).ok()?.as_binary_storage()?;
-        Some((actual as i128 - expected).unsigned_abs())
-    }
+            /// ULP statistics tracker (using u128 for all profiles).
+            #[allow(dead_code)]
+            struct UlpStats {
+                name: &'static str,
+                max_ulp: u128,
+                sum_ulp: u128,
+                count: usize,
+                worst_label: String,
+                errors: usize,
+                ulps: Vec<u128>,
+            }
 
-    fn eval_binary_ulp(a: &'static str, b: &'static str, expected: i128, f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
-        let expr = f(gmath_safe(a), gmath_safe(b));
-        let actual = evaluate(&expr).ok()?.as_binary_storage()?;
-        Some((actual as i128 - expected).unsigned_abs())
-    }
+            #[allow(dead_code)]
+            impl UlpStats {
+                fn new(name: &'static str) -> Self {
+                    Self {
+                        name,
+                        max_ulp: 0,
+                        sum_ulp: 0,
+                        count: 0,
+                        worst_label: String::new(),
+                        errors: 0,
+                        ulps: Vec::new(),
+                    }
+                }
 
-    // Measured 2026-02-14: all exact vs reference after to_compute_storage + rounding fixes.
-    // Q64.64: tier N+1 (Q128.128 compute) → all 18 functions exact (exp: 1 ULP).
-    // Thresholds: 5 ULP (generous margin for 0-1 measured).
+                fn record(&mut self, ulp: u128, label: &str) {
+                    self.ulps.push(ulp);
+                    self.sum_ulp = self.sum_ulp.saturating_add(ulp);
+                    self.count += 1;
+                    if ulp > self.max_ulp {
+                        self.max_ulp = ulp;
+                        self.worst_label = label.to_string();
+                    }
+                }
 
-    // Direct algorithm functions (all exact except exp=1 ULP):
-    fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
-    fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
-    fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
-    fasc_unary_test!(validate_sin,   "sin",   FASC_SIN_REFS,   5, sin);
-    fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
-    fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
+                fn record_error(&mut self, label: &str) {
+                    self.errors += 1;
+                    if self.errors <= 5 {
+                        eprintln!("  eval error: {}", label);
+                    }
+                }
 
-    // Composed functions (all exact vs reference):
-    fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   5, tan);
-    fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
-    fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
+                fn p99(&self) -> u128 {
+                    if self.ulps.is_empty() { return 0; }
+                    let mut sorted = self.ulps.clone();
+                    sorted.sort();
+                    let idx = (sorted.len() as f64 * 0.99).ceil() as usize;
+                    sorted[idx.min(sorted.len() - 1)]
+                }
 
-    // Hyperbolic functions (all exact vs reference):
-    fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
-    fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
-    fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
-    fasc_unary_test!(validate_asinh, "asinh", FASC_ASINH_REFS, 5, asinh);
-    fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
-    fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh);
+                #[allow(dead_code)]
+                fn mean(&self) -> f64 {
+                    if self.count == 0 { return 0.0; }
+                    self.sum_ulp as f64 / self.count as f64
+                }
 
-    // Binary functions (all exact vs reference after to_compute_storage fix):
-    fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,             5, |a, b| a.atan2(b));
-    fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,       5, |a, b| a.pow(b));
-    fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS,    5, |a, b| a.pow(b));
+                /// Guaranteed decimal digits = floor(frac_bits * log10(2) - log10(max_ulp)).
+                /// This is the ABSOLUTE worst-case: number of fractional decimal digits
+                /// that are always correct regardless of result magnitude.
+                fn guaranteed_decimals(&self, frac_bits: u32) -> u32 {
+                    if self.max_ulp == 0 {
+                        return (frac_bits as f64 * std::f64::consts::LOG10_2) as u32;
+                    }
+                    let total = frac_bits as f64 * std::f64::consts::LOG10_2;
+                    let loss = (self.max_ulp as f64).log10();
+                    let g = total - loss;
+                    if g < 0.0 { 0 } else { g.floor() as u32 }
+                }
+
+                #[allow(dead_code)]
+                fn report(&self, profile: &str, frac_bits: u32) {
+                    let gd = self.guaranteed_decimals(frac_bits);
+                    eprintln!(
+                        "FASC {:8} {}: max={:<12} mean={:<10.1} p99={:<12} points={:<5} guaranteed={}d (worst: {}){}",
+                        self.name, profile, self.max_ulp, self.mean(), self.p99(),
+                        self.count, gd, self.worst_label,
+                        if self.errors > 0 { format!(" [{} eval errors]", self.errors) } else { String::new() }
+                    );
+                }
+
+                fn report_throughput(&self, profile: &str, frac_bits: u32, elapsed: std::time::Duration) {
+                    let gd = self.guaranteed_decimals(frac_bits);
+                    let total_ns = elapsed.as_nanos() as f64;
+                    let per_call_ns = if self.count > 0 { total_ns / self.count as f64 } else { 0.0 };
+                    let ops_per_sec = if total_ns > 0.0 { self.count as f64 / (total_ns / 1e9) } else { 0.0 };
+                    let (throughput_val, throughput_unit) = if ops_per_sec >= 1_000_000.0 {
+                        (ops_per_sec / 1_000_000.0, "M ops/s")
+                    } else if ops_per_sec >= 1_000.0 {
+                        (ops_per_sec / 1_000.0, "K ops/s")
+                    } else {
+                        (ops_per_sec, "  ops/s")
+                    };
+                    eprintln!(
+                        "FASC {:8} {}: max={:<4} p99={:<4} {:>5}d | {:>8.0}ns/op  {:>6.1} {} | points={}  (worst: {}){}",
+                        self.name, profile, self.max_ulp, self.p99(), gd,
+                        per_call_ns, throughput_val, throughput_unit, self.count,
+                        self.worst_label,
+                        if self.errors > 0 { format!(" [{} errors]", self.errors) } else { String::new() }
+                    );
+                }
+            }
+
+            // ════════════════════════════════════════════════════════════════════
+            // Shared macros
+            // ════════════════════════════════════════════════════════════════════
+
+
+
+            // ════════════════════════════════════════════════════════════════════
+            // Q64.64 Profile (embedded / performance)
+            // ════════════════════════════════════════════════════════════════════
+
+
+            // ════════════════════════════════════════════════════════════════════
+            // Q128.128 Profile (balanced)
+            // ════════════════════════════════════════════════════════════════════
+
+
+            // ════════════════════════════════════════════════════════════════════
+            // Q256.256 Profile (scientific)
+            // ════════════════════════════════════════════════════════════════════
+    };
 }
 
-// ════════════════════════════════════════════════════════════════════
-// Q128.128 Profile (balanced)
-// ════════════════════════════════════════════════════════════════════
+// The q64_64 references, at that word only.
+macro_rules! suite_q64_64 {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
 
-#[cfg(table_format = "q128_128")]
-mod q128_128 {
-    use super::*;
-    use g_math::fixed_point::domains::binary_fixed::i256::I256;
+            include!("data/fasc_ulp_refs_q64_64.rs");
 
-    include!("data/fasc_ulp_refs_q128_128.rs");
+            const PROFILE: &str = "Q64.64";
 
-    const FRAC_BITS: u32 = 128;
-    const PROFILE: &str = "Q128.128";
+            fn eval_unary_ulp(input: &'static str, expected: i128, f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
+                let expr = f(gmath_safe(input));
+                let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                Some((actual as i128 - expected).unsigned_abs())
+            }
 
-    fn ulp_i256(actual: I256, expected: I256) -> u128 {
-        let diff = actual - expected;
-        let is_neg = diff.words[3] >> 63 == 1;
-        let abs_diff = if is_neg { -diff } else { diff };
-        // If upper words non-zero, ULP exceeds u128 — catastrophic error
-        if abs_diff.words[2] != 0 || abs_diff.words[3] != 0 {
-            return u128::MAX;
+            fn eval_binary_ulp(a: &'static str, b: &'static str, expected: i128, f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
+                let expr = f(gmath_safe(a), gmath_safe(b));
+                let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                Some((actual as i128 - expected).unsigned_abs())
+            }
+
+            // Measured 2026-02-14: all exact vs reference after to_compute_storage + rounding fixes.
+            // Q64.64: tier N+1 (Q128.128 compute) → all 18 functions exact (exp: 1 ULP).
+            // Thresholds: 5 ULP (generous margin for 0-1 measured).
+
+            // Direct algorithm functions (all exact except exp=1 ULP):
+            fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
+            fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
+            fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
+            fasc_unary_test!(validate_sin,   "sin",   FASC_SIN_REFS,   5, sin);
+            fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
+            fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
+
+            // Composed functions (all exact vs reference):
+            fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   5, tan);
+            fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
+            fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
+
+            // Hyperbolic functions (all exact vs reference):
+            fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
+            fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
+            fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
+            fasc_unary_test!(validate_asinh, "asinh", FASC_ASINH_REFS, 5, asinh);
+            fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
+            fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh);
+
+            // Binary functions (all exact vs reference after to_compute_storage fix):
+            fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,             5, |a, b| a.atan2(b));
+            fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,       5, |a, b| a.pow(b));
+            fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS,    5, |a, b| a.pow(b));
         }
-        abs_diff.words[0] as u128 | ((abs_diff.words[1] as u128) << 64)
-    }
-
-    fn eval_unary_ulp(input: &'static str, expected_words: [u64; 4], f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
-        let expr = f(gmath_safe(input));
-        let actual = evaluate(&expr).ok()?.as_binary_storage()?;
-        Some(ulp_i256(actual, I256 { words: expected_words }))
-    }
-
-    fn eval_binary_ulp(a: &'static str, b: &'static str, expected_words: [u64; 4], f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
-        let expr = f(gmath_safe(a), gmath_safe(b));
-        let actual = evaluate(&expr).ok()?.as_binary_storage()?;
-        Some(ulp_i256(actual, I256 { words: expected_words }))
-    }
-
-    // Measured 2026-02-14: all exact vs reference after to_compute_storage fix.
-    // Thresholds: 5 ULP (generous margin for 0 measured).
-
-    fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
-    fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
-    fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
-    fasc_unary_test!(validate_sin,   "sin",   FASC_SIN_REFS,   5, sin);
-    fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
-    fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   5, tan);
-    fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
-    fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
-    fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
-    fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
-    fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
-    fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
-    fasc_unary_test!(validate_asinh, "asinh", FASC_ASINH_REFS, 5, asinh);
-    fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
-    // 527 eval errors: pre-existing Symbolic BigInt→i128 conversion overflow in to_binary_storage
-    fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh, 530);
-
-    fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b));
-    fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b));
-    fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b));
-
-    #[test]
-    fn diagnose_atanh_negative() {
-        let expr = gmath_safe("-0.5").atanh();
-        match evaluate(&expr) {
-            Ok(val) => eprintln!("Q128 atanh(-0.5) OK: tier={}", val.tier()),
-            Err(e) => eprintln!("Q128 atanh(-0.5) ERROR: {:?}", e),
-        }
-        let expr2 = gmath_safe("0.5").atanh();
-        match evaluate(&expr2) {
-            Ok(val) => eprintln!("Q128 atanh(0.5) OK: tier={}", val.tier()),
-            Err(e) => eprintln!("Q128 atanh(0.5) ERROR: {:?}", e),
-        }
-        let ln_expr = ((gmath("1") + gmath_safe("-0.5")) / (gmath("1") - gmath_safe("-0.5"))).ln();
-        match evaluate(&ln_expr) {
-            Ok(val) => eprintln!("Q128 ln(ratio(-0.5)) OK: tier={}", val.tier()),
-            Err(e) => eprintln!("Q128 ln(ratio(-0.5)) ERROR: {:?}", e),
-        }
-    }
+    };
 }
 
-// ════════════════════════════════════════════════════════════════════
-// Q256.256 Profile (scientific)
-// ════════════════════════════════════════════════════════════════════
+// The q128_128 references, at that word only.
+macro_rules! suite_q128_128 {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
+            use g_math::fixed_point::domains::binary_fixed::i256::I256;
 
-#[cfg(table_format = "q256_256")]
-mod q256_256 {
-    use super::*;
-    use g_math::fixed_point::domains::binary_fixed::i512::I512;
+            include!("data/fasc_ulp_refs_q128_128.rs");
 
-    include!("data/fasc_ulp_refs_q256_256.rs");
+            const PROFILE: &str = "Q128.128";
 
-    const FRAC_BITS: u32 = 256;
-    const PROFILE: &str = "Q256.256";
+            fn ulp_i256(actual: I256, expected: I256) -> u128 {
+                let diff = actual - expected;
+                let is_neg = diff.words[3] >> 63 == 1;
+                let abs_diff = if is_neg { -diff } else { diff };
+                // If upper words non-zero, ULP exceeds u128 — catastrophic error
+                if abs_diff.words[2] != 0 || abs_diff.words[3] != 0 {
+                    return u128::MAX;
+                }
+                abs_diff.words[0] as u128 | ((abs_diff.words[1] as u128) << 64)
+            }
 
-    fn ulp_i512(actual: I512, expected: I512) -> u128 {
-        let diff = actual - expected;
-        let is_neg = diff.words[7] >> 63 == 1;
-        let abs_diff = if is_neg { -diff } else { diff };
-        // If any upper words non-zero, ULP exceeds u128
-        for i in 2..8 {
-            if abs_diff.words[i] != 0 {
-                return u128::MAX;
+            fn eval_unary_ulp(input: &'static str, expected_words: [u64; 4], f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
+                let expr = f(gmath_safe(input));
+                let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                Some(ulp_i256(actual, I256 { words: expected_words }))
+            }
+
+            fn eval_binary_ulp(a: &'static str, b: &'static str, expected_words: [u64; 4], f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
+                let expr = f(gmath_safe(a), gmath_safe(b));
+                let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                Some(ulp_i256(actual, I256 { words: expected_words }))
+            }
+
+            // Measured 2026-02-14: all exact vs reference after to_compute_storage fix.
+            // Thresholds: 5 ULP (generous margin for 0 measured).
+
+            fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
+            fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
+            fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
+            fasc_unary_test!(validate_sin,   "sin",   FASC_SIN_REFS,   5, sin);
+            fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
+            fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   5, tan);
+            fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
+            fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
+            fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
+            fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
+            fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
+            fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
+            fasc_unary_test!(validate_asinh, "asinh", FASC_ASINH_REFS, 5, asinh);
+            fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
+            // 527 eval errors: pre-existing Symbolic BigInt→i128 conversion overflow in to_binary_storage
+            fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh, 530);
+
+            fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b));
+            fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b));
+            fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b));
+
+            #[test]
+            fn diagnose_atanh_negative() {
+                let expr = gmath_safe("-0.5").atanh();
+                match evaluate_in(&expr) {
+                    Ok(val) => eprintln!("Q128 atanh(-0.5) OK: tier={}", val.tier()),
+                    Err(e) => eprintln!("Q128 atanh(-0.5) ERROR: {:?}", e),
+                }
+                let expr2 = gmath_safe("0.5").atanh();
+                match evaluate_in(&expr2) {
+                    Ok(val) => eprintln!("Q128 atanh(0.5) OK: tier={}", val.tier()),
+                    Err(e) => eprintln!("Q128 atanh(0.5) ERROR: {:?}", e),
+                }
+                let ln_expr = ((gmath_in::<FixedPoint>("1") + gmath_safe("-0.5")) / (gmath_in::<FixedPoint>("1") - gmath_safe("-0.5"))).ln();
+                match evaluate_in(&ln_expr) {
+                    Ok(val) => eprintln!("Q128 ln(ratio(-0.5)) OK: tier={}", val.tier()),
+                    Err(e) => eprintln!("Q128 ln(ratio(-0.5)) ERROR: {:?}", e),
+                }
             }
         }
-        abs_diff.words[0] as u128 | ((abs_diff.words[1] as u128) << 64)
-    }
-
-    fn eval_unary_ulp(input: &'static str, expected_words: [u64; 8], f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
-        let expr = f(gmath_safe(input));
-        let actual = evaluate(&expr).ok()?.as_binary_storage()?;
-        Some(ulp_i512(actual, I512 { words: expected_words }))
-    }
-
-    fn eval_binary_ulp(a: &'static str, b: &'static str, expected_words: [u64; 8], f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
-        let expr = f(gmath_safe(a), gmath_safe(b));
-        let actual = evaluate(&expr).ok()?.as_binary_storage()?;
-        Some(ulp_i512(actual, I512 { words: expected_words }))
-    }
-
-    // Measured 2026-02-14: all exact vs reference after to_compute_storage fix, except inherent
-    // downscale rounding: sin/cos/asin/acos/atan/atan2=1, tan=7 (Q512.512→Q256.256).
-
-    fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
-    fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
-    fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
-    fasc_unary_test!(validate_sin,   "sin",   FASC_SIN_REFS,   5, sin);
-    fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
-    fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   15, tan);
-    fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
-    fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
-    fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
-    fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
-    fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
-    fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
-    fasc_unary_test!(validate_asinh, "asinh", FASC_ASINH_REFS, 5, asinh);
-    fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
-    // 527 eval errors: pre-existing Symbolic BigInt→i128 conversion overflow in to_binary_storage
-    fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh, 530);
-
-    fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b));
-    fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b));
-    fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b));
+    };
 }
+
+// The q256_256 references, at that word only.
+macro_rules! suite_q256_256 {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
+            use g_math::fixed_point::domains::binary_fixed::i512::I512;
+
+            include!("data/fasc_ulp_refs_q256_256.rs");
+
+            const PROFILE: &str = "Q256.256";
+
+            fn ulp_i512(actual: I512, expected: I512) -> u128 {
+                let diff = actual - expected;
+                let is_neg = diff.words[7] >> 63 == 1;
+                let abs_diff = if is_neg { -diff } else { diff };
+                // If any upper words non-zero, ULP exceeds u128
+                for i in 2..8 {
+                    if abs_diff.words[i] != 0 {
+                        return u128::MAX;
+                    }
+                }
+                abs_diff.words[0] as u128 | ((abs_diff.words[1] as u128) << 64)
+            }
+
+            fn eval_unary_ulp(input: &'static str, expected_words: [u64; 8], f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
+                let expr = f(gmath_safe(input));
+                let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                Some(ulp_i512(actual, I512 { words: expected_words }))
+            }
+
+            fn eval_binary_ulp(a: &'static str, b: &'static str, expected_words: [u64; 8], f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
+                let expr = f(gmath_safe(a), gmath_safe(b));
+                let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                Some(ulp_i512(actual, I512 { words: expected_words }))
+            }
+
+            // Measured 2026-02-14: all exact vs reference after to_compute_storage fix, except inherent
+            // downscale rounding: sin/cos/asin/acos/atan/atan2=1, tan=7 (Q512.512→Q256.256).
+
+            fasc_unary_test!(validate_exp,   "exp",   FASC_EXP_REFS,   5, exp);
+            fasc_unary_test!(validate_ln,    "ln",    FASC_LN_REFS,    5, ln);
+            fasc_unary_test!(validate_sqrt,  "sqrt",  FASC_SQRT_REFS,  5, sqrt);
+            fasc_unary_test!(validate_sin,   "sin",   FASC_SIN_REFS,   5, sin);
+            fasc_unary_test!(validate_cos,   "cos",   FASC_COS_REFS,   5, cos);
+            fasc_unary_test!(validate_tan,   "tan",   FASC_TAN_REFS,   15, tan);
+            fasc_unary_test!(validate_atan,  "atan",  FASC_ATAN_REFS,  5, atan);
+            fasc_unary_test!(validate_asin,  "asin",  FASC_ASIN_REFS,  5, asin);
+            fasc_unary_test!(validate_acos,  "acos",  FASC_ACOS_REFS,  5, acos);
+            fasc_unary_test!(validate_sinh,  "sinh",  FASC_SINH_REFS,  5, sinh);
+            fasc_unary_test!(validate_cosh,  "cosh",  FASC_COSH_REFS,  5, cosh);
+            fasc_unary_test!(validate_tanh,  "tanh",  FASC_TANH_REFS,  5, tanh);
+            fasc_unary_test!(validate_asinh, "asinh", FASC_ASINH_REFS, 5, asinh);
+            fasc_unary_test!(validate_acosh, "acosh", FASC_ACOSH_REFS, 5, acosh);
+            // 527 eval errors: pre-existing Symbolic BigInt→i128 conversion overflow in to_binary_storage
+            fasc_unary_test!(validate_atanh, "atanh", FASC_ATANH_REFS, 5, atanh, 530);
+
+            fasc_binary_test!(validate_atan2,        "atan2",    FASC_ATAN2_REFS,          5, |a, b| a.atan2(b));
+            fasc_binary_test!(validate_pow_integer,  "pow_int",  FASC_POW_INTEGER_REFS,    5, |a, b| a.pow(b));
+            fasc_binary_test!(validate_pow_frac,     "pow_frac", FASC_POW_FRACTIONAL_REFS, 5, |a, b| a.pow(b));
+        }
+    };
+}
+
+suite_q64_64!(q64_64_word, i128, 64);
+suite_q128_128!(q128_128_word, g_math::fixed_point::I256, 128);
+suite_q256_256!(q256_256_word, g_math::fixed_point::I512, 256);

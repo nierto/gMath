@@ -16,443 +16,457 @@
 //! Profile-independent (UGOD tiers 1–3 are plain integer ops; FASC display
 //! comparisons avoid profile-specific raw layouts).
 
-use g_math::canonical::{evaluate, gmath, gmath_parse, LazyExpr, StackValue};
-use g_math::fixed_point::domains::balanced_ternary::{
-    UniversalTernaryFixed, TernaryTier, SCALE_TQ10_10, SCALE_TQ20_20,
-};
+#[macro_use]
+mod common;
 
-// ============================================================================
-// Helpers
-// ============================================================================
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #[allow(dead_code)]
+            type FixedPoint = Fixed<$S, $F>;
+            type LazyExpr<T = FixedPoint> = g_math::canonical::LazyExpr<T>;
+            type StackValue<T = FixedPoint> = g_math::canonical::StackValue<T>;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            const FRAC_BITS: u32 = $F;
+            use g_math::fixed_point::Fixed;
+            use g_math::canonical::{evaluate_in, gmath_in, gmath_parse_in};
+            use g_math::fixed_point::domains::balanced_ternary::{UniversalTernaryFixed, TernaryTier, SCALE_TQ10_10, SCALE_TQ20_20};
 
-fn ugod(s: &str) -> UniversalTernaryFixed {
-    UniversalTernaryFixed::from_str(s).expect("parse")
-}
+            // ============================================================================
+            // Helpers
+            // ============================================================================
 
-fn display(expr: &LazyExpr) -> String {
-    format!("{}", evaluate(expr).expect("evaluate"))
-}
+            fn ugod(s: &str) -> UniversalTernaryFixed {
+                UniversalTernaryFixed::from_str(s).expect("parse")
+            }
 
-/// Runtime-string literal (gmath! requires 'static strs).
-fn g(s: &str) -> LazyExpr {
-    gmath_parse(s).expect("parse literal")
-}
+            fn display(expr: &LazyExpr) -> String {
+                format!("{}", evaluate_in(expr).expect("evaluate"))
+            }
 
-fn is_ternary(v: &StackValue) -> bool {
-    matches!(v, StackValue::Ternary(..))
-}
+            /// Runtime-string literal (gmath! requires 'static strs).
+            fn g(s: &str) -> LazyExpr {
+                gmath_parse_in::<FixedPoint>(s).expect("parse literal")
+            }
 
-// ============================================================================
-// Item 5a — UGOD promotion at raw-overflow boundaries
-// ============================================================================
+            fn is_ternary(v: &StackValue) -> bool {
+                matches!(v, StackValue::Ternary(..))
+            }
 
-#[test]
-fn ugod_promotion_on_multiply_overflow() {
-    // 3000 × 3000 = 9,000,000 — the value fits easily, but the Tier 1
-    // product raw (9e6 · 3^8 ≈ 5.9e13) overflows i32, so UGOD must promote.
-    let a = ugod("3000");
-    assert_eq!(a.current_tier(), TernaryTier::Tier1);
-    let product = a.multiply(&a).expect("multiply with promotion");
-    assert_ne!(
-        product.current_tier(),
-        TernaryTier::Tier1,
-        "product must be promoted beyond Tier 1"
-    );
-    let (tier, raw) = product.to_tier_value();
-    assert_eq!(tier, 2, "expected promotion to exactly Tier 2");
-    assert_eq!(raw, 9_000_000i128 * SCALE_TQ20_20 as i128, "value preserved exactly");
-}
+            // ============================================================================
+            // Item 5a — UGOD promotion at raw-overflow boundaries
+            // ============================================================================
 
-#[test]
-fn ugod_promotion_preserves_value_exactly() {
-    // Lossless promotion roundtrip: value at Tier 1, promoted through the
-    // tiers, must decode to the same rational (raw scales by 3^10 per step).
-    let v = ugod("29524"); // the full nominal Tier-1 integer window
-    let (t1, raw1) = v.to_tier_value();
-    assert_eq!((t1, raw1), (1, 29524 * SCALE_TQ10_10 as i128));
-    let promoted = v.promote_to_tier(TernaryTier::Tier2).expect("promote");
-    let (t2, raw2) = promoted.to_tier_value();
-    assert_eq!(t2, 2);
-    assert_eq!(raw2, 29524 * SCALE_TQ20_20 as i128, "promotion must be exact rescale");
-}
+            #[test]
+            fn ugod_promotion_on_multiply_overflow() {
+                // 3000 × 3000 = 9,000,000 — the value fits easily, but the Tier 1
+                // product raw (9e6 · 3^8 ≈ 5.9e13) overflows i32, so UGOD must promote.
+                let a = ugod("3000");
+                assert_eq!(a.current_tier(), TernaryTier::Tier1);
+                let product = a.multiply(&a).expect("multiply with promotion");
+                assert_ne!(
+                    product.current_tier(),
+                    TernaryTier::Tier1,
+                    "product must be promoted beyond Tier 1"
+                );
+                let (tier, raw) = product.to_tier_value();
+                assert_eq!(tier, 2, "expected promotion to exactly Tier 2");
+                assert_eq!(raw, 9_000_000i128 * SCALE_TQ20_20 as i128, "value preserved exactly");
+            }
 
-#[test]
-fn ugod_mixed_tier_alignment() {
-    // from_integer places small values at Tier 1 and 6-digit values at
-    // Tier 1 too (i16-gated) — force a Tier 2 via a large integer.
-    let small = UniversalTernaryFixed::from_integer(5).expect("small");
-    let large = UniversalTernaryFixed::from_integer(100_000).expect("large");
-    assert_eq!(small.current_tier(), TernaryTier::Tier1);
-    assert_eq!(large.current_tier(), TernaryTier::Tier2);
-    let sum = large.add(&small).expect("mixed-tier add");
-    assert_ne!(sum.current_tier(), TernaryTier::Tier1);
-    let (tier, raw) = sum.to_tier_value();
-    assert_eq!(tier, 2);
-    assert_eq!(raw, 100_005i128 * SCALE_TQ20_20 as i128, "aligned add exact");
-}
+            #[test]
+            fn ugod_promotion_preserves_value_exactly() {
+                // Lossless promotion roundtrip: value at Tier 1, promoted through the
+                // tiers, must decode to the same rational (raw scales by 3^10 per step).
+                let v = ugod("29524"); // the full nominal Tier-1 integer window
+                let (t1, raw1) = v.to_tier_value();
+                assert_eq!((t1, raw1), (1, 29524 * SCALE_TQ10_10 as i128));
+                let promoted = v.promote_to_tier(TernaryTier::Tier2).expect("promote");
+                let (t2, raw2) = promoted.to_tier_value();
+                assert_eq!(t2, 2);
+                assert_eq!(raw2, 29524 * SCALE_TQ20_20 as i128, "promotion must be exact rescale");
+            }
 
-#[test]
-fn ugod_window_boundaries_exact() {
-    // ±29524 = ±(3^10−1)/2 — the all-(+1)/(−1) integer-trit patterns of Tier 1.
-    for (s, expected) in [("29524", 29524i128), ("1", 1), ("0", 0)] {
-        let v = ugod(s);
-        let (_t, raw) = v.to_tier_value();
-        assert_eq!(raw, expected * SCALE_TQ10_10 as i128, "window value {s}");
-    }
-    // from_str window gate: 29525 exceeds the Tier-1 window and must land
-    // on Tier 2 (contract §1b range note: from_str DOES enforce the nominal
-    // window, unlike from_integer).
-    let over = ugod("29525");
-    assert_eq!(over.current_tier(), TernaryTier::Tier2);
-    let (_, raw) = over.to_tier_value();
-    assert_eq!(raw, 29525 * SCALE_TQ20_20 as i128);
-}
+            #[test]
+            fn ugod_mixed_tier_alignment() {
+                // from_integer places small values at Tier 1 and 6-digit values at
+                // Tier 1 too (i16-gated) — force a Tier 2 via a large integer.
+                let small = UniversalTernaryFixed::from_integer(5).expect("small");
+                let large = UniversalTernaryFixed::from_integer(100_000).expect("large");
+                assert_eq!(small.current_tier(), TernaryTier::Tier1);
+                assert_eq!(large.current_tier(), TernaryTier::Tier2);
+                let sum = large.add(&small).expect("mixed-tier add");
+                assert_ne!(sum.current_tier(), TernaryTier::Tier1);
+                let (tier, raw) = sum.to_tier_value();
+                assert_eq!(tier, 2);
+                assert_eq!(raw, 100_005i128 * SCALE_TQ20_20 as i128, "aligned add exact");
+            }
 
-// ============================================================================
-// Item 5b — canonical (FASC) vs imperative (UGOD) path equivalence
-// ============================================================================
+            #[test]
+            fn ugod_window_boundaries_exact() {
+                // ±29524 = ±(3^10−1)/2 — the all-(+1)/(−1) integer-trit patterns of Tier 1.
+                for (s, expected) in [("29524", 29524i128), ("1", 1), ("0", 0)] {
+                    let v = ugod(s);
+                    let (_t, raw) = v.to_tier_value();
+                    assert_eq!(raw, expected * SCALE_TQ10_10 as i128, "window value {s}");
+                }
+                // from_str window gate: 29525 exceeds the Tier-1 window and must land
+                // on Tier 2 (contract §1b range note: from_str DOES enforce the nominal
+                // window, unlike from_integer).
+                let over = ugod("29525");
+                assert_eq!(over.current_tier(), TernaryTier::Tier2);
+                let (_, raw) = over.to_tier_value();
+                assert_eq!(raw, 29525 * SCALE_TQ20_20 as i128);
+            }
 
-#[test]
-fn fasc_ternary_arithmetic_stays_ternary_and_exact() {
-    // Integer 0t literals: results must be exact and remain in the ternary
-    // domain (no silent coercion), and agree with direct UGOD arithmetic.
-    let cases: &[(&str, &str, &str, &str)] = &[
-        // (op, a, b, expected-integer)
-        ("+", "7", "5", "12"),
-        ("+", "29524", "1", "29525"),
-        ("-", "7", "12", "-5"),
-        ("*", "21", "3", "63"),
-        ("*", "81", "81", "6561"),
-        ("/", "63", "3", "21"),
-    ];
-    for &(op, a, b, expected) in cases {
-        let (ea, eb) = (g(&format!("0t{a}")), g(&format!("0t{b}")));
-        let expr = match op {
-            "+" => ea + eb,
-            "-" => ea - eb,
-            "*" => ea * eb,
-            "/" => ea / eb,
-            _ => unreachable!(),
-        };
-        let result = evaluate(&expr).expect("fasc evaluate");
-        assert!(is_ternary(&result), "0t{a} {op} 0t{b} left the ternary domain");
-        // Ternary integer results display as plain integers on all profiles.
-        assert_eq!(
-            format!("{result}"),
-            expected,
-            "FASC 0t{a} {op} 0t{b} != {expected}"
-        );
-        // And equals the imperative UGOD computation, integer-exactly.
-        let ua = ugod(a);
-        let ub = ugod(b);
-        let ures = match op {
-            "+" => ua.add(&ub),
-            "-" => ua.subtract(&ub),
-            "*" => ua.multiply(&ub),
-            "/" => ua.divide(&ub),
-            _ => unreachable!(),
+            // ============================================================================
+            // Item 5b — canonical (FASC) vs imperative (UGOD) path equivalence
+            // ============================================================================
+
+            #[test]
+            fn fasc_ternary_arithmetic_stays_ternary_and_exact() {
+                // Integer 0t literals: results must be exact and remain in the ternary
+                // domain (no silent coercion), and agree with direct UGOD arithmetic.
+                let cases: &[(&str, &str, &str, &str)] = &[
+                    // (op, a, b, expected-integer)
+                    ("+", "7", "5", "12"),
+                    ("+", "29524", "1", "29525"),
+                    ("-", "7", "12", "-5"),
+                    ("*", "21", "3", "63"),
+                    ("*", "81", "81", "6561"),
+                    ("/", "63", "3", "21"),
+                ];
+                for &(op, a, b, expected) in cases {
+                    let (ea, eb) = (g(&format!("0t{a}")), g(&format!("0t{b}")));
+                    let expr = match op {
+                        "+" => ea + eb,
+                        "-" => ea - eb,
+                        "*" => ea * eb,
+                        "/" => ea / eb,
+                        _ => unreachable!(),
+                    };
+                    let result = evaluate_in(&expr).expect("fasc evaluate");
+                    assert!(is_ternary(&result), "0t{a} {op} 0t{b} left the ternary domain");
+                    // Ternary integer results display as plain integers on all profiles.
+                    assert_eq!(
+                        format!("{result}"),
+                        expected,
+                        "FASC 0t{a} {op} 0t{b} != {expected}"
+                    );
+                    // And equals the imperative UGOD computation, integer-exactly.
+                    let ua = ugod(a);
+                    let ub = ugod(b);
+                    let ures = match op {
+                        "+" => ua.add(&ub),
+                        "-" => ua.subtract(&ub),
+                        "*" => ua.multiply(&ub),
+                        "/" => ua.divide(&ub),
+                        _ => unreachable!(),
+                    }
+                    .expect("ugod op");
+                    let (tier, raw) = ures.to_tier_value();
+                    let scale: i128 = match tier {
+                        1 => SCALE_TQ10_10 as i128,
+                        2 => SCALE_TQ20_20 as i128,
+                        t => panic!("unexpected tier {t} for small integers"),
+                    };
+                    assert_eq!(raw % scale, 0, "integer result must be exact");
+                    assert_eq!((raw / scale).to_string(), expected, "UGOD path diverges");
+                }
+            }
+
+            #[test]
+            fn fasc_ternary_negation_symmetry() {
+                // NOTE: a leading-minus literal ("-0t7") is a ParseError — the 0t prefix
+                // check requires position 0. Negation is expressed as an operator.
+                for s in ["1", "7", "29524"] {
+                    let pos = display(&g(&format!("0t{s}")));
+                    let negated = display(&(-g(&format!("0t{s}"))));
+                    let via_sub = display(&(g("0t0") - g(&format!("0t{s}"))));
+                    assert_eq!(negated, via_sub, "negation path divergence at 0t{s}");
+                    assert_ne!(pos, negated);
+                    // And double negation restores the original display.
+                    let double = display(&(-(-g(&format!("0t{s}")))));
+                    assert_eq!(double, pos, "neg(neg(0t{s})) != 0t{s}");
+                }
+            }
+
+            // ============================================================================
+            // Item 5c — cross-domain coercion must not change values
+            // ============================================================================
+
+            #[test]
+            fn cross_domain_coercion_matches_plain_expressions() {
+                // Each pair: expression with a ternary operand vs the same expression
+                // with a plain operand. Router coercion must produce identical display.
+                let pairs: &[(fn() -> LazyExpr, fn() -> LazyExpr)] = &[
+                    (|| gmath_in::<FixedPoint>("0t2") + gmath_in::<FixedPoint>("3"), || gmath_in::<FixedPoint>("2") + gmath_in::<FixedPoint>("3")),
+                    (|| gmath_in::<FixedPoint>("0t2") + gmath_in::<FixedPoint>("0.5"), || gmath_in::<FixedPoint>("2") + gmath_in::<FixedPoint>("0.5")),
+                    (|| gmath_in::<FixedPoint>("0t2") * gmath_in::<FixedPoint>("1/3"), || gmath_in::<FixedPoint>("2") * gmath_in::<FixedPoint>("1/3")),
+                    (|| gmath_in::<FixedPoint>("0t7") - gmath_in::<FixedPoint>("0.25"), || gmath_in::<FixedPoint>("7") - gmath_in::<FixedPoint>("0.25")),
+                    (|| gmath_in::<FixedPoint>("10") / gmath_in::<FixedPoint>("0t4"), || gmath_in::<FixedPoint>("10") / gmath_in::<FixedPoint>("4")),
+                ];
+                // Display formatting differs per result domain (ternary "5" vs decimal
+                // "5.000000000"), so equality is checked through the router itself:
+                // (ternary_expr − plain_expr) must evaluate to exactly zero.
+                for (i, (ternary_side, plain_side)) in pairs.iter().enumerate() {
+                    let diff = display(&(ternary_side() - plain_side()));
+                    let trimmed = if diff.contains('.') {
+                        diff.trim_end_matches('0').trim_end_matches('.')
+                    } else {
+                        diff.as_str()
+                    };
+                    assert!(
+                        trimmed == "0" || trimmed == "-0" || trimmed == "0/1",
+                        "cross-domain pair {i} diverges: difference displays as {diff:?}"
+                    );
+                }
+            }
+
+            // ============================================================================
+            // Contract §5 — the 0t fractional-literal conversion boundary
+            // ============================================================================
+
+            #[test]
+            fn fractional_literal_conversion_boundary() {
+                // "0t0.5" forces the canonical tie: 0.5·3^10 = 29524.5, exactly between
+                // grid points (3^F odd — contract §4/§5). Pin the shipped conversion.
+                let v = UniversalTernaryFixed::from_str("0.5").expect("parse 0.5");
+                let (tier, raw) = v.to_tier_value();
+                assert_eq!(tier, 1);
+                // Pin (contract §5, 0.5.0 unification): conversion rounds NEAREST with
+                // ties toward +∞ — 0.5·3^10 = 29524.5 is a genuine tie and resolves UP
+                // to 29525; 1.5·3^10 = 88573.5 → 88574.
+                assert_eq!(raw, 29525, "0.5 conversion pin (nearest, tie → +∞)");
+                let (_, raw15) = UniversalTernaryFixed::from_str("1.5").expect("1.5").to_tier_value();
+                assert_eq!(raw15, 88574, "1.5 conversion pin (nearest, tie → +∞)");
+                // Exact-decimal values that ARE ternary-representable: integers only —
+                // 0.5 is necessarily inexact (denominator 2 ∉ {3}).
+                assert_ne!(raw as i128 * 2, (SCALE_TQ10_10 as i128) * 1, "0.5 cannot be exact");
+            }
+
+            #[test]
+            fn ternary_literal_tier2_storage_limit_is_loud() {
+                // from_str window-gates 29525 to Tier 2 (raw 29525·3^20 ≈ 1.03e14). On the
+                // narrow profiles that raw does not fit BinaryStorage — before 0.4.33
+                // this silently wrapped into garbage (pre-resize, 0t3281 displayed as "-11.56021"
+                // on realtime); now it is a loud TierOverflow at parse.
+                // Note the asymmetry: the same VALUE reached by arithmetic
+                // (0t29524 + 0t1) stays at Tier 1 raw 29525·3^10, which fits everywhere.
+                let parsed = gmath_parse_in::<FixedPoint>("0t29525");
+                if (BITS == 32) {
+                assert!(parsed.is_err(), "Tier-2 literal must fail loud on realtime");
+                }
+                if !((BITS == 32)) {
+                    let expr = parsed.expect("wider profiles hold Tier-2 raws");
+                    assert_eq!(display(&expr), "29525");
+                }
+            }
+
+            #[test]
+            fn negative_fractional_literal_sign_regression() {
+                // REGRESSION (fixed in 0.4.33): "-0.5" parsed as +0.5 — the "-0"
+                // integer part lost its sign before the fraction was applied. The fix
+                // strips the sign once in from_str and negates the parsed magnitude.
+                // Nearest with ties toward +∞ (0.5.0): −0.5 is a tie and resolves UP
+                // (toward +∞) to −29524; −0.1 has no tie (5904.9 → 5905); −1.5 tie → −88573.
+                for (s, expected_raw) in [("-0.5", -29524i128), ("-0.1", -5905), ("-1.5", -88573)] {
+                    let (tier, raw) = UniversalTernaryFixed::from_str(s)
+                        .expect("parse negative fractional")
+                        .to_tier_value();
+                    assert_eq!(tier, 1);
+                    assert_eq!(raw, expected_raw, "sign-correct conversion of {s}");
+                }
+                // Sign symmetry of conversion holds for every NON-tie input;
+                // exact ties break it by design (ties toward +∞ is not odd-symmetric):
+                // parse(0.5) = 29525 but parse(-0.5) = −29524. Both directions pinned.
+                for s in ["0.1", "29524", "0.0001", "0.3", "1.7"] {
+                    let pos = UniversalTernaryFixed::from_str(s).expect("pos").to_tier_value();
+                    let neg = UniversalTernaryFixed::from_str(&format!("-{s}")).expect("neg").to_tier_value();
+                    assert_eq!(neg.0, pos.0, "tier symmetry for {s}");
+                    assert_eq!(neg.1, -pos.1, "raw symmetry for {s}");
+                }
+                let tie_pos = UniversalTernaryFixed::from_str("0.5").unwrap().to_tier_value().1;
+                let tie_neg = UniversalTernaryFixed::from_str("-0.5").unwrap().to_tier_value().1;
+                assert_eq!((tie_pos, tie_neg), (29525, -29524), "documented tie asymmetry (+∞)");
+                // Double minus stays rejected.
+                assert!(UniversalTernaryFixed::from_str("--5").is_err());
+            }
+
+            // ============================================================================
+            // Gap-closing (post-0.4.33): wide ternary_to_storage arms + FASC
+            // transcendentals on ternary operands
+            // ============================================================================
+
+            #[test]
+            fn ternary_literals_cap_at_tier3() {
+                // from_str parses the integer part as i64 (≤ ~9.2e18), and Tier 3 has
+                // no window gate — any i64 integer's raw (≤ 9.2e18·3^40 ≈ 1.1e38) fits
+                // i128. Consequence, pinned here: 0t literals can NEVER land beyond
+                // Tier 3; the Medium/Large/XLarge storage arms are reachable only via
+                // internal from_tier_raw paths (unit-tested in domain.rs).
+                let v = UniversalTernaryFixed::from_str("9000000000000000000").expect("i64-max-ish");
+                assert_eq!(v.current_tier(), TernaryTier::Tier3);
+                // And the same literal through FASC: loud error on narrow storage,
+                // exact on i128+ storage.
+                let parsed = gmath_parse_in::<FixedPoint>("0t9000000000000000000");
+                if (BITS == 32 || BITS == 64) {
+                assert!(parsed.is_err(), "big Tier-3 literal must fail loud on narrow storage");
+                }
+                if !((BITS == 32 || BITS == 64)) {
+                    let expr = parsed.expect("i128+ storage holds Tier-3 raws");
+                    assert_eq!(display(&expr), "9000000000000000000");
+                }
+            }
+
+            #[test]
+            fn tier3_literal_storage_conversion_per_profile() {
+                // 9e14 is inside the Tier-3 window: raw = 9e14 · 3^32 ≈ 1.67e30 —
+                // fits i128 (embedded+) but not i64/i32 (realtime, compact).
+                let parsed = gmath_parse_in::<FixedPoint>("0t900000000000000");
+                if (BITS == 32 || BITS == 64) {
+                assert!(parsed.is_err(), "Tier-3 literal must fail loud on realtime/compact");
+                }
+                if !((BITS == 32 || BITS == 64)) {
+                    let expr = parsed.expect("i128+ storage holds Tier-3 raws");
+                    assert_eq!(display(&expr), "900000000000000");
+                }
+            }
+
+            #[test]
+            fn fasc_transcendentals_on_ternary_operands_match_plain() {
+                // Ternary operands route through the binary compute-tier engines; the
+                // result must be identical to the same computation on a plain literal
+                // (path independence across the ternary entry point).
+                let cases: &[(&str, &str)] = &[("0t2", "2"), ("0t9", "9"), ("0t3280", "3280")];
+                for &(t, p) in cases {
+                    assert_eq!(
+                        display(&g(t).sqrt()),
+                        display(&g(p).sqrt()),
+                        "sqrt diverges for ternary operand {t}"
+                    );
+                    assert_eq!(
+                        display(&g(t).ln()),
+                        display(&g(p).ln()),
+                        "ln diverges for ternary operand {t}"
+                    );
+                }
+                // exp/sin on a small ternary operand, plus a composed chain.
+                assert_eq!(display(&g("0t2").exp()), display(&g("2").exp()));
+                assert_eq!(display(&g("0t2").sin()), display(&g("2").sin()));
+                // Composed chain: the ternary-origin result may materialize back into
+                // the ternary domain ("2") while the plain path stays binary-formatted
+                // ("2.0000000000000000000") — same VALUE, different display. Compare
+                // through the router: the difference must be exactly zero.
+                let diff = display(&(g("0t2").exp().ln() - g("2").exp().ln()));
+                let trimmed = if diff.contains('.') {
+                    diff.trim_end_matches('0').trim_end_matches('.')
+                } else {
+                    diff.as_str()
+                };
+                assert!(
+                    trimmed == "0" || trimmed == "-0",
+                    "composed chain diverges for ternary operand: diff = {diff:?}"
+                );
+            }
+
+            // ============================================================================
+            // 0.4.34 — ternary routing column (docs/design/TERNARY_ROUTING_COLUMN.md)
+            // ============================================================================
+
+            use g_math::fixed_point::router::fractal_topology::{route_binary_op, DomainChoice, OpId, OperandClass, BINARY_BIT, DECIMAL_BIT, SYMBOLIC_BIT, TERNARY_BIT};
+
+            fn class(bits: u8) -> OperandClass {
+                OperandClass { exact_in: bits }
+            }
+
+            #[test]
+            fn routing_table_ternary_column_pins() {
+                let tern_sym = class(TERNARY_BIT | SYMBOLIC_BIT); // e.g. 1/3
+                let all = class(TERNARY_BIT | BINARY_BIT | DECIMAL_BIT | SYMBOLIC_BIT); // integers
+                let dec_sym = class(DECIMAL_BIT | SYMBOLIC_BIT); // e.g. 0.1
+
+                // Decision 1: Add/Sub of 3-adic classes route Ternary…
+                assert_eq!(route_binary_op(OpId::Add, tern_sym, tern_sym), DomainChoice::Ternary);
+                assert_eq!(route_binary_op(OpId::Sub, tern_sym, tern_sym), DomainChoice::Ternary);
+                assert_eq!(route_binary_op(OpId::Add, all, tern_sym), DomainChoice::Ternary);
+                assert_eq!(route_binary_op(OpId::Sub, tern_sym, all), DomainChoice::Ternary);
+                // …while Mul/Div of the same classes keep their pre-column routes.
+                assert_eq!(route_binary_op(OpId::Mul, tern_sym, tern_sym), DomainChoice::Symbolic);
+                assert_eq!(route_binary_op(OpId::Div, tern_sym, tern_sym), DomainChoice::Symbolic);
+                // Precedence unchanged elsewhere: integers stay Binary, decimals Decimal.
+                assert_eq!(route_binary_op(OpId::Add, all, all), DomainChoice::Binary);
+                assert_eq!(route_binary_op(OpId::Add, dec_sym, all), DomainChoice::Decimal);
+                // No shared non-symbolic exactness → Symbolic, as before.
+                assert_eq!(route_binary_op(OpId::Add, dec_sym, tern_sym), DomainChoice::Symbolic);
+            }
+
+            #[test]
+            fn column_routes_cross_domain_3adic_add_exactly() {
+                // 0t2 (ternary, class ALL) + 1/3 (symbolic, class TERN|SYM) → Ternary.
+                let result = evaluate_in(&(g("0t2") + g("1/3"))).expect("routed add");
+                // Wide-enough profiles hold the coerced value and stay in-domain;
+                // narrow profiles may fall back (Decision 2) — the VALUE is pinned
+                // everywhere via router-difference-zero either way.
+                if !((BITS == 32)) {
+                assert!(is_ternary(&result), "expected ternary-domain result");
+                }
+                let _ = result;
+                let diff = display(&((g("0t2") + g("1/3")) - g("7/3")));
+                let trimmed = if diff.contains('.') {
+                    diff.trim_end_matches('0').trim_end_matches('.')
+                } else {
+                    diff.as_str()
+                };
+                assert!(trimmed == "0" || trimmed == "-0", "2 + 1/3 != 7/3, diff {diff:?}");
+
+                // Exactness through a follow-up multiply: (1/3 + 2) · 3 == 7 exactly.
+                // (The multiply itself routes symbolic — Mul is outside the column.)
+                let seven = display(&((g("1/3") + g("2")) * g("3")));
+                let seven_trim = if seven.contains('.') {
+                    seven.trim_end_matches('0').trim_end_matches('.')
+                } else {
+                    seven.as_str()
+                };
+                assert_eq!(seven_trim, "7", "exactness lost through the routed add");
+            }
+
+            #[test]
+            fn column_fallback_on_narrow_storage_is_silent_and_correct() {
+                // 1e9/3 is 3-adic (routes Ternary) but its tier raw exceeds narrow
+                // storage — realtime must fall back silently to the rational path
+                // (Decision 2), never error, never wrap. Value identical everywhere.
+                let expr = || g("1000000000/3") + g("0t1");
+                let result = evaluate_in(&expr()).expect("must evaluate on every profile");
+                let _ = result;
+                let diff = display(&(expr() - g("1000000003/3")));
+                let trimmed = if diff.contains('.') {
+                    diff.trim_end_matches('0').trim_end_matches('.')
+                } else {
+                    diff.as_str()
+                };
+                assert!(
+                    trimmed == "0" || trimmed == "-0",
+                    "fallback changed the value: diff {diff:?}"
+                );
+            }
+
+            #[test]
+            fn convert_to_ternary_output_mode_is_exact_on_every_profile() {
+                // History: the output-mode conversion once stored tier-3 raws through
+                // an UNCHECKED cast (silent wrap on realtime; made a loud error in
+                // 0.4.34). Since the 0.5.0 tier resize the coercion targets the
+                // PROFILE's own tier and scale, so a 3-adic value converts EXACTLY on
+                // every profile — realtime holds 1/3 at Tier 1 as raw 3^10/3 = 19,683.
+                use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
+                let _ = set_gmath_mode("auto:ternary");
+                let converted = evaluate_in(&g("1/3"));
+                reset_gmath_mode();
+                let v = converted.expect("1/3 is 3-adic: exact ternary on every profile");
+                assert!(is_ternary(&v), "output mode must yield a ternary value");
+            }
         }
-        .expect("ugod op");
-        let (tier, raw) = ures.to_tier_value();
-        let scale: i128 = match tier {
-            1 => SCALE_TQ10_10 as i128,
-            2 => SCALE_TQ20_20 as i128,
-            t => panic!("unexpected tier {t} for small integers"),
-        };
-        assert_eq!(raw % scale, 0, "integer result must be exact");
-        assert_eq!((raw / scale).to_string(), expected, "UGOD path diverges");
-    }
-}
-
-#[test]
-fn fasc_ternary_negation_symmetry() {
-    // NOTE: a leading-minus literal ("-0t7") is a ParseError — the 0t prefix
-    // check requires position 0. Negation is expressed as an operator.
-    for s in ["1", "7", "29524"] {
-        let pos = display(&g(&format!("0t{s}")));
-        let negated = display(&(-g(&format!("0t{s}"))));
-        let via_sub = display(&(g("0t0") - g(&format!("0t{s}"))));
-        assert_eq!(negated, via_sub, "negation path divergence at 0t{s}");
-        assert_ne!(pos, negated);
-        // And double negation restores the original display.
-        let double = display(&(-(-g(&format!("0t{s}")))));
-        assert_eq!(double, pos, "neg(neg(0t{s})) != 0t{s}");
-    }
-}
-
-// ============================================================================
-// Item 5c — cross-domain coercion must not change values
-// ============================================================================
-
-#[test]
-fn cross_domain_coercion_matches_plain_expressions() {
-    // Each pair: expression with a ternary operand vs the same expression
-    // with a plain operand. Router coercion must produce identical display.
-    let pairs: &[(fn() -> LazyExpr, fn() -> LazyExpr)] = &[
-        (|| gmath("0t2") + gmath("3"), || gmath("2") + gmath("3")),
-        (|| gmath("0t2") + gmath("0.5"), || gmath("2") + gmath("0.5")),
-        (|| gmath("0t2") * gmath("1/3"), || gmath("2") * gmath("1/3")),
-        (|| gmath("0t7") - gmath("0.25"), || gmath("7") - gmath("0.25")),
-        (|| gmath("10") / gmath("0t4"), || gmath("10") / gmath("4")),
-    ];
-    // Display formatting differs per result domain (ternary "5" vs decimal
-    // "5.000000000"), so equality is checked through the router itself:
-    // (ternary_expr − plain_expr) must evaluate to exactly zero.
-    for (i, (ternary_side, plain_side)) in pairs.iter().enumerate() {
-        let diff = display(&(ternary_side() - plain_side()));
-        let trimmed = if diff.contains('.') {
-            diff.trim_end_matches('0').trim_end_matches('.')
-        } else {
-            diff.as_str()
-        };
-        assert!(
-            trimmed == "0" || trimmed == "-0" || trimmed == "0/1",
-            "cross-domain pair {i} diverges: difference displays as {diff:?}"
-        );
-    }
-}
-
-// ============================================================================
-// Contract §5 — the 0t fractional-literal conversion boundary
-// ============================================================================
-
-#[test]
-fn fractional_literal_conversion_boundary() {
-    // "0t0.5" forces the canonical tie: 0.5·3^10 = 29524.5, exactly between
-    // grid points (3^F odd — contract §4/§5). Pin the shipped conversion.
-    let v = UniversalTernaryFixed::from_str("0.5").expect("parse 0.5");
-    let (tier, raw) = v.to_tier_value();
-    assert_eq!(tier, 1);
-    // Pin (contract §5, 0.5.0 unification): conversion rounds NEAREST with
-    // ties toward +∞ — 0.5·3^10 = 29524.5 is a genuine tie and resolves UP
-    // to 29525; 1.5·3^10 = 88573.5 → 88574.
-    assert_eq!(raw, 29525, "0.5 conversion pin (nearest, tie → +∞)");
-    let (_, raw15) = UniversalTernaryFixed::from_str("1.5").expect("1.5").to_tier_value();
-    assert_eq!(raw15, 88574, "1.5 conversion pin (nearest, tie → +∞)");
-    // Exact-decimal values that ARE ternary-representable: integers only —
-    // 0.5 is necessarily inexact (denominator 2 ∉ {3}).
-    assert_ne!(raw as i128 * 2, (SCALE_TQ10_10 as i128) * 1, "0.5 cannot be exact");
-}
-
-#[test]
-fn ternary_literal_tier2_storage_limit_is_loud() {
-    // from_str window-gates 29525 to Tier 2 (raw 29525·3^20 ≈ 1.03e14). On the
-    // narrow profiles that raw does not fit BinaryStorage — before 0.4.33
-    // this silently wrapped into garbage (pre-resize, 0t3281 displayed as "-11.56021"
-    // on realtime); now it is a loud TierOverflow at parse.
-    // Note the asymmetry: the same VALUE reached by arithmetic
-    // (0t29524 + 0t1) stays at Tier 1 raw 29525·3^10, which fits everywhere.
-    let parsed = gmath_parse("0t29525");
-    #[cfg(any(table_format = "q16_16"))]
-    assert!(parsed.is_err(), "Tier-2 literal must fail loud on realtime");
-    #[cfg(not(any(table_format = "q16_16")))]
-    {
-        let expr = parsed.expect("wider profiles hold Tier-2 raws");
-        assert_eq!(display(&expr), "29525");
-    }
-}
-
-#[test]
-fn negative_fractional_literal_sign_regression() {
-    // REGRESSION (fixed in 0.4.33): "-0.5" parsed as +0.5 — the "-0"
-    // integer part lost its sign before the fraction was applied. The fix
-    // strips the sign once in from_str and negates the parsed magnitude.
-    // Nearest with ties toward +∞ (0.5.0): −0.5 is a tie and resolves UP
-    // (toward +∞) to −29524; −0.1 has no tie (5904.9 → 5905); −1.5 tie → −88573.
-    for (s, expected_raw) in [("-0.5", -29524i128), ("-0.1", -5905), ("-1.5", -88573)] {
-        let (tier, raw) = UniversalTernaryFixed::from_str(s)
-            .expect("parse negative fractional")
-            .to_tier_value();
-        assert_eq!(tier, 1);
-        assert_eq!(raw, expected_raw, "sign-correct conversion of {s}");
-    }
-    // Sign symmetry of conversion holds for every NON-tie input;
-    // exact ties break it by design (ties toward +∞ is not odd-symmetric):
-    // parse(0.5) = 29525 but parse(-0.5) = −29524. Both directions pinned.
-    for s in ["0.1", "29524", "0.0001", "0.3", "1.7"] {
-        let pos = UniversalTernaryFixed::from_str(s).expect("pos").to_tier_value();
-        let neg = UniversalTernaryFixed::from_str(&format!("-{s}")).expect("neg").to_tier_value();
-        assert_eq!(neg.0, pos.0, "tier symmetry for {s}");
-        assert_eq!(neg.1, -pos.1, "raw symmetry for {s}");
-    }
-    let tie_pos = UniversalTernaryFixed::from_str("0.5").unwrap().to_tier_value().1;
-    let tie_neg = UniversalTernaryFixed::from_str("-0.5").unwrap().to_tier_value().1;
-    assert_eq!((tie_pos, tie_neg), (29525, -29524), "documented tie asymmetry (+∞)");
-    // Double minus stays rejected.
-    assert!(UniversalTernaryFixed::from_str("--5").is_err());
-}
-
-// ============================================================================
-// Gap-closing (post-0.4.33): wide ternary_to_storage arms + FASC
-// transcendentals on ternary operands
-// ============================================================================
-
-#[test]
-fn ternary_literals_cap_at_tier3() {
-    // from_str parses the integer part as i64 (≤ ~9.2e18), and Tier 3 has
-    // no window gate — any i64 integer's raw (≤ 9.2e18·3^40 ≈ 1.1e38) fits
-    // i128. Consequence, pinned here: 0t literals can NEVER land beyond
-    // Tier 3; the Medium/Large/XLarge storage arms are reachable only via
-    // internal from_tier_raw paths (unit-tested in domain.rs).
-    let v = UniversalTernaryFixed::from_str("9000000000000000000").expect("i64-max-ish");
-    assert_eq!(v.current_tier(), TernaryTier::Tier3);
-    // And the same literal through FASC: loud error on narrow storage,
-    // exact on i128+ storage.
-    let parsed = gmath_parse("0t9000000000000000000");
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    assert!(parsed.is_err(), "big Tier-3 literal must fail loud on narrow storage");
-    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-    {
-        let expr = parsed.expect("i128+ storage holds Tier-3 raws");
-        assert_eq!(display(&expr), "9000000000000000000");
-    }
-}
-
-#[test]
-fn tier3_literal_storage_conversion_per_profile() {
-    // 9e14 is inside the Tier-3 window: raw = 9e14 · 3^32 ≈ 1.67e30 —
-    // fits i128 (embedded+) but not i64/i32 (realtime, compact).
-    let parsed = gmath_parse("0t900000000000000");
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    assert!(parsed.is_err(), "Tier-3 literal must fail loud on realtime/compact");
-    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-    {
-        let expr = parsed.expect("i128+ storage holds Tier-3 raws");
-        assert_eq!(display(&expr), "900000000000000");
-    }
-}
-
-#[test]
-fn fasc_transcendentals_on_ternary_operands_match_plain() {
-    // Ternary operands route through the binary compute-tier engines; the
-    // result must be identical to the same computation on a plain literal
-    // (path independence across the ternary entry point).
-    let cases: &[(&str, &str)] = &[("0t2", "2"), ("0t9", "9"), ("0t3280", "3280")];
-    for &(t, p) in cases {
-        assert_eq!(
-            display(&g(t).sqrt()),
-            display(&g(p).sqrt()),
-            "sqrt diverges for ternary operand {t}"
-        );
-        assert_eq!(
-            display(&g(t).ln()),
-            display(&g(p).ln()),
-            "ln diverges for ternary operand {t}"
-        );
-    }
-    // exp/sin on a small ternary operand, plus a composed chain.
-    assert_eq!(display(&g("0t2").exp()), display(&g("2").exp()));
-    assert_eq!(display(&g("0t2").sin()), display(&g("2").sin()));
-    // Composed chain: the ternary-origin result may materialize back into
-    // the ternary domain ("2") while the plain path stays binary-formatted
-    // ("2.0000000000000000000") — same VALUE, different display. Compare
-    // through the router: the difference must be exactly zero.
-    let diff = display(&(g("0t2").exp().ln() - g("2").exp().ln()));
-    let trimmed = if diff.contains('.') {
-        diff.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        diff.as_str()
     };
-    assert!(
-        trimmed == "0" || trimmed == "-0",
-        "composed chain diverges for ternary operand: diff = {diff:?}"
-    );
 }
 
-// ============================================================================
-// 0.4.34 — ternary routing column (docs/design/TERNARY_ROUTING_COLUMN.md)
-// ============================================================================
-
-use g_math::fixed_point::router::fractal_topology::{
-    route_binary_op, DomainChoice, OpId, OperandClass, BINARY_BIT, DECIMAL_BIT,
-    SYMBOLIC_BIT, TERNARY_BIT,
-};
-
-fn class(bits: u8) -> OperandClass {
-    OperandClass { exact_in: bits }
-}
-
-#[test]
-fn routing_table_ternary_column_pins() {
-    let tern_sym = class(TERNARY_BIT | SYMBOLIC_BIT); // e.g. 1/3
-    let all = class(TERNARY_BIT | BINARY_BIT | DECIMAL_BIT | SYMBOLIC_BIT); // integers
-    let dec_sym = class(DECIMAL_BIT | SYMBOLIC_BIT); // e.g. 0.1
-
-    // Decision 1: Add/Sub of 3-adic classes route Ternary…
-    assert_eq!(route_binary_op(OpId::Add, tern_sym, tern_sym), DomainChoice::Ternary);
-    assert_eq!(route_binary_op(OpId::Sub, tern_sym, tern_sym), DomainChoice::Ternary);
-    assert_eq!(route_binary_op(OpId::Add, all, tern_sym), DomainChoice::Ternary);
-    assert_eq!(route_binary_op(OpId::Sub, tern_sym, all), DomainChoice::Ternary);
-    // …while Mul/Div of the same classes keep their pre-column routes.
-    assert_eq!(route_binary_op(OpId::Mul, tern_sym, tern_sym), DomainChoice::Symbolic);
-    assert_eq!(route_binary_op(OpId::Div, tern_sym, tern_sym), DomainChoice::Symbolic);
-    // Precedence unchanged elsewhere: integers stay Binary, decimals Decimal.
-    assert_eq!(route_binary_op(OpId::Add, all, all), DomainChoice::Binary);
-    assert_eq!(route_binary_op(OpId::Add, dec_sym, all), DomainChoice::Decimal);
-    // No shared non-symbolic exactness → Symbolic, as before.
-    assert_eq!(route_binary_op(OpId::Add, dec_sym, tern_sym), DomainChoice::Symbolic);
-}
-
-#[test]
-fn column_routes_cross_domain_3adic_add_exactly() {
-    // 0t2 (ternary, class ALL) + 1/3 (symbolic, class TERN|SYM) → Ternary.
-    let result = evaluate(&(g("0t2") + g("1/3"))).expect("routed add");
-    // Wide-enough profiles hold the coerced value and stay in-domain;
-    // narrow profiles may fall back (Decision 2) — the VALUE is pinned
-    // everywhere via router-difference-zero either way.
-    #[cfg(not(any(table_format = "q16_16")))]
-    assert!(is_ternary(&result), "expected ternary-domain result");
-    let _ = result;
-    let diff = display(&((g("0t2") + g("1/3")) - g("7/3")));
-    let trimmed = if diff.contains('.') {
-        diff.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        diff.as_str()
-    };
-    assert!(trimmed == "0" || trimmed == "-0", "2 + 1/3 != 7/3, diff {diff:?}");
-
-    // Exactness through a follow-up multiply: (1/3 + 2) · 3 == 7 exactly.
-    // (The multiply itself routes symbolic — Mul is outside the column.)
-    let seven = display(&((g("1/3") + g("2")) * g("3")));
-    let seven_trim = if seven.contains('.') {
-        seven.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        seven.as_str()
-    };
-    assert_eq!(seven_trim, "7", "exactness lost through the routed add");
-}
-
-#[test]
-fn column_fallback_on_narrow_storage_is_silent_and_correct() {
-    // 1e9/3 is 3-adic (routes Ternary) but its tier raw exceeds narrow
-    // storage — realtime must fall back silently to the rational path
-    // (Decision 2), never error, never wrap. Value identical everywhere.
-    let expr = || g("1000000000/3") + g("0t1");
-    let result = evaluate(&expr()).expect("must evaluate on every profile");
-    let _ = result;
-    let diff = display(&(expr() - g("1000000003/3")));
-    let trimmed = if diff.contains('.') {
-        diff.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        diff.as_str()
-    };
-    assert!(
-        trimmed == "0" || trimmed == "-0",
-        "fallback changed the value: diff {diff:?}"
-    );
-}
-
-#[test]
-fn convert_to_ternary_output_mode_is_exact_on_every_profile() {
-    // History: the output-mode conversion once stored tier-3 raws through
-    // an UNCHECKED cast (silent wrap on realtime; made a loud error in
-    // 0.4.34). Since the 0.5.0 tier resize the coercion targets the
-    // PROFILE's own tier and scale, so a 3-adic value converts EXACTLY on
-    // every profile — realtime holds 1/3 at Tier 1 as raw 3^10/3 = 19,683.
-    use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
-    let _ = set_gmath_mode("auto:ternary");
-    let converted = evaluate(&g("1/3"));
-    reset_gmath_mode();
-    let v = converted.expect("1/3 is 3-adic: exact ternary on every profile");
-    assert!(is_ternary(&v), "output mode must yield a ternary value");
-}
+for_each_format!(suite);

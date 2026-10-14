@@ -593,7 +593,37 @@ Refined for the build (2026-10-10, after phase 5), in two sub-phases:
     library test count rose from 332 to 373. Gate script
     `.gates/no_profile_in_lib.py` (local): 0 reads outside tests and the
     marked scaffolding.
-  - **7b, the tests.** Each integration test generic over `T: FixedNum`
+  - **7b, the tests.** IN PROGRESS (2026-10-14, one build green per file,
+    the full-suite runs pending). As built, the mechanism is a macro rather
+    than generic functions: a suite file is `macro_rules! suite { ($m:ident,
+    $S:ty, $F:literal) => { mod $m { type FixedPoint = Fixed<$S, $F>; const
+    BITS; const FRAC_BITS; <the file's body unchanged> } } }` and
+    `for_each_format!(suite)` from `tests/common/mod.rs` instantiates it at
+    Q22.10, Q16.16, Q32.32, Q64.64, Q128.128 and Q256.256, so one binary runs
+    the old per-profile body at six formats and `FixedPoint` inside it is
+    the module's alias, not the crate's. Defaulted containers get module
+    aliases (`type FixedVector<T = FixedPoint> = ...`), defaulted traits are
+    named (`Manifold<FixedPoint>`), the canonical entry points become their
+    `_in` forms (`gmath_in::<FixedPoint>`, `evaluate_in`). A profile cfg arm
+    becomes a `BITS` / `FRAC_BITS` condition (a `let` or `const` if-chain, an
+    early return in a test, a panic carrying the expected text in a
+    should-panic test); a part written for some words only (32-bit raws, the
+    row-scaled forms, the circle predicates below the 512-bit word, per-word
+    reference tables) becomes a second suite macro instantiated at those
+    words, with the file's non-test items in a `shared_items!` macro both
+    use; inner `macro_rules!` move to file level (their metavariables would be
+    read by the suite macro), one per word where the bodies differed. The
+    reference tables that selected by profile (`certified_geometry_refs`,
+    `compute_tier_refs`, `decimal_exp_range_refs`, `fasc_ulp_refs_q16`,
+    `wide_q64_refs`) now carry every format's table and select by the
+    including module's `BITS` and `FRAC_BITS` (generators updated). Unit
+    counts across words read the raw bit by bit (`raw_units`) instead of
+    casting. Eleven print-only `trace_*` files were deleted and the three
+    that asserted became explicit-format pins. `differential_065_validation`
+    is the one suite that keeps `cfg(table_format)`: it mirrors the
+    published crate's build, and its new type is now derived from the old
+    crate's storage word and split (`Mirror`), not from `frac_config`.
+  - **7b, the plan was.** Each integration test generic over `T: FixedNum`
     (or `FascFormat`), instantiated through one `for_each_format!` in
     `tests/common/` at `Fixed<i32, 10>`, `Q16_16`, `Q32_32`, `Q64_64`,
     `Q128_128`, `Q256_256`, with the realtime splits F = 2..30 as types

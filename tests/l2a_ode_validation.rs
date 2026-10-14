@@ -9,436 +9,431 @@
 //!
 //! All tests run on the active profile (embedded/balanced/scientific).
 
-use g_math::fixed_point::{FixedPoint, FixedVector};
-use g_math::fixed_point::imperative::ode::*;
+#[macro_use]
+mod common;
 
-fn fp(s: &str) -> FixedPoint {
-    if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
-    else { FixedPoint::from_str(s) }
-}
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #[allow(dead_code)]
+            type FixedPoint = Fixed<$S, $F>;
+            const FRAC_BITS: u32 = $F;
+            type FixedVector<T = FixedPoint> = g_math::fixed_point::FixedVector<T>;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            use g_math::fixed_point::{Fixed};
+            use g_math::fixed_point::imperative::ode::*;
 
-/// `k` units in the last place of this build's storage (realtime follows
-/// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
-fn ulps(k: i32) -> FixedPoint {
-    let mut u = FixedPoint::one();
-    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
-    u * FixedPoint::from_int(k)
-}
+            fn fp(s: &str) -> FixedPoint {
+                if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
+                else { FixedPoint::from_str(s) }
+            }
 
-/// The larger of a decimal tolerance and `k` storage units.
-fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+            /// `k` units in the last place of this build's storage (realtime follows
+            /// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+            fn ulps(k: i32) -> FixedPoint {
+                let mut u = FixedPoint::one();
+                for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
+                u * FixedPoint::from_int(k)
+            }
 
-/// A difference in storage units (its raw value), for printing measured
-/// errors. Doubling the value instead would leave the range at 24 fraction
-/// bits, where the scalar operators wrap.
-fn in_ulps(d: FixedPoint) -> String { format!("{:?}", d.raw()) }
+            /// The larger of a decimal tolerance and `k` storage units.
+            fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
 
-/// Below 10 fraction bits a decimal step such as 0.01 is a few units with a
-/// large representation error (3/256 = 0.0117 at 8 bits) and every step
-/// rounds a state increment of about one unit: those builds step by 2^-k.
-fn coarse() -> bool { g_math::fixed_point::frac_config::FRAC_BITS < 10 }
+            /// A difference in storage units (its raw value), for printing measured
+            /// errors. Doubling the value instead would leave the range at 24 fraction
+            /// bits, where the scalar operators wrap.
+            fn in_ulps(d: FixedPoint) -> String { format!("{:?}", d.raw()) }
 
-/// 2^-k exactly.
-fn pow2_neg(k: u32) -> FixedPoint {
-    let mut u = FixedPoint::one();
-    for _ in 0..k { u = u / FixedPoint::from_int(2); }
-    u
-}
+            /// Below 10 fraction bits a decimal step such as 0.01 is a few units with a
+            /// large representation error (3/256 = 0.0117 at 8 bits) and every step
+            /// rounds a state increment of about one unit: those builds step by 2^-k.
+            fn coarse() -> bool { FRAC_BITS < 10 }
 
-fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
-    let d = (got - exp).abs();
-    assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
-}
+            /// 2^-k exactly.
+            fn pow2_neg(k: u32) -> FixedPoint {
+                let mut u = FixedPoint::one();
+                for _ in 0..k { u = u / FixedPoint::from_int(2); }
+                u
+            }
 
-// ============================================================================
-// RK4: Exponential decay — dx/dt = -x, x(0) = 1
-// Solution: x(t) = e^(-t)
-// ============================================================================
+            fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
+                let d = (got - exp).abs();
+                assert!(d < tol, "{}: got {}, expected {}, diff={}", name, got, exp, d);
+            }
 
-struct ExponentialDecay;
+            // ============================================================================
+            // RK4: Exponential decay — dx/dt = -x, x(0) = 1
+            // Solution: x(t) = e^(-t)
+            // ============================================================================
 
-impl OdeSystem for ExponentialDecay {
-    fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
-        // dx/dt = -x
-        -x
-    }
-}
+            struct ExponentialDecay;
 
-#[test]
-fn test_rk4_exponential_decay() {
-    let sys = ExponentialDecay;
-    let x0 = FixedVector::from_slice(&[fp("1")]);
-    let t0 = fp("0");
-    let t_end = fp("1");
-    // 100 steps; 16 steps of 1/16 below 10 fraction bits (see coarse())
-    let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
+            impl OdeSystem<FixedPoint> for ExponentialDecay {
+                fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
+                    // dx/dt = -x
+                    -x
+                }
+            }
 
-    let trajectory = rk4_integrate(&sys, &x0, t0, t_end, h);
-    let final_point = trajectory.last().unwrap();
-    println!("exp decay error: {} ulp", in_ulps((final_point.x[0] - fp("0.36787944117144232159647396907")).abs()));
+            #[test]
+            fn test_rk4_exponential_decay() {
+                let sys = ExponentialDecay;
+                let x0 = FixedVector::from_slice(&[fp("1")]);
+                let t0 = fp("0");
+                let t_end = fp("1");
+                // 100 steps; 16 steps of 1/16 below 10 fraction bits (see coarse())
+                let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
 
-    // x(1) = e^(-1) ≈ 0.36787944117144232
-    // mpmath: mp.dps=50; exp(-1) = 0.36787944117144232159647396907...
-    #[cfg(table_format = "q16_16")]
-    let expected = fp("0.3678");
-    #[cfg(table_format = "q32_32")]
-    let expected = fp("0.367879441");
-    #[cfg(table_format = "q64_64")]
-    let expected = fp("0.3678794411714423");
-    #[cfg(table_format = "q128_128")]
-    let expected = fp("0.36787944117144232159647396907");
-    #[cfg(table_format = "q256_256")]
-    let expected = fp("0.36787944117144232159647396907");
+                let trajectory = rk4_integrate(&sys, &x0, t0, t_end, h);
+                let final_point = trajectory.last().unwrap();
+                println!("exp decay error: {} ulp", in_ulps((final_point.x[0] - fp("0.36787944117144232159647396907")).abs()));
 
-    // RK4 with h=0.01 on this smooth ODE should be very accurate
-    #[cfg(table_format = "q16_16")]
-    let rk4_tol = fp("0.01");  // 100 steps × 16-bit precision
-    #[cfg(not(table_format = "q16_16"))]
-    let rk4_tol = fp("0.00001");
-    // 16 steps, one rounding of at most half a unit each, contracted by
-    // |1 - h + ...| < 1: at most 8 units (the RK4 truncation error at h = 1/16
-    // is below 1e-7), plus 0.02 unit for the 4-digit expected value
-    let rk4_tol = at_least(rk4_tol, 9);
-    assert_fp(final_point.x[0], expected, rk4_tol, "exp_decay_rk4");
-}
+                // x(1) = e^(-1) ≈ 0.36787944117144232
+                // mpmath: mp.dps=50; exp(-1) = 0.36787944117144232159647396907...
+                let expected = if BITS == 32 { fp("0.3678") } else if BITS == 64 { fp("0.367879441") } else if BITS == 128 { fp("0.3678794411714423") } else if BITS == 256 { fp("0.36787944117144232159647396907") } else { fp("0.36787944117144232159647396907") };
 
-// ============================================================================
-// RK4: Harmonic oscillator — d²x/dt² = -x
-// System: dx/dt = v, dv/dt = -x
-// Solution: x(t) = cos(t), v(t) = -sin(t) for x(0)=1, v(0)=0
-// ============================================================================
+                // RK4 with h=0.01 on this smooth ODE should be very accurate
+                let rk4_tol = if BITS == 32 { fp("0.01") } else { fp("0.00001") };
+                // 16 steps, one rounding of at most half a unit each, contracted by
+                // |1 - h + ...| < 1: at most 8 units (the RK4 truncation error at h = 1/16
+                // is below 1e-7), plus 0.02 unit for the 4-digit expected value
+                let rk4_tol = at_least(rk4_tol, 9);
+                assert_fp(final_point.x[0], expected, rk4_tol, "exp_decay_rk4");
+            }
 
-struct HarmonicOscillator;
+            // ============================================================================
+            // RK4: Harmonic oscillator — d²x/dt² = -x
+            // System: dx/dt = v, dv/dt = -x
+            // Solution: x(t) = cos(t), v(t) = -sin(t) for x(0)=1, v(0)=0
+            // ============================================================================
 
-impl OdeSystem for HarmonicOscillator {
-    fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
-        // x = [position, velocity]
-        // dx/dt = [velocity, -position]
-        FixedVector::from_slice(&[x[1], -x[0]])
-    }
-}
+            struct HarmonicOscillator;
 
-#[test]
-fn test_rk4_harmonic_oscillator() {
-    let sys = HarmonicOscillator;
-    let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]); // x=1, v=0
-    let t0 = fp("0");
-    let t_end = fp("3.14159265358979"); // ≈ π
-    let h = fp("0.01");
+            impl OdeSystem<FixedPoint> for HarmonicOscillator {
+                fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
+                    // x = [position, velocity]
+                    // dx/dt = [velocity, -position]
+                    FixedVector::from_slice(&[x[1], -x[0]])
+                }
+            }
 
-    let trajectory = rk4_integrate(&sys, &x0, t0, t_end, h);
-    let final_point = trajectory.last().unwrap();
+            #[test]
+            fn test_rk4_harmonic_oscillator() {
+                let sys = HarmonicOscillator;
+                let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]); // x=1, v=0
+                let t0 = fp("0");
+                let t_end = fp("3.14159265358979"); // ≈ π
+                let h = fp("0.01");
 
-    // At t=π: x(π) = cos(π) = -1, v(π) = -sin(π) = 0
-    #[cfg(table_format = "q16_16")]
-    let osc_tol = fp("0.1");  // ~314 steps at 16-bit precision
-    #[cfg(not(table_format = "q16_16"))]
-    let osc_tol = fp("0.001");
-    assert_fp(final_point.x[0], fp("-1"), osc_tol, "harmonic_x_at_pi");
-    assert_fp(final_point.x[1], fp("0"), osc_tol, "harmonic_v_at_pi");
-}
+                let trajectory = rk4_integrate(&sys, &x0, t0, t_end, h);
+                let final_point = trajectory.last().unwrap();
 
-#[test]
-fn test_rk4_harmonic_energy_conservation() {
-    let sys = HarmonicOscillator;
-    let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]);
-    let trajectory = rk4_integrate(&sys, &x0, fp("0"), fp("10"), fp("0.01"));
+                // At t=π: x(π) = cos(π) = -1, v(π) = -sin(π) = 0
+                let osc_tol = if BITS == 32 { fp("0.1") } else { fp("0.001") };
+                assert_fp(final_point.x[0], fp("-1"), osc_tol, "harmonic_x_at_pi");
+                assert_fp(final_point.x[1], fp("0"), osc_tol, "harmonic_v_at_pi");
+            }
 
-    // Energy = x² + v², should be conserved (= 1.0 initially)
-    let (max_drift, _) = monitor_invariant(
-        |x| x[0] * x[0] + x[1] * x[1],
-        &trajectory,
-    );
+            #[test]
+            fn test_rk4_harmonic_energy_conservation() {
+                let sys = HarmonicOscillator;
+                let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]);
+                let trajectory = rk4_integrate(&sys, &x0, fp("0"), fp("10"), fp("0.01"));
 
-    // Over 10 time units (1000 steps), energy drift should be small
-    #[cfg(table_format = "q16_16")]
-    let drift_tol = fp("0.1");  // 1000 steps × 16-bit → larger drift
-    #[cfg(not(table_format = "q16_16"))]
-    let drift_tol = fp("0.001");
-    assert!(max_drift < drift_tol,
-        "Energy drift {} exceeds tolerance", max_drift);
-}
+                // Energy = x² + v², should be conserved (= 1.0 initially)
+                let (max_drift, _) = monitor_invariant(
+                    |x| x[0] * x[0] + x[1] * x[1],
+                    &trajectory,
+                );
 
-// ============================================================================
-// RK4: Single step accuracy — compare against mpmath reference
-// ============================================================================
+                // Over 10 time units (1000 steps), energy drift should be small
+                let drift_tol = if BITS == 32 { fp("0.1") } else { fp("0.001") };
+                assert!(max_drift < drift_tol,
+                    "Energy drift {} exceeds tolerance", max_drift);
+            }
 
-#[test]
-fn test_rk4_single_step_mpmath() {
-    // Single RK4 step on dx/dt = -x, x(0) = 1, h = 0.1
-    // mpmath 50-digit: RK4 gives x(0.1) with O(h^5) local error
-    //
-    // Exact: e^(-0.1) = 0.90483741803595957316424905944...
-    // RK4 with h=0.1: x ≈ 1 + 0.1*(-1)/6*(...) weights
-    //
-    // k1 = -1
-    // k2 = -(1 + 0.05*(-1)) = -0.95
-    // k3 = -(1 + 0.05*(-0.95)) = -0.9525
-    // k4 = -(1 + 0.1*(-0.9525)) = -0.90475
-    // x1 = 1 + (0.1/6)*(-1 + 2*(-0.95) + 2*(-0.9525) + (-0.90475))
-    //     = 1 + (0.1/6)*(-5.70975)
-    //     = 1 - 0.0951625
-    //     = 0.9048375
+            // ============================================================================
+            // RK4: Single step accuracy — compare against mpmath reference
+            // ============================================================================
 
-    let sys = ExponentialDecay;
-    let x0 = FixedVector::from_slice(&[fp("1")]);
-    // h = 0.1 is not representable in binary (102/1024 at 10 fraction bits),
-    // so the step is h = 3/32: the RK4 polynomial 1 - h + h^2/2 - h^3/6 + h^4/24
-    // is then exactly 7637915/8388608 on every profile.
-    let result = rk4_step(&sys, fp("0"), &x0, fp("0.09375"));
-    assert_fp(result[0], fp("0.91051042079925537109375"), at_least(fp("0.0001"), 2), "rk4_single_step");
+            #[test]
+            fn test_rk4_single_step_mpmath() {
+                // Single RK4 step on dx/dt = -x, x(0) = 1, h = 0.1
+                // mpmath 50-digit: RK4 gives x(0.1) with O(h^5) local error
+                //
+                // Exact: e^(-0.1) = 0.90483741803595957316424905944...
+                // RK4 with h=0.1: x ≈ 1 + 0.1*(-1)/6*(...) weights
+                //
+                // k1 = -1
+                // k2 = -(1 + 0.05*(-1)) = -0.95
+                // k3 = -(1 + 0.05*(-0.95)) = -0.9525
+                // k4 = -(1 + 0.1*(-0.9525)) = -0.90475
+                // x1 = 1 + (0.1/6)*(-1 + 2*(-0.95) + 2*(-0.9525) + (-0.90475))
+                //     = 1 + (0.1/6)*(-5.70975)
+                //     = 1 - 0.0951625
+                //     = 0.9048375
 
-    // the original h = 0.1 on the profiles that resolve it (0.9048375)
-    if g_math::fixed_point::frac_config::FRAC_BITS >= 16 {
-        let result = rk4_step(&sys, fp("0"), &x0, fp("0.1"));
-        assert_fp(result[0], fp("0.9048375"), fp("0.0001"), "rk4_single_step h = 0.1");
-    }
-}
+                let sys = ExponentialDecay;
+                let x0 = FixedVector::from_slice(&[fp("1")]);
+                // h = 0.1 is not representable in binary (102/1024 at 10 fraction bits),
+                // so the step is h = 3/32: the RK4 polynomial 1 - h + h^2/2 - h^3/6 + h^4/24
+                // is then exactly 7637915/8388608 on every profile.
+                let result = rk4_step(&sys, fp("0"), &x0, fp("0.09375"));
+                assert_fp(result[0], fp("0.91051042079925537109375"), at_least(fp("0.0001"), 2), "rk4_single_step");
 
-// ============================================================================
-// RK45: Adaptive stepping
-// ============================================================================
+                // the original h = 0.1 on the profiles that resolve it (0.9048375)
+                if FRAC_BITS >= 16 {
+                    let result = rk4_step(&sys, fp("0"), &x0, fp("0.1"));
+                    assert_fp(result[0], fp("0.9048375"), fp("0.0001"), "rk4_single_step h = 0.1");
+                }
+            }
 
-/// Q16.16: RK45 adaptive tolerance 1e-4 is barely representable (raw≈6) at 16-bit.
-#[test]
-#[cfg(not(table_format = "q16_16"))]
-fn test_rk45_exponential_decay() {
-    let sys = ExponentialDecay;
-    let x0 = FixedVector::from_slice(&[fp("1")]);
-    let config = Rk45Config::new(fp("0.0001"), fp("0.1"));
+            // ============================================================================
+            // RK45: Adaptive stepping
+            // ============================================================================
 
-    let (trajectory, _rejected) = rk45_integrate(&sys, &x0, fp("0"), fp("1"), &config).unwrap();
-    let final_point = trajectory.last().unwrap();
+            /// Q16.16: RK45 adaptive tolerance 1e-4 is barely representable (raw≈6) at 16-bit.
+            #[test]
+            fn test_rk45_exponential_decay() {
+                if !(!(BITS == 32)) { return; }
+                let sys = ExponentialDecay;
+                let x0 = FixedVector::from_slice(&[fp("1")]);
+                let config = Rk45Config::new(fp("0.0001"), fp("0.1"));
 
-    // Should reach t=1 with good accuracy
-    assert_fp(final_point.x[0], fp("0.3678794411714423"), fp("0.001"), "rk45_exp_decay");
+                let (trajectory, _rejected) = rk45_integrate(&sys, &x0, fp("0"), fp("1"), &config).unwrap();
+                let final_point = trajectory.last().unwrap();
 
-    // Trajectory should be non-trivial (some steps taken)
-    assert!(trajectory.len() > 2, "RK45 should take multiple steps");
-}
+                // Should reach t=1 with good accuracy
+                assert_fp(final_point.x[0], fp("0.3678794411714423"), fp("0.001"), "rk45_exp_decay");
 
-#[test]
-fn test_rk45_adaptive_activates() {
-    // Use a system where the solution changes rapidly, then slowly
-    // dx/dt = -10x (fast decay)
-    struct FastDecay;
-    impl OdeSystem for FastDecay {
-        fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
-            FixedVector::from_slice(&[fp("-10") * x[0]])
+                // Trajectory should be non-trivial (some steps taken)
+                assert!(trajectory.len() > 2, "RK45 should take multiple steps");
+            }
+
+            #[test]
+            fn test_rk45_adaptive_activates() {
+                // Use a system where the solution changes rapidly, then slowly
+                // dx/dt = -10x (fast decay)
+                struct FastDecay;
+                impl OdeSystem<FixedPoint> for FastDecay {
+                    fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
+                        FixedVector::from_slice(&[fp("-10") * x[0]])
+                    }
+                }
+
+                let x0 = FixedVector::from_slice(&[fp("1")]);
+                // 0.001 is a single unit at 10 fraction bits: below a few units the error
+                // estimate is all rounding and the step cannot shrink usefully
+                // h_init 0.25, not 0.5: at h = 0.5 the Dormand-Prince stage values of
+                // this system reach -110.8 and f = -10 x reaches 1108, beyond the Q8.24
+                // range (+-128), where the FixedPoint operators panic instead of
+                // wrapping. At 0.25 the stages stay within 7.6 (f within 76) and the
+                // controller still rejects the first steps (2 rejections in exact
+                // arithmetic at tol = 0.001, 3 at h_init = 0.5; same final value).
+                let config = Rk45Config::new(at_least(fp("0.001"), 32), fp("0.25"));
+
+                let (trajectory, _rejected) = rk45_integrate(&FastDecay, &x0, fp("0"), fp("1"), &config).unwrap();
+
+                // The adaptive controller should reject some initial large steps and then
+                // accept smaller ones. We just verify it converges.
+                let final_val = trajectory.last().unwrap().x[0];
+                // e^(-10) ≈ 0.0000453999...
+                println!("rk45 fast decay final value: {final_val}");
+                assert!(final_val.abs() < at_least(fp("0.001"), 4), "Fast decay should converge near zero: {final_val}");
+            }
+
+            // ============================================================================
+            // Verlet: Harmonic oscillator (Hamiltonian)
+            // ============================================================================
+
+            struct HarmonicHamiltonian;
+
+            impl HamiltonianSystem<FixedPoint> for HarmonicHamiltonian {
+                fn force(&self, q: &FixedVector, _p: &FixedVector) -> FixedVector {
+                    // dp/dt = -dH/dq = -q (for H = p²/2 + q²/2)
+                    -q
+                }
+
+                fn velocity(&self, _q: &FixedVector, p: &FixedVector) -> FixedVector {
+                    // dq/dt = dH/dp = p
+                    p.clone()
+                }
+
+                fn energy(&self, q: &FixedVector, p: &FixedVector) -> FixedPoint {
+                    // H = (q² + p²) / 2
+                    let two = FixedPoint::from_int(2);
+                    (q.dot_precise(q) + p.dot_precise(p)) / two
+                }
+            }
+
+            #[test]
+            fn test_verlet_harmonic_oscillator() {
+                let sys = HarmonicHamiltonian;
+                let q0 = FixedVector::from_slice(&[fp("1")]);
+                let p0 = FixedVector::from_slice(&[fp("0")]);
+
+                let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
+                let trajectory = verlet_integrate(&sys, &q0, &p0, fp("0"), fp("6.28318530717959"), h);
+
+                let final_point = trajectory.last().unwrap();
+                // After one full period (2π), should return to q≈1, p≈0. At h = 0.01 the
+                // 628 kicks of about 5 units each round by up to half a unit: 42 units of
+                // accumulated state rounding at Q22.10, where 0.01 is only 10 units.
+                // Below 10 bits (h = 1/16, 101 steps) measured 6 and 4 units.
+                println!("verlet period: q = {}, p = {}; errors {} / {} ulp", final_point.q[0], final_point.p[0],
+                    in_ulps((final_point.q[0] - fp("1")).abs()), in_ulps(final_point.p[0].abs()));
+                assert_fp(final_point.q[0], fp("1"), at_least(fp("0.01"), 64), "verlet_q_period");
+                assert_fp(final_point.p[0], fp("0"), at_least(fp("0.01"), 64), "verlet_p_period");
+            }
+
+            #[test]
+            fn test_verlet_energy_conservation() {
+                let sys = HarmonicHamiltonian;
+                let q0 = FixedVector::from_slice(&[fp("1")]);
+                let p0 = FixedVector::from_slice(&[fp("0")]);
+
+                let trajectory = verlet_integrate(&sys, &q0, &p0, fp("0"), fp("100"), fp("0.01"));
+
+                let initial_energy = trajectory[0].energy;
+                let mut max_drift = FixedPoint::ZERO;
+                for pt in &trajectory {
+                    let drift = (pt.energy - initial_energy).abs();
+                    if drift > max_drift { max_drift = drift; }
+                }
+
+                // Symplectic integrator: energy should oscillate but not drift
+                // Over 100 time units (10000 steps), max energy drift should be small
+                // storage rounding of each kick bounds the drift in units, not in 0.01:
+                // 10 units measured at Q22.10, where 0.01 is 10 units
+                println!("verlet max energy drift: {max_drift}");
+                assert!(max_drift < at_least(fp("0.01"), 64),
+                    "Verlet energy drift {} exceeds tolerance over 10000 steps", max_drift);
+            }
+
+            #[test]
+            fn test_verlet_single_step_mpmath() {
+                // Single Verlet step on harmonic oscillator
+                // q(0)=1, p(0)=0, h=0.1
+                //
+                // p_half = p0 + (h/2)*force(q0, p0) = 0 + 0.05*(-1) = -0.05
+                // q_new = q0 + h*velocity(q0, p_half) = 1 + 0.1*(-0.05) = 0.995
+                // p_new = p_half + (h/2)*force(q_new, p_half) = -0.05 + 0.05*(-0.995) = -0.09975
+                //
+                // mpmath 50 digits: exact cos(0.1)=0.995004165278025766..., exact -sin(0.1)=-0.099833416646828...
+                let sys = HarmonicHamiltonian;
+                let q0 = FixedVector::from_slice(&[fp("1")]);
+                let p0 = FixedVector::from_slice(&[fp("0")]);
+
+                // h = 0.1 is 26/256 at 8 fraction bits (q_new is then 0.99484, 0.0011 from
+                // 0.995 before any rounding), so the step is h = 3/32 on every profile:
+                // q_new = 1 - h^2/2 = 2039/2048, p_new = -(h/2)(1 + q_new) = -12261/131072
+                // (python3 fractions). Three roundings of half a unit, weights <= 1.
+                let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.09375"));
+                assert_fp(q_new[0], fp("0.99560546875"), at_least(fp("0.001"), 2), "verlet_step_q h = 3/32");
+                assert_fp(p_new[0], fp("-0.09354400634765625"), at_least(fp("0.001"), 2), "verlet_step_p h = 3/32");
+
+                // the original h = 0.1 on the profiles that resolve it
+                if FRAC_BITS >= 16 {
+                    let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.1"));
+                    // Verlet is 2nd-order, so these won't be exact but close
+                    assert_fp(q_new[0], fp("0.995"), fp("0.001"), "verlet_step_q");
+                    assert_fp(p_new[0], fp("-0.09975"), fp("0.001"), "verlet_step_p");
+                }
+            }
+
+            // ============================================================================
+            // Monitor invariant
+            // ============================================================================
+
+            #[test]
+            fn test_monitor_invariant_exact() {
+                // For the harmonic oscillator, energy x[0]²+x[1]² should be constant=1
+                let sys = HarmonicOscillator;
+                let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]);
+                let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
+                let trajectory = rk4_integrate(&sys, &x0, fp("0"), fp("1"), h);
+
+                let (max_drift, drifts) = monitor_invariant(
+                    |x| x[0] * x[0] + x[1] * x[1],
+                    &trajectory,
+                );
+                println!("rk4 invariant drift: {} ulp", in_ulps(max_drift));
+
+                // RK4 doesn't preserve the Hamiltonian exactly, but drift should be small
+                let inv_tol = if BITS == 32 { fp("0.01") } else { fp("0.0001") };
+                // measured drift in units: 6 at 8 fraction bits (h = 1/16), 4 at 10-16,
+                // 12 at 20, 11 at 24; 0.01 is 2.56 units at 8 bits
+                let inv_tol = at_least(inv_tol, 8);
+                assert!(max_drift < inv_tol,
+                    "RK4 energy drift {} over 100 steps", max_drift);
+                assert_eq!(drifts.len(), trajectory.len());
+                // First point should have zero drift
+                assert!(drifts[0].is_zero(), "Initial drift should be zero");
+            }
+
+            // ============================================================================
+            // Multi-dimensional system: Lotka-Volterra
+            // dx/dt = αx - βxy
+            // dy/dt = δxy - γy
+            // ============================================================================
+
+            #[test]
+            fn test_rk4_lotka_volterra() {
+                struct LotkaVolterra;
+                impl OdeSystem<FixedPoint> for LotkaVolterra {
+                    fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
+                        let alpha = fp("1.5");
+                        let beta = fp("1");
+                        let delta = fp("1");
+                        let gamma = fp("3");
+                        FixedVector::from_slice(&[
+                            alpha * x[0] - beta * x[0] * x[1],
+                            delta * x[0] * x[1] - gamma * x[1],
+                        ])
+                    }
+                }
+
+                let x0 = FixedVector::from_slice(&[fp("10"), fp("5")]);
+                // 0.001 rounds to 0 below 10 fraction bits (an empty trajectory): one unit
+                let trajectory = rk4_integrate(&LotkaVolterra, &x0, fp("0"), fp("1"), at_least(fp("0.001"), 1));
+
+                // Just verify the integration completes and values stay positive
+                let final_point = trajectory.last().unwrap();
+                assert!(final_point.x[0] > fp("0"), "Prey population should stay positive");
+                assert!(final_point.x[1] > fp("0"), "Predator population should stay positive");
+                assert!(trajectory.len() > 100, "Should take many steps");
+            }
+
+            // ============================================================================
+            // RK4 order verification: halving step size should reduce error by ~16x
+            // ============================================================================
+
+            // Q16.16/Q32.32: limited precision means both step sizes hit the representation floor,
+            // so the error ratio collapses. Convergence order test requires ≥Q64.64.
+            #[test]
+            fn test_rk4_order_verification() {
+                if !(!((BITS == 32 || BITS == 64))) { return; }
+                let sys = ExponentialDecay;
+                let x0 = FixedVector::from_slice(&[fp("1")]);
+                let exact = fp("0.3678794411714423"); // e^(-1)
+
+                // Run with h=0.1 and h=0.05
+                let traj_coarse = rk4_integrate(&sys, &x0, fp("0"), fp("1"), fp("0.1"));
+                let traj_fine = rk4_integrate(&sys, &x0, fp("0"), fp("1"), fp("0.05"));
+
+                let err_coarse = (traj_coarse.last().unwrap().x[0] - exact).abs();
+                let err_fine = (traj_fine.last().unwrap().x[0] - exact).abs();
+
+                // RK4 is 4th order: halving h should reduce error by factor of ~16
+                // We check that fine error is at least 8x smaller (generous bound)
+                if !err_fine.is_zero() && !err_coarse.is_zero() {
+                    // err_coarse / err_fine should be ≈ 16
+                    let ratio = err_coarse / err_fine;
+                    assert!(ratio > fp("8"), "RK4 order: error ratio {} should be > 8 (expect ~16)", ratio);
+                }
+            }
         }
-    }
-
-    let x0 = FixedVector::from_slice(&[fp("1")]);
-    // 0.001 is a single unit at 10 fraction bits: below a few units the error
-    // estimate is all rounding and the step cannot shrink usefully
-    // h_init 0.25, not 0.5: at h = 0.5 the Dormand-Prince stage values of
-    // this system reach -110.8 and f = -10 x reaches 1108, beyond the Q8.24
-    // range (+-128), where the FixedPoint operators panic instead of
-    // wrapping. At 0.25 the stages stay within 7.6 (f within 76) and the
-    // controller still rejects the first steps (2 rejections in exact
-    // arithmetic at tol = 0.001, 3 at h_init = 0.5; same final value).
-    let config = Rk45Config::new(at_least(fp("0.001"), 32), fp("0.25"));
-
-    let (trajectory, _rejected) = rk45_integrate(&FastDecay, &x0, fp("0"), fp("1"), &config).unwrap();
-
-    // The adaptive controller should reject some initial large steps and then
-    // accept smaller ones. We just verify it converges.
-    let final_val = trajectory.last().unwrap().x[0];
-    // e^(-10) ≈ 0.0000453999...
-    println!("rk45 fast decay final value: {final_val}");
-    assert!(final_val.abs() < at_least(fp("0.001"), 4), "Fast decay should converge near zero: {final_val}");
+    };
 }
 
-// ============================================================================
-// Verlet: Harmonic oscillator (Hamiltonian)
-// ============================================================================
-
-struct HarmonicHamiltonian;
-
-impl HamiltonianSystem for HarmonicHamiltonian {
-    fn force(&self, q: &FixedVector, _p: &FixedVector) -> FixedVector {
-        // dp/dt = -dH/dq = -q (for H = p²/2 + q²/2)
-        -q
-    }
-
-    fn velocity(&self, _q: &FixedVector, p: &FixedVector) -> FixedVector {
-        // dq/dt = dH/dp = p
-        p.clone()
-    }
-
-    fn energy(&self, q: &FixedVector, p: &FixedVector) -> FixedPoint {
-        // H = (q² + p²) / 2
-        let two = FixedPoint::from_int(2);
-        (q.dot_precise(q) + p.dot_precise(p)) / two
-    }
-}
-
-#[test]
-fn test_verlet_harmonic_oscillator() {
-    let sys = HarmonicHamiltonian;
-    let q0 = FixedVector::from_slice(&[fp("1")]);
-    let p0 = FixedVector::from_slice(&[fp("0")]);
-
-    let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
-    let trajectory = verlet_integrate(&sys, &q0, &p0, fp("0"), fp("6.28318530717959"), h);
-
-    let final_point = trajectory.last().unwrap();
-    // After one full period (2π), should return to q≈1, p≈0. At h = 0.01 the
-    // 628 kicks of about 5 units each round by up to half a unit: 42 units of
-    // accumulated state rounding at Q22.10, where 0.01 is only 10 units.
-    // Below 10 bits (h = 1/16, 101 steps) measured 6 and 4 units.
-    println!("verlet period: q = {}, p = {}; errors {} / {} ulp", final_point.q[0], final_point.p[0],
-        in_ulps((final_point.q[0] - fp("1")).abs()), in_ulps(final_point.p[0].abs()));
-    assert_fp(final_point.q[0], fp("1"), at_least(fp("0.01"), 64), "verlet_q_period");
-    assert_fp(final_point.p[0], fp("0"), at_least(fp("0.01"), 64), "verlet_p_period");
-}
-
-#[test]
-fn test_verlet_energy_conservation() {
-    let sys = HarmonicHamiltonian;
-    let q0 = FixedVector::from_slice(&[fp("1")]);
-    let p0 = FixedVector::from_slice(&[fp("0")]);
-
-    let trajectory = verlet_integrate(&sys, &q0, &p0, fp("0"), fp("100"), fp("0.01"));
-
-    let initial_energy = trajectory[0].energy;
-    let mut max_drift = FixedPoint::ZERO;
-    for pt in &trajectory {
-        let drift = (pt.energy - initial_energy).abs();
-        if drift > max_drift { max_drift = drift; }
-    }
-
-    // Symplectic integrator: energy should oscillate but not drift
-    // Over 100 time units (10000 steps), max energy drift should be small
-    // storage rounding of each kick bounds the drift in units, not in 0.01:
-    // 10 units measured at Q22.10, where 0.01 is 10 units
-    println!("verlet max energy drift: {max_drift}");
-    assert!(max_drift < at_least(fp("0.01"), 64),
-        "Verlet energy drift {} exceeds tolerance over 10000 steps", max_drift);
-}
-
-#[test]
-fn test_verlet_single_step_mpmath() {
-    // Single Verlet step on harmonic oscillator
-    // q(0)=1, p(0)=0, h=0.1
-    //
-    // p_half = p0 + (h/2)*force(q0, p0) = 0 + 0.05*(-1) = -0.05
-    // q_new = q0 + h*velocity(q0, p_half) = 1 + 0.1*(-0.05) = 0.995
-    // p_new = p_half + (h/2)*force(q_new, p_half) = -0.05 + 0.05*(-0.995) = -0.09975
-    //
-    // mpmath 50 digits: exact cos(0.1)=0.995004165278025766..., exact -sin(0.1)=-0.099833416646828...
-    let sys = HarmonicHamiltonian;
-    let q0 = FixedVector::from_slice(&[fp("1")]);
-    let p0 = FixedVector::from_slice(&[fp("0")]);
-
-    // h = 0.1 is 26/256 at 8 fraction bits (q_new is then 0.99484, 0.0011 from
-    // 0.995 before any rounding), so the step is h = 3/32 on every profile:
-    // q_new = 1 - h^2/2 = 2039/2048, p_new = -(h/2)(1 + q_new) = -12261/131072
-    // (python3 fractions). Three roundings of half a unit, weights <= 1.
-    let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.09375"));
-    assert_fp(q_new[0], fp("0.99560546875"), at_least(fp("0.001"), 2), "verlet_step_q h = 3/32");
-    assert_fp(p_new[0], fp("-0.09354400634765625"), at_least(fp("0.001"), 2), "verlet_step_p h = 3/32");
-
-    // the original h = 0.1 on the profiles that resolve it
-    if g_math::fixed_point::frac_config::FRAC_BITS >= 16 {
-        let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.1"));
-        // Verlet is 2nd-order, so these won't be exact but close
-        assert_fp(q_new[0], fp("0.995"), fp("0.001"), "verlet_step_q");
-        assert_fp(p_new[0], fp("-0.09975"), fp("0.001"), "verlet_step_p");
-    }
-}
-
-// ============================================================================
-// Monitor invariant
-// ============================================================================
-
-#[test]
-fn test_monitor_invariant_exact() {
-    // For the harmonic oscillator, energy x[0]²+x[1]² should be constant=1
-    let sys = HarmonicOscillator;
-    let x0 = FixedVector::from_slice(&[fp("1"), fp("0")]);
-    let h = if coarse() { pow2_neg(4) } else { fp("0.01") };
-    let trajectory = rk4_integrate(&sys, &x0, fp("0"), fp("1"), h);
-
-    let (max_drift, drifts) = monitor_invariant(
-        |x| x[0] * x[0] + x[1] * x[1],
-        &trajectory,
-    );
-    println!("rk4 invariant drift: {} ulp", in_ulps(max_drift));
-
-    // RK4 doesn't preserve the Hamiltonian exactly, but drift should be small
-    #[cfg(table_format = "q16_16")]
-    let inv_tol = fp("0.01");
-    #[cfg(not(table_format = "q16_16"))]
-    let inv_tol = fp("0.0001");
-    // measured drift in units: 6 at 8 fraction bits (h = 1/16), 4 at 10-16,
-    // 12 at 20, 11 at 24; 0.01 is 2.56 units at 8 bits
-    let inv_tol = at_least(inv_tol, 8);
-    assert!(max_drift < inv_tol,
-        "RK4 energy drift {} over 100 steps", max_drift);
-    assert_eq!(drifts.len(), trajectory.len());
-    // First point should have zero drift
-    assert!(drifts[0].is_zero(), "Initial drift should be zero");
-}
-
-// ============================================================================
-// Multi-dimensional system: Lotka-Volterra
-// dx/dt = αx - βxy
-// dy/dt = δxy - γy
-// ============================================================================
-
-#[test]
-fn test_rk4_lotka_volterra() {
-    struct LotkaVolterra;
-    impl OdeSystem for LotkaVolterra {
-        fn eval(&self, _t: FixedPoint, x: &FixedVector) -> FixedVector {
-            let alpha = fp("1.5");
-            let beta = fp("1");
-            let delta = fp("1");
-            let gamma = fp("3");
-            FixedVector::from_slice(&[
-                alpha * x[0] - beta * x[0] * x[1],
-                delta * x[0] * x[1] - gamma * x[1],
-            ])
-        }
-    }
-
-    let x0 = FixedVector::from_slice(&[fp("10"), fp("5")]);
-    // 0.001 rounds to 0 below 10 fraction bits (an empty trajectory): one unit
-    let trajectory = rk4_integrate(&LotkaVolterra, &x0, fp("0"), fp("1"), at_least(fp("0.001"), 1));
-
-    // Just verify the integration completes and values stay positive
-    let final_point = trajectory.last().unwrap();
-    assert!(final_point.x[0] > fp("0"), "Prey population should stay positive");
-    assert!(final_point.x[1] > fp("0"), "Predator population should stay positive");
-    assert!(trajectory.len() > 100, "Should take many steps");
-}
-
-// ============================================================================
-// RK4 order verification: halving step size should reduce error by ~16x
-// ============================================================================
-
-// Q16.16/Q32.32: limited precision means both step sizes hit the representation floor,
-// so the error ratio collapses. Convergence order test requires ≥Q64.64.
-#[test]
-#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-fn test_rk4_order_verification() {
-    let sys = ExponentialDecay;
-    let x0 = FixedVector::from_slice(&[fp("1")]);
-    let exact = fp("0.3678794411714423"); // e^(-1)
-
-    // Run with h=0.1 and h=0.05
-    let traj_coarse = rk4_integrate(&sys, &x0, fp("0"), fp("1"), fp("0.1"));
-    let traj_fine = rk4_integrate(&sys, &x0, fp("0"), fp("1"), fp("0.05"));
-
-    let err_coarse = (traj_coarse.last().unwrap().x[0] - exact).abs();
-    let err_fine = (traj_fine.last().unwrap().x[0] - exact).abs();
-
-    // RK4 is 4th order: halving h should reduce error by factor of ~16
-    // We check that fine error is at least 8x smaller (generous bound)
-    if !err_fine.is_zero() && !err_coarse.is_zero() {
-        // err_coarse / err_fine should be ≈ 16
-        let ratio = err_coarse / err_fine;
-        assert!(ratio > fp("8"), "RK4 order: error ratio {} should be > 8 (expect ~16)", ratio);
-    }
-}
+for_each_format!(suite);

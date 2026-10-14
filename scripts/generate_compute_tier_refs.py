@@ -7,8 +7,8 @@ where compute raw = round(v * 2^CFB), storage raw = round(v * 2^FB).
 All integers emitted as i128-compatible literals; inputs are chosen exactly
 representable at Q16.16 (multiples of 2^-6), so both profiles share them.
 
-The realtime profile gets one table per GMATH_FRAC_BITS (2..=30) and a `refs`
-facade that selects the build's split. A split keeps an input only if the
+Every 32-bit split (2..=30) and Q32.32 get a module; the `refs` facade
+selects by the including module's `BITS` and `FRAC_BITS` constants. A split keeps an input only if the
 input is exact at that split and both the input and the result fit its
 storage range. The FRAC_BITS=16 tables are the original q16_16 tables.
 """
@@ -81,26 +81,29 @@ out.append("// (x_compute_raw, expected_compute_raw, expected_storage_raw)")
 out.append("// compute raw = round(v * 2^COMPUTE_FRAC_BITS); storage raw = round(v * 2^FRAC_BITS).")
 out.append("")
 
-# realtime: one module per GMATH_FRAC_BITS, and a facade for the build's split
+# one module per format, every one compiled in every build; `refs` selects by
+# the including module's (BITS, FRAC_BITS)
 SPLITS = list(range(2, 31))
 for fb in SPLITS:
-    out.append('#[cfg(table_format = "q16_16")]')
-    out.append(f"pub mod refs_f{fb} {{")
+    out.append(f"pub mod refs_q{32 - fb}_{fb} {{")
     emit_tables(out, fb, 2 * fb, 32, "    ")
     out.append("}")
     out.append("")
-out.append('#[cfg(table_format = "q16_16")]')
-out.append("pub mod refs {")
-for name in INPUTS:
-    arms = ", ".join(f"{fb} => super::refs_f{fb}::{name.upper()}" for fb in SPLITS if fb != 16)
-    out.append(f"    pub const {name.upper()}: &[(i128, i128, i64)] =")
-    out.append(f"        match g_math::fixed_point::frac_config::FRAC_BITS {{ {arms}, _ => super::refs_f16::{name.upper()} }};")
+out.append("pub mod refs_q32_32 {")
+emit_tables(out, 32, 64, 64, "    ")
 out.append("}")
 out.append("")
-
-out.append('#[cfg(table_format = "q32_32")]')
+out.append("/// The table of the including module's format: it defines `BITS` (the")
+out.append("/// storage word's width) and `FRAC_BITS` (its split). Only the 32-bit")
+out.append("/// splits and Q32.32 have references.")
 out.append("pub mod refs {")
-emit_tables(out, 32, 64, 64, "    ")
+out.append("    pub const FRAC_BITS: u32 = super::FRAC_BITS;")
+out.append("    pub const STORAGE_BITS: u32 = super::BITS;")
+out.append("    const BITS: u32 = super::BITS;")
+for name in INPUTS:
+    arms = ", ".join(f"(32, {fb}) => super::refs_q{32 - fb}_{fb}::{name.upper()}" for fb in SPLITS)
+    out.append(f"    pub const {name.upper()}: &[(i128, i128, i64)] =")
+    out.append(f"        match (BITS, FRAC_BITS) {{ {arms}, (64, 32) => super::refs_q32_32::{name.upper()}, _ => &[] }};")
 out.append("}")
 out.append("")
 

@@ -2,8 +2,7 @@
 // (x_compute_raw, expected_compute_raw, expected_storage_raw)
 // compute raw = round(v * 2^COMPUTE_FRAC_BITS); storage raw = round(v * 2^FRAC_BITS).
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f2 {
+pub mod refs_q30_2 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-56, 0, 0),
         (-12, 8, 2),
@@ -61,8 +60,7 @@ pub mod refs_f2 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f3 {
+pub mod refs_q29_3 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-224, 2, 0),
         (-48, 30, 4),
@@ -120,8 +118,7 @@ pub mod refs_f3 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f4 {
+pub mod refs_q28_4 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-896, 8, 0),
         (-192, 121, 8),
@@ -184,8 +181,7 @@ pub mod refs_f4 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f5 {
+pub mod refs_q27_5 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-3584, 31, 1),
         (-768, 484, 15),
@@ -248,8 +244,7 @@ pub mod refs_f5 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f6 {
+pub mod refs_q26_6 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-14336, 124, 2),
         (-3072, 1935, 30),
@@ -312,8 +307,7 @@ pub mod refs_f6 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f7 {
+pub mod refs_q25_7 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-57344, 495, 4),
         (-12288, 7739, 60),
@@ -376,8 +370,7 @@ pub mod refs_f7 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f8 {
+pub mod refs_q24_8 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-229376, 1979, 8),
         (-49152, 30957, 121),
@@ -440,8 +433,7 @@ pub mod refs_f8 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f9 {
+pub mod refs_q23_9 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-917504, 7916, 15),
         (-196608, 123828, 242),
@@ -504,8 +496,7 @@ pub mod refs_f9 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f10 {
+pub mod refs_q22_10 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-3670016, 31664, 31),
         (-786432, 495312, 484),
@@ -568,8 +559,7 @@ pub mod refs_f10 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f11 {
+pub mod refs_q21_11 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-14680064, 126657, 62),
         (-3145728, 1981249, 967),
@@ -632,8 +622,7 @@ pub mod refs_f11 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f12 {
+pub mod refs_q20_12 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-58720256, 506628, 124),
         (-12582912, 7924996, 1935),
@@ -696,8 +685,7 @@ pub mod refs_f12 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f13 {
+pub mod refs_q19_13 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-234881024, 2026512, 247),
         (-50331648, 31699983, 3870),
@@ -760,8 +748,7 @@ pub mod refs_f13 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f14 {
+pub mod refs_q18_14 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-939524096, 8106048, 495),
         (-201326592, 126799931, 7739),
@@ -824,8 +811,7 @@ pub mod refs_f14 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f15 {
+pub mod refs_q17_15 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-3758096384, 32424194, 990),
         (-805306368, 507199724, 15479),
@@ -888,8 +874,7 @@ pub mod refs_f15 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f16 {
+pub mod refs_q16_16 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-15032385536, 129696774, 1979),
         (-3221225472, 2028798896, 30957),
@@ -952,8 +937,7 @@ pub mod refs_f16 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f17 {
+pub mod refs_q15_17 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-60129542144, 518787097, 3958),
         (-12884901888, 8115195583, 61914),
@@ -1016,8 +1000,7 @@ pub mod refs_f17 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f18 {
+pub mod refs_q14_18 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-240518168576, 2075148388, 7916),
         (-51539607552, 32460782332, 123828),
@@ -1080,8 +1063,7 @@ pub mod refs_f18 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f19 {
+pub mod refs_q13_19 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-962072674304, 8300593550, 15832),
         (-206158430208, 129843129328, 247656),
@@ -1144,8 +1126,7 @@ pub mod refs_f19 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f20 {
+pub mod refs_q12_20 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-3848290697216, 33202374201, 31664),
         (-824633720832, 519372517311, 495312),
@@ -1208,8 +1189,7 @@ pub mod refs_f20 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f21 {
+pub mod refs_q11_21 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-15393162788864, 132809496805, 63329),
         (-3298534883328, 2077490069245, 990624),
@@ -1272,8 +1252,7 @@ pub mod refs_f21 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f22 {
+pub mod refs_q10_22 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-61572651155456, 531237987220, 126657),
         (-13194139533312, 8309960276979, 1981249),
@@ -1336,8 +1315,7 @@ pub mod refs_f22 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f23 {
+pub mod refs_q9_23 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-246290604621824, 2124951948880, 253314),
         (-52776558133248, 33239841107917, 3962498),
@@ -1400,8 +1378,7 @@ pub mod refs_f23 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f24 {
+pub mod refs_q8_24 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-985162418487296, 8499807795520, 506628),
         (-211106232532992, 132959364431670, 7924996),
@@ -1464,8 +1441,7 @@ pub mod refs_f24 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f25 {
+pub mod refs_q7_25 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-3940649673949184, 33999231182079, 1013256),
         (-844424930131968, 531837457726680, 15849991),
@@ -1527,8 +1503,7 @@ pub mod refs_f25 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f26 {
+pub mod refs_q6_26 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-15762598695796736, 135996924728318, 2026512),
         (-3377699720527872, 2127349830906720, 31699983),
@@ -1589,8 +1564,7 @@ pub mod refs_f26 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f27 {
+pub mod refs_q5_27 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-63050394783186944, 543987698913270, 4053024),
         (-13510798882111488, 8509399323626878, 63399965),
@@ -1651,8 +1625,7 @@ pub mod refs_f27 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f28 {
+pub mod refs_q4_28 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-252201579132747776, 2175950795653081, 8106048),
         (-54043195528445952, 34037597294507513, 126799931),
@@ -1711,8 +1684,7 @@ pub mod refs_f28 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f29 {
+pub mod refs_q3_29 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-1008806316530991104, 8703803182612326, 16212097),
         (-216172782113783808, 136150389178030053, 253599862),
@@ -1760,8 +1732,7 @@ pub mod refs_f29 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs_f30 {
+pub mod refs_q2_30 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-864691128455135232, 544601556712120213, 507199724),
     ];
@@ -1796,28 +1767,7 @@ pub mod refs_f30 {
     ];
 }
 
-#[cfg(table_format = "q16_16")]
-pub mod refs {
-    pub const EXP: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::EXP, 3 => super::refs_f3::EXP, 4 => super::refs_f4::EXP, 5 => super::refs_f5::EXP, 6 => super::refs_f6::EXP, 7 => super::refs_f7::EXP, 8 => super::refs_f8::EXP, 9 => super::refs_f9::EXP, 10 => super::refs_f10::EXP, 11 => super::refs_f11::EXP, 12 => super::refs_f12::EXP, 13 => super::refs_f13::EXP, 14 => super::refs_f14::EXP, 15 => super::refs_f15::EXP, 17 => super::refs_f17::EXP, 18 => super::refs_f18::EXP, 19 => super::refs_f19::EXP, 20 => super::refs_f20::EXP, 21 => super::refs_f21::EXP, 22 => super::refs_f22::EXP, 23 => super::refs_f23::EXP, 24 => super::refs_f24::EXP, 25 => super::refs_f25::EXP, 26 => super::refs_f26::EXP, 27 => super::refs_f27::EXP, 28 => super::refs_f28::EXP, 29 => super::refs_f29::EXP, 30 => super::refs_f30::EXP, _ => super::refs_f16::EXP };
-    pub const LN: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::LN, 3 => super::refs_f3::LN, 4 => super::refs_f4::LN, 5 => super::refs_f5::LN, 6 => super::refs_f6::LN, 7 => super::refs_f7::LN, 8 => super::refs_f8::LN, 9 => super::refs_f9::LN, 10 => super::refs_f10::LN, 11 => super::refs_f11::LN, 12 => super::refs_f12::LN, 13 => super::refs_f13::LN, 14 => super::refs_f14::LN, 15 => super::refs_f15::LN, 17 => super::refs_f17::LN, 18 => super::refs_f18::LN, 19 => super::refs_f19::LN, 20 => super::refs_f20::LN, 21 => super::refs_f21::LN, 22 => super::refs_f22::LN, 23 => super::refs_f23::LN, 24 => super::refs_f24::LN, 25 => super::refs_f25::LN, 26 => super::refs_f26::LN, 27 => super::refs_f27::LN, 28 => super::refs_f28::LN, 29 => super::refs_f29::LN, 30 => super::refs_f30::LN, _ => super::refs_f16::LN };
-    pub const SQRT: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::SQRT, 3 => super::refs_f3::SQRT, 4 => super::refs_f4::SQRT, 5 => super::refs_f5::SQRT, 6 => super::refs_f6::SQRT, 7 => super::refs_f7::SQRT, 8 => super::refs_f8::SQRT, 9 => super::refs_f9::SQRT, 10 => super::refs_f10::SQRT, 11 => super::refs_f11::SQRT, 12 => super::refs_f12::SQRT, 13 => super::refs_f13::SQRT, 14 => super::refs_f14::SQRT, 15 => super::refs_f15::SQRT, 17 => super::refs_f17::SQRT, 18 => super::refs_f18::SQRT, 19 => super::refs_f19::SQRT, 20 => super::refs_f20::SQRT, 21 => super::refs_f21::SQRT, 22 => super::refs_f22::SQRT, 23 => super::refs_f23::SQRT, 24 => super::refs_f24::SQRT, 25 => super::refs_f25::SQRT, 26 => super::refs_f26::SQRT, 27 => super::refs_f27::SQRT, 28 => super::refs_f28::SQRT, 29 => super::refs_f29::SQRT, 30 => super::refs_f30::SQRT, _ => super::refs_f16::SQRT };
-    pub const SIGMOID: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::SIGMOID, 3 => super::refs_f3::SIGMOID, 4 => super::refs_f4::SIGMOID, 5 => super::refs_f5::SIGMOID, 6 => super::refs_f6::SIGMOID, 7 => super::refs_f7::SIGMOID, 8 => super::refs_f8::SIGMOID, 9 => super::refs_f9::SIGMOID, 10 => super::refs_f10::SIGMOID, 11 => super::refs_f11::SIGMOID, 12 => super::refs_f12::SIGMOID, 13 => super::refs_f13::SIGMOID, 14 => super::refs_f14::SIGMOID, 15 => super::refs_f15::SIGMOID, 17 => super::refs_f17::SIGMOID, 18 => super::refs_f18::SIGMOID, 19 => super::refs_f19::SIGMOID, 20 => super::refs_f20::SIGMOID, 21 => super::refs_f21::SIGMOID, 22 => super::refs_f22::SIGMOID, 23 => super::refs_f23::SIGMOID, 24 => super::refs_f24::SIGMOID, 25 => super::refs_f25::SIGMOID, 26 => super::refs_f26::SIGMOID, 27 => super::refs_f27::SIGMOID, 28 => super::refs_f28::SIGMOID, 29 => super::refs_f29::SIGMOID, 30 => super::refs_f30::SIGMOID, _ => super::refs_f16::SIGMOID };
-    pub const SOFTPLUS: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::SOFTPLUS, 3 => super::refs_f3::SOFTPLUS, 4 => super::refs_f4::SOFTPLUS, 5 => super::refs_f5::SOFTPLUS, 6 => super::refs_f6::SOFTPLUS, 7 => super::refs_f7::SOFTPLUS, 8 => super::refs_f8::SOFTPLUS, 9 => super::refs_f9::SOFTPLUS, 10 => super::refs_f10::SOFTPLUS, 11 => super::refs_f11::SOFTPLUS, 12 => super::refs_f12::SOFTPLUS, 13 => super::refs_f13::SOFTPLUS, 14 => super::refs_f14::SOFTPLUS, 15 => super::refs_f15::SOFTPLUS, 17 => super::refs_f17::SOFTPLUS, 18 => super::refs_f18::SOFTPLUS, 19 => super::refs_f19::SOFTPLUS, 20 => super::refs_f20::SOFTPLUS, 21 => super::refs_f21::SOFTPLUS, 22 => super::refs_f22::SOFTPLUS, 23 => super::refs_f23::SOFTPLUS, 24 => super::refs_f24::SOFTPLUS, 25 => super::refs_f25::SOFTPLUS, 26 => super::refs_f26::SOFTPLUS, 27 => super::refs_f27::SOFTPLUS, 28 => super::refs_f28::SOFTPLUS, 29 => super::refs_f29::SOFTPLUS, 30 => super::refs_f30::SOFTPLUS, _ => super::refs_f16::SOFTPLUS };
-    pub const LN1P: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::LN1P, 3 => super::refs_f3::LN1P, 4 => super::refs_f4::LN1P, 5 => super::refs_f5::LN1P, 6 => super::refs_f6::LN1P, 7 => super::refs_f7::LN1P, 8 => super::refs_f8::LN1P, 9 => super::refs_f9::LN1P, 10 => super::refs_f10::LN1P, 11 => super::refs_f11::LN1P, 12 => super::refs_f12::LN1P, 13 => super::refs_f13::LN1P, 14 => super::refs_f14::LN1P, 15 => super::refs_f15::LN1P, 17 => super::refs_f17::LN1P, 18 => super::refs_f18::LN1P, 19 => super::refs_f19::LN1P, 20 => super::refs_f20::LN1P, 21 => super::refs_f21::LN1P, 22 => super::refs_f22::LN1P, 23 => super::refs_f23::LN1P, 24 => super::refs_f24::LN1P, 25 => super::refs_f25::LN1P, 26 => super::refs_f26::LN1P, 27 => super::refs_f27::LN1P, 28 => super::refs_f28::LN1P, 29 => super::refs_f29::LN1P, 30 => super::refs_f30::LN1P, _ => super::refs_f16::LN1P };
-    pub const SINH: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::SINH, 3 => super::refs_f3::SINH, 4 => super::refs_f4::SINH, 5 => super::refs_f5::SINH, 6 => super::refs_f6::SINH, 7 => super::refs_f7::SINH, 8 => super::refs_f8::SINH, 9 => super::refs_f9::SINH, 10 => super::refs_f10::SINH, 11 => super::refs_f11::SINH, 12 => super::refs_f12::SINH, 13 => super::refs_f13::SINH, 14 => super::refs_f14::SINH, 15 => super::refs_f15::SINH, 17 => super::refs_f17::SINH, 18 => super::refs_f18::SINH, 19 => super::refs_f19::SINH, 20 => super::refs_f20::SINH, 21 => super::refs_f21::SINH, 22 => super::refs_f22::SINH, 23 => super::refs_f23::SINH, 24 => super::refs_f24::SINH, 25 => super::refs_f25::SINH, 26 => super::refs_f26::SINH, 27 => super::refs_f27::SINH, 28 => super::refs_f28::SINH, 29 => super::refs_f29::SINH, 30 => super::refs_f30::SINH, _ => super::refs_f16::SINH };
-    pub const COSH: &[(i128, i128, i64)] =
-        match g_math::fixed_point::frac_config::FRAC_BITS { 2 => super::refs_f2::COSH, 3 => super::refs_f3::COSH, 4 => super::refs_f4::COSH, 5 => super::refs_f5::COSH, 6 => super::refs_f6::COSH, 7 => super::refs_f7::COSH, 8 => super::refs_f8::COSH, 9 => super::refs_f9::COSH, 10 => super::refs_f10::COSH, 11 => super::refs_f11::COSH, 12 => super::refs_f12::COSH, 13 => super::refs_f13::COSH, 14 => super::refs_f14::COSH, 15 => super::refs_f15::COSH, 17 => super::refs_f17::COSH, 18 => super::refs_f18::COSH, 19 => super::refs_f19::COSH, 20 => super::refs_f20::COSH, 21 => super::refs_f21::COSH, 22 => super::refs_f22::COSH, 23 => super::refs_f23::COSH, 24 => super::refs_f24::COSH, 25 => super::refs_f25::COSH, 26 => super::refs_f26::COSH, 27 => super::refs_f27::COSH, 28 => super::refs_f28::COSH, 29 => super::refs_f29::COSH, 30 => super::refs_f30::COSH, _ => super::refs_f16::COSH };
-}
-
-#[cfg(table_format = "q32_32")]
-pub mod refs {
+pub mod refs_q32_32 {
     pub const EXP: &[(i128, i128, i64)] = &[
         (-64563604257983430656, 557043403687188862, 129696774),
         (-13835058055282163712, 8713624907393923404, 2028798896),
@@ -1878,5 +1828,30 @@ pub mod refs {
         (9223372036854775808, 20801027591031817798, 4843116643),
         (46116860184273879040, 113120774617257531815, 26337982765),
     ];
+}
+
+/// The table of the including module's format: it defines `BITS` (the
+/// storage word's width) and `FRAC_BITS` (its split). Only the 32-bit
+/// splits and Q32.32 have references.
+pub mod refs {
+    pub const FRAC_BITS: u32 = super::FRAC_BITS;
+    pub const STORAGE_BITS: u32 = super::BITS;
+    const BITS: u32 = super::BITS;
+    pub const EXP: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::EXP, (32, 3) => super::refs_q29_3::EXP, (32, 4) => super::refs_q28_4::EXP, (32, 5) => super::refs_q27_5::EXP, (32, 6) => super::refs_q26_6::EXP, (32, 7) => super::refs_q25_7::EXP, (32, 8) => super::refs_q24_8::EXP, (32, 9) => super::refs_q23_9::EXP, (32, 10) => super::refs_q22_10::EXP, (32, 11) => super::refs_q21_11::EXP, (32, 12) => super::refs_q20_12::EXP, (32, 13) => super::refs_q19_13::EXP, (32, 14) => super::refs_q18_14::EXP, (32, 15) => super::refs_q17_15::EXP, (32, 16) => super::refs_q16_16::EXP, (32, 17) => super::refs_q15_17::EXP, (32, 18) => super::refs_q14_18::EXP, (32, 19) => super::refs_q13_19::EXP, (32, 20) => super::refs_q12_20::EXP, (32, 21) => super::refs_q11_21::EXP, (32, 22) => super::refs_q10_22::EXP, (32, 23) => super::refs_q9_23::EXP, (32, 24) => super::refs_q8_24::EXP, (32, 25) => super::refs_q7_25::EXP, (32, 26) => super::refs_q6_26::EXP, (32, 27) => super::refs_q5_27::EXP, (32, 28) => super::refs_q4_28::EXP, (32, 29) => super::refs_q3_29::EXP, (32, 30) => super::refs_q2_30::EXP, (64, 32) => super::refs_q32_32::EXP, _ => &[] };
+    pub const LN: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::LN, (32, 3) => super::refs_q29_3::LN, (32, 4) => super::refs_q28_4::LN, (32, 5) => super::refs_q27_5::LN, (32, 6) => super::refs_q26_6::LN, (32, 7) => super::refs_q25_7::LN, (32, 8) => super::refs_q24_8::LN, (32, 9) => super::refs_q23_9::LN, (32, 10) => super::refs_q22_10::LN, (32, 11) => super::refs_q21_11::LN, (32, 12) => super::refs_q20_12::LN, (32, 13) => super::refs_q19_13::LN, (32, 14) => super::refs_q18_14::LN, (32, 15) => super::refs_q17_15::LN, (32, 16) => super::refs_q16_16::LN, (32, 17) => super::refs_q15_17::LN, (32, 18) => super::refs_q14_18::LN, (32, 19) => super::refs_q13_19::LN, (32, 20) => super::refs_q12_20::LN, (32, 21) => super::refs_q11_21::LN, (32, 22) => super::refs_q10_22::LN, (32, 23) => super::refs_q9_23::LN, (32, 24) => super::refs_q8_24::LN, (32, 25) => super::refs_q7_25::LN, (32, 26) => super::refs_q6_26::LN, (32, 27) => super::refs_q5_27::LN, (32, 28) => super::refs_q4_28::LN, (32, 29) => super::refs_q3_29::LN, (32, 30) => super::refs_q2_30::LN, (64, 32) => super::refs_q32_32::LN, _ => &[] };
+    pub const SQRT: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::SQRT, (32, 3) => super::refs_q29_3::SQRT, (32, 4) => super::refs_q28_4::SQRT, (32, 5) => super::refs_q27_5::SQRT, (32, 6) => super::refs_q26_6::SQRT, (32, 7) => super::refs_q25_7::SQRT, (32, 8) => super::refs_q24_8::SQRT, (32, 9) => super::refs_q23_9::SQRT, (32, 10) => super::refs_q22_10::SQRT, (32, 11) => super::refs_q21_11::SQRT, (32, 12) => super::refs_q20_12::SQRT, (32, 13) => super::refs_q19_13::SQRT, (32, 14) => super::refs_q18_14::SQRT, (32, 15) => super::refs_q17_15::SQRT, (32, 16) => super::refs_q16_16::SQRT, (32, 17) => super::refs_q15_17::SQRT, (32, 18) => super::refs_q14_18::SQRT, (32, 19) => super::refs_q13_19::SQRT, (32, 20) => super::refs_q12_20::SQRT, (32, 21) => super::refs_q11_21::SQRT, (32, 22) => super::refs_q10_22::SQRT, (32, 23) => super::refs_q9_23::SQRT, (32, 24) => super::refs_q8_24::SQRT, (32, 25) => super::refs_q7_25::SQRT, (32, 26) => super::refs_q6_26::SQRT, (32, 27) => super::refs_q5_27::SQRT, (32, 28) => super::refs_q4_28::SQRT, (32, 29) => super::refs_q3_29::SQRT, (32, 30) => super::refs_q2_30::SQRT, (64, 32) => super::refs_q32_32::SQRT, _ => &[] };
+    pub const SIGMOID: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::SIGMOID, (32, 3) => super::refs_q29_3::SIGMOID, (32, 4) => super::refs_q28_4::SIGMOID, (32, 5) => super::refs_q27_5::SIGMOID, (32, 6) => super::refs_q26_6::SIGMOID, (32, 7) => super::refs_q25_7::SIGMOID, (32, 8) => super::refs_q24_8::SIGMOID, (32, 9) => super::refs_q23_9::SIGMOID, (32, 10) => super::refs_q22_10::SIGMOID, (32, 11) => super::refs_q21_11::SIGMOID, (32, 12) => super::refs_q20_12::SIGMOID, (32, 13) => super::refs_q19_13::SIGMOID, (32, 14) => super::refs_q18_14::SIGMOID, (32, 15) => super::refs_q17_15::SIGMOID, (32, 16) => super::refs_q16_16::SIGMOID, (32, 17) => super::refs_q15_17::SIGMOID, (32, 18) => super::refs_q14_18::SIGMOID, (32, 19) => super::refs_q13_19::SIGMOID, (32, 20) => super::refs_q12_20::SIGMOID, (32, 21) => super::refs_q11_21::SIGMOID, (32, 22) => super::refs_q10_22::SIGMOID, (32, 23) => super::refs_q9_23::SIGMOID, (32, 24) => super::refs_q8_24::SIGMOID, (32, 25) => super::refs_q7_25::SIGMOID, (32, 26) => super::refs_q6_26::SIGMOID, (32, 27) => super::refs_q5_27::SIGMOID, (32, 28) => super::refs_q4_28::SIGMOID, (32, 29) => super::refs_q3_29::SIGMOID, (32, 30) => super::refs_q2_30::SIGMOID, (64, 32) => super::refs_q32_32::SIGMOID, _ => &[] };
+    pub const SOFTPLUS: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::SOFTPLUS, (32, 3) => super::refs_q29_3::SOFTPLUS, (32, 4) => super::refs_q28_4::SOFTPLUS, (32, 5) => super::refs_q27_5::SOFTPLUS, (32, 6) => super::refs_q26_6::SOFTPLUS, (32, 7) => super::refs_q25_7::SOFTPLUS, (32, 8) => super::refs_q24_8::SOFTPLUS, (32, 9) => super::refs_q23_9::SOFTPLUS, (32, 10) => super::refs_q22_10::SOFTPLUS, (32, 11) => super::refs_q21_11::SOFTPLUS, (32, 12) => super::refs_q20_12::SOFTPLUS, (32, 13) => super::refs_q19_13::SOFTPLUS, (32, 14) => super::refs_q18_14::SOFTPLUS, (32, 15) => super::refs_q17_15::SOFTPLUS, (32, 16) => super::refs_q16_16::SOFTPLUS, (32, 17) => super::refs_q15_17::SOFTPLUS, (32, 18) => super::refs_q14_18::SOFTPLUS, (32, 19) => super::refs_q13_19::SOFTPLUS, (32, 20) => super::refs_q12_20::SOFTPLUS, (32, 21) => super::refs_q11_21::SOFTPLUS, (32, 22) => super::refs_q10_22::SOFTPLUS, (32, 23) => super::refs_q9_23::SOFTPLUS, (32, 24) => super::refs_q8_24::SOFTPLUS, (32, 25) => super::refs_q7_25::SOFTPLUS, (32, 26) => super::refs_q6_26::SOFTPLUS, (32, 27) => super::refs_q5_27::SOFTPLUS, (32, 28) => super::refs_q4_28::SOFTPLUS, (32, 29) => super::refs_q3_29::SOFTPLUS, (32, 30) => super::refs_q2_30::SOFTPLUS, (64, 32) => super::refs_q32_32::SOFTPLUS, _ => &[] };
+    pub const LN1P: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::LN1P, (32, 3) => super::refs_q29_3::LN1P, (32, 4) => super::refs_q28_4::LN1P, (32, 5) => super::refs_q27_5::LN1P, (32, 6) => super::refs_q26_6::LN1P, (32, 7) => super::refs_q25_7::LN1P, (32, 8) => super::refs_q24_8::LN1P, (32, 9) => super::refs_q23_9::LN1P, (32, 10) => super::refs_q22_10::LN1P, (32, 11) => super::refs_q21_11::LN1P, (32, 12) => super::refs_q20_12::LN1P, (32, 13) => super::refs_q19_13::LN1P, (32, 14) => super::refs_q18_14::LN1P, (32, 15) => super::refs_q17_15::LN1P, (32, 16) => super::refs_q16_16::LN1P, (32, 17) => super::refs_q15_17::LN1P, (32, 18) => super::refs_q14_18::LN1P, (32, 19) => super::refs_q13_19::LN1P, (32, 20) => super::refs_q12_20::LN1P, (32, 21) => super::refs_q11_21::LN1P, (32, 22) => super::refs_q10_22::LN1P, (32, 23) => super::refs_q9_23::LN1P, (32, 24) => super::refs_q8_24::LN1P, (32, 25) => super::refs_q7_25::LN1P, (32, 26) => super::refs_q6_26::LN1P, (32, 27) => super::refs_q5_27::LN1P, (32, 28) => super::refs_q4_28::LN1P, (32, 29) => super::refs_q3_29::LN1P, (32, 30) => super::refs_q2_30::LN1P, (64, 32) => super::refs_q32_32::LN1P, _ => &[] };
+    pub const SINH: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::SINH, (32, 3) => super::refs_q29_3::SINH, (32, 4) => super::refs_q28_4::SINH, (32, 5) => super::refs_q27_5::SINH, (32, 6) => super::refs_q26_6::SINH, (32, 7) => super::refs_q25_7::SINH, (32, 8) => super::refs_q24_8::SINH, (32, 9) => super::refs_q23_9::SINH, (32, 10) => super::refs_q22_10::SINH, (32, 11) => super::refs_q21_11::SINH, (32, 12) => super::refs_q20_12::SINH, (32, 13) => super::refs_q19_13::SINH, (32, 14) => super::refs_q18_14::SINH, (32, 15) => super::refs_q17_15::SINH, (32, 16) => super::refs_q16_16::SINH, (32, 17) => super::refs_q15_17::SINH, (32, 18) => super::refs_q14_18::SINH, (32, 19) => super::refs_q13_19::SINH, (32, 20) => super::refs_q12_20::SINH, (32, 21) => super::refs_q11_21::SINH, (32, 22) => super::refs_q10_22::SINH, (32, 23) => super::refs_q9_23::SINH, (32, 24) => super::refs_q8_24::SINH, (32, 25) => super::refs_q7_25::SINH, (32, 26) => super::refs_q6_26::SINH, (32, 27) => super::refs_q5_27::SINH, (32, 28) => super::refs_q4_28::SINH, (32, 29) => super::refs_q3_29::SINH, (32, 30) => super::refs_q2_30::SINH, (64, 32) => super::refs_q32_32::SINH, _ => &[] };
+    pub const COSH: &[(i128, i128, i64)] =
+        match (BITS, FRAC_BITS) { (32, 2) => super::refs_q30_2::COSH, (32, 3) => super::refs_q29_3::COSH, (32, 4) => super::refs_q28_4::COSH, (32, 5) => super::refs_q27_5::COSH, (32, 6) => super::refs_q26_6::COSH, (32, 7) => super::refs_q25_7::COSH, (32, 8) => super::refs_q24_8::COSH, (32, 9) => super::refs_q23_9::COSH, (32, 10) => super::refs_q22_10::COSH, (32, 11) => super::refs_q21_11::COSH, (32, 12) => super::refs_q20_12::COSH, (32, 13) => super::refs_q19_13::COSH, (32, 14) => super::refs_q18_14::COSH, (32, 15) => super::refs_q17_15::COSH, (32, 16) => super::refs_q16_16::COSH, (32, 17) => super::refs_q15_17::COSH, (32, 18) => super::refs_q14_18::COSH, (32, 19) => super::refs_q13_19::COSH, (32, 20) => super::refs_q12_20::COSH, (32, 21) => super::refs_q11_21::COSH, (32, 22) => super::refs_q10_22::COSH, (32, 23) => super::refs_q9_23::COSH, (32, 24) => super::refs_q8_24::COSH, (32, 25) => super::refs_q7_25::COSH, (32, 26) => super::refs_q6_26::COSH, (32, 27) => super::refs_q5_27::COSH, (32, 28) => super::refs_q4_28::COSH, (32, 29) => super::refs_q3_29::COSH, (32, 30) => super::refs_q2_30::COSH, (64, 32) => super::refs_q32_32::COSH, _ => &[] };
 }
 

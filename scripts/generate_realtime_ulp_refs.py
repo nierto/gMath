@@ -82,10 +82,11 @@ def main():
     arms = " ".join(f"{F} => Q{32 - F}_{F}_REFS," for F in SPLITS if F != 16)
     lines.append("/// The table for the build's split (every GMATH_FRAC_BITS the build accepts).")
     lines.append("pub const REALTIME_REFS: &[(&str, i32, i32, &str)] =")
-    lines.append(f"    match g_math::fixed_point::frac_config::FRAC_BITS {{ {arms} _ => Q16_REFS }};")
+    lines.append(f"    match FRAC_BITS {{ {arms} _ => Q16_REFS }};")
     lines.append("/// The split `REALTIME_REFS` was generated for (equals FRAC_BITS for 2..=30).")
+    lines.append("// the including module defines `const FRAC_BITS: u32` (its format's split)")
     lines.append("pub const REALTIME_REFS_FRAC_BITS: u32 =")
-    lines.append("    match g_math::fixed_point::frac_config::FRAC_BITS { f @ 2..=30 => f, _ => 16 };")
+    lines.append("    match FRAC_BITS { f @ 2..=30 => f, _ => 16 };")
     open(OUT, "w").write("\n".join(lines) + "\n")
 
 

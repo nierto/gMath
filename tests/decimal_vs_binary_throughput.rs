@@ -15,20 +15,11 @@
 //! GMATH_PROFILE=embedded cargo test --release --test decimal_vs_binary_throughput -- --nocapture
 //! ```
 
-#![cfg(table_format = "q64_64")]
+#[macro_use]
+mod common;
 
-use g_math::fixed_point::canonical::{gmath, evaluate};
-use std::time::Instant;
-
-/// A set of representative inputs for throughput measurement.
-/// Each input is a string that `gmath()` will parse.
-const INPUTS: &[&str] = &[
-    "0.1", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "0.25", "0.75",
-    "1.1", "1.2", "1.3", "1.4", "1.6", "1.7", "1.8", "1.9", "2.1",
-    "2.2", "2.3", "2.4", "2.6", "2.7", "2.8", "2.9", "0.9", "0.8",
-    "0.7", "0.6", "0.4", "0.3", "0.2", "0.05", "0.15", "0.35", "0.45",
-];
-
+// Helper macros of the suite, at file level (an inner macro_rules! cannot live
+// inside the suite macro: its metavariables would be read by the outer one).
 macro_rules! cmp_row {
     ($func_name:expr, $iters:expr, $method:ident) => {{
         eprintln!("\n== {} ==", $func_name);
@@ -39,7 +30,7 @@ macro_rules! cmp_row {
         let dec_start = Instant::now();
         for _ in 0..$iters {
             for s in INPUTS {
-                let _ = evaluate(&gmath(s).$method());
+                let _ = evaluate_in(&gmath_in::<FixedPoint>(s).$method());
                 dec_iters += 1;
             }
         }
@@ -52,23 +43,51 @@ macro_rules! cmp_row {
     }};
 }
 
-#[test]
-fn cmp_exp() { cmp_row!("exp", 50, exp); }
-#[test]
-fn cmp_ln()  { cmp_row!("ln",  50, ln);  }
-#[test]
-fn cmp_sqrt(){ cmp_row!("sqrt",50, sqrt); }
-#[test]
-fn cmp_sin() { cmp_row!("sin", 50, sin); }
-#[test]
-fn cmp_cos() { cmp_row!("cos", 50, cos); }
-#[test]
-fn cmp_atan(){ cmp_row!("atan",50, atan); }
-#[test]
-fn cmp_tan() { cmp_row!("tan", 50, tan); }
-#[test]
-fn cmp_sinh(){ cmp_row!("sinh",50, sinh); }
-#[test]
-fn cmp_cosh(){ cmp_row!("cosh",50, cosh); }
-#[test]
-fn cmp_tanh(){ cmp_row!("tanh",50, tanh); }
+
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(dead_code, unused_imports)]
+            type FixedPoint = Fixed<$S, $F>;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            const FRAC_BITS: u32 = $F;
+            use g_math::fixed_point::Fixed;
+            use g_math::fixed_point::canonical::{gmath_in, evaluate_in};
+            use std::time::Instant;
+
+            /// A set of representative inputs for throughput measurement.
+            /// Each input is a string that `gmath_in::<FixedPoint>()` will parse.
+            const INPUTS: &[&str] = &[
+                "0.1", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "0.25", "0.75",
+                "1.1", "1.2", "1.3", "1.4", "1.6", "1.7", "1.8", "1.9", "2.1",
+                "2.2", "2.3", "2.4", "2.6", "2.7", "2.8", "2.9", "0.9", "0.8",
+                "0.7", "0.6", "0.4", "0.3", "0.2", "0.05", "0.15", "0.35", "0.45",
+            ];
+
+
+            #[test]
+            fn cmp_exp() { cmp_row!("exp", 50, exp); }
+            #[test]
+            fn cmp_ln()  { cmp_row!("ln",  50, ln);  }
+            #[test]
+            fn cmp_sqrt(){ cmp_row!("sqrt",50, sqrt); }
+            #[test]
+            fn cmp_sin() { cmp_row!("sin", 50, sin); }
+            #[test]
+            fn cmp_cos() { cmp_row!("cos", 50, cos); }
+            #[test]
+            fn cmp_atan(){ cmp_row!("atan",50, atan); }
+            #[test]
+            fn cmp_tan() { cmp_row!("tan", 50, tan); }
+            #[test]
+            fn cmp_sinh(){ cmp_row!("sinh",50, sinh); }
+            #[test]
+            fn cmp_cosh(){ cmp_row!("cosh",50, cosh); }
+            #[test]
+            fn cmp_tanh(){ cmp_row!("tanh",50, tanh); }
+        }
+    };
+}
+
+// the formats this suite was written for (it was cfg-bound to them)
+suite!(q64_64, i128, 64);

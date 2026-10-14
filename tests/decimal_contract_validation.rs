@@ -22,630 +22,360 @@
 //! for guard digits (balanced = 77). Run with:
 //!   rm -rf target/debug/incremental/
 //!   GMATH_PROFILE=balanced cargo test --test decimal_contract_validation -- --nocapture
-#![cfg(table_format = "q128_128")]
 
-use g_math::fixed_point::DecimalFixed;
-use g_math::fixed_point::{DecimalTier, Dp};
-use std::path::PathBuf;
+#[macro_use]
+mod common;
 
-/// Storage scale of the fixtures. Lands on decimal-scaled's d38_s28 grid point.
-const SCALE: u8 = 28;
-
-/// Max |delta| (in storage LSB) we accept before calling it a contract
-/// violation. gMath's wide-tier strategy targets correctly-rounded; 1 LSB
-/// covers the double-rounding window. Anything beyond is a real bug.
-const TOL_LSB: i128 = 1;
-
-/// Fractional class of `f(x)*10^scale - floor` in [0,1).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Cls {
-    Exact, // Z
-    Low,   // L  (0 < frac < 0.5)
-    Tie,   // E  (frac == 0.5)
-    High,  // G  (0.5 < frac < 1)
-}
-
-impl Cls {
-    fn parse(s: &str) -> Cls {
-        match s {
-            "Z" => Cls::Exact,
-            "L" => Cls::Low,
-            "E" => Cls::Tie,
-            "G" => Cls::High,
-            other => panic!("unknown class column: {other:?}"),
+// Helper macros of the suite, at file level (an inner macro_rules! cannot use
+// repetitions inside the suite macro).
+macro_rules! grade_arms {
+    ($scale:ident, $func:ident, $lines:ident, $r:ident; $($s:literal),* $(,)?) => {
+        match $scale {
+            $( $s => grade_scale::<$s>($func, $lines, $r), )*
+            _ => $r.skipped_range += $lines.len(),
         }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Mode {
-    HalfAwayFromZero, // gMath decimal's declared rule
-    HalfToEven,       // banker's rounding (decimal-scaled default; financial)
-}
-
-/// Correctly-rounded storage integer from `(floor, cls)` under `mode`.
-/// Mirrors decimal-scaled's grader for the two half-modes we need; the
-/// directed modes (Floor/Ceiling/Trunc) are not exercised yet.
-fn oracle_correctly_rounded(floor: i128, cls: Cls, mode: Mode) -> i128 {
-    match cls {
-        Cls::Exact => floor,
-        // For both half-modes, nearest is floor (L) or floor+1 (G) regardless
-        // of sign — ties never enter here.
-        Cls::Low => floor,
-        Cls::High => floor + 1,
-        Cls::Tie => match mode {
-            // Away-from-zero: bump iff the true value is non-negative.
-            // floor toward -inf, so the true value is < 0 exactly when floor < 0.
-            Mode::HalfAwayFromZero => {
-                if floor >= 0 {
-                    floor + 1
-                } else {
-                    floor
-                }
-            }
-            // Banker's: pick the even neighbour (last decimal digit parity ==
-            // integer parity, since 10 is even).
-            Mode::HalfToEven => {
-                if floor.rem_euclid(2) == 0 {
-                    floor
-                } else {
-                    floor + 1
-                }
-            }
-        },
-    }
-}
-
-struct GoldenLine {
-    input: i128,
-    floor: i128,
-    cls: Cls,
-}
-
-fn load(func: &str) -> Vec<GoldenLine> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests/oracle_golden");
-    path.push(format!("{func}_s{SCALE}.txt"));
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let cols: Vec<&str> = line.split('\t').collect();
-        assert_eq!(cols.len(), 3, "unary golden line must have 3 columns: {line:?}");
-        out.push(GoldenLine {
-            input: cols[0].parse().expect("input_raw i128"),
-            floor: cols[1].parse().expect("floor_raw i128"),
-            cls: Cls::parse(cols[2]),
-        });
-    }
-    assert!(!out.is_empty(), "no golden lines for {func}");
-    out
-}
-
-#[derive(Default)]
-struct Report {
-    n: usize,
-    correctly_rounded: usize, // delta == 0 under HalfAwayFromZero
-    within_tol: usize,        // 0 < delta <= TOL_LSB
-    violations: usize,        // delta > TOL_LSB
-    max_delta: i128,
-    ties: usize,              // E-class inputs (counted separately)
-    tie_divergences: usize,   // half-away vs half-even disagree (financial gap)
-    worst_input: i128,
-}
-
-/// Run one function: `compute` maps a constructed DecimalFixed to its raw
-/// result integer at SCALE.
-fn run(func: &str, compute: impl Fn(DecimalFixed<28>) -> i128) -> Report {
-    let mut r = Report::default();
-    for g in load(func) {
-        r.n += 1;
-        let actual = compute(DecimalFixed::<28>::from_raw(g.input));
-        let expected = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfAwayFromZero);
-        let even = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfToEven);
-        if expected != even {
-            r.tie_divergences += 1;
-        }
-        if g.cls == Cls::Tie {
-            r.ties += 1;
-        }
-        let delta = (actual - expected).abs();
-        if delta == 0 {
-            r.correctly_rounded += 1;
-        } else if delta <= TOL_LSB {
-            r.within_tol += 1;
-        } else {
-            r.violations += 1;
-        }
-        if delta > r.max_delta {
-            r.max_delta = delta;
-            r.worst_input = g.input;
-        }
-    }
-    r
-}
-
-fn report_and_assert(func: &str, r: &Report) {
-    eprintln!(
-        "[decimal/{func}] n={} correct={} within_tol(<= {})={} violations={} \
-         max_delta={} ties(E)={} financial_gap(away!=even)={}{}",
-        r.n,
-        r.correctly_rounded,
-        TOL_LSB,
-        r.within_tol,
-        r.violations,
-        r.max_delta,
-        r.ties,
-        r.tie_divergences,
-        if r.violations > 0 {
-            format!(" worst_input={}", r.worst_input)
-        } else {
-            String::new()
-        },
-    );
-    assert_eq!(
-        r.violations, 0,
-        "{func}: {} contract violations (max_delta={} LSB > tol {}), worst input_raw={}",
-        r.violations, r.max_delta, TOL_LSB, r.worst_input
-    );
-}
-
-#[test]
-fn decimal_exp_contract() {
-    let r = run("exp", |d| d.exp().raw_value());
-    report_and_assert("exp", &r);
-}
-
-#[test]
-fn decimal_ln_contract() {
-    let r = run("ln", |d| d.ln().raw_value());
-    report_and_assert("ln", &r);
-}
-
-#[test]
-fn decimal_sqrt_contract() {
-    let r = run("sqrt", |d| d.sqrt().raw_value());
-    report_and_assert("sqrt", &r);
-}
-
-#[test]
-fn decimal_sin_contract() {
-    let r = run("sin", |d| d.sin().raw_value());
-    report_and_assert("sin", &r);
-}
-
-// ============================================================================
-// Oracle #2 — adversarial grading against mootable/decimal-scaled's corpus.
-//
-// Env-gated: set GMATH_DECIMAL_SCALED_GOLDEN to a local clone of decimal-scaled
-// (pinned to e6c7497). Self-skips if unset, so normal runs/CI are unaffected.
-// This is the INDEPENDENT, adversarial oracle (tie-hunting, overflow edges,
-// large-trig). Each sweep prints the full error distribution AND hard-gates:
-// the gated functions must be correctly rounded (0 LSB per `gate_policy` /
-// `arith_gated`, `max_delta == 0` for FASC) with zero panics on valid-domain
-// inputs — a panic there is a bug, not a tolerance question.
-//
-// Run (single-threaded so the panic-hook swap doesn't race):
-//   GMATH_DECIMAL_SCALED_GOLDEN=~/gh/decimal-scaled GMATH_PROFILE=balanced \
-//     cargo test --test decimal_contract_validation oracle2 -- --nocapture --test-threads=1
-// ============================================================================
-
-fn oracle2_dir() -> Option<PathBuf> {
-    std::env::var_os("GMATH_DECIMAL_SCALED_GOLDEN").map(PathBuf::from)
-}
-
-fn parse_unary_file(path: &std::path::Path) -> Vec<GoldenLine> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let cols: Vec<&str> = line.split('\t').collect();
-        if cols.len() != 3 {
-            continue; // defensively skip non-unary rows
-        }
-        let (Ok(input), Ok(floor)) = (cols[0].parse::<i128>(), cols[1].parse::<i128>()) else {
-            continue; // wider-than-i128 floor (shouldn't happen at d38) -> skip
-        };
-        out.push(GoldenLine { input, floor, cls: Cls::parse(cols[2]) });
-    }
-    out
-}
-
-#[derive(Default, Clone)]
-struct O2 {
-    n: usize,
-    exact: usize,   // delta 0  (correctly rounded)
-    one: usize,     // delta 1  (double-rounding window)
-    small: usize,   // delta 2..=8
-    large: usize,   // delta > 8 (suspicious — real weakness)
-    skipped_domain: usize,
-    skipped_range: usize,
-    errored: usize, // gMath panicked (overflow / unexpected)
-    max_delta: i128,
-    worst_input: i128,
-    worst_scale: u8,
-    ties: usize,
-    financial_gap: usize,
-}
-
-impl O2 {
-    fn merge(&mut self, o: &O2) {
-        self.n += o.n;
-        self.exact += o.exact;
-        self.one += o.one;
-        self.small += o.small;
-        self.large += o.large;
-        self.skipped_domain += o.skipped_domain;
-        self.skipped_range += o.skipped_range;
-        self.errored += o.errored;
-        self.ties += o.ties;
-        self.financial_gap += o.financial_gap;
-        if o.max_delta > self.max_delta {
-            self.max_delta = o.max_delta;
-            self.worst_input = o.worst_input;
-            self.worst_scale = o.worst_scale;
-        }
-    }
-}
-
-/// 10^s as i128 (s <= 37 always fits; 10^38 would overflow i128).
-fn pow10_i128(s: u8) -> i128 {
-    10i128.pow(s as u32)
-}
-
-/// Is the raw input (value = input/10^s) inside `func`'s real domain?
-fn in_domain(func: &str, input: i128, s: u8) -> bool {
-    let one = pow10_i128(s);
-    match func {
-        "ln" => input > 0,
-        "sqrt" => input >= 0,
-        "asin" | "acos" => input.unsigned_abs() <= one as u128,
-        "atanh" => input.unsigned_abs() < one as u128,
-        "acosh" => input >= one,
-        _ => true, // exp/sin/cos/tan/atan/sinh/cosh/tanh: all-real (overflow caught)
-    }
-}
-
-/// Compute func at compile-time scale S; raw result integer at scale S.
-fn compute_unary<const S: u8>(func: &str, input: i128) -> i128
-where
-    Dp<S>: DecimalTier,
-{
-    let d = DecimalFixed::<S>::from_raw(input);
-    match func {
-        "exp" => d.exp().raw_value(),
-        "ln" => d.ln().raw_value(),
-        "sqrt" => d.sqrt().raw_value(),
-        "sin" => d.sin().raw_value(),
-        "cos" => d.cos().raw_value(),
-        "tan" => d.tan().raw_value(),
-        "atan" => d.atan().raw_value(),
-        "asin" => d.asin().raw_value(),
-        "acos" => d.acos().raw_value(),
-        "sinh" => d.sinh().raw_value(),
-        "cosh" => d.cosh().raw_value(),
-        "tanh" => d.tanh().raw_value(),
-        "asinh" => d.asinh().raw_value(),
-        "acosh" => d.acosh().raw_value(),
-        "atanh" => d.atanh().raw_value(),
-        other => panic!("compute_unary: unknown func {other:?}"),
-    }
-}
-
-fn grade_scale<const S: u8>(func: &str, lines: &[GoldenLine], r: &mut O2)
-where
-    Dp<S>: DecimalTier,
-{
-    for g in lines {
-        if !in_domain(func, g.input, S) {
-            r.skipped_domain += 1;
-            continue;
-        }
-        if g.floor.checked_abs().map_or(true, |a| a > i128::MAX / 2) {
-            r.skipped_range += 1;
-            continue;
-        }
-        r.n += 1;
-        if g.cls == Cls::Tie {
-            r.ties += 1;
-        }
-        let expected = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfAwayFromZero);
-        if expected != oracle_correctly_rounded(g.floor, g.cls, Mode::HalfToEven) {
-            r.financial_gap += 1;
-        }
-        let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compute_unary::<S>(func, g.input)
-        }));
-        let actual = match computed {
-            Ok(v) => v,
-            Err(_) => {
-                r.errored += 1;
-                continue;
-            }
-        };
-        let delta = (actual - expected).abs();
-        match delta {
-            0 => r.exact += 1,
-            1 => r.one += 1,
-            2..=8 => r.small += 1,
-            _ => r.large += 1,
-        }
-        if delta > r.max_delta {
-            r.max_delta = delta;
-            r.worst_input = g.input;
-            r.worst_scale = S;
-        }
-    }
-}
-
-/// Runtime scale -> compile-time const dispatch for the 14 scales present in
-/// decimal-scaled's d18 + d38 tiers. Files at any other scale are skipped.
-fn dispatch_scale(scale: u8, func: &str, lines: &[GoldenLine], r: &mut O2) {
-    macro_rules! arms {
-        ($($s:literal),* $(,)?) => {
-            match scale {
-                $( $s => grade_scale::<$s>(func, lines, r), )*
-                _ => r.skipped_range += lines.len(),
-            }
-        };
-    }
-    arms!(0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37);
-}
-
-fn report_o2(label: &str, r: &O2) {
-    eprintln!(
-        "[oracle2/{label}] n={} exact={} 1LSB={} 2-8={} >8={} max_delta={} \
-         errored={} skip_dom={} skip_rng={} ties(E)={} fin_gap={}{}",
-        r.n, r.exact, r.one, r.small, r.large, r.max_delta, r.errored,
-        r.skipped_domain, r.skipped_range, r.ties, r.financial_gap,
-        if r.max_delta > 1 {
-            format!(" worst=(input={}, scale={})", r.worst_input, r.worst_scale)
-        } else {
-            String::new()
-        },
-    );
-}
-
-/// Per-function CI policy. `Some(max_delta)` = gated: must have 0 panics and
-/// max_delta within tolerance. `None` = report-only. All 15 native unary
-/// transcendentals are currently gated at 0 LSB; the `None` arm is retained as
-/// the mechanism for staging any future function before it tightens to gated.
-fn gate_policy(func: &str) -> Option<i128> {
-    match func {
-        // Dedicated native engines + composed functions that compose at the
-        // compute tier (single downscale) — all correctly rounded, gated at 0.
-        "exp" | "ln" | "sqrt" | "sin" | "cos" | "atan" | "tan" | "asin" | "acos"
-        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => Some(0),
-        _ => None,
-    }
-}
-
-/// Full sweep (Arm A, imperative `DecimalFixed`): every native unary
-/// transcendental over decimal-scaled's d18 + d38 tiers, all scales. All 15
-/// functions are gated at 0 LSB (correctly rounded) per `gate_policy`; any
-/// regression — a panic on a valid-domain input or a delta above tolerance —
-/// fails the test.
-#[test]
-fn oracle2_decimal_sweep() {
-    let Some(dir) = oracle2_dir() else {
-        eprintln!("[oracle2] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN to a decimal-scaled clone");
-        return;
     };
-    const FUNCS: &[&str] = &[
-        "exp", "ln", "sqrt", "sin", "cos", "tan", "atan", "asin", "acos",
-        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-    ];
-    const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37];
+}
 
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let mut grand = O2::default();
-    let mut results: Vec<(&str, O2)> = Vec::new();
-    for func in FUNCS {
-        let mut r = O2::default();
-        for tier in [18u8, 38] {
-            for &s in SCALES {
-                let path = dir
-                    .join("tests/golden")
-                    .join(format!("{func}_d{tier}_s{s}.txt"));
-                if !path.exists() {
-                    continue;
-                }
-                let lines = parse_unary_file(&path);
-                dispatch_scale(s, func, &lines, &mut r);
-            }
+macro_rules! compute_arms {
+    ($scale:ident, $op:ident, $a:ident, $b:ident; $($s:literal),* $(,)?) => {
+        match $scale {
+            $( $s => compute_binary::<$s>($op, $a, $b), )*
+            _ => None,
         }
-        report_o2(func, &r);
-        grand.merge(&r);
-        results.push((*func, r));
-    }
-    std::panic::set_hook(prev_hook);
-    report_o2("TOTAL", &grand);
-    assert!(grand.n > 0, "oracle2 sweep found no inputs — wrong corpus path?");
-
-    let mut failures = Vec::new();
-    for (func, r) in &results {
-        match gate_policy(func) {
-            Some(tol) => {
-                if r.errored != 0 || r.max_delta > tol {
-                    failures.push(format!(
-                        "{func} (errored={}, max_delta={}, tol={})",
-                        r.errored, r.max_delta, tol
-                    ));
-                }
-            }
-            None => eprintln!(
-                "[oracle2/{func}] REPORT-ONLY (staged, not yet gated): \
-                 errored={} max_delta={}",
-                r.errored, r.max_delta
-            ),
-        }
-    }
-    assert!(failures.is_empty(), "gated functions regressed: {failures:?}");
-}
-
-/// Arm B: do the SAME worst cases survive through the FASC/router path
-/// (compute-tier chain persistence + UGOD) where the imperative Arm A dies?
-#[test]
-fn arm_b_fasc_probe() {
-    use g_math::canonical::{evaluate, gmath_parse};
-    // (label, decimal-string input, mpmath true value)
-    let cases: &[(&str, &str, &str)] = &[
-        ("asinh", "-1.4661736815306297448", "-1.17585209122032172461"),
-        ("atanh", "-0.9999999999999999999999999999", "-32.58276489219661223096"),
-        ("tan", "14.133754388", "293.03459111392422611133"),
-        ("asin", "0.99999999999", "1.57079185465894161592"),
-        ("acosh", "2.0", "1.31695789692481670862"),
-        ("tanh", "-5.2874712800902", "-0.99994890484746193280"),
-    ];
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    for &(func, input, truth) in cases {
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let base = gmath_parse(input).expect("parse");
-            let expr = match func {
-                "asinh" => base.asinh(),
-                "atanh" => base.atanh(),
-                "tan" => base.tan(),
-                "asin" => base.asin(),
-                "acosh" => base.acosh(),
-                "tanh" => base.tanh(),
-                _ => unreachable!(),
-            };
-            evaluate(&expr).map(|v| format!("{v}"))
-        }));
-        match out {
-            Ok(Ok(s)) => eprintln!("[armB/{func}] FASC = {s}   (true {truth})"),
-            Ok(Err(e)) => eprintln!("[armB/{func}] FASC Err({e:?})   (true {truth})"),
-            Err(_) => eprintln!("[armB/{func}] FASC PANICKED   (true {truth})"),
-        }
-    }
-    std::panic::set_hook(prev);
-}
-
-/// Regression: a negative decimal with a zero integer part (e.g. -0.5) must
-/// keep its sign. The parser previously keyed the fractional sign off
-/// `integer_part < 0`, which is false for `-0`, silently flipping -0.x to +0.x.
-#[test]
-fn parse_negative_subunit_sign() {
-    use g_math::canonical::{evaluate, gmath_parse};
-    for s in ["-0.5", "-0.999", "-0.0001", "-1.5", "-2.0"] {
-        let out = format!("{}", evaluate(&gmath_parse(s).unwrap()).unwrap());
-        assert!(out.starts_with('-'), "parse({s}) lost its sign: got {out}");
-    }
-    let p = format!("{}", evaluate(&gmath_parse("0.5").unwrap()).unwrap());
-    assert!(!p.starts_with('-'), "parse(0.5) wrongly negative: {p}");
-}
-
-// ============================================================================
-// Arm B — the FASC / canonical gmath() surface (the path most users hit).
-//
-// Routes Jack's inputs through gmath_parse(...).f() -> evaluate. The fractal
-// router picks the domain per input (integers -> binary, decimals -> decimal),
-// so this exercises the real canonical experience, not just the decimal engine.
-// FASC materializes decimal output at DECIMAL_STORAGE_MAX_DP-2 (=36 on balanced);
-// we downscale its Display string to the golden scale S. S<=28 keeps >=8 guard
-// digits so the extra rounding step is harmless; scale 37 is skipped.
-// ============================================================================
-
-/// Format a scale-S storage integer as a decimal string for gmath_parse.
-fn raw_to_decimal_string(raw: i128, scale: u8) -> String {
-    if scale == 0 {
-        return format!("{raw}");
-    }
-    let neg = raw < 0;
-    let mag = raw.unsigned_abs();
-    let p = 10u128.pow(scale as u32);
-    format!(
-        "{}{}.{:0width$}",
-        if neg { "-" } else { "" },
-        mag / p,
-        mag % p,
-        width = scale as usize
-    )
-}
-
-/// Parse a decimal Display string to a scale-S storage integer (round half-away).
-fn decimal_string_to_scaled(s: &str, scale: u8) -> i128 {
-    let neg = s.starts_with('-');
-    let body = s.trim_start_matches('-');
-    let (int_part, frac_part) = body.split_once('.').unwrap_or((body, ""));
-    let int: i128 = int_part.parse().unwrap_or(0);
-    let mut scaled = int * 10i128.pow(scale as u32);
-    let fb = frac_part.as_bytes();
-    let mut fv: i128 = 0;
-    for i in 0..scale as usize {
-        fv = fv * 10 + if i < fb.len() { (fb[i] - b'0') as i128 } else { 0 };
-    }
-    scaled += fv;
-    if fb.len() > scale as usize && fb[scale as usize] - b'0' >= 5 {
-        scaled += 1;
-    }
-    if neg { -scaled } else { scaled }
-}
-
-/// Compute func via the FASC canonical path at runtime scale; raw result at scale.
-fn fasc_compute(func: &str, input: i128, scale: u8) -> Option<i128> {
-    use g_math::canonical::{evaluate, gmath_parse};
-    let base = gmath_parse(&raw_to_decimal_string(input, scale)).ok()?;
-    let expr = match func {
-        "exp" => base.exp(),
-        "ln" => base.ln(),
-        "sqrt" => base.sqrt(),
-        "sin" => base.sin(),
-        "cos" => base.cos(),
-        "tan" => base.tan(),
-        "atan" => base.atan(),
-        "asin" => base.asin(),
-        "acos" => base.acos(),
-        "sinh" => base.sinh(),
-        "cosh" => base.cosh(),
-        "tanh" => base.tanh(),
-        "asinh" => base.asinh(),
-        "acosh" => base.acosh(),
-        "atanh" => base.atanh(),
-        _ => return None,
     };
-    let v = evaluate(&expr).ok()?;
-    Some(decimal_string_to_scaled(&format!("{v}"), scale))
 }
 
-/// Arm B sweep: the same corpus, routed through the canonical `gmath()`/FASC
-/// path. Gated at 0 LSB — asserts zero panics on valid-domain inputs and
-/// `max_delta == 0` (correctly rounded), matching Arm A's gate.
-#[test]
-fn oracle2_fasc_sweep() {
-    let Some(dir) = oracle2_dir() else {
-        eprintln!("[fasc] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN");
-        return;
-    };
-    const FUNCS: &[&str] = &[
-        "exp", "ln", "sqrt", "sin", "cos", "tan", "atan", "asin", "acos",
-        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-    ];
-    const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28];
 
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let mut grand = O2::default();
-    for func in FUNCS {
-        let mut r = O2::default();
-        for tier in [18u8, 38] {
-            for &s in SCALES {
-                let path = dir.join("tests/golden").join(format!("{func}_d{tier}_s{s}.txt"));
-                if !path.exists() {
-                    continue;
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #[allow(dead_code)]
+            type FixedPoint = Fixed<$S, $F>;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            const FRAC_BITS: u32 = $F;
+            use g_math::fixed_point::DecimalFixed;
+            use g_math::fixed_point::{Fixed, DecimalTier, Dp};
+            use std::path::PathBuf;
+
+            /// Storage scale of the fixtures. Lands on decimal-scaled's d38_s28 grid point.
+            const SCALE: u8 = 28;
+
+            /// Max |delta| (in storage LSB) we accept before calling it a contract
+            /// violation. gMath's wide-tier strategy targets correctly-rounded; 1 LSB
+            /// covers the double-rounding window. Anything beyond is a real bug.
+            const TOL_LSB: i128 = 1;
+
+            /// Fractional class of `f(x)*10^scale - floor` in [0,1).
+            #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+            enum Cls {
+                Exact, // Z
+                Low,   // L  (0 < frac < 0.5)
+                Tie,   // E  (frac == 0.5)
+                High,  // G  (0.5 < frac < 1)
+            }
+
+            impl Cls {
+                fn parse(s: &str) -> Cls {
+                    match s {
+                        "Z" => Cls::Exact,
+                        "L" => Cls::Low,
+                        "E" => Cls::Tie,
+                        "G" => Cls::High,
+                        other => panic!("unknown class column: {other:?}"),
+                    }
                 }
-                for g in parse_unary_file(&path) {
-                    if !in_domain(func, g.input, s) {
+            }
+
+            #[derive(Clone, Copy)]
+            enum Mode {
+                HalfAwayFromZero, // gMath decimal's declared rule
+                HalfToEven,       // banker's rounding (decimal-scaled default; financial)
+            }
+
+            /// Correctly-rounded storage integer from `(floor, cls)` under `mode`.
+            /// Mirrors decimal-scaled's grader for the two half-modes we need; the
+            /// directed modes (Floor/Ceiling/Trunc) are not exercised yet.
+            fn oracle_correctly_rounded(floor: i128, cls: Cls, mode: Mode) -> i128 {
+                match cls {
+                    Cls::Exact => floor,
+                    // For both half-modes, nearest is floor (L) or floor+1 (G) regardless
+                    // of sign — ties never enter here.
+                    Cls::Low => floor,
+                    Cls::High => floor + 1,
+                    Cls::Tie => match mode {
+                        // Away-from-zero: bump iff the true value is non-negative.
+                        // floor toward -inf, so the true value is < 0 exactly when floor < 0.
+                        Mode::HalfAwayFromZero => {
+                            if floor >= 0 {
+                                floor + 1
+                            } else {
+                                floor
+                            }
+                        }
+                        // Banker's: pick the even neighbour (last decimal digit parity ==
+                        // integer parity, since 10 is even).
+                        Mode::HalfToEven => {
+                            if floor.rem_euclid(2) == 0 {
+                                floor
+                            } else {
+                                floor + 1
+                            }
+                        }
+                    },
+                }
+            }
+
+            struct GoldenLine {
+                input: i128,
+                floor: i128,
+                cls: Cls,
+            }
+
+            fn load(func: &str) -> Vec<GoldenLine> {
+                let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                path.push("tests/oracle_golden");
+                path.push(format!("{func}_s{SCALE}.txt"));
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                let mut out = Vec::new();
+                for line in text.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    let cols: Vec<&str> = line.split('\t').collect();
+                    assert_eq!(cols.len(), 3, "unary golden line must have 3 columns: {line:?}");
+                    out.push(GoldenLine {
+                        input: cols[0].parse().expect("input_raw i128"),
+                        floor: cols[1].parse().expect("floor_raw i128"),
+                        cls: Cls::parse(cols[2]),
+                    });
+                }
+                assert!(!out.is_empty(), "no golden lines for {func}");
+                out
+            }
+
+            #[derive(Default)]
+            struct Report {
+                n: usize,
+                correctly_rounded: usize, // delta == 0 under HalfAwayFromZero
+                within_tol: usize,        // 0 < delta <= TOL_LSB
+                violations: usize,        // delta > TOL_LSB
+                max_delta: i128,
+                ties: usize,              // E-class inputs (counted separately)
+                tie_divergences: usize,   // half-away vs half-even disagree (financial gap)
+                worst_input: i128,
+            }
+
+            /// Run one function: `compute` maps a constructed DecimalFixed to its raw
+            /// result integer at SCALE.
+            fn run(func: &str, compute: impl Fn(DecimalFixed<28>) -> i128) -> Report {
+                let mut r = Report::default();
+                for g in load(func) {
+                    r.n += 1;
+                    let actual = compute(DecimalFixed::<28>::from_raw(g.input));
+                    let expected = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfAwayFromZero);
+                    let even = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfToEven);
+                    if expected != even {
+                        r.tie_divergences += 1;
+                    }
+                    if g.cls == Cls::Tie {
+                        r.ties += 1;
+                    }
+                    let delta = (actual - expected).abs();
+                    if delta == 0 {
+                        r.correctly_rounded += 1;
+                    } else if delta <= TOL_LSB {
+                        r.within_tol += 1;
+                    } else {
+                        r.violations += 1;
+                    }
+                    if delta > r.max_delta {
+                        r.max_delta = delta;
+                        r.worst_input = g.input;
+                    }
+                }
+                r
+            }
+
+            fn report_and_assert(func: &str, r: &Report) {
+                eprintln!(
+                    "[decimal/{func}] n={} correct={} within_tol(<= {})={} violations={} \
+                     max_delta={} ties(E)={} financial_gap(away!=even)={}{}",
+                    r.n,
+                    r.correctly_rounded,
+                    TOL_LSB,
+                    r.within_tol,
+                    r.violations,
+                    r.max_delta,
+                    r.ties,
+                    r.tie_divergences,
+                    if r.violations > 0 {
+                        format!(" worst_input={}", r.worst_input)
+                    } else {
+                        String::new()
+                    },
+                );
+                assert_eq!(
+                    r.violations, 0,
+                    "{func}: {} contract violations (max_delta={} LSB > tol {}), worst input_raw={}",
+                    r.violations, r.max_delta, TOL_LSB, r.worst_input
+                );
+            }
+
+            #[test]
+            fn decimal_exp_contract() {
+                let r = run("exp", |d| d.exp().raw_value());
+                report_and_assert("exp", &r);
+            }
+
+            #[test]
+            fn decimal_ln_contract() {
+                let r = run("ln", |d| d.ln().raw_value());
+                report_and_assert("ln", &r);
+            }
+
+            #[test]
+            fn decimal_sqrt_contract() {
+                let r = run("sqrt", |d| d.sqrt().raw_value());
+                report_and_assert("sqrt", &r);
+            }
+
+            #[test]
+            fn decimal_sin_contract() {
+                let r = run("sin", |d| d.sin().raw_value());
+                report_and_assert("sin", &r);
+            }
+
+            // ============================================================================
+            // Oracle #2 — adversarial grading against mootable/decimal-scaled's corpus.
+            //
+            // Env-gated: set GMATH_DECIMAL_SCALED_GOLDEN to a local clone of decimal-scaled
+            // (pinned to e6c7497). Self-skips if unset, so normal runs/CI are unaffected.
+            // This is the INDEPENDENT, adversarial oracle (tie-hunting, overflow edges,
+            // large-trig). Each sweep prints the full error distribution AND hard-gates:
+            // the gated functions must be correctly rounded (0 LSB per `gate_policy` /
+            // `arith_gated`, `max_delta == 0` for FASC) with zero panics on valid-domain
+            // inputs — a panic there is a bug, not a tolerance question.
+            //
+            // Run (single-threaded so the panic-hook swap doesn't race):
+            //   GMATH_DECIMAL_SCALED_GOLDEN=~/gh/decimal-scaled GMATH_PROFILE=balanced \
+            //     cargo test --test decimal_contract_validation oracle2 -- --nocapture --test-threads=1
+            // ============================================================================
+
+            fn oracle2_dir() -> Option<PathBuf> {
+                std::env::var_os("GMATH_DECIMAL_SCALED_GOLDEN").map(PathBuf::from)
+            }
+
+            fn parse_unary_file(path: &std::path::Path) -> Vec<GoldenLine> {
+                let text = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                let mut out = Vec::new();
+                for line in text.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    let cols: Vec<&str> = line.split('\t').collect();
+                    if cols.len() != 3 {
+                        continue; // defensively skip non-unary rows
+                    }
+                    let (Ok(input), Ok(floor)) = (cols[0].parse::<i128>(), cols[1].parse::<i128>()) else {
+                        continue; // wider-than-i128 floor (shouldn't happen at d38) -> skip
+                    };
+                    out.push(GoldenLine { input, floor, cls: Cls::parse(cols[2]) });
+                }
+                out
+            }
+
+            #[derive(Default, Clone)]
+            struct O2 {
+                n: usize,
+                exact: usize,   // delta 0  (correctly rounded)
+                one: usize,     // delta 1  (double-rounding window)
+                small: usize,   // delta 2..=8
+                large: usize,   // delta > 8 (suspicious — real weakness)
+                skipped_domain: usize,
+                skipped_range: usize,
+                errored: usize, // gMath panicked (overflow / unexpected)
+                max_delta: i128,
+                worst_input: i128,
+                worst_scale: u8,
+                ties: usize,
+                financial_gap: usize,
+            }
+
+            impl O2 {
+                fn merge(&mut self, o: &O2) {
+                    self.n += o.n;
+                    self.exact += o.exact;
+                    self.one += o.one;
+                    self.small += o.small;
+                    self.large += o.large;
+                    self.skipped_domain += o.skipped_domain;
+                    self.skipped_range += o.skipped_range;
+                    self.errored += o.errored;
+                    self.ties += o.ties;
+                    self.financial_gap += o.financial_gap;
+                    if o.max_delta > self.max_delta {
+                        self.max_delta = o.max_delta;
+                        self.worst_input = o.worst_input;
+                        self.worst_scale = o.worst_scale;
+                    }
+                }
+            }
+
+            /// 10^s as i128 (s <= 37 always fits; 10^38 would overflow i128).
+            fn pow10_i128(s: u8) -> i128 {
+                10i128.pow(s as u32)
+            }
+
+            /// Is the raw input (value = input/10^s) inside `func`'s real domain?
+            fn in_domain(func: &str, input: i128, s: u8) -> bool {
+                let one = pow10_i128(s);
+                match func {
+                    "ln" => input > 0,
+                    "sqrt" => input >= 0,
+                    "asin" | "acos" => input.unsigned_abs() <= one as u128,
+                    "atanh" => input.unsigned_abs() < one as u128,
+                    "acosh" => input >= one,
+                    _ => true, // exp/sin/cos/tan/atan/sinh/cosh/tanh: all-real (overflow caught)
+                }
+            }
+
+            /// Compute func at compile-time scale S; raw result integer at scale S.
+            fn compute_unary<const S: u8>(func: &str, input: i128) -> i128
+            where
+                Dp<S>: DecimalTier,
+            {
+                let d = DecimalFixed::<S>::from_raw(input);
+                match func {
+                    "exp" => d.exp().raw_value(),
+                    "ln" => d.ln().raw_value(),
+                    "sqrt" => d.sqrt().raw_value(),
+                    "sin" => d.sin().raw_value(),
+                    "cos" => d.cos().raw_value(),
+                    "tan" => d.tan().raw_value(),
+                    "atan" => d.atan().raw_value(),
+                    "asin" => d.asin().raw_value(),
+                    "acos" => d.acos().raw_value(),
+                    "sinh" => d.sinh().raw_value(),
+                    "cosh" => d.cosh().raw_value(),
+                    "tanh" => d.tanh().raw_value(),
+                    "asinh" => d.asinh().raw_value(),
+                    "acosh" => d.acosh().raw_value(),
+                    "atanh" => d.atanh().raw_value(),
+                    other => panic!("compute_unary: unknown func {other:?}"),
+                }
+            }
+
+            fn grade_scale<const S: u8>(func: &str, lines: &[GoldenLine], r: &mut O2)
+            where
+                Dp<S>: DecimalTier,
+            {
+                for g in lines {
+                    if !in_domain(func, g.input, S) {
                         r.skipped_domain += 1;
                         continue;
                     }
@@ -658,12 +388,15 @@ fn oracle2_fasc_sweep() {
                         r.ties += 1;
                     }
                     let expected = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfAwayFromZero);
+                    if expected != oracle_correctly_rounded(g.floor, g.cls, Mode::HalfToEven) {
+                        r.financial_gap += 1;
+                    }
                     let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        fasc_compute(func, g.input, s)
+                        compute_unary::<S>(func, g.input)
                     }));
                     let actual = match computed {
-                        Ok(Some(v)) => v,
-                        _ => {
+                        Ok(v) => v,
+                        Err(_) => {
                             r.errored += 1;
                             continue;
                         }
@@ -678,247 +411,534 @@ fn oracle2_fasc_sweep() {
                     if delta > r.max_delta {
                         r.max_delta = delta;
                         r.worst_input = g.input;
-                        r.worst_scale = s;
+                        r.worst_scale = S;
                     }
                 }
             }
-        }
-        report_o2(&format!("fasc/{func}"), &r);
-        grand.merge(&r);
-    }
-    std::panic::set_hook(prev);
-    report_o2("fasc/TOTAL", &grand);
-    assert!(grand.n > 0, "fasc sweep found no inputs");
-    assert_eq!(grand.errored, 0, "fasc: {} panics on valid-domain inputs", grand.errored);
-    assert_eq!(
-        grand.max_delta, 0,
-        "fasc canonical path not correctly rounded: max_delta={} at input={} scale={}",
-        grand.max_delta, grand.worst_input, grand.worst_scale
-    );
-}
 
-// ============================================================================
-// 4-column arm — decimal binary ops: add, sub, mul, div, atan2.
-//
-// decimal-scaled's two-argument golden format: <a>\t<b>\t<floor>\t<cls>.
-// add/sub are exact; mul/div carry a class and are where TIES occur (unlike
-// transcendentals). gMath's decimal mul/div use BANKER'S rounding
-// (pure_decimal_banker_round), so they're graded under HalfToEven — this is the
-// arm that actually exercises the financial rounding rule. atan2 is the
-// transcendental (half-away downscale; irrational, no ties).
-// ============================================================================
-
-fn op_mode(op: &str) -> Mode {
-    match op {
-        "mul" | "div" => Mode::HalfToEven, // gMath decimal arithmetic = banker's
-        _ => Mode::HalfAwayFromZero,        // add/sub exact; atan2 (no ties)
-    }
-}
-
-/// All decimal binary ops are gated at 0 after routing mul/div through the
-/// D256-intermediate path (the `*`/`/` operators previously overflowed the
-/// unscaled product/dividend in i128 for large operands).
-fn arith_gated(_op: &str) -> bool {
-    true
-}
-
-fn compute_binary<const S: u8>(op: &str, a: i128, b: i128) -> Option<i128>
-where
-    Dp<S>: DecimalTier,
-{
-    let x = DecimalFixed::<S>::from_raw(a);
-    let y = DecimalFixed::<S>::from_raw(b);
-    Some(match op {
-        "add" => (x + y).raw_value(),
-        "sub" => (x - y).raw_value(),
-        "mul" => (x * y).raw_value(),
-        "div" => {
-            if b == 0 {
-                return None;
+            /// Runtime scale -> compile-time const dispatch for the 14 scales present in
+            /// decimal-scaled's d18 + d38 tiers. Files at any other scale are skipped.
+            fn dispatch_scale(scale: u8, func: &str, lines: &[GoldenLine], r: &mut O2) {
+                grade_arms!(scale, func, lines, r; 0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37);
             }
-            (x / y).raw_value()
-        }
-        // atan2(y, x): decimal-scaled column 1 = y, column 2 = x.
-        "atan2" => {
-            if a == 0 && b == 0 {
-                return None;
+
+            fn report_o2(label: &str, r: &O2) {
+                eprintln!(
+                    "[oracle2/{label}] n={} exact={} 1LSB={} 2-8={} >8={} max_delta={} \
+                     errored={} skip_dom={} skip_rng={} ties(E)={} fin_gap={}{}",
+                    r.n, r.exact, r.one, r.small, r.large, r.max_delta, r.errored,
+                    r.skipped_domain, r.skipped_range, r.ties, r.financial_gap,
+                    if r.max_delta > 1 {
+                        format!(" worst=(input={}, scale={})", r.worst_input, r.worst_scale)
+                    } else {
+                        String::new()
+                    },
+                );
             }
-            x.atan2(y).raw_value()
-        }
-        _ => return None,
-    })
-}
 
-fn dispatch_scale_binary(scale: u8, op: &str, a: i128, b: i128) -> Option<i128> {
-    macro_rules! arms {
-        ($($s:literal),* $(,)?) => {
-            match scale {
-                $( $s => compute_binary::<$s>(op, a, b), )*
-                _ => None,
-            }
-        };
-    }
-    arms!(0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37)
-}
-
-fn parse_binary_file(path: &std::path::Path) -> Vec<(i128, i128, i128, Cls)> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let c: Vec<&str> = line.split('\t').collect();
-        if c.len() != 4 {
-            continue;
-        }
-        // Skip rows whose operands or floor exceed i128 (Jack tests up to
-        // i128::MAX; products/sums can overflow what DecimalFixed<S> can hold).
-        let (Ok(a), Ok(b), Ok(f)) =
-            (c[0].parse::<i128>(), c[1].parse::<i128>(), c[2].parse::<i128>())
-        else {
-            continue;
-        };
-        out.push((a, b, f, Cls::parse(c[3])));
-    }
-    out
-}
-
-/// Sweep decimal binary ops (add/sub/mul/div/atan2) over the d18+d38 tiers.
-/// add/sub/mul/div gated at 0 (exact / banker's); atan2 gated at 0 (correctly
-/// rounded). Report-mode print plus a hard gate.
-#[test]
-fn oracle2_arithmetic_sweep() {
-    let Some(dir) = oracle2_dir() else {
-        eprintln!("[arith] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN");
-        return;
-    };
-    const OPS: &[&str] = &["add", "sub", "mul", "div", "atan2"];
-    const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37];
-
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let mut grand = O2::default();
-    let mut gated = O2::default();
-    for op in OPS {
-        let mut r = O2::default();
-        let mode = op_mode(op);
-        for tier in [18u8, 38] {
-            for &s in SCALES {
-                let path = dir.join("tests/golden").join(format!("{op}_d{tier}_s{s}.txt"));
-                if !path.exists() {
-                    continue;
+            /// Per-function CI policy. `Some(max_delta)` = gated: must have 0 panics and
+            /// max_delta within tolerance. `None` = report-only. All 15 native unary
+            /// transcendentals are currently gated at 0 LSB; the `None` arm is retained as
+            /// the mechanism for staging any future function before it tightens to gated.
+            fn gate_policy(func: &str) -> Option<i128> {
+                match func {
+                    // Dedicated native engines + composed functions that compose at the
+                    // compute tier (single downscale) — all correctly rounded, gated at 0.
+                    "exp" | "ln" | "sqrt" | "sin" | "cos" | "atan" | "tan" | "asin" | "acos"
+                    | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => Some(0),
+                    _ => None,
                 }
-                for (a, b, floor, cls) in parse_binary_file(&path) {
-                    if floor.checked_abs().map_or(true, |x| x > i128::MAX / 2)
-                        || a.checked_abs().map_or(true, |x| x > i128::MAX / 2)
-                        || b.checked_abs().map_or(true, |x| x > i128::MAX / 2)
-                    {
-                        r.skipped_range += 1;
+            }
+
+            /// Full sweep (Arm A, imperative `DecimalFixed`): every native unary
+            /// transcendental over decimal-scaled's d18 + d38 tiers, all scales. All 15
+            /// functions are gated at 0 LSB (correctly rounded) per `gate_policy`; any
+            /// regression — a panic on a valid-domain input or a delta above tolerance —
+            /// fails the test.
+            #[test]
+            fn oracle2_decimal_sweep() {
+                let Some(dir) = oracle2_dir() else {
+                    eprintln!("[oracle2] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN to a decimal-scaled clone");
+                    return;
+                };
+                const FUNCS: &[&str] = &[
+                    "exp", "ln", "sqrt", "sin", "cos", "tan", "atan", "asin", "acos",
+                    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+                ];
+                const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37];
+
+                let prev_hook = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|_| {}));
+                let mut grand = O2::default();
+                let mut results: Vec<(&str, O2)> = Vec::new();
+                for func in FUNCS {
+                    let mut r = O2::default();
+                    for tier in [18u8, 38] {
+                        for &s in SCALES {
+                            let path = dir
+                                .join("tests/golden")
+                                .join(format!("{func}_d{tier}_s{s}.txt"));
+                            if !path.exists() {
+                                continue;
+                            }
+                            let lines = parse_unary_file(&path);
+                            dispatch_scale(s, func, &lines, &mut r);
+                        }
+                    }
+                    report_o2(func, &r);
+                    grand.merge(&r);
+                    results.push((*func, r));
+                }
+                std::panic::set_hook(prev_hook);
+                report_o2("TOTAL", &grand);
+                assert!(grand.n > 0, "oracle2 sweep found no inputs — wrong corpus path?");
+
+                let mut failures = Vec::new();
+                for (func, r) in &results {
+                    match gate_policy(func) {
+                        Some(tol) => {
+                            if r.errored != 0 || r.max_delta > tol {
+                                failures.push(format!(
+                                    "{func} (errored={}, max_delta={}, tol={})",
+                                    r.errored, r.max_delta, tol
+                                ));
+                            }
+                        }
+                        None => eprintln!(
+                            "[oracle2/{func}] REPORT-ONLY (staged, not yet gated): \
+                             errored={} max_delta={}",
+                            r.errored, r.max_delta
+                        ),
+                    }
+                }
+                assert!(failures.is_empty(), "gated functions regressed: {failures:?}");
+            }
+
+            /// Arm B: do the SAME worst cases survive through the FASC/router path
+            /// (compute-tier chain persistence + UGOD) where the imperative Arm A dies?
+            #[test]
+            fn arm_b_fasc_probe() {
+                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                // (label, decimal-string input, mpmath true value)
+                let cases: &[(&str, &str, &str)] = &[
+                    ("asinh", "-1.4661736815306297448", "-1.17585209122032172461"),
+                    ("atanh", "-0.9999999999999999999999999999", "-32.58276489219661223096"),
+                    ("tan", "14.133754388", "293.03459111392422611133"),
+                    ("asin", "0.99999999999", "1.57079185465894161592"),
+                    ("acosh", "2.0", "1.31695789692481670862"),
+                    ("tanh", "-5.2874712800902", "-0.99994890484746193280"),
+                ];
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|_| {}));
+                for &(func, input, truth) in cases {
+                    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let base = gmath_parse_in::<FixedPoint>(input).expect("parse");
+                        let expr = match func {
+                            "asinh" => base.asinh(),
+                            "atanh" => base.atanh(),
+                            "tan" => base.tan(),
+                            "asin" => base.asin(),
+                            "acosh" => base.acosh(),
+                            "tanh" => base.tanh(),
+                            _ => unreachable!(),
+                        };
+                        evaluate_in(&expr).map(|v| format!("{v}"))
+                    }));
+                    match out {
+                        Ok(Ok(s)) => eprintln!("[armB/{func}] FASC = {s}   (true {truth})"),
+                        Ok(Err(e)) => eprintln!("[armB/{func}] FASC Err({e:?})   (true {truth})"),
+                        Err(_) => eprintln!("[armB/{func}] FASC PANICKED   (true {truth})"),
+                    }
+                }
+                std::panic::set_hook(prev);
+            }
+
+            /// Regression: a negative decimal with a zero integer part (e.g. -0.5) must
+            /// keep its sign. The parser previously keyed the fractional sign off
+            /// `integer_part < 0`, which is false for `-0`, silently flipping -0.x to +0.x.
+            #[test]
+            fn parse_negative_subunit_sign() {
+                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                for s in ["-0.5", "-0.999", "-0.0001", "-1.5", "-2.0"] {
+                    let out = format!("{}", evaluate_in(&gmath_parse_in::<FixedPoint>(s).unwrap()).unwrap());
+                    assert!(out.starts_with('-'), "parse({s}) lost its sign: got {out}");
+                }
+                let p = format!("{}", evaluate_in(&gmath_parse_in::<FixedPoint>("0.5").unwrap()).unwrap());
+                assert!(!p.starts_with('-'), "parse(0.5) wrongly negative: {p}");
+            }
+
+            // ============================================================================
+            // Arm B — the FASC / canonical gmath_in::<FixedPoint>() surface (the path most users hit).
+            //
+            // Routes Jack's inputs through gmath_parse_in::<FixedPoint>(...).f() -> evaluate. The fractal
+            // router picks the domain per input (integers -> binary, decimals -> decimal),
+            // so this exercises the real canonical experience, not just the decimal engine.
+            // FASC materializes decimal output at DECIMAL_STORAGE_MAX_DP-2 (=36 on balanced);
+            // we downscale its Display string to the golden scale S. S<=28 keeps >=8 guard
+            // digits so the extra rounding step is harmless; scale 37 is skipped.
+            // ============================================================================
+
+            /// Format a scale-S storage integer as a decimal string for gmath_parse.
+            fn raw_to_decimal_string(raw: i128, scale: u8) -> String {
+                if scale == 0 {
+                    return format!("{raw}");
+                }
+                let neg = raw < 0;
+                let mag = raw.unsigned_abs();
+                let p = 10u128.pow(scale as u32);
+                format!(
+                    "{}{}.{:0width$}",
+                    if neg { "-" } else { "" },
+                    mag / p,
+                    mag % p,
+                    width = scale as usize
+                )
+            }
+
+            /// Parse a decimal Display string to a scale-S storage integer (round half-away).
+            fn decimal_string_to_scaled(s: &str, scale: u8) -> i128 {
+                let neg = s.starts_with('-');
+                let body = s.trim_start_matches('-');
+                let (int_part, frac_part) = body.split_once('.').unwrap_or((body, ""));
+                let int: i128 = int_part.parse().unwrap_or(0);
+                let mut scaled = int * 10i128.pow(scale as u32);
+                let fb = frac_part.as_bytes();
+                let mut fv: i128 = 0;
+                for i in 0..scale as usize {
+                    fv = fv * 10 + if i < fb.len() { (fb[i] - b'0') as i128 } else { 0 };
+                }
+                scaled += fv;
+                if fb.len() > scale as usize && fb[scale as usize] - b'0' >= 5 {
+                    scaled += 1;
+                }
+                if neg { -scaled } else { scaled }
+            }
+
+            /// Compute func via the FASC canonical path at runtime scale; raw result at scale.
+            fn fasc_compute(func: &str, input: i128, scale: u8) -> Option<i128> {
+                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                let base = gmath_parse_in::<FixedPoint>(&raw_to_decimal_string(input, scale)).ok()?;
+                let expr = match func {
+                    "exp" => base.exp(),
+                    "ln" => base.ln(),
+                    "sqrt" => base.sqrt(),
+                    "sin" => base.sin(),
+                    "cos" => base.cos(),
+                    "tan" => base.tan(),
+                    "atan" => base.atan(),
+                    "asin" => base.asin(),
+                    "acos" => base.acos(),
+                    "sinh" => base.sinh(),
+                    "cosh" => base.cosh(),
+                    "tanh" => base.tanh(),
+                    "asinh" => base.asinh(),
+                    "acosh" => base.acosh(),
+                    "atanh" => base.atanh(),
+                    _ => return None,
+                };
+                let v = evaluate_in(&expr).ok()?;
+                Some(decimal_string_to_scaled(&format!("{v}"), scale))
+            }
+
+            /// Arm B sweep: the same corpus, routed through the canonical `gmath_in::<FixedPoint>()`/FASC
+            /// path. Gated at 0 LSB — asserts zero panics on valid-domain inputs and
+            /// `max_delta == 0` (correctly rounded), matching Arm A's gate.
+            #[test]
+            fn oracle2_fasc_sweep() {
+                let Some(dir) = oracle2_dir() else {
+                    eprintln!("[fasc] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN");
+                    return;
+                };
+                const FUNCS: &[&str] = &[
+                    "exp", "ln", "sqrt", "sin", "cos", "tan", "atan", "asin", "acos",
+                    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+                ];
+                const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28];
+
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|_| {}));
+                let mut grand = O2::default();
+                for func in FUNCS {
+                    let mut r = O2::default();
+                    for tier in [18u8, 38] {
+                        for &s in SCALES {
+                            let path = dir.join("tests/golden").join(format!("{func}_d{tier}_s{s}.txt"));
+                            if !path.exists() {
+                                continue;
+                            }
+                            for g in parse_unary_file(&path) {
+                                if !in_domain(func, g.input, s) {
+                                    r.skipped_domain += 1;
+                                    continue;
+                                }
+                                if g.floor.checked_abs().map_or(true, |a| a > i128::MAX / 2) {
+                                    r.skipped_range += 1;
+                                    continue;
+                                }
+                                r.n += 1;
+                                if g.cls == Cls::Tie {
+                                    r.ties += 1;
+                                }
+                                let expected = oracle_correctly_rounded(g.floor, g.cls, Mode::HalfAwayFromZero);
+                                let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    fasc_compute(func, g.input, s)
+                                }));
+                                let actual = match computed {
+                                    Ok(Some(v)) => v,
+                                    _ => {
+                                        r.errored += 1;
+                                        continue;
+                                    }
+                                };
+                                let delta = (actual - expected).abs();
+                                match delta {
+                                    0 => r.exact += 1,
+                                    1 => r.one += 1,
+                                    2..=8 => r.small += 1,
+                                    _ => r.large += 1,
+                                }
+                                if delta > r.max_delta {
+                                    r.max_delta = delta;
+                                    r.worst_input = g.input;
+                                    r.worst_scale = s;
+                                }
+                            }
+                        }
+                    }
+                    report_o2(&format!("fasc/{func}"), &r);
+                    grand.merge(&r);
+                }
+                std::panic::set_hook(prev);
+                report_o2("fasc/TOTAL", &grand);
+                assert!(grand.n > 0, "fasc sweep found no inputs");
+                assert_eq!(grand.errored, 0, "fasc: {} panics on valid-domain inputs", grand.errored);
+                assert_eq!(
+                    grand.max_delta, 0,
+                    "fasc canonical path not correctly rounded: max_delta={} at input={} scale={}",
+                    grand.max_delta, grand.worst_input, grand.worst_scale
+                );
+            }
+
+            // ============================================================================
+            // 4-column arm — decimal binary ops: add, sub, mul, div, atan2.
+            //
+            // decimal-scaled's two-argument golden format: <a>\t<b>\t<floor>\t<cls>.
+            // add/sub are exact; mul/div carry a class and are where TIES occur (unlike
+            // transcendentals). gMath's decimal mul/div use BANKER'S rounding
+            // (pure_decimal_banker_round), so they're graded under HalfToEven — this is the
+            // arm that actually exercises the financial rounding rule. atan2 is the
+            // transcendental (half-away downscale; irrational, no ties).
+            // ============================================================================
+
+            fn op_mode(op: &str) -> Mode {
+                match op {
+                    "mul" | "div" => Mode::HalfToEven, // gMath decimal arithmetic = banker's
+                    _ => Mode::HalfAwayFromZero,        // add/sub exact; atan2 (no ties)
+                }
+            }
+
+            /// All decimal binary ops are gated at 0 after routing mul/div through the
+            /// D256-intermediate path (the `*`/`/` operators previously overflowed the
+            /// unscaled product/dividend in i128 for large operands).
+            fn arith_gated(_op: &str) -> bool {
+                true
+            }
+
+            fn compute_binary<const S: u8>(op: &str, a: i128, b: i128) -> Option<i128>
+            where
+                Dp<S>: DecimalTier,
+            {
+                let x = DecimalFixed::<S>::from_raw(a);
+                let y = DecimalFixed::<S>::from_raw(b);
+                Some(match op {
+                    "add" => (x + y).raw_value(),
+                    "sub" => (x - y).raw_value(),
+                    "mul" => (x * y).raw_value(),
+                    "div" => {
+                        if b == 0 {
+                            return None;
+                        }
+                        (x / y).raw_value()
+                    }
+                    // atan2(y, x): decimal-scaled column 1 = y, column 2 = x.
+                    "atan2" => {
+                        if a == 0 && b == 0 {
+                            return None;
+                        }
+                        x.atan2(y).raw_value()
+                    }
+                    _ => return None,
+                })
+            }
+
+            fn dispatch_scale_binary(scale: u8, op: &str, a: i128, b: i128) -> Option<i128> {
+                compute_arms!(scale, op, a, b; 0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37)
+            }
+
+            fn parse_binary_file(path: &std::path::Path) -> Vec<(i128, i128, i128, Cls)> {
+                let text = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                let mut out = Vec::new();
+                for line in text.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
                         continue;
                     }
-                    r.n += 1;
-                    if cls == Cls::Tie {
-                        r.ties += 1;
+                    let c: Vec<&str> = line.split('\t').collect();
+                    if c.len() != 4 {
+                        continue;
                     }
-                    let expected = oracle_correctly_rounded(floor, cls, mode);
-                    let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        dispatch_scale_binary(s, op, a, b)
-                    }));
-                    let actual = match computed {
-                        Ok(Some(v)) => v,
-                        _ => {
-                            r.errored += 1;
-                            continue;
-                        }
+                    // Skip rows whose operands or floor exceed i128 (Jack tests up to
+                    // i128::MAX; products/sums can overflow what DecimalFixed<S> can hold).
+                    let (Ok(a), Ok(b), Ok(f)) =
+                        (c[0].parse::<i128>(), c[1].parse::<i128>(), c[2].parse::<i128>())
+                    else {
+                        continue;
                     };
-                    let delta = (actual - expected).abs();
-                    match delta {
-                        0 => r.exact += 1,
-                        1 => r.one += 1,
-                        2..=8 => r.small += 1,
-                        _ => r.large += 1,
+                    out.push((a, b, f, Cls::parse(c[3])));
+                }
+                out
+            }
+
+            /// Sweep decimal binary ops (add/sub/mul/div/atan2) over the d18+d38 tiers.
+            /// add/sub/mul/div gated at 0 (exact / banker's); atan2 gated at 0 (correctly
+            /// rounded). Report-mode print plus a hard gate.
+            #[test]
+            fn oracle2_arithmetic_sweep() {
+                let Some(dir) = oracle2_dir() else {
+                    eprintln!("[arith] SKIP — set GMATH_DECIMAL_SCALED_GOLDEN");
+                    return;
+                };
+                const OPS: &[&str] = &["add", "sub", "mul", "div", "atan2"];
+                const SCALES: &[u8] = &[0, 2, 3, 4, 6, 9, 10, 12, 13, 17, 18, 19, 28, 37];
+
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|_| {}));
+                let mut grand = O2::default();
+                let mut gated = O2::default();
+                for op in OPS {
+                    let mut r = O2::default();
+                    let mode = op_mode(op);
+                    for tier in [18u8, 38] {
+                        for &s in SCALES {
+                            let path = dir.join("tests/golden").join(format!("{op}_d{tier}_s{s}.txt"));
+                            if !path.exists() {
+                                continue;
+                            }
+                            for (a, b, floor, cls) in parse_binary_file(&path) {
+                                if floor.checked_abs().map_or(true, |x| x > i128::MAX / 2)
+                                    || a.checked_abs().map_or(true, |x| x > i128::MAX / 2)
+                                    || b.checked_abs().map_or(true, |x| x > i128::MAX / 2)
+                                {
+                                    r.skipped_range += 1;
+                                    continue;
+                                }
+                                r.n += 1;
+                                if cls == Cls::Tie {
+                                    r.ties += 1;
+                                }
+                                let expected = oracle_correctly_rounded(floor, cls, mode);
+                                let computed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    dispatch_scale_binary(s, op, a, b)
+                                }));
+                                let actual = match computed {
+                                    Ok(Some(v)) => v,
+                                    _ => {
+                                        r.errored += 1;
+                                        continue;
+                                    }
+                                };
+                                let delta = (actual - expected).abs();
+                                match delta {
+                                    0 => r.exact += 1,
+                                    1 => r.one += 1,
+                                    2..=8 => r.small += 1,
+                                    _ => r.large += 1,
+                                }
+                                if delta > r.max_delta {
+                                    r.max_delta = delta;
+                                    r.worst_input = a;
+                                    r.worst_scale = s;
+                                }
+                            }
+                        }
                     }
-                    if delta > r.max_delta {
-                        r.max_delta = delta;
-                        r.worst_input = a;
-                        r.worst_scale = s;
+                    report_o2(&format!("arith/{op}"), &r);
+                    grand.merge(&r);
+                    if arith_gated(op) {
+                        gated.merge(&r);
+                    } else {
+                        eprintln!("[arith/{op}] REPORT-ONLY — known operator overflow (FINDINGS.md)");
                     }
+                }
+                std::panic::set_hook(prev);
+                report_o2("arith/TOTAL", &grand);
+                assert!(grand.n > 0, "arith sweep found no inputs");
+                assert_eq!(gated.errored, 0, "arith(add/sub/atan2): {} panics", gated.errored);
+                assert_eq!(
+                    gated.max_delta, 0,
+                    "arith(add/sub/atan2) not correctly rounded: max_delta={} at input={} scale={}",
+                    gated.max_delta, gated.worst_input, gated.worst_scale
+                );
+            }
+
+            /// Cost-benefit probe: how accurate is the CURRENT symbolic->binary fallback for
+            /// composed transcendentals? If already correctly rounded, a decimal/symbolic
+            /// guard offers ~0 accuracy gain.
+            #[test]
+            fn symbolic_transcendental_accuracy_probe() {
+                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                let cases = [
+                    ("atanh", "1/3"), ("atanh", "1/10"), ("atanh", "1/4"),
+                    ("asinh", "1/7"), ("tanh", "2/3"), ("acosh", "7/3"),
+                ];
+                for (f, x) in cases {
+                    let base = gmath_parse_in::<FixedPoint>(x).unwrap();
+                    let expr = match f {
+                        "atanh" => base.atanh(),
+                        "asinh" => base.asinh(),
+                        "tanh" => base.tanh(),
+                        "acosh" => base.acosh(),
+                        _ => unreachable!(),
+                    };
+                    eprintln!("SYMB {f}({x}) = {}", evaluate_in(&expr).unwrap());
+                }
+            }
+
+            /// Pin the grader against decimal-scaled's rule for every (cls, mode, sign).
+            /// This proves the grader independently of whether the fixtures contain ties.
+            #[test]
+            fn grader_truth_table() {
+                use Cls::*;
+                use Mode::*;
+                // (floor, cls, mode, expected)
+                let cases: &[(i128, Cls, Mode, i128)] = &[
+                    // Exact: every mode returns floor.
+                    (10, Exact, HalfAwayFromZero, 10),
+                    (-10, Exact, HalfToEven, -10),
+                    // Low: nearest is floor.
+                    (10, Low, HalfAwayFromZero, 10),
+                    (-10, Low, HalfToEven, -10),
+                    // High: nearest is floor+1.
+                    (10, High, HalfAwayFromZero, 11),
+                    (-10, High, HalfToEven, -9),
+                    // Tie, away-from-zero: positive bumps up, negative stays (more |.|).
+                    (2, Tie, HalfAwayFromZero, 3),    // +2.5 -> 3
+                    (-3, Tie, HalfAwayFromZero, -3),  // -2.5 -> -3 (floor toward -inf is -3)
+                    // Tie, half-even: pick even neighbour.
+                    (2, Tie, HalfToEven, 2),   // 2 even -> 2
+                    (3, Tie, HalfToEven, 4),   // 3 odd  -> 4
+                    (-3, Tie, HalfToEven, -2), // -3 odd -> -2 (even)
+                    (-4, Tie, HalfToEven, -4), // -4 even -> -4
+                ];
+                for &(floor, cls, mode, want) in cases {
+                    let got = oracle_correctly_rounded(floor, cls, mode);
+                    assert_eq!(got, want, "grader({floor}, {cls:?}, mode) = {got}, want {want}");
                 }
             }
         }
-        report_o2(&format!("arith/{op}"), &r);
-        grand.merge(&r);
-        if arith_gated(op) {
-            gated.merge(&r);
-        } else {
-            eprintln!("[arith/{op}] REPORT-ONLY — known operator overflow (FINDINGS.md)");
-        }
-    }
-    std::panic::set_hook(prev);
-    report_o2("arith/TOTAL", &grand);
-    assert!(grand.n > 0, "arith sweep found no inputs");
-    assert_eq!(gated.errored, 0, "arith(add/sub/atan2): {} panics", gated.errored);
-    assert_eq!(
-        gated.max_delta, 0,
-        "arith(add/sub/atan2) not correctly rounded: max_delta={} at input={} scale={}",
-        gated.max_delta, gated.worst_input, gated.worst_scale
-    );
+    };
 }
 
-/// Cost-benefit probe: how accurate is the CURRENT symbolic->binary fallback for
-/// composed transcendentals? If already correctly rounded, a decimal/symbolic
-/// guard offers ~0 accuracy gain.
-#[test]
-fn symbolic_transcendental_accuracy_probe() {
-    use g_math::canonical::{evaluate, gmath_parse};
-    let cases = [
-        ("atanh", "1/3"), ("atanh", "1/10"), ("atanh", "1/4"),
-        ("asinh", "1/7"), ("tanh", "2/3"), ("acosh", "7/3"),
-    ];
-    for (f, x) in cases {
-        let base = gmath_parse(x).unwrap();
-        let expr = match f {
-            "atanh" => base.atanh(),
-            "asinh" => base.asinh(),
-            "tanh" => base.tanh(),
-            "acosh" => base.acosh(),
-            _ => unreachable!(),
-        };
-        eprintln!("SYMB {f}({x}) = {}", evaluate(&expr).unwrap());
-    }
-}
-
-/// Pin the grader against decimal-scaled's rule for every (cls, mode, sign).
-/// This proves the grader independently of whether the fixtures contain ties.
-#[test]
-fn grader_truth_table() {
-    use Cls::*;
-    use Mode::*;
-    // (floor, cls, mode, expected)
-    let cases: &[(i128, Cls, Mode, i128)] = &[
-        // Exact: every mode returns floor.
-        (10, Exact, HalfAwayFromZero, 10),
-        (-10, Exact, HalfToEven, -10),
-        // Low: nearest is floor.
-        (10, Low, HalfAwayFromZero, 10),
-        (-10, Low, HalfToEven, -10),
-        // High: nearest is floor+1.
-        (10, High, HalfAwayFromZero, 11),
-        (-10, High, HalfToEven, -9),
-        // Tie, away-from-zero: positive bumps up, negative stays (more |.|).
-        (2, Tie, HalfAwayFromZero, 3),    // +2.5 -> 3
-        (-3, Tie, HalfAwayFromZero, -3),  // -2.5 -> -3 (floor toward -inf is -3)
-        // Tie, half-even: pick even neighbour.
-        (2, Tie, HalfToEven, 2),   // 2 even -> 2
-        (3, Tie, HalfToEven, 4),   // 3 odd  -> 4
-        (-3, Tie, HalfToEven, -2), // -3 odd -> -2 (even)
-        (-4, Tie, HalfToEven, -4), // -4 even -> -4
-    ];
-    for &(floor, cls, mode, want) in cases {
-        let got = oracle_correctly_rounded(floor, cls, mode);
-        assert_eq!(got, want, "grader({floor}, {cls:?}, mode) = {got}, want {want}");
-    }
-}
+// the formats this suite was written for (it was cfg-bound to them)
+suite!(q128_128, g_math::fixed_point::I256, 128);

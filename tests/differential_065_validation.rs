@@ -11,70 +11,91 @@
 //! bits below it, a random sign, plus the extremes and the values around
 //! zero and one.
 
-use g_math::fixed_point::FixedPoint as New;
-use g_math_065::fixed_point::FixedPoint as Old;
+use g_math::fixed_point::{Fixed, FixedNum, Storage, WideInt};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+// ---- the format of the published crate's build, mirrored in this crate -----
+//
+// The published crate still reads `GMATH_PROFILE` / `GMATH_FRAC_BITS`; this
+// crate has no profile. The new type is chosen from the old crate's own
+// storage word and split, so one build of this test compares the two crates
+// at whatever format the old one was built for.
+
+type OldWord = g_math_065::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
+const OLD_FRAC: u32 = g_math_065::fixed_point::frac_config::FRAC_BITS;
+
+/// The new crate's word for an old crate's word, and the raw in both as bytes.
+trait Mirror: Copy {
+    type New: Storage;
+    fn mirror_to_be(self) -> Vec<u8>;
+    fn mirror_from_be(bytes: &[u8]) -> Self;
+}
+macro_rules! mirror_native {
+    ($t:ty) => {
+        impl Mirror for $t {
+            type New = $t;
+            fn mirror_to_be(self) -> Vec<u8> { self.to_be_bytes().to_vec() }
+            fn mirror_from_be(bytes: &[u8]) -> Self { <$t>::from_be_bytes(bytes.try_into().expect("word bytes")) }
+        }
+    };
+}
+mirror_native!(i32);
+mirror_native!(i64);
+mirror_native!(i128);
+macro_rules! mirror_wide {
+    ($old:ty, $new:ty, $words:expr) => {
+        impl Mirror for $old {
+            type New = $new;
+            fn mirror_to_be(self) -> Vec<u8> {
+                let mut be = Vec::with_capacity($words * 8);
+                for w in self.words.iter().rev() { be.extend_from_slice(&w.to_be_bytes()); }
+                be
+            }
+            fn mirror_from_be(bytes: &[u8]) -> Self {
+                let mut words = [0u64; $words];
+                for (i, chunk) in bytes.rchunks(8).enumerate() { words[i] = u64::from_be_bytes(chunk.try_into().expect("word bytes")); }
+                Self { words }
+            }
+        }
+    };
+}
+mirror_wide!(g_math_065::fixed_point::I256, g_math::fixed_point::I256, 4);
+mirror_wide!(g_math_065::fixed_point::I512, g_math::fixed_point::I512, 8);
+
+type New = Fixed<<OldWord as Mirror>::New, OLD_FRAC>;
+use g_math_065::fixed_point::FixedPoint as Old;
 
 // ---- the same raw integer in both crates --------------------------------
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
 mod raw {
-    #[cfg(table_format = "q16_16")]
-    pub type Raw = i32;
-    #[cfg(table_format = "q32_32")]
-    pub type Raw = i64;
-    #[cfg(table_format = "q64_64")]
-    pub type Raw = i128;
-    pub const WORDS: usize = (Raw::BITS / 64) as usize + (Raw::BITS % 64 != 0) as usize;
+    use super::{Mirror, New, Old, OldWord, Storage};
+    /// A raw of the new crate's word.
+    pub type Raw = <OldWord as Mirror>::New;
+    pub const WORDS: usize = (<Raw as super::WideInt>::BITS / 64) as usize + (<Raw as super::WideInt>::BITS % 64 != 0) as usize;
+    /// Little-endian 64-bit words into a raw (the words beyond the width are ignored).
     pub fn from_words(w: &[u64]) -> Raw {
-        let mut v: u128 = 0;
-        for (i, x) in w.iter().enumerate().take(2) {
-            v |= (*x as u128) << (64 * i);
+        let bytes = (<Raw as super::WideInt>::BITS / 8) as usize;
+        let mut be = vec![0u8; bytes];
+        for (i, x) in w.iter().enumerate() {
+            for k in 0..8 {
+                let pos = i * 8 + k;
+                if pos < bytes { be[bytes - 1 - pos] = (x >> (8 * k)) as u8; }
+            }
         }
-        v as Raw
+        <Raw as Storage>::from_be_slice(&be)
     }
-    pub fn old(r: Raw) -> super::Old { super::Old::from_raw(r) }
-    pub fn new(r: Raw) -> super::New { super::New::from_raw(r) }
-    pub fn old_raw(v: super::Old) -> Raw { v.raw() }
-    pub fn new_raw(v: super::New) -> Raw { v.raw() }
-}
-
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-mod raw {
-    #[cfg(table_format = "q128_128")]
-    pub const WORDS: usize = 4;
-    #[cfg(table_format = "q256_256")]
-    pub const WORDS: usize = 8;
-    #[cfg(table_format = "q128_128")]
-    use g_math::fixed_point::I256 as NewInt;
-    #[cfg(table_format = "q256_256")]
-    use g_math::fixed_point::I512 as NewInt;
-    #[cfg(table_format = "q128_128")]
-    use g_math_065::fixed_point::I256 as OldInt;
-    #[cfg(table_format = "q256_256")]
-    use g_math_065::fixed_point::I512 as OldInt;
-    pub type Raw = [u64; WORDS];
-    pub fn from_words(w: &[u64]) -> Raw {
-        let mut r = [0u64; WORDS];
-        r.copy_from_slice(&w[..WORDS]);
-        r
-    }
-    pub fn old(r: Raw) -> super::Old { super::Old::from_raw(OldInt { words: r }) }
-    pub fn new(r: Raw) -> super::New { super::New::from_raw(NewInt { words: r }) }
-    pub fn old_raw(v: super::Old) -> Raw { v.raw().words }
-    pub fn new_raw(v: super::New) -> Raw { v.raw().words }
+    pub fn old(r: Raw) -> Old { Old::from_raw(OldWord::mirror_from_be(&<Raw as Storage>::to_be_vec(r))) }
+    pub fn new(r: Raw) -> New { New::from_raw(r) }
+    pub fn old_raw(v: Old) -> Raw { <Raw as Storage>::from_be_slice(&v.raw().mirror_to_be()) }
+    pub fn new_raw(v: New) -> Raw { v.raw() }
 }
 
 use raw::{Raw, WORDS};
 
 #[allow(dead_code)]
-const BITS: u32 = WORDS as u32 * 64;
-
-#[cfg(table_format = "q16_16")]
-const WIDTH: u32 = 32;
-#[cfg(not(table_format = "q16_16"))]
+const BITS: u32 = <Raw as WideInt>::BITS;
 const WIDTH: u32 = BITS;
-const FRAC: u32 = g_math::fixed_point::frac_config::FRAC_BITS;
+const FRAC: u32 = <New as FixedNum>::FRAC_BITS;
 
 // ---- inputs ---------------------------------------------------------------
 

@@ -8625,9 +8625,8 @@ pub const FIXED_REFS: &[(&str, u8, i128, i128)] = &[
     ("cos", 38, 170141183460469231731687303715884105727, -13024443211469801912620381285824925858),
 ];
 
-/// realtime: decimal_exp at storage dp 4 (x_raw, expected), BinaryStorage range
-#[cfg(table_format = "q16_16")]
-pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
+/// 32-bit word: decimal_exp at storage dp 4 (x_raw, expected), storage range
+pub const ENGINE_EXP_REFS_W32: &[(&str, &str)] = &[
     ("-680000", "0"),
     ("-670000", "0"),
     ("-660000", "0"),
@@ -8784,13 +8783,11 @@ pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
     ("122771", "2147221187"),
     ("122772", "2147435920"),
 ];
-/// realtime: the largest x_raw at dp 4 whose exp fits BinaryStorage
-#[cfg(table_format = "q16_16")]
-pub const ENGINE_EXP_TOP: &str = "122772";
+/// 32-bit word: the largest x_raw at dp 4 whose exp fits storage
+pub const ENGINE_EXP_TOP_W32: &str = "122772";
 
-/// compact: decimal_exp at storage dp 9 (x_raw, expected), BinaryStorage range
-#[cfg(table_format = "q32_32")]
-pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
+/// 64-bit word: decimal_exp at storage dp 9 (x_raw, expected), storage range
+pub const ENGINE_EXP_REFS_W64: &[(&str, &str)] = &[
     ("-128042557944", "0"),
     ("-128000000000", "0"),
     ("-124786505174", "0"),
@@ -8972,13 +8969,11 @@ pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
     ("22945006537", "9223372024586368956"),
     ("22945006538", "9223372033809740985"),
 ];
-/// compact: the largest x_raw at dp 9 whose exp fits BinaryStorage
-#[cfg(table_format = "q32_32")]
-pub const ENGINE_EXP_TOP: &str = "22945006538";
+/// 64-bit word: the largest x_raw at dp 9 whose exp fits storage
+pub const ENGINE_EXP_TOP_W64: &str = "22945006538";
 
-/// embedded: decimal_exp at storage dp 19 (x_raw, expected), BinaryStorage range
-#[cfg(table_format = "q64_64")]
-pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
+/// 128-bit word: decimal_exp at storage dp 19 (x_raw, expected), storage range
+pub const ENGINE_EXP_REFS_W128: &[(&str, &str)] = &[
     ("-2560000000000000000000", "0"),
     ("-2557615778056518854331", "0"),
     ("-2429702355701189916947", "0"),
@@ -9190,13 +9185,11 @@ pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
     ("442805751642261862995", "170141183460469231706737496669525332867"),
     ("442805751642261862996", "170141183460469231723751615015572256039"),
 ];
-/// embedded: the largest x_raw at dp 19 whose exp fits BinaryStorage
-#[cfg(table_format = "q64_64")]
-pub const ENGINE_EXP_TOP: &str = "442805751642261862996";
+/// 128-bit word: the largest x_raw at dp 19 whose exp fits storage
+pub const ENGINE_EXP_TOP_W128: &str = "442805751642261862996";
 
-/// balanced: decimal_exp at storage dp 38 (x_raw, expected), BinaryStorage range
-#[cfg(table_format = "q128_128")]
-pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
+/// 256-bit word: decimal_exp at storage dp 38 (x_raw, expected), storage range
+pub const ENGINE_EXP_REFS_W256: &[(&str, &str)] = &[
     ("-51394217033649917733161178854136120051986", "0"),
     ("-51200000000000000000000000000000000000000", "0"),
     ("-50603801527862295152048615149442165109074", "0"),
@@ -9469,13 +9462,11 @@ pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
     ("8925429750901231790871051569382918497040", "57896044618658097711785492504343953926016796086209394694296700784427883570202"),
     ("8925429750901231790871051569382918497041", "57896044618658097711785492504343953926595756532395975671414555709471323109465"),
 ];
-/// balanced: the largest x_raw at dp 38 whose exp fits BinaryStorage
-#[cfg(table_format = "q128_128")]
-pub const ENGINE_EXP_TOP: &str = "8925429750901231790871051569382918497041";
+/// 256-bit word: the largest x_raw at dp 38 whose exp fits storage
+pub const ENGINE_EXP_TOP_W256: &str = "8925429750901231790871051569382918497041";
 
-/// scientific: decimal_exp at storage dp 77 (x_raw, expected), BinaryStorage range
-#[cfg(table_format = "q256_256")]
-pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
+/// 512-bit word: decimal_exp at storage dp 77 (x_raw, expected), storage range
+pub const ENGINE_EXP_REFS_W512: &[(&str, &str)] = &[
     ("-102400000000000000000000000000000000000000000000000000000000000000000000000000000", "0"),
     ("-101497497754424937776666127022804672151368352004408052205486822302187999090379142", "0"),
     ("-100800000000000000000000000000000000000000000000000000000000000000000000000000000", "0"),
@@ -9867,6 +9858,9 @@ pub const ENGINE_EXP_REFS: &[(&str, &str)] = &[
     ("17689915710559053544282027205443218230129575403367491570110123647662104988135784", "6703903964971298549787012499102923063739682910296196688861780721860882015036648149367436767452212757117496868738299356814535778460849975555536034399542063"),
     ("17689915710559053544282027205443218230129575403367491570110123647662104988135785", "6703903964971298549787012499102923063739682910296196688861780721860882015036715188407086480437710627242487897968936753643638740427738593362754643219692430"),
 ];
-/// scientific: the largest x_raw at dp 77 whose exp fits BinaryStorage
-#[cfg(table_format = "q256_256")]
-pub const ENGINE_EXP_TOP: &str = "17689915710559053544282027205443218230129575403367491570110123647662104988135785";
+/// 512-bit word: the largest x_raw at dp 77 whose exp fits storage
+pub const ENGINE_EXP_TOP_W512: &str = "17689915710559053544282027205443218230129575403367491570110123647662104988135785";
+
+/// The including module's word (it defines `BITS`).
+pub const ENGINE_EXP_REFS: &[(&str, &str)] = match BITS { 32 => ENGINE_EXP_REFS_W32, 64 => ENGINE_EXP_REFS_W64, 128 => ENGINE_EXP_REFS_W128, 256 => ENGINE_EXP_REFS_W256, 512 => ENGINE_EXP_REFS_W512, _ => &[] };
+pub const ENGINE_EXP_TOP: &str = match BITS { 32 => ENGINE_EXP_TOP_W32, 64 => ENGINE_EXP_TOP_W64, 128 => ENGINE_EXP_TOP_W128, 256 => ENGINE_EXP_TOP_W256, 512 => ENGINE_EXP_TOP_W512, _ => "0" };

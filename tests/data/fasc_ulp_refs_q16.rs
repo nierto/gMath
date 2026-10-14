@@ -2687,7 +2687,7 @@ pub const Q2_30_REFS: &[(&str, i32, i32, &str)] = &[
 
 /// The table for the build's split (every GMATH_FRAC_BITS the build accepts).
 pub const REALTIME_REFS: &[(&str, i32, i32, &str)] =
-    match g_math::fixed_point::frac_config::FRAC_BITS { 2 => Q30_2_REFS, 3 => Q29_3_REFS, 4 => Q28_4_REFS, 5 => Q27_5_REFS, 6 => Q26_6_REFS, 7 => Q25_7_REFS, 8 => Q24_8_REFS, 9 => Q23_9_REFS, 10 => Q22_10_REFS, 11 => Q21_11_REFS, 12 => Q20_12_REFS, 13 => Q19_13_REFS, 14 => Q18_14_REFS, 15 => Q17_15_REFS, 17 => Q15_17_REFS, 18 => Q14_18_REFS, 19 => Q13_19_REFS, 20 => Q12_20_REFS, 21 => Q11_21_REFS, 22 => Q10_22_REFS, 23 => Q9_23_REFS, 24 => Q8_24_REFS, 25 => Q7_25_REFS, 26 => Q6_26_REFS, 27 => Q5_27_REFS, 28 => Q4_28_REFS, 29 => Q3_29_REFS, 30 => Q2_30_REFS, _ => Q16_REFS };
+    match FRAC_BITS { 2 => Q30_2_REFS, 3 => Q29_3_REFS, 4 => Q28_4_REFS, 5 => Q27_5_REFS, 6 => Q26_6_REFS, 7 => Q25_7_REFS, 8 => Q24_8_REFS, 9 => Q23_9_REFS, 10 => Q22_10_REFS, 11 => Q21_11_REFS, 12 => Q20_12_REFS, 13 => Q19_13_REFS, 14 => Q18_14_REFS, 15 => Q17_15_REFS, 17 => Q15_17_REFS, 18 => Q14_18_REFS, 19 => Q13_19_REFS, 20 => Q12_20_REFS, 21 => Q11_21_REFS, 22 => Q10_22_REFS, 23 => Q9_23_REFS, 24 => Q8_24_REFS, 25 => Q7_25_REFS, 26 => Q6_26_REFS, 27 => Q5_27_REFS, 28 => Q4_28_REFS, 29 => Q3_29_REFS, 30 => Q2_30_REFS, _ => Q16_REFS };
 /// The split `REALTIME_REFS` was generated for (equals FRAC_BITS for 2..=30).
 pub const REALTIME_REFS_FRAC_BITS: u32 =
-    match g_math::fixed_point::frac_config::FRAC_BITS { f @ 2..=30 => f, _ => 16 };
+    match FRAC_BITS { f @ 2..=30 => f, _ => 16 };

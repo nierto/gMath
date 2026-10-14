@@ -225,10 +225,11 @@ def main():
 
     arms = " ".join(f"{F} => REALTIME_F{F}_LITERALS," for F in range(2, 31))
     lines.append("/// The realtime literal table for the build's split.")
-    lines.append(f"pub const REALTIME_LITERALS: &[Storage] = match g_math::fixed_point::frac_config::FRAC_BITS {{ {arms} _ => &[] }};")
+    lines.append("// the including module defines `const FRAC_BITS: u32` (its format's split)")
+    lines.append(f"pub const REALTIME_LITERALS: &[Storage] = match FRAC_BITS {{ {arms} _ => &[] }};")
     arms = " ".join(f"{F} => REALTIME_F{F}_RMS_ZERO," for F in range(2, 31))
     lines.append("/// The realtime rms table for the build's split.")
-    lines.append(f"pub const REALTIME_RMS_ZERO: &[(&str, &str)] = match g_math::fixed_point::frac_config::FRAC_BITS {{ {arms} _ => &[] }};")
+    lines.append(f"pub const REALTIME_RMS_ZERO: &[(&str, &str)] = match FRAC_BITS {{ {arms} _ => &[] }};")
     lines.append("")
     with open("tests/data/wide_q64_refs.rs", "w") as fh:
         fh.write("\n".join(lines))

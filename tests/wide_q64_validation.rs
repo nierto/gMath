@@ -7,458 +7,459 @@
 //! exact `fractions.Fraction` for the literals). Errors are compared on raw
 //! integers; no float arithmetic is performed.
 
-use g_math::fixed_point::{FixedPoint, OverflowDetected};
-use g_math::fixed_point::imperative::fused;
-use g_math::wide;
-use g_math::fixed_point::domains::binary_fixed::transcendental::{
-    exp_tier_n_plus_1::exp_q64_64_native, ln_tier_n_plus_1::ln_q64_64_native,
-};
+#[macro_use]
+mod common;
 
-#[allow(dead_code)]
-mod refs {
-    include!("data/wide_q64_refs.rs");
+macro_rules! shared_items {
+    ($S:ty, $F:literal) => {
+            type FixedPoint = Fixed<$S, $F>;
+            const FRAC_BITS: u32 = $F;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            use g_math::fixed_point::{Fixed, OverflowDetected};
+            use g_math::fixed_point::imperative::fused;
+            use g_math::wide;
+            use g_math::fixed_point::domains::binary_fixed::transcendental::{exp_tier_n_plus_1::exp_q64_64_native, ln_tier_n_plus_1::ln_q64_64_native};
+
+            #[allow(dead_code)]
+            mod refs {
+                #[allow(unused_imports)]
+                use super::{BITS, FRAC_BITS, FixedPoint};
+                include!("data/wide_q64_refs.rs");
+            }
+
+
+            // ============================================================================
+            // Measured error bounds (Q64.64 units), from the reference sweep below
+            // ============================================================================
+
+            // The engines are profile-independent, so every profile measures the same.
+            const EXP_MAX_REL_UNITS: i128 = 4;
+            const LN_MAX_UNITS: i128 = 55;
+            const EXP_LN_MAX_REL_UNITS: i128 = 33;
+            const SINCOS_MAX_UNITS: [(&str, i128); 5] = [
+                ("SINCOS_0_2PI", 3),
+                ("SINCOS_2PI_2P12", 1390),
+                ("SINCOS_2P12_2P20", 357205),
+                ("SINCOS_2P20_2P32", 1436006462),
+                ("SINCOS_2P32_2P62", 1537439059212478773),
+            ];
+
+            /// A raw from a hexadecimal magnitude and a sign, on any word (the
+            /// word's minimum keeps its two's complement pattern).
+            fn raw_from(negative: bool, hex: &str) -> FixedPoint {
+                let mut be = vec![0u8; (BITS / 8) as usize];
+                let digits: Vec<u8> = hex.trim_start_matches("0x").bytes().collect();
+                let mut nibbles = digits.iter().rev().map(|d| (*d as char).to_digit(16).expect("hex digit") as u8);
+                for i in (0..be.len()).rev() {
+                    let lo = nibbles.next().unwrap_or(0);
+                    let hi = nibbles.next().unwrap_or(0);
+                    be[i] = (hi << 4) | lo;
+                }
+                let m = <$S as g_math::fixed_point::Storage>::from_be_slice(&be);
+                FixedPoint::from_raw(if negative { <$S as g_math::fixed_point::WideInt>::checked_neg_wide(m).unwrap_or(m) } else { m })
+            }
+
+            /// sin/cos error grows with |x|: range reduction subtracts k * PI_HALF_Q64,
+            /// which is 0.537 units below pi/2, so the reduced angle drifts by
+            /// 0.537 / (pi/2) = 0.342 units per radian. Per-case bound 4 + 0.35 |x|.
+            fn sincos_bound(x: i128) -> i128 {
+                4 + (x.unsigned_abs() >> 64) as i128 * 35 / 100
+            }
+
+            fn sincos_band(name: &str) -> &'static [(i128, i128, i128)] {
+                match name {
+                    "SINCOS_0_2PI" => refs::SINCOS_0_2PI,
+                    "SINCOS_2PI_2P12" => refs::SINCOS_2PI_2P12,
+                    "SINCOS_2P12_2P20" => refs::SINCOS_2P12_2P20,
+                    "SINCOS_2P20_2P32" => refs::SINCOS_2P20_2P32,
+                    _ => refs::SINCOS_2P32_2P62,
+                }
+            }
+
+            // ============================================================================
+            // Constants
+            // ============================================================================
+
+            /// |got - want| relative to max(1, |want|): in units of 2^-64 of the result.
+            fn rel_units(got: i128, want: i128) -> i128 {
+                let diff = (got - want).abs();
+                let scale = (want.abs() >> 64).max(1);
+                diff / scale
+            }
+            /// Fraction bits of this build (FRAC_BITS on realtime).
+            fn frac_bits() -> u32 {
+                // the build's split (halving one with from_int(2) fails where 2 is out of
+                // range, at GMATH_FRAC_BITS = 30)
+                FRAC_BITS
+            }
+            fn storage_literals() -> Option<&'static [refs::Storage]> {
+                if BITS == 32 { Some(refs::REALTIME_LITERALS) } else if BITS == 64 { Some(refs::COMPACT_LITERALS) } else if BITS == 128 { Some(refs::EMBEDDED_LITERALS) } else if BITS == 256 { Some(refs::BALANCED_LITERALS) } else { Some(refs::SCIENTIFIC_LITERALS) }
+            }
+            #[allow(dead_code)]
+            fn round_q64_to_storage(x: i128) -> i128 {
+                let shift = 64 - frac_bits();
+                (x + (1i128 << (shift - 1))) >> shift
+            }
+            /// References and the measured worst error in storage ulp: the realtime
+            /// compute tier (2F bits) resolves sqrt of a tiny argument coarsely.
+            /// Error bound in storage units for 1/sqrt(eps_c) on realtime: the compute
+            /// tier's sqrt of eps_c is within 2^(-2F-1), which 1/sqrt propagates to at
+            /// most 2^(F-1) / eps_raw storage units (eps_raw = eps_c at the compute tier),
+            /// plus one for the final rounding. Measured: 17 units at F = 10 (bound 53),
+            /// 0 and 5 at F = 16 (bounds 2 and 9).
+            #[allow(dead_code)]
+            fn realtime_rms_bound(eps_q64: i128) -> u32 {
+                // the 32-bit word only (2F < 64); saturating so the wide instances compile
+                let f = FRAC_BITS;
+                let shift = 64u32.saturating_sub(2 * f).max(1);
+                let eps_raw = ((eps_q64 >> shift) + ((eps_q64 >> (shift - 1)) & 1)).max(1);
+                ((1i128 << (f.min(63) - 1)) / eps_raw + 2) as u32
+            }
+            fn rms_zero_refs() -> Option<(&'static [(&'static str, &'static str)], u32)> {
+                // realtime: bounded per epsilon, see realtime_rms_bound
+                if BITS == 32 { Some((refs::REALTIME_RMS_ZERO, 0)) } else if BITS == 64 { Some((refs::COMPACT_RMS_ZERO, 0)) } else if BITS == 128 { Some((refs::EMBEDDED_RMS_ZERO, 0)) } else if BITS == 256 { Some((refs::BALANCED_RMS_ZERO, 0)) } else { Some((refs::SCIENTIFIC_RMS_ZERO, 0)) }
+            }
+    };
 }
 
-#[cfg(table_format = "q128_128")]
-use g_math::fixed_point::domains::binary_fixed::i256::I256;
-#[cfg(table_format = "q256_256")]
-use g_math::fixed_point::domains::binary_fixed::i512::I512;
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
+            #[test]
+            fn constants_are_independently_truncated() {
+                // floor(c * 2^f) at 120 digits (mpmath)
+                assert_eq!(wide::PI_Q64, 57952155664616982739);
+                assert_eq!(wide::TWO_PI_Q64, 115904311329233965478);
+                assert_eq!(wide::PI_HALF_Q64, 28976077832308491369);
+                assert_eq!(wide::PI_Q32, 13493037704);
+                assert_eq!(wide::TWO_PI_Q32, 26986075409);
+                assert_eq!(wide::ONE_Q64, 1i128 << 64);
+                assert_eq!(wide::TWO_PI_Q64, 2 * wide::PI_Q64);
+                assert_eq!(wide::TWO_PI_Q64, 4 * wide::PI_HALF_Q64 + 2);
+            }
 
-// ============================================================================
-// Measured error bounds (Q64.64 units), from the reference sweep below
-// ============================================================================
+            // ============================================================================
+            // Transcendentals: identity with the 0.6.3 paths, exact points, accuracy
+            // ============================================================================
 
-// The engines are profile-independent, so every profile measures the same.
-const EXP_MAX_REL_UNITS: i128 = 4;
-const LN_MAX_UNITS: i128 = 55;
-const EXP_LN_MAX_REL_UNITS: i128 = 33;
-const SINCOS_MAX_UNITS: [(&str, i128); 5] = [
-    ("SINCOS_0_2PI", 3),
-    ("SINCOS_2PI_2P12", 1390),
-    ("SINCOS_2P12_2P20", 357205),
-    ("SINCOS_2P20_2P32", 1436006462),
-    ("SINCOS_2P32_2P62", 1537439059212478773),
-];
+            #[test]
+            fn wide_matches_the_native_engines_bit_for_bit() {
+                for &(x, _) in refs::EXP {
+                    assert_eq!(wide::exp_q64(x), exp_q64_64_native(x), "exp {x}");
+                }
+                for &(x, _) in refs::LN {
+                    assert_eq!(wide::ln_q64(x), Some(ln_q64_64_native(x)), "ln {x}");
+                }
+                for &(name, _) in SINCOS_MAX_UNITS.iter() {
+                    for &(x, _, _) in sincos_band(name) {
+                        assert_eq!(wide::sincos_q64(x), (wide::sin_q64(x), wide::cos_q64(x)), "sincos {x}");
+                    }
+                }
+                // the 0.6.3 compute-tier wrappers on the profiles whose compute tier is Q64.64
+                if (BITS == 32 || BITS == 64) {
+                    // the 0.6.x `*_binary_i128` routing of these profiles, by name since 0.7.0
+                    use g_math::fixed_point::domains::binary_fixed::transcendental::{
+                        exp_tier_n_plus_1::exp_q64_64_native,
+                        ln_tier_n_plus_1::ln_q64_64_native,
+                        sin_cos_tier_n_plus_1::{cos_q64_64, sin_q64_64},
+                    };
+                    fn exp_binary_i128(x: i128) -> i128 { exp_q64_64_native(x) }
+                    fn ln_binary_i128(x: i128) -> i128 { if x <= 0 { i128::MIN } else { ln_q64_64_native(x) } }
+                    fn sin_binary_i128(x: i128) -> i128 { sin_q64_64(x) }
+                    fn cos_binary_i128(x: i128) -> i128 { cos_q64_64(x) }
+                    for &(x, _) in refs::EXP { assert_eq!(wide::exp_q64(x), exp_binary_i128(x)); }
+                    for &(x, _) in refs::LN { assert_eq!(wide::ln_q64(x), Some(ln_binary_i128(x))); }
+                    for &(name, _) in SINCOS_MAX_UNITS.iter() {
+                        for &(x, _, _) in sincos_band(name) {
+                            assert_eq!(wide::sincos_q64(x), (sin_binary_i128(x), cos_binary_i128(x)));
+                        }
+                    }
+                }
+            }
 
-/// sin/cos error grows with |x|: range reduction subtracts k * PI_HALF_Q64,
-/// which is 0.537 units below pi/2, so the reduced angle drifts by
-/// 0.537 / (pi/2) = 0.342 units per radian. Per-case bound 4 + 0.35 |x|.
-fn sincos_bound(x: i128) -> i128 {
-    4 + (x.unsigned_abs() >> 64) as i128 * 35 / 100
-}
+            #[test]
+            fn exact_points_and_domain_edges() {
+                let one = wide::ONE_Q64;
+                assert_eq!(wide::exp_q64(0), one);
+                assert_eq!(wide::ln_q64(one), Some(0));
+                assert_eq!(wide::sincos_q64(0), (0, one));
+                assert_eq!(wide::ln_q64(0), None);
+                assert_eq!(wide::ln_q64(-1), None);
+                assert_eq!(wide::ln_q64(i128::MIN), None);
+                assert_eq!(wide::exp_q64(41 * one), i128::MAX);
+                assert_eq!(wide::exp_q64(i128::MAX), i128::MAX);
+                assert_eq!(wide::exp_q64(-40 * one - 1), 0);
+                assert_eq!(wide::exp_q64(i128::MIN), 0);
+                assert!(wide::exp_q64(41 * one - 1) < i128::MAX);
+            }
 
-fn sincos_band(name: &str) -> &'static [(i128, i128, i128)] {
-    match name {
-        "SINCOS_0_2PI" => refs::SINCOS_0_2PI,
-        "SINCOS_2PI_2P12" => refs::SINCOS_2PI_2P12,
-        "SINCOS_2P12_2P20" => refs::SINCOS_2P12_2P20,
-        "SINCOS_2P20_2P32" => refs::SINCOS_2P20_2P32,
-        _ => refs::SINCOS_2P32_2P62,
-    }
-}
+            #[test]
+            fn exp_ln_round_trip() {
+                // exp(ln x) for x in [2^40, 2^100], relative to x in units of 2^-64
+                let mut worst = 0i128;
+                for &(x, _) in refs::LN {
+                    if x < (1i128 << 40) || x > (1i128 << 100) { continue; }
+                    let y = wide::exp_q64(wide::ln_q64(x).unwrap());
+                    worst = worst.max(rel_units(y, x));
+                }
+                println!("exp(ln x) worst relative error: {worst} units of 2^-64");
+                assert!(worst <= EXP_LN_MAX_REL_UNITS, "{worst}");
+            }
 
-// ============================================================================
-// Constants
-// ============================================================================
 
-#[test]
-fn constants_are_independently_truncated() {
-    // floor(c * 2^f) at 120 digits (mpmath)
-    assert_eq!(wide::PI_Q64, 57952155664616982739);
-    assert_eq!(wide::TWO_PI_Q64, 115904311329233965478);
-    assert_eq!(wide::PI_HALF_Q64, 28976077832308491369);
-    assert_eq!(wide::PI_Q32, 13493037704);
-    assert_eq!(wide::TWO_PI_Q32, 26986075409);
-    assert_eq!(wide::ONE_Q64, 1i128 << 64);
-    assert_eq!(wide::TWO_PI_Q64, 2 * wide::PI_Q64);
-    assert_eq!(wide::TWO_PI_Q64, 4 * wide::PI_HALF_Q64 + 2);
-}
+            #[test]
+            fn accuracy_against_mpmath() {
+                let exp_worst = refs::EXP.iter().map(|&(x, r)| rel_units(wide::exp_q64(x), r)).max().unwrap();
+                let ln_worst = refs::LN.iter().map(|&(x, r)| (wide::ln_q64(x).unwrap() - r).abs()).max().unwrap();
+                println!("exp: {} cases, worst {exp_worst} relative units of 2^-64", refs::EXP.len());
+                println!("ln:  {} cases, worst {ln_worst} units of 2^-64", refs::LN.len());
+                let mut failures = Vec::new();
+                for &(name, bound) in SINCOS_MAX_UNITS.iter() {
+                    let band = sincos_band(name);
+                    let worst = band.iter().map(|&(x, s, c)| {
+                        let (gs, gc) = wide::sincos_q64(x);
+                        (gs - s).abs().max((gc - c).abs())
+                    }).max().unwrap();
+                    println!("{name}: {} cases, worst {worst} units of 2^-64", band.len());
+                    if worst > bound { failures.push((name, worst, bound)); }
+                    for &(x, s, c) in band {
+                        let (gs, gc) = wide::sincos_q64(x);
+                        let err = (gs - s).abs().max((gc - c).abs());
+                        if err > sincos_bound(x) { failures.push((name, err, sincos_bound(x))); }
+                    }
+                }
+                assert!(exp_worst <= EXP_MAX_REL_UNITS, "exp {exp_worst}");
+                assert!(ln_worst <= LN_MAX_UNITS, "ln {ln_worst}");
+                assert!(failures.is_empty(), "{failures:?}");
+            }
 
-// ============================================================================
-// Transcendentals: identity with the 0.6.3 paths, exact points, accuracy
-// ============================================================================
+            // ============================================================================
+            // Decimal literals
+            // ============================================================================
 
-#[test]
-fn wide_matches_the_native_engines_bit_for_bit() {
-    for &(x, _) in refs::EXP {
-        assert_eq!(wide::exp_q64(x), exp_q64_64_native(x), "exp {x}");
-    }
-    for &(x, _) in refs::LN {
-        assert_eq!(wide::ln_q64(x), Some(ln_q64_64_native(x)), "ln {x}");
-    }
-    for &(name, _) in SINCOS_MAX_UNITS.iter() {
-        for &(x, _, _) in sincos_band(name) {
-            assert_eq!(wide::sincos_q64(x), (wide::sin_q64(x), wide::cos_q64(x)), "sincos {x}");
-        }
-    }
-    // the 0.6.3 compute-tier wrappers on the profiles whose compute tier is Q64.64
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    {
-        // the 0.6.x `*_binary_i128` routing of these profiles, by name since 0.7.0
-        use g_math::fixed_point::domains::binary_fixed::transcendental::{
-            exp_tier_n_plus_1::exp_q64_64_native,
-            ln_tier_n_plus_1::ln_q64_64_native,
-            sin_cos_tier_n_plus_1::{cos_q64_64, sin_q64_64},
-        };
-        fn exp_binary_i128(x: i128) -> i128 { exp_q64_64_native(x) }
-        fn ln_binary_i128(x: i128) -> i128 { if x <= 0 { i128::MIN } else { ln_q64_64_native(x) } }
-        fn sin_binary_i128(x: i128) -> i128 { sin_q64_64(x) }
-        fn cos_binary_i128(x: i128) -> i128 { cos_q64_64(x) }
-        for &(x, _) in refs::EXP { assert_eq!(wide::exp_q64(x), exp_binary_i128(x)); }
-        for &(x, _) in refs::LN { assert_eq!(wide::ln_q64(x), Some(ln_binary_i128(x))); }
-        for &(name, _) in SINCOS_MAX_UNITS.iter() {
-            for &(x, _, _) in sincos_band(name) {
-                assert_eq!(wide::sincos_q64(x), (sin_binary_i128(x), cos_binary_i128(x)));
+            #[test]
+            fn wide_literals_match_exact_rational_rounding() {
+                let mut mismatches = Vec::new();
+                for &(s, f, want) in refs::LITERALS_WIDE {
+                    let got = wide::try_from_str(s, f);
+                    let ok = match want {
+                        Some(r) => got == Ok(r),
+                        None => got == Err(OverflowDetected::TierOverflow),
+                    };
+                    if !ok { mismatches.push((s, f, got, want)); }
+                }
+                assert!(mismatches.is_empty(), "{} of {}: {:?}", mismatches.len(), refs::LITERALS_WIDE.len(),
+                    &mismatches[..mismatches.len().min(10)]);
+            }
+
+            #[test]
+            fn wide_literal_pins_and_errors() {
+                assert_eq!(wide::try_from_str("1e-06", 20), Ok(1));
+                assert_eq!(wide::try_from_str("1e-05", 64), Ok(refs::EPS_1E_M5_Q64));
+                assert_eq!(refs::EPS_1E_M5_Q64, 184467440737096); // 184467440737095.516 to nearest
+                assert_eq!(wide::try_from_str("6.283185307179586476925286766559", 64), Ok(wide::TWO_PI_Q64));
+                assert_eq!(wide::try_from_str("0.25", 10), Ok(256));
+                assert_eq!(wide::try_from_str("1000000.0", 0), Ok(1_000_000));
+                for bad in ["", "abc", "1.2.3", ".", "-", "e5", "1e", "1e+", "1 2", "0x10", "1/3", "pi", "--1"] {
+                    assert_eq!(wide::try_from_str(bad, 64), Err(OverflowDetected::ParseError), "{bad:?}");
+                }
+                assert_eq!(wide::try_from_str("1e400", 64), Err(OverflowDetected::TierOverflow));
+                assert_eq!(wide::try_from_str("1e-400", 64), Ok(0));
+                assert_eq!(wide::try_from_str("1", 128), Err(OverflowDetected::InvalidInput));
+                // i128::MIN is reachable, one tie beyond it rounds toward +inf back onto it
+                assert_eq!(wide::try_from_str("-170141183460469231731687303715884105728", 0), Ok(i128::MIN));
+                assert_eq!(wide::try_from_str("-170141183460469231731687303715884105728.5", 0), Ok(i128::MIN));
+                assert_eq!(wide::try_from_str("-170141183460469231731687303715884105728.50001", 0),
+                    Err(OverflowDetected::TierOverflow));
+                assert_eq!(wide::try_from_str("170141183460469231731687303715884105727.5", 0),
+                    Err(OverflowDetected::TierOverflow));
+            }
+
+
+
+
+
+
+
+            #[test]
+            fn storage_literals_match_exact_rational_rounding() {
+                let Some(cases) = storage_literals() else { return };
+                let mut mismatches = Vec::new();
+                for &(s, want) in cases {
+                    let got = FixedPoint::try_from_str(s);
+                    let ok = match want {
+                        Some((negative, hex)) => got == Ok(raw_from(negative, hex)),
+                        None => got == Err(OverflowDetected::TierOverflow),
+                    };
+                    if !ok { mismatches.push((s, got, want)); }
+                }
+                assert!(mismatches.is_empty(), "{} of {}: {:?}", mismatches.len(), cases.len(),
+                    &mismatches[..mismatches.len().min(10)]);
+            }
+
+            #[test]
+            fn from_str_keeps_the_canonical_grammar() {
+                // outside the decimal grammar: the canonical evaluator, as before 0.6.4
+                let half = FixedPoint::from_str("0.5");
+                assert_eq!(FixedPoint::from_str("1/2"), half);
+                // still parsed (a value beyond a narrow split's range is TierOverflow,
+                // never a ParseError)
+                for other in ["0x10", "0b101", "pi", "0.3..."] {
+                    assert_ne!(FixedPoint::try_from_str(other).err(), Some(OverflowDetected::ParseError), "{other:?}");
+                }
+                for bad in ["", "abc", "1.2.3", "1e", "--1"] {
+                    assert!(FixedPoint::try_from_str(bad).is_err(), "{bad:?}");
+                }
+                // exponent notation (panicked before 0.6.4)
+                if let Ok(fifteen) = FixedPoint::try_from_int(15) {
+                    assert_eq!(FixedPoint::from_str("1.5e1"), fifteen);
+                }
+                assert_eq!(FixedPoint::from_str("25e-2"), FixedPoint::from_str("0.25"));
+            }
+
+            // ============================================================================
+            // sincos_wide_q64
+            // ============================================================================
+
+
+            // ============================================================================
+            // rms_norm_factor_eps_wide
+            // ============================================================================
+
+
+
+            #[test]
+            fn rms_norm_eps_wide_on_an_all_zero_vector() {
+                let zeros = vec![FixedPoint::ZERO; 64];
+                let unit = raw_from(false, "1");
+                let Some((refs, max_ulp)) = rms_zero_refs() else { return };
+                for (eps, eps_q64) in [("1e-5", refs::EPS_1E_M5_Q64), ("1e-6", refs::EPS_1E_M6_Q64)] {
+                    let want = refs.iter().find(|r| r.0 == eps).unwrap().1;
+                    let got = fused::rms_norm_factor_eps_wide(&zeros, eps_q64);
+                    // the epsilon rounds to zero at the compute tier of a coarse split
+                    if want == "DivisionByZero" {
+                        assert_eq!(got, Err(OverflowDetected::DivisionByZero), "{eps}");
+                        continue;
+                    }
+                    // 1/sqrt(eps) beyond the storage range of a coarse split
+                    let Ok(want) = FixedPoint::try_from_str(want) else {
+                        assert_eq!(got, Err(OverflowDetected::TierOverflow), "{eps}");
+                        continue;
+                    };
+                    let got = got.expect("eps at compute tier");
+                    let mut ulps = 0;
+                    let mut w = want;
+                    while w != got && ulps < 1_000_000 {
+                        w = if got > w { w + unit } else { w - unit };
+                        ulps += 1;
+                    }
+                    let max_ulp = if BITS == 32 { realtime_rms_bound(eps_q64).max(max_ulp) } else { max_ulp };
+                    println!("rms_norm_factor_eps_wide(0, {eps}) = {got}, reference {want}, {ulps} ulp (bound {max_ulp})");
+                    assert!(ulps <= max_ulp, "{ulps}");
+                }
+            }
+
+            #[test]
+            fn rms_norm_eps_wide_is_invisible_on_the_healthy_path() {
+                // values in [1/8, 7/8]: they fit every split, including +-2 at 30 bits
+                // 8 values at 28+ fraction bits, where the compute tier holds only +-8
+                // (48 squares would exceed it: a correct TierOverflow)
+                let n = if FRAC_BITS >= 28 { 8 } else { 48 };
+                let values: Vec<FixedPoint> = (1..=n).map(|k| FixedPoint::from_str(["0.125", "0.25", "0.375", "0.5", "0.625", "0.75", "0.875"][k % 7])).collect();
+                let neg: Vec<FixedPoint> = values.iter().map(|&v| -v).collect();
+                for v in [&values, &neg] {
+                    let base = fused::rms_norm_factor(v, FixedPoint::ZERO).unwrap();
+                    assert_eq!(fused::rms_norm_factor_eps_wide(v, 0).unwrap(), base);
+                    // on realtime (compute tier 2F < 64 bits) an epsilon below half a
+                    // compute-tier unit rounds to zero; wider tiers hold 2^-64 exactly
+                    if 2 * frac_bits() < 64 {
+                        let below_half_unit = (1i128 << (63 - 2 * frac_bits())) - 1;
+                        assert_eq!(fused::rms_norm_factor_eps_wide(v, below_half_unit).unwrap(), base);
+                    }
+                    // a storage epsilon passed in Q64.64 is the same epsilon
+                    let eps = raw_from(false, "3");
+                    let eps_q64 = 3i128 << (64 - frac_bits().min(64));
+                    if frac_bits() <= 64 {
+                        assert_eq!(fused::rms_norm_factor_eps_wide(v, eps_q64).unwrap(),
+                            fused::rms_norm_factor(v, eps).unwrap());
+                    }
+                }
+                assert_eq!(fused::rms_norm_factor_eps_wide(&[] as &[FixedPoint], 1), Err(OverflowDetected::DivisionByZero));
+            }
+
+            #[test]
+            fn canonical_parser_rounds_literals_like_the_exact_parser() {
+                // The canonical evaluator in binary mode, on the same exact-rational
+                // references (constructed ties, ties +- 10^-(F+10), range edges). Before
+                // 0.6.4 it truncated literals past 38 digits and wrapped value * 10^dp
+                // into i32 decimal storage on realtime.
+                use g_math::canonical::{evaluate_in, gmath_parse_in, reset_gmath_mode, set_gmath_mode};
+                let Some(cases) = storage_literals() else { return };
+                set_gmath_mode("binary:binary").unwrap();
+                let mut mismatches = Vec::new();
+                for &(s, want) in cases {
+                    // the canonical grammar has no exponent notation or leading '+'/'.'
+                    let t = s.trim();
+                    if t.contains(['e', 'E', '+']) || t.starts_with('.') || t.starts_with("-.") || t.ends_with('.') { continue; }
+                    let got = gmath_parse_in::<FixedPoint>(t).and_then(|e| evaluate_in(&e)).map(|v| v.as_binary_storage());
+                    let ok = match (want, &got) {
+                        (Some((negative, hex)), Ok(Some(raw))) => FixedPoint::from_raw(*raw) == raw_from(negative, hex),
+                        (None, Err(_)) => true,
+                        _ => false,
+                    };
+                    if !ok { mismatches.push((s, format!("{got:?}"), want)); }
+                }
+                reset_gmath_mode();
+                assert!(mismatches.is_empty(), "{} of {}: {:?}", mismatches.len(), cases.len(),
+                    &mismatches[..mismatches.len().min(5)]);
             }
         }
-    }
+    };
 }
 
-#[test]
-fn exact_points_and_domain_edges() {
-    let one = wide::ONE_Q64;
-    assert_eq!(wide::exp_q64(0), one);
-    assert_eq!(wide::ln_q64(one), Some(0));
-    assert_eq!(wide::sincos_q64(0), (0, one));
-    assert_eq!(wide::ln_q64(0), None);
-    assert_eq!(wide::ln_q64(-1), None);
-    assert_eq!(wide::ln_q64(i128::MIN), None);
-    assert_eq!(wide::exp_q64(41 * one), i128::MAX);
-    assert_eq!(wide::exp_q64(i128::MAX), i128::MAX);
-    assert_eq!(wide::exp_q64(-40 * one - 1), 0);
-    assert_eq!(wide::exp_q64(i128::MIN), 0);
-    assert!(wide::exp_q64(41 * one - 1) < i128::MAX);
-}
+// The part of the suite written for a subset of the words.
+macro_rules! narrow_suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
+            #[test]
+            fn sincos_wide_q64_extends_sincos_wide() {
+                // a deterministic LCG over i64 angles, plus edges
+                let mut a: i64 = 0x2545_F491_4F6C_DD1D;
+                let mut angles = vec![0i64, 1, -1, i64::MAX, i64::MIN, wide::TWO_PI_Q32, -wide::PI_Q32];
+                for _ in 0..200_000 {
+                    a = a.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    angles.push(a >> (a as u64 % 40));
+                }
+                for &a in &angles {
+                    assert_eq!(FixedPoint::sincos_wide_q64((a as i128) << 32), FixedPoint::sincos_wide(a), "{a}");
+                }
+                let one = FixedPoint::one();
+                let unit = raw_from(false, "1");
+                let near = |x: FixedPoint, y: FixedPoint| (x - y).abs() <= unit;
+                let (s, c) = FixedPoint::sincos_wide_q64(wide::TWO_PI_Q64);
+                assert!(near(s, FixedPoint::ZERO) && near(c, one), "{s} {c}");
+                let (s, c) = FixedPoint::sincos_wide_q64(wide::PI_HALF_Q64);
+                assert!(near(s, one) && near(c, FixedPoint::ZERO), "{s} {c}");
 
-#[test]
-fn exp_ln_round_trip() {
-    // exp(ln x) for x in [2^40, 2^100], relative to x in units of 2^-64
-    let mut worst = 0i128;
-    for &(x, _) in refs::LN {
-        if x < (1i128 << 40) || x > (1i128 << 100) { continue; }
-        let y = wide::exp_q64(wide::ln_q64(x).unwrap());
-        worst = worst.max(rel_units(y, x));
-    }
-    println!("exp(ln x) worst relative error: {worst} units of 2^-64");
-    assert!(worst <= EXP_LN_MAX_REL_UNITS, "{worst}");
-}
-
-/// |got - want| relative to max(1, |want|): in units of 2^-64 of the result.
-fn rel_units(got: i128, want: i128) -> i128 {
-    let diff = (got - want).abs();
-    let scale = (want.abs() >> 64).max(1);
-    diff / scale
-}
-
-#[test]
-fn accuracy_against_mpmath() {
-    let exp_worst = refs::EXP.iter().map(|&(x, r)| rel_units(wide::exp_q64(x), r)).max().unwrap();
-    let ln_worst = refs::LN.iter().map(|&(x, r)| (wide::ln_q64(x).unwrap() - r).abs()).max().unwrap();
-    println!("exp: {} cases, worst {exp_worst} relative units of 2^-64", refs::EXP.len());
-    println!("ln:  {} cases, worst {ln_worst} units of 2^-64", refs::LN.len());
-    let mut failures = Vec::new();
-    for &(name, bound) in SINCOS_MAX_UNITS.iter() {
-        let band = sincos_band(name);
-        let worst = band.iter().map(|&(x, s, c)| {
-            let (gs, gc) = wide::sincos_q64(x);
-            (gs - s).abs().max((gc - c).abs())
-        }).max().unwrap();
-        println!("{name}: {} cases, worst {worst} units of 2^-64", band.len());
-        if worst > bound { failures.push((name, worst, bound)); }
-        for &(x, s, c) in band {
-            let (gs, gc) = wide::sincos_q64(x);
-            let err = (gs - s).abs().max((gc - c).abs());
-            if err > sincos_bound(x) { failures.push((name, err, sincos_bound(x))); }
+                // the documented RoPE example
+                let (theta, i, d, position) = (10_000i128, 3i128, 64i128, 4_095i128);
+                let ln_theta = wide::ln_q64(theta << 64).unwrap();
+                let inv_freq = wide::exp_q64(-(2 * i * ln_theta) / d);
+                let (s, c) = FixedPoint::sincos_wide_q64(inv_freq * position);
+                let (ws, wc) = wide::sincos_q64(inv_freq * position);
+                assert!(near(s, raw_from(ws < 0, &format!("{:x}", round_q64_to_storage(ws.abs()))))
+                    && near(c, raw_from(wc < 0, &format!("{:x}", round_q64_to_storage(wc.abs())))));
+            }
         }
-    }
-    assert!(exp_worst <= EXP_MAX_REL_UNITS, "exp {exp_worst}");
-    assert!(ln_worst <= LN_MAX_UNITS, "ln {ln_worst}");
-    assert!(failures.is_empty(), "{failures:?}");
+    };
 }
 
-// ============================================================================
-// Decimal literals
-// ============================================================================
+for_each_format!(suite);
+narrow_suite!(narrow_suite_q22_10, i32, 10);
+narrow_suite!(narrow_suite_q16_16, i32, 16);
+narrow_suite!(narrow_suite_q32_32, i64, 32);
 
-#[test]
-fn wide_literals_match_exact_rational_rounding() {
-    let mut mismatches = Vec::new();
-    for &(s, f, want) in refs::LITERALS_WIDE {
-        let got = wide::try_from_str(s, f);
-        let ok = match want {
-            Some(r) => got == Ok(r),
-            None => got == Err(OverflowDetected::TierOverflow),
-        };
-        if !ok { mismatches.push((s, f, got, want)); }
-    }
-    assert!(mismatches.is_empty(), "{} of {}: {:?}", mismatches.len(), refs::LITERALS_WIDE.len(),
-        &mismatches[..mismatches.len().min(10)]);
-}
-
-#[test]
-fn wide_literal_pins_and_errors() {
-    assert_eq!(wide::try_from_str("1e-06", 20), Ok(1));
-    assert_eq!(wide::try_from_str("1e-05", 64), Ok(refs::EPS_1E_M5_Q64));
-    assert_eq!(refs::EPS_1E_M5_Q64, 184467440737096); // 184467440737095.516 to nearest
-    assert_eq!(wide::try_from_str("6.283185307179586476925286766559", 64), Ok(wide::TWO_PI_Q64));
-    assert_eq!(wide::try_from_str("0.25", 10), Ok(256));
-    assert_eq!(wide::try_from_str("1000000.0", 0), Ok(1_000_000));
-    for bad in ["", "abc", "1.2.3", ".", "-", "e5", "1e", "1e+", "1 2", "0x10", "1/3", "pi", "--1"] {
-        assert_eq!(wide::try_from_str(bad, 64), Err(OverflowDetected::ParseError), "{bad:?}");
-    }
-    assert_eq!(wide::try_from_str("1e400", 64), Err(OverflowDetected::TierOverflow));
-    assert_eq!(wide::try_from_str("1e-400", 64), Ok(0));
-    assert_eq!(wide::try_from_str("1", 128), Err(OverflowDetected::InvalidInput));
-    // i128::MIN is reachable, one tie beyond it rounds toward +inf back onto it
-    assert_eq!(wide::try_from_str("-170141183460469231731687303715884105728", 0), Ok(i128::MIN));
-    assert_eq!(wide::try_from_str("-170141183460469231731687303715884105728.5", 0), Ok(i128::MIN));
-    assert_eq!(wide::try_from_str("-170141183460469231731687303715884105728.50001", 0),
-        Err(OverflowDetected::TierOverflow));
-    assert_eq!(wide::try_from_str("170141183460469231731687303715884105727.5", 0),
-        Err(OverflowDetected::TierOverflow));
-}
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn raw_from(negative: bool, hex: &str) -> FixedPoint {
-    let magnitude = u128::from_str_radix(hex, 16).unwrap();
-    let value = if negative { (magnitude as i128).wrapping_neg() } else { magnitude as i128 };
-    FixedPoint::from_raw(value as _)
-}
-
-#[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-fn hex_words<const N: usize>(hex: &str) -> [u64; N] {
-    let mut words = [0u64; N];
-    for (i, chunk) in hex.as_bytes().rchunks(16).enumerate() {
-        words[i] = u64::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
-    }
-    words
-}
-
-#[cfg(table_format = "q128_128")]
-fn raw_from(negative: bool, hex: &str) -> FixedPoint {
-    let magnitude = I256 { words: hex_words::<4>(hex) };
-    FixedPoint::from_raw(if negative { -magnitude } else { magnitude })
-}
-
-#[cfg(table_format = "q256_256")]
-fn raw_from(negative: bool, hex: &str) -> FixedPoint {
-    let magnitude = I512 { words: hex_words::<8>(hex) };
-    FixedPoint::from_raw(if negative { -magnitude } else { magnitude })
-}
-
-/// Fraction bits of this build (FRAC_BITS on realtime).
-fn frac_bits() -> u32 {
-    // the build's split (halving one with from_int(2) fails where 2 is out of
-    // range, at GMATH_FRAC_BITS = 30)
-    g_math::fixed_point::frac_config::FRAC_BITS
-}
-
-fn storage_literals() -> Option<&'static [refs::Storage]> {
-    #[cfg(table_format = "q16_16")]
-    { Some(refs::REALTIME_LITERALS) }
-    #[cfg(table_format = "q32_32")]
-    { Some(refs::COMPACT_LITERALS) }
-    #[cfg(table_format = "q64_64")]
-    { Some(refs::EMBEDDED_LITERALS) }
-    #[cfg(table_format = "q128_128")]
-    { Some(refs::BALANCED_LITERALS) }
-    #[cfg(table_format = "q256_256")]
-    { Some(refs::SCIENTIFIC_LITERALS) }
-}
-
-#[test]
-fn storage_literals_match_exact_rational_rounding() {
-    let Some(cases) = storage_literals() else { return };
-    let mut mismatches = Vec::new();
-    for &(s, want) in cases {
-        let got = FixedPoint::try_from_str(s);
-        let ok = match want {
-            Some((negative, hex)) => got == Ok(raw_from(negative, hex)),
-            None => got == Err(OverflowDetected::TierOverflow),
-        };
-        if !ok { mismatches.push((s, got, want)); }
-    }
-    assert!(mismatches.is_empty(), "{} of {}: {:?}", mismatches.len(), cases.len(),
-        &mismatches[..mismatches.len().min(10)]);
-}
-
-#[test]
-fn from_str_keeps_the_canonical_grammar() {
-    // outside the decimal grammar: the canonical evaluator, as before 0.6.4
-    let half = FixedPoint::from_str("0.5");
-    assert_eq!(FixedPoint::from_str("1/2"), half);
-    // still parsed (a value beyond a narrow split's range is TierOverflow,
-    // never a ParseError)
-    for other in ["0x10", "0b101", "pi", "0.3..."] {
-        assert_ne!(FixedPoint::try_from_str(other).err(), Some(OverflowDetected::ParseError), "{other:?}");
-    }
-    for bad in ["", "abc", "1.2.3", "1e", "--1"] {
-        assert!(FixedPoint::try_from_str(bad).is_err(), "{bad:?}");
-    }
-    // exponent notation (panicked before 0.6.4)
-    if let Ok(fifteen) = FixedPoint::try_from_int(15) {
-        assert_eq!(FixedPoint::from_str("1.5e1"), fifteen);
-    }
-    assert_eq!(FixedPoint::from_str("25e-2"), FixedPoint::from_str("0.25"));
-}
-
-// ============================================================================
-// sincos_wide_q64
-// ============================================================================
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-#[test]
-fn sincos_wide_q64_extends_sincos_wide() {
-    // a deterministic LCG over i64 angles, plus edges
-    let mut a: i64 = 0x2545_F491_4F6C_DD1D;
-    let mut angles = vec![0i64, 1, -1, i64::MAX, i64::MIN, wide::TWO_PI_Q32, -wide::PI_Q32];
-    for _ in 0..200_000 {
-        a = a.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        angles.push(a >> (a as u64 % 40));
-    }
-    for &a in &angles {
-        assert_eq!(FixedPoint::sincos_wide_q64((a as i128) << 32), FixedPoint::sincos_wide(a), "{a}");
-    }
-    let one = FixedPoint::one();
-    let unit = raw_from(false, "1");
-    let near = |x: FixedPoint, y: FixedPoint| (x - y).abs() <= unit;
-    let (s, c) = FixedPoint::sincos_wide_q64(wide::TWO_PI_Q64);
-    assert!(near(s, FixedPoint::ZERO) && near(c, one), "{s} {c}");
-    let (s, c) = FixedPoint::sincos_wide_q64(wide::PI_HALF_Q64);
-    assert!(near(s, one) && near(c, FixedPoint::ZERO), "{s} {c}");
-
-    // the documented RoPE example
-    let (theta, i, d, position) = (10_000i128, 3i128, 64i128, 4_095i128);
-    let ln_theta = wide::ln_q64(theta << 64).unwrap();
-    let inv_freq = wide::exp_q64(-(2 * i * ln_theta) / d);
-    let (s, c) = FixedPoint::sincos_wide_q64(inv_freq * position);
-    let (ws, wc) = wide::sincos_q64(inv_freq * position);
-    assert!(near(s, raw_from(ws < 0, &format!("{:x}", round_q64_to_storage(ws.abs()))))
-        && near(c, raw_from(wc < 0, &format!("{:x}", round_q64_to_storage(wc.abs())))));
-}
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-fn round_q64_to_storage(x: i128) -> i128 {
-    let shift = 64 - frac_bits();
-    (x + (1i128 << (shift - 1))) >> shift
-}
-
-// ============================================================================
-// rms_norm_factor_eps_wide
-// ============================================================================
-
-/// References and the measured worst error in storage ulp: the realtime
-/// compute tier (2F bits) resolves sqrt of a tiny argument coarsely.
-/// Error bound in storage units for 1/sqrt(eps_c) on realtime: the compute
-/// tier's sqrt of eps_c is within 2^(-2F-1), which 1/sqrt propagates to at
-/// most 2^(F-1) / eps_raw storage units (eps_raw = eps_c at the compute tier),
-/// plus one for the final rounding. Measured: 17 units at F = 10 (bound 53),
-/// 0 and 5 at F = 16 (bounds 2 and 9).
-#[cfg(table_format = "q16_16")]
-fn realtime_rms_bound(eps_q64: i128) -> u32 {
-    let f = g_math::fixed_point::frac_config::FRAC_BITS;
-    let shift = 64 - 2 * f;
-    let eps_raw = ((eps_q64 >> shift) + ((eps_q64 >> (shift - 1)) & 1)).max(1);
-    ((1i128 << (f - 1)) / eps_raw + 2) as u32
-}
-
-fn rms_zero_refs() -> Option<(&'static [(&'static str, &'static str)], u32)> {
-    // realtime: bounded per epsilon, see realtime_rms_bound
-    #[cfg(table_format = "q16_16")]
-    { Some((refs::REALTIME_RMS_ZERO, 0)) }
-    #[cfg(table_format = "q32_32")]
-    { Some((refs::COMPACT_RMS_ZERO, 0)) }
-    #[cfg(table_format = "q64_64")]
-    { Some((refs::EMBEDDED_RMS_ZERO, 0)) }
-    #[cfg(table_format = "q128_128")]
-    { Some((refs::BALANCED_RMS_ZERO, 0)) }
-    #[cfg(table_format = "q256_256")]
-    { Some((refs::SCIENTIFIC_RMS_ZERO, 0)) }
-}
-
-#[test]
-fn rms_norm_eps_wide_on_an_all_zero_vector() {
-    let zeros = vec![FixedPoint::ZERO; 64];
-    let unit = raw_from(false, "1");
-    let Some((refs, max_ulp)) = rms_zero_refs() else { return };
-    for (eps, eps_q64) in [("1e-5", refs::EPS_1E_M5_Q64), ("1e-6", refs::EPS_1E_M6_Q64)] {
-        let want = refs.iter().find(|r| r.0 == eps).unwrap().1;
-        let got = fused::rms_norm_factor_eps_wide(&zeros, eps_q64);
-        // the epsilon rounds to zero at the compute tier of a coarse split
-        if want == "DivisionByZero" {
-            assert_eq!(got, Err(OverflowDetected::DivisionByZero), "{eps}");
-            continue;
-        }
-        // 1/sqrt(eps) beyond the storage range of a coarse split
-        let Ok(want) = FixedPoint::try_from_str(want) else {
-            assert_eq!(got, Err(OverflowDetected::TierOverflow), "{eps}");
-            continue;
-        };
-        let got = got.expect("eps at compute tier");
-        let mut ulps = 0;
-        let mut w = want;
-        while w != got && ulps < 1_000_000 {
-            w = if got > w { w + unit } else { w - unit };
-            ulps += 1;
-        }
-        #[cfg(table_format = "q16_16")]
-        let max_ulp = realtime_rms_bound(eps_q64).max(max_ulp);
-        println!("rms_norm_factor_eps_wide(0, {eps}) = {got}, reference {want}, {ulps} ulp (bound {max_ulp})");
-        assert!(ulps <= max_ulp, "{ulps}");
-    }
-}
-
-#[test]
-fn rms_norm_eps_wide_is_invisible_on_the_healthy_path() {
-    // values in [1/8, 7/8]: they fit every split, including +-2 at 30 bits
-    // 8 values at 28+ fraction bits, where the compute tier holds only +-8
-    // (48 squares would exceed it: a correct TierOverflow)
-    let n = if g_math::fixed_point::frac_config::FRAC_BITS >= 28 { 8 } else { 48 };
-    let values: Vec<FixedPoint> = (1..=n).map(|k| FixedPoint::from_str(["0.125", "0.25", "0.375", "0.5", "0.625", "0.75", "0.875"][k % 7])).collect();
-    let neg: Vec<FixedPoint> = values.iter().map(|&v| -v).collect();
-    for v in [&values, &neg] {
-        let base = fused::rms_norm_factor(v, FixedPoint::ZERO).unwrap();
-        assert_eq!(fused::rms_norm_factor_eps_wide(v, 0).unwrap(), base);
-        // on realtime (compute tier 2F < 64 bits) an epsilon below half a
-        // compute-tier unit rounds to zero; wider tiers hold 2^-64 exactly
-        if 2 * frac_bits() < 64 {
-            let below_half_unit = (1i128 << (63 - 2 * frac_bits())) - 1;
-            assert_eq!(fused::rms_norm_factor_eps_wide(v, below_half_unit).unwrap(), base);
-        }
-        // a storage epsilon passed in Q64.64 is the same epsilon
-        let eps = raw_from(false, "3");
-        let eps_q64 = 3i128 << (64 - frac_bits().min(64));
-        if frac_bits() <= 64 {
-            assert_eq!(fused::rms_norm_factor_eps_wide(v, eps_q64).unwrap(),
-                fused::rms_norm_factor(v, eps).unwrap());
-        }
-    }
-    assert_eq!(fused::rms_norm_factor_eps_wide(&[] as &[FixedPoint], 1), Err(OverflowDetected::DivisionByZero));
-}
-
-#[test]
-fn canonical_parser_rounds_literals_like_the_exact_parser() {
-    // The canonical evaluator in binary mode, on the same exact-rational
-    // references (constructed ties, ties +- 10^-(F+10), range edges). Before
-    // 0.6.4 it truncated literals past 38 digits and wrapped value * 10^dp
-    // into i32 decimal storage on realtime.
-    use g_math::canonical::{evaluate, gmath_parse, reset_gmath_mode, set_gmath_mode};
-    let Some(cases) = storage_literals() else { return };
-    set_gmath_mode("binary:binary").unwrap();
-    let mut mismatches = Vec::new();
-    for &(s, want) in cases {
-        // the canonical grammar has no exponent notation or leading '+'/'.'
-        let t = s.trim();
-        if t.contains(['e', 'E', '+']) || t.starts_with('.') || t.starts_with("-.") || t.ends_with('.') { continue; }
-        let got = gmath_parse(t).and_then(|e| evaluate(&e)).map(|v| v.as_binary_storage());
-        let ok = match (want, &got) {
-            (Some((negative, hex)), Ok(Some(raw))) => FixedPoint::from_raw(*raw) == raw_from(negative, hex),
-            (None, Err(_)) => true,
-            _ => false,
-        };
-        if !ok { mismatches.push((s, format!("{got:?}"), want)); }
-    }
-    reset_gmath_mode();
-    assert!(mismatches.is_empty(), "{} of {}: {:?}", mismatches.len(), cases.len(),
-        &mismatches[..mismatches.len().min(5)]);
-}

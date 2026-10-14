@@ -18,583 +18,546 @@
 //!
 //! Overflow and domain errors are typed, never wrapped.
 
-use g_math::fixed_point::imperative::fused;
-use g_math::fixed_point::{FixedMatrix, FixedPoint, FixedVector, Interval, OverflowDetected};
+#[macro_use]
+mod common;
 
-// realtime: the build's split (GMATH_FRAC_BITS; 16 by default, 10 at Q22.10)
-#[cfg(table_format = "q16_16")]
-const FB: u32 = g_math::fixed_point::frac_config::FRAC_BITS;
-#[cfg(table_format = "q32_32")]
-const FB: u32 = 32;
-#[cfg(table_format = "q64_64")]
-const FB: u32 = 64;
+macro_rules! shared_items {
+    ($S:ty, $F:literal) => {
+            type FixedPoint = Fixed<$S, $F>;
+            const FRAC_BITS: u32 = $F;
+            type FixedMatrix<T = FixedPoint> = g_math::fixed_point::FixedMatrix<T>;
+            type FixedVector<T = FixedPoint> = g_math::fixed_point::FixedVector<T>;
+            type Interval<T = FixedPoint> = g_math::fixed_point::Interval<T>;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            use g_math::fixed_point::imperative::fused;
+            use g_math::fixed_point::{Fixed, OverflowDetected};
 
-/// Storage width in bits on the narrow profiles; results must fit it.
-#[cfg(table_format = "q16_16")]
-const SB: u32 = 32;
-#[cfg(table_format = "q32_32")]
-const SB: u32 = 64;
-#[cfg(table_format = "q64_64")]
-const SB: u32 = 128;
+            // realtime: the build's split (GMATH_FRAC_BITS; 16 by default, 10 at Q22.10)
+            const FB: u32 = if BITS == 32 { FRAC_BITS } else if BITS == 64 { 32 } else { 64 };
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn fits_storage(v: i128) -> bool {
-    if SB >= 128 { return true; }
-    let max = (1i128 << (SB - 1)) - 1;
-    v >= -max - 1 && v <= max
+            /// Storage width in bits on the narrow profiles; results must fit it.
+            const SB: u32 = if BITS == 32 { 32 } else if BITS == 64 { 64 } else { 128 };
+
+
+
+            fn fp(s: &str) -> FixedPoint { FixedPoint::from_str(s) }
+            fn pt(s: &str) -> Interval { Interval::point(fp(s)) }
+            fn ulp() -> FixedPoint { FixedPoint::from_raw(one_raw()) }
+
+            fn one_raw() -> $S { <$S as g_math::fixed_point::WideInt>::one() }
+
+
+
+
+
+            // ----------------------------------------------------------------------------
+            // Property 1: directed rounding brackets the nearest scalar by at most 1 ulp
+            // ----------------------------------------------------------------------------
+
+
+
+            const ALL_FB: u32 = if BITS == 32 { FRAC_BITS } else if BITS == 64 { 32 } else if BITS == 128 { 64 } else if BITS == 256 { 128 } else { 256 };
+            const ALL_SB: u32 = if BITS == 32 { 32 } else if BITS == 64 { 64 } else if BITS == 128 { 128 } else if BITS == 256 { 256 } else { 512 };
+            /// `2^bits + extra` as a raw storage value, on every word.
+            fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
+                let one = <$S as g_math::fixed_point::WideInt>::one();
+                FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::shl_bits(one, bits as u32) + <$S as g_math::fixed_point::WideInt>::from_i128(extra))
+            }
+            fn max_raw() -> $S { let one = <$S as g_math::fixed_point::WideInt>::one(); let h = <$S as g_math::fixed_point::WideInt>::shl_bits(one, BITS - 2); h + (h - one) }
+            fn min_raw() -> $S { <$S as g_math::fixed_point::WideInt>::shl_bits(<$S as g_math::fixed_point::WideInt>::one(), BITS - 1) }
+    };
 }
 
-/// Deterministic generator, integer only.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-struct Rng(u64);
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let x = self.0;
-        (x >> 33) ^ x
-    }
-}
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
+            /// Constructed ties, both signs, on every profile.
+            #[test]
+            fn constructed_ties_bracket_nearest_and_are_one_ulp_wide() {
+                let half = fp("0.5");
+                let half_plus = half + ulp();
+                let one = FixedPoint::one();
 
-fn fp(s: &str) -> FixedPoint { FixedPoint::from_str(s) }
-fn pt(s: &str) -> Interval { Interval::point(fp(s)) }
-fn ulp() -> FixedPoint { FixedPoint::from_raw(one_raw()) }
+                // exact: 1.5 * 0.5 = 0.75, a point interval
+                let exact = pt("1.5") * pt("0.5");
+                assert!(exact.is_point());
+                assert_eq!(exact.lo(), fp("0.75"));
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn one_raw() -> g_math::fixed_point::imperative::BinaryStorage { 1 }
-#[cfg(table_format = "q128_128")]
-fn one_raw() -> g_math::fixed_point::imperative::BinaryStorage { g_math::fixed_point::I256::from_i128(1) }
-#[cfg(table_format = "q256_256")]
-fn one_raw() -> g_math::fixed_point::imperative::BinaryStorage { g_math::fixed_point::I512::from_i128(1) }
+                // positive tie: (0.5 + ulp) * 0.5 = 0.25 + half an ulp
+                let iv = Interval::point(half_plus) * Interval::point(half);
+                assert_eq!(iv.lo(), fp("0.25"));
+                assert_eq!(iv.hi(), fp("0.25") + ulp());
+                assert_eq!(iv.width(), ulp());
+                let nearest = half_plus * half; // ties toward +infinity -> the ceil
+                assert!(iv.contains(nearest));
+                assert_eq!(nearest, iv.hi());
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn raw_i128(x: FixedPoint) -> i128 { x.raw() as i128 }
+                // negative tie: -(0.5 + ulp) * 0.5 = -0.25 - half an ulp
+                let iv = Interval::point(-half_plus) * Interval::point(half);
+                assert_eq!(iv.hi(), -fp("0.25"));
+                assert_eq!(iv.lo(), -fp("0.25") - ulp());
+                assert_eq!(iv.width(), ulp());
+                let nearest = (-half_plus) * half; // tie toward +infinity -> the ceil
+                assert!(iv.contains(nearest));
+                assert_eq!(nearest, iv.hi());
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn from_i128(r: i128) -> FixedPoint { FixedPoint::from_raw(r as _) }
+                // 1/3 is inexact on every binary profile: one ulp wide, scalar inside
+                let third = Interval::point(one) / pt("3");
+                assert_eq!(third.width(), ulp());
+                assert!(third.contains(one / fp("3")));
+                // and -1/3 mirrors it exactly (floor/ceil swap under negation)
+                let neg_third = Interval::point(-one) / pt("3");
+                assert_eq!(neg_third, -third);
+            }
 
-/// Sample a raw value whose products with another sample stay within i128
-/// at the compute scale: |raw| < 2^(FB + FB/2 - 2) keeps a*b < 2^(3FB - 4),
-/// which is 2^188 at FB = 64; so at q64_64 the sweep restricts to |raw| < 2^62.
-/// The width is also capped at (SB + FB)/2 - 2 bits so that operands are valid
-/// storage values and their products fit the storage tier (a*b / 2^FB <
-/// 2^(SB - 4)). The cap only binds on realtime above 16 fraction bits: it
-/// equals FB + FB/2 - 2 at FB = 16 and FB = 32 and exceeds it below.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn sample_raw(rng: &mut Rng) -> i128 {
-    sample_bits(rng, if FB >= 64 { 62 } else { (FB + FB / 2 - 2).min((SB + FB) / 2 - 2) })
-}
+            // ----------------------------------------------------------------------------
+            // Property 2: enclosure of the exact result
+            // ----------------------------------------------------------------------------
 
-/// A signed raw with a magnitude below 2^bits.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn sample_bits(rng: &mut Rng, bits: u32) -> i128 {
-    let mask = (1u128 << bits) - 1;
-    let mag = (rng.next() as u128) & mask;
-    let v = mag as i128;
-    if rng.next() & 1 == 1 { -v } else { v }
-}
 
-// ----------------------------------------------------------------------------
-// Property 1: directed rounding brackets the nearest scalar by at most 1 ulp
-// ----------------------------------------------------------------------------
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn mul_interval_is_floor_ceil_of_exact_product() {
-    let mut rng = Rng(0x1A7E_57ED);
-    let mut inexact = 0usize;
-    let mut negatives = 0usize;
-    for _ in 0..20_000 {
-        let a = sample_raw(&mut rng);
-        let b = sample_raw(&mut rng);
-        let wide = a * b;
-        let floor = wide >> FB;
-        let ceil = if wide & ((1i128 << FB) - 1) != 0 { floor + 1 } else { floor };
-        let iv = Interval::point(from_i128(a)) * Interval::point(from_i128(b));
-        assert_eq!(raw_i128(iv.lo()), floor, "floor mismatch for {a} * {b}");
-        assert_eq!(raw_i128(iv.hi()), ceil, "ceil mismatch for {a} * {b}");
-        let nearest = from_i128(a) * from_i128(b);
-        assert!(iv.contains(nearest), "nearest {} outside [{}, {}]", raw_i128(nearest), floor, ceil);
-        if ceil != floor { inexact += 1; }
-        if wide < 0 { negatives += 1; }
-    }
-    assert!(inexact > 15_000, "sweep must exercise inexact products, got {inexact}");
-    assert!(negatives > 8_000, "sweep must exercise negative products, got {negatives}");
-}
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn div_interval_is_floor_ceil_of_exact_quotient() {
-    let mut rng = Rng(0xD1F1_DED);
-    let mut inexact = 0usize;
-    let mut negatives = 0usize;
-    let mut overflowed = 0usize;
-    for _ in 0..20_000 {
-        // Below 16 fraction bits, FB + FB/2 - 2 bits never reach the realtime
-        // storage boundary (13 bits at Q22.10): draw both operands wider.
-        // Above 16, sample_raw >> FB/2 makes nearly every quotient (about
-        // 1.5 FB bits) overflow: draw b with FB + 4 bits so the quotient has
-        // about 26 bits, as at Q22.10, and small divisors still overflow.
-        let a = if SB == 32 && FB != 16 { sample_bits(&mut rng, 30) } else { sample_raw(&mut rng) };
-        let mut b = if SB == 32 && FB < 16 {
-            sample_bits(&mut rng, 19) >> 5
-        } else if SB == 32 && FB > 16 {
-            sample_bits(&mut rng, FB + 9) >> 5
-        } else {
-            sample_raw(&mut rng) >> (FB / 2)
-        };
-        if b == 0 { b = 3; }
-        let num = a << FB;
-        let q = num / b;
-        let rem = num - q * b;
-        let (floor, ceil) = if rem == 0 {
-            (q, q)
-        } else if (num < 0) == (b < 0) {
-            (q, q + 1)
-        } else {
-            (q - 1, q)
-        };
-        let iv = Interval::point(from_i128(a)).try_div(Interval::point(from_i128(b)));
-        if !fits_storage(floor) || !fits_storage(ceil) {
-            // the quotient leaves the storage tier: typed, never wrapped
-            assert_eq!(iv, Err(OverflowDetected::TierOverflow), "quotient {a} / {b} should overflow storage");
-            overflowed += 1;
-            continue;
-        }
-        let iv = iv.expect("quotient fits storage");
-        assert_eq!(raw_i128(iv.lo()), floor, "floor mismatch for {a} / {b}");
-        assert_eq!(raw_i128(iv.hi()), ceil, "ceil mismatch for {a} / {b}");
-        let nearest = from_i128(a) / from_i128(b);
-        assert!(iv.contains(nearest), "nearest {} outside [{}, {}]", raw_i128(nearest), floor, ceil);
-        if ceil != floor { inexact += 1; }
-        if (num < 0) != (b < 0) { negatives += 1; }
-    }
-    assert!(inexact > 14_000, "sweep must exercise inexact quotients, got {inexact}");
-    assert!(negatives > 7_000, "sweep must exercise negative quotients, got {negatives}");
-    if SB == 32 {
-        assert!(overflowed > 0, "realtime sweep must reach the storage boundary");
-    }
-}
+            /// Constructed ties on every profile: `v = [1/2]`, `m = [[2 ulp]]` makes the
+            /// exact value exactly half an ulp. The interval is `[0, 1 ulp]`, the fused
+            /// scalar rounds the tie toward +infinity to `1 ulp`; the negative twin gives
+            /// `[-1 ulp, 0]` and a scalar of `0`.
+            #[test]
+            fn fused_quadratic_form_rounds_ties_toward_positive_infinity() {
+                let half = fp("0.5");
+                let two_ulp = ulp() + ulp();
+                let v = FixedVector::from_slice(&[half]);
+                let mut m = FixedMatrix::new(1, 1);
+                m.set(0, 0, two_ulp);
+                assert_eq!(Interval::quadratic_form(&v, &m), Interval::new(FixedPoint::ZERO, ulp()));
+                assert_eq!(fused::quadratic_form(&v, &m), ulp());
+                m.set(0, 0, -two_ulp);
+                assert_eq!(Interval::quadratic_form(&v, &m), Interval::new(-ulp(), FixedPoint::ZERO));
+                assert_eq!(fused::quadratic_form(&v, &m), FixedPoint::ZERO);
+                // 2 x 2 with an off-diagonal tie: v = [1/2, 1/2], m = [[0, 2 ulp], [2 ulp, 0]]
+                // exact = 2 * (1/4) * 2 ulp = 1 ulp, representable: point interval, scalar 1 ulp
+                let v2 = FixedVector::from_slice(&[half, half]);
+                let mut m2 = FixedMatrix::new(2, 2);
+                m2.set(0, 1, two_ulp);
+                m2.set(1, 0, two_ulp);
+                assert_eq!(Interval::quadratic_form(&v2, &m2), Interval::point(ulp()));
+                assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
+                // one-sided: m = [[0, 2 ulp], [0, 0]] -> exact half an ulp, the tie again
+                m2.set(1, 0, FixedPoint::ZERO);
+                assert_eq!(Interval::quadratic_form(&v2, &m2), Interval::new(FixedPoint::ZERO, ulp()));
+                assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
+            }
 
-/// Constructed ties, both signs, on every profile.
-#[test]
-fn constructed_ties_bracket_nearest_and_are_one_ulp_wide() {
-    let half = fp("0.5");
-    let half_plus = half + ulp();
-    let one = FixedPoint::one();
+            /// Structural pin on every profile: with the identity metric the fused
+            /// scalar is `fused::dot(v, v)` bit for bit (the same exact value, the same
+            /// nearest rounding), and the quadratic form's interval brackets it.
+            #[test]
+            fn fused_quadratic_form_with_identity_equals_fused_dot() {
+                let vs = [fp("0.3"), fp("-1.25"), fp("2.5"), fp("0.001"), fp("-0.333333")];
+                let v = FixedVector::from_slice(&vs);
+                let id = FixedMatrix::identity(5);
+                let scalar = fused::quadratic_form(&v, &id);
+                assert_eq!(scalar, fused::dot(&vs, &vs));
+                let iv = Interval::quadratic_form(&v, &id);
+                assert!(iv.contains(scalar));
+                assert!(iv.width() <= ulp());
+                assert_eq!(iv, Interval::dot(&vs, &vs));
+            }
 
-    // exact: 1.5 * 0.5 = 0.75, a point interval
-    let exact = pt("1.5") * pt("0.5");
-    assert!(exact.is_point());
-    assert_eq!(exact.lo(), fp("0.75"));
+            /// The typed overflow: a quadratic form whose value leaves the storage tier
+            /// is `TierOverflow` from `try_quadratic_form` on both the interval and the
+            /// fused path, never a wrapped value.
+            #[test]
+            fn quadratic_form_overflow_is_typed_on_both_paths() {
+                // X = 2^ceil((SB - FB) / 3): X fits storage comfortably, X^3 does not.
+                let k = (ALL_SB - ALL_FB + 2) / 3;
+                let mut big = fp("1");
+                for _ in 0..k { big = big + big; }
+                let v = FixedVector::from_slice(&[big, big]);
+                let mut m = FixedMatrix::new(2, 2);
+                m.set(0, 0, big);
+                m.set(1, 1, big);
+                assert_eq!(Interval::try_quadratic_form(&v, &m), Err(OverflowDetected::TierOverflow));
+                assert_eq!(fused::try_quadratic_form(&v, &m), Err(OverflowDetected::TierOverflow));
+            }
 
-    // positive tie: (0.5 + ulp) * 0.5 = 0.25 + half an ulp
-    let iv = Interval::point(half_plus) * Interval::point(half);
-    assert_eq!(iv.lo(), fp("0.25"));
-    assert_eq!(iv.hi(), fp("0.25") + ulp());
-    assert_eq!(iv.width(), ulp());
-    let nearest = half_plus * half; // ties toward +infinity -> the ceil
-    assert!(iv.contains(nearest));
-    assert_eq!(nearest, iv.hi());
 
-    // negative tie: -(0.5 + ulp) * 0.5 = -0.25 - half an ulp
-    let iv = Interval::point(-half_plus) * Interval::point(half);
-    assert_eq!(iv.hi(), -fp("0.25"));
-    assert_eq!(iv.lo(), -fp("0.25") - ulp());
-    assert_eq!(iv.width(), ulp());
-    let nearest = (-half_plus) * half; // tie toward +infinity -> the ceil
-    assert!(iv.contains(nearest));
-    assert_eq!(nearest, iv.hi());
+            /// Structural pin on every profile: with the identity metric the quadratic
+            /// form's first stage is exact, so `quadratic_form(v, I) == dot(v, v)`.
+            #[test]
+            fn quadratic_form_with_identity_equals_dot() {
+                let v = FixedVector::from_slice(&[fp("0.3"), fp("-1.25"), fp("2.5"), fp("0.001")]);
+                let id = FixedMatrix::identity(4);
+                let qf = Interval::quadratic_form(&v, &id);
+                let vs: Vec<FixedPoint> = (0..4).map(|i| v[i]).collect();
+                let d = Interval::dot(&vs, &vs);
+                assert_eq!(qf, d);
+                assert!(qf.is_certainly_positive());
+                assert!(qf.width() <= ulp());
+            }
 
-    // 1/3 is inexact on every binary profile: one ulp wide, scalar inside
-    let third = Interval::point(one) / pt("3");
-    assert_eq!(third.width(), ulp());
-    assert!(third.contains(one / fp("3")));
-    // and -1/3 mirrors it exactly (floor/ceil swap under negation)
-    let neg_third = Interval::point(-one) / pt("3");
-    assert_eq!(neg_third, -third);
-}
+            /// Chains: the scalar path rounds at every step and must still lie inside the
+            /// interval path on every profile.
+            #[test]
+            fn composed_chain_contains_scalar_result() {
+                // the last field bounds the magnitude of every intermediate (integer part)
+                let cases = [
+                    ("0.1", "0.2", "0.3", "0.7", 1),
+                    ("-1.5", "2.25", "0.125", "3", 2),
+                    ("123.456", "-0.001", "7", "-0.5", 138),
+                    ("0.333333", "3", "-0.000001", "1.000001", 1),
+                ];
+                for (a, b, c, d, bound) in cases {
+                    // the result (-137.2 for the third case) must fit the storage range
+                    // 2^(SB - FB - 1): not at 24 or more realtime fraction bits (+-128)
+                    if (bound as i128) >= (1i128 << (ALL_SB - ALL_FB - 1).min(126)) { continue; }
+                    let (fa, fb, fc, fd) = (fp(a), fp(b), fp(c), fp(d));
+                    let scalar = (fa * fb + fc) / fd - fa;
+                    let iv = (pt(a) * pt(b) + pt(c)) / pt(d) - pt(a);
+                    assert!(iv.contains(scalar), "scalar escaped chain enclosure for ({a},{b},{c},{d})");
+                    // three narrowings: mul, div, and nothing else rounds (add/sub exact)
+                    assert!(iv.width() <= ulp() + ulp() + ulp(), "chain width too large for ({a},{b},{c},{d})");
+                }
+            }
 
-// ----------------------------------------------------------------------------
-// Property 2: enclosure of the exact result
-// ----------------------------------------------------------------------------
+            // ----------------------------------------------------------------------------
+            // Property 3: the sqrt certificate
+            // ----------------------------------------------------------------------------
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn interval_mul_encloses_exact_product_of_interval_operands() {
-    let mut rng = Rng(0xE7C1_05E);
-    for _ in 0..5_000 {
-        let a0 = sample_raw(&mut rng) >> 1;
-        let a1 = a0 + ((rng.next() & 0xFF) as i128);
-        let b0 = sample_raw(&mut rng) >> 1;
-        let b1 = b0 + ((rng.next() & 0xFF) as i128);
-        let a = Interval::new(from_i128(a0), from_i128(a1));
-        let b = Interval::new(from_i128(b0), from_i128(b1));
-        let iv = a * b;
-        // every corner, and a few interior points, at exact scale
-        for &x in &[a0, a1, (a0 + a1) / 2] {
-            for &y in &[b0, b1, (b0 + b1) / 2] {
-                let wide = x * y;
-                let lo_scaled = raw_i128(iv.lo()) << FB;
-                let hi_scaled = raw_i128(iv.hi()) << FB;
-                assert!(lo_scaled <= wide && wide <= hi_scaled, "product {x}*{y} escaped the enclosure");
+
+            /// Structural sqrt pins on every profile.
+            #[test]
+            fn sqrt_pins() {
+                // perfect squares are points
+                for (x, r) in [("4", "2"), ("0.25", "0.5"), ("2.25", "1.5"), ("0", "0"), ("1", "1")] {
+                    let iv = pt(x).sqrt();
+                    assert!(iv.is_point(), "sqrt({x}) should be exact");
+                    assert_eq!(iv.lo(), fp(r));
+                }
+                // sqrt(2) is one ulp wide and contains the scalar
+                let s2 = pt("2").sqrt();
+                assert_eq!(s2.width(), ulp());
+                assert!(s2.contains(fp("2").sqrt()));
+                // interval input: monotone endpoints
+                let iv = Interval::new(fp("4"), fp("9")).sqrt();
+                assert_eq!(iv.lo(), fp("2"));
+                assert_eq!(iv.hi(), fp("3"));
+                // certificate squared back, using interval arithmetic (itself sound):
+                // lo^2 <= x and x <= hi^2 hold in the enclosed products
+                let x = fp("2");
+                let lo2 = Interval::point(s2.lo()) * Interval::point(s2.lo());
+                let hi2 = Interval::point(s2.hi()) * Interval::point(s2.hi());
+                assert!(lo2.lo() <= x, "lo^2 exceeds x");
+                assert!(hi2.hi() >= x, "hi^2 below x");
+            }
+
+            /// The scalar sqrt engine must lie inside the certified enclosure across the
+            /// profile's whole magnitude range, not only the validated [1e-4, 1e4] window.
+            /// On the scientific profile this found the Q512.512 engine losing precision
+            /// above ~2^200 (fixed by normalising its input); it stays as the gate.
+            #[test]
+            fn scalar_sqrt_lies_inside_the_certified_enclosure_across_magnitudes() {
+                let mut checked = 0usize;
+                let mut e = -(ALL_FB as i32);
+                while e <= ALL_SB as i32 - ALL_FB as i32 - 2 {
+                    for extra in [0i128, 1, 12345] {
+                        let x = pow2_plus(e + ALL_FB as i32, extra);
+                        if x <= FixedPoint::ZERO { continue; }
+                        let iv = Interval::point(x).sqrt();
+                        assert!(iv.width() <= ulp(), "sqrt enclosure wider than one ulp at 2^{e}");
+                        let scalar = x.sqrt();
+                        assert!(iv.contains(scalar), "scalar sqrt escaped the certified enclosure at 2^{e} + {extra} ulp: scalar {scalar}, enclosure [{}, {}]", iv.lo(), iv.hi());
+                        checked += 1;
+                    }
+                    e += 3;
+                }
+                assert!(checked > 30, "ladder too short: {checked}");
+            }
+
+
+
+            // ----------------------------------------------------------------------------
+            // Errors are typed, never wrapped
+            // ----------------------------------------------------------------------------
+
+            #[test]
+            fn errors_are_typed() {
+                let zero_straddle = Interval::new(fp("-1"), fp("1"));
+                assert_eq!(pt("1").try_div(zero_straddle), Err(OverflowDetected::DivisionByZero));
+                assert_eq!(pt("1").try_div(pt("0")), Err(OverflowDetected::DivisionByZero));
+                assert_eq!(Interval::new(fp("-1"), fp("4")).try_sqrt(), Err(OverflowDetected::DomainError));
+                assert_eq!(Interval::try_new(fp("2"), fp("1")), Err(OverflowDetected::InvalidInput));
+
+                let max = Interval::point(FixedPoint::from_raw(max_raw()));
+                assert_eq!(max.try_add(Interval::point(ulp())), Err(OverflowDetected::TierOverflow));
+                assert_eq!(max.try_mul(pt("2")), Err(OverflowDetected::TierOverflow));
+                let min = Interval::point(FixedPoint::from_raw(min_raw()));
+                assert_eq!(min.try_neg(), Err(OverflowDetected::TierOverflow));
+                assert_eq!(min.try_sub(Interval::point(ulp())), Err(OverflowDetected::TierOverflow));
+                // ceil of a value whose floor is the storage maximum has no home
+                assert_eq!(max.try_mul(Interval::new(FixedPoint::one(), FixedPoint::one() + ulp())), Err(OverflowDetected::TierOverflow));
             }
         }
-    }
+    };
 }
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn dot_encloses_exact_sum_with_one_narrowing() {
-    let mut rng = Rng(0xD07_D07);
-    for _ in 0..2_000 {
-        let n = 1 + (rng.next() % 16) as usize;
-        let a: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> 4).collect();
-        let b: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> 4).collect();
-        let exact: i128 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
-        let floor = exact >> FB;
-        let ceil = if exact & ((1i128 << FB) - 1) != 0 { floor + 1 } else { floor };
-        let av: Vec<FixedPoint> = a.iter().map(|&r| from_i128(r)).collect();
-        let bv: Vec<FixedPoint> = b.iter().map(|&r| from_i128(r)).collect();
-        let iv = Interval::dot(&av, &bv);
-        assert_eq!(raw_i128(iv.lo()), floor);
-        assert_eq!(raw_i128(iv.hi()), ceil);
-        assert!(iv.width() <= ulp(), "dot widened beyond one narrowing");
-    }
-}
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn quadratic_form_encloses_exact_value_and_stays_narrow() {
-    let mut rng = Rng(0x0F0_12A);
-    let mut inexact_count = 0usize;
-    let mut negatives = 0usize;
-    for _ in 0..3_000 {
-        let n = 2 + (rng.next() % 6) as usize;
-        let v: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect();
-        let m: Vec<Vec<i128>> = (0..n).map(|_| (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect()).collect();
-        // exact v^T M v at scale 2^(2 FB): sum_i v_i * (sum_j m_ij v_j), inner sum at 2^(2FB)
-        // then divided by 2^FB exactly (rational); compare via cross-multiplication.
-        let mut num: i128 = 0; // numerator at scale 2^(3 FB)
-        for i in 0..n {
-            let mut mv: i128 = 0;
-            for j in 0..n { mv += m[i][j] * v[j]; }
-            num += v[i] * mv;
-        }
-        // exact value in raw units = num / 2^(2 FB)
-        let fv = FixedVector::from_slice(&v.iter().map(|&r| from_i128(r)).collect::<Vec<_>>());
-        let mut fm = FixedMatrix::new(n, n);
-        for i in 0..n { for j in 0..n { fm.set(i, j, from_i128(m[i][j])); } }
-        let iv = Interval::quadratic_form(&fv, &fm);
-        // One narrowing of one exact value: the interval IS [floor, ceil] of
-        // num / 2^(2FB) (two-step shifts: 2FB = 128 at Q64.64 is out of range
-        // for a single i128 shift).
-        let floor = (num >> FB) >> FB;
-        let inexact = ((floor << FB) << FB) != num;
-        let ceil = if inexact { floor + 1 } else { floor };
-        let round_bit = (num >> (2 * FB - 1)) & 1 == 1;
-        let nearest = if round_bit { floor + 1 } else { floor };
-        assert_eq!(raw_i128(iv.lo()), floor, "quadratic form lower endpoint is not the floor of the exact value");
-        assert_eq!(raw_i128(iv.hi()), ceil, "quadratic form upper endpoint is not the ceil of the exact value");
-        let width = raw_i128(iv.width());
-        assert!(width <= 1, "quadratic form width {width} ulp exceeds the one-narrowing bound for n = {n}");
-        assert_eq!(width == 0, !inexact, "width is zero exactly when the value is representable");
-        // the fused scalar is the nearest (ties toward +infinity) of the same exact value
-        let scalar = fused::quadratic_form(&fv, &fm);
-        assert_eq!(raw_i128(scalar), nearest, "fused quadratic form is not the correctly rounded value");
-        assert!(iv.contains(scalar));
-        if inexact { inexact_count += 1; }
-        if num < 0 { negatives += 1; }
-    }
-    assert!(inexact_count > 2_000, "sweep must exercise inexact values, got {inexact_count}");
-    assert!(negatives > 1_000, "sweep must exercise negative values, got {negatives}");
-}
-
-/// Constructed ties on every profile: `v = [1/2]`, `m = [[2 ulp]]` makes the
-/// exact value exactly half an ulp. The interval is `[0, 1 ulp]`, the fused
-/// scalar rounds the tie toward +infinity to `1 ulp`; the negative twin gives
-/// `[-1 ulp, 0]` and a scalar of `0`.
-#[test]
-fn fused_quadratic_form_rounds_ties_toward_positive_infinity() {
-    let half = fp("0.5");
-    let two_ulp = ulp() + ulp();
-    let v = FixedVector::from_slice(&[half]);
-    let mut m = FixedMatrix::new(1, 1);
-    m.set(0, 0, two_ulp);
-    assert_eq!(Interval::quadratic_form(&v, &m), Interval::new(FixedPoint::ZERO, ulp()));
-    assert_eq!(fused::quadratic_form(&v, &m), ulp());
-    m.set(0, 0, -two_ulp);
-    assert_eq!(Interval::quadratic_form(&v, &m), Interval::new(-ulp(), FixedPoint::ZERO));
-    assert_eq!(fused::quadratic_form(&v, &m), FixedPoint::ZERO);
-    // 2 x 2 with an off-diagonal tie: v = [1/2, 1/2], m = [[0, 2 ulp], [2 ulp, 0]]
-    // exact = 2 * (1/4) * 2 ulp = 1 ulp, representable: point interval, scalar 1 ulp
-    let v2 = FixedVector::from_slice(&[half, half]);
-    let mut m2 = FixedMatrix::new(2, 2);
-    m2.set(0, 1, two_ulp);
-    m2.set(1, 0, two_ulp);
-    assert_eq!(Interval::quadratic_form(&v2, &m2), Interval::point(ulp()));
-    assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
-    // one-sided: m = [[0, 2 ulp], [0, 0]] -> exact half an ulp, the tie again
-    m2.set(1, 0, FixedPoint::ZERO);
-    assert_eq!(Interval::quadratic_form(&v2, &m2), Interval::new(FixedPoint::ZERO, ulp()));
-    assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
-}
-
-/// Structural pin on every profile: with the identity metric the fused
-/// scalar is `fused::dot(v, v)` bit for bit (the same exact value, the same
-/// nearest rounding), and the quadratic form's interval brackets it.
-#[test]
-fn fused_quadratic_form_with_identity_equals_fused_dot() {
-    let vs = [fp("0.3"), fp("-1.25"), fp("2.5"), fp("0.001"), fp("-0.333333")];
-    let v = FixedVector::from_slice(&vs);
-    let id = FixedMatrix::identity(5);
-    let scalar = fused::quadratic_form(&v, &id);
-    assert_eq!(scalar, fused::dot(&vs, &vs));
-    let iv = Interval::quadratic_form(&v, &id);
-    assert!(iv.contains(scalar));
-    assert!(iv.width() <= ulp());
-    assert_eq!(iv, Interval::dot(&vs, &vs));
-}
-
-/// The typed overflow: a quadratic form whose value leaves the storage tier
-/// is `TierOverflow` from `try_quadratic_form` on both the interval and the
-/// fused path, never a wrapped value.
-#[test]
-fn quadratic_form_overflow_is_typed_on_both_paths() {
-    // X = 2^ceil((SB - FB) / 3): X fits storage comfortably, X^3 does not.
-    let k = (ALL_SB - ALL_FB + 2) / 3;
-    let mut big = fp("1");
-    for _ in 0..k { big = big + big; }
-    let v = FixedVector::from_slice(&[big, big]);
-    let mut m = FixedMatrix::new(2, 2);
-    m.set(0, 0, big);
-    m.set(1, 1, big);
-    assert_eq!(Interval::try_quadratic_form(&v, &m), Err(OverflowDetected::TierOverflow));
-    assert_eq!(fused::try_quadratic_form(&v, &m), Err(OverflowDetected::TierOverflow));
-}
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn dot_intervals_encloses_every_corner_and_interior_choice() {
-    let mut rng = Rng(0xD07_1A7);
-    for _ in 0..1_000 {
-        let n = 1 + (rng.next() % 8) as usize;
-        let mk = |rng: &mut Rng| {
-            let lo = sample_raw(rng) >> 4;
-            let hi = lo + (rng.next() & 0xFF) as i128;
-            (lo, hi)
-        };
-        let a: Vec<(i128, i128)> = (0..n).map(|_| mk(&mut rng)).collect();
-        let b: Vec<(i128, i128)> = (0..n).map(|_| mk(&mut rng)).collect();
-        let ai: Vec<Interval> = a.iter().map(|&(l, h)| Interval::new(from_i128(l), from_i128(h))).collect();
-        let bi: Vec<Interval> = b.iter().map(|&(l, h)| Interval::new(from_i128(l), from_i128(h))).collect();
-        let iv = Interval::dot_intervals(&ai, &bi);
-        let lo_scaled = raw_i128(iv.lo()) << FB;
-        let hi_scaled = raw_i128(iv.hi()) << FB;
-        // every choice of endpoint per term, plus midpoints, must land inside
-        for choice in 0..(1u32 << (2 * n).min(16)) {
-            let mut exact = 0i128;
-            for k in 0..n {
-                let x = match (choice >> (2 * k)) & 3 { 0 => a[k].0, 1 => a[k].1, _ => (a[k].0 + a[k].1) / 2 };
-                let y = match (choice >> (2 * k + 1)) & 1 { 0 => b[k].0, _ => b[k].1 };
-                exact += x * y;
+// The part of the suite written for a subset of the words.
+macro_rules! narrow_suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(unused_imports, dead_code)]
+            shared_items!($S, $F);
+            fn fits_storage(v: i128) -> bool {
+                if SB >= 128 { return true; }
+                let max = (1i128 << (SB - 1)) - 1;
+                v >= -max - 1 && v <= max
             }
-            assert!(lo_scaled <= exact && exact <= hi_scaled, "dot_intervals enclosure violated");
+            /// Deterministic generator, integer only.
+            struct Rng(u64);
+            impl Rng {
+                fn next(&mut self) -> u64 {
+                    self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    let x = self.0;
+                    (x >> 33) ^ x
+                }
+            }
+            fn raw_i128(x: FixedPoint) -> i128 { x.raw() as i128 }
+            fn from_i128(r: i128) -> FixedPoint { FixedPoint::from_raw(r as _) }
+            /// Sample a raw value whose products with another sample stay within i128
+            /// at the compute scale: |raw| < 2^(FB + FB/2 - 2) keeps a*b < 2^(3FB - 4),
+            /// which is 2^188 at FB = 64; so at q64_64 the sweep restricts to |raw| < 2^62.
+            /// The width is also capped at (SB + FB)/2 - 2 bits so that operands are valid
+            /// storage values and their products fit the storage tier (a*b / 2^FB <
+            /// 2^(SB - 4)). The cap only binds on realtime above 16 fraction bits: it
+            /// equals FB + FB/2 - 2 at FB = 16 and FB = 32 and exceeds it below.
+            fn sample_raw(rng: &mut Rng) -> i128 {
+                sample_bits(rng, if FB >= 64 { 62 } else { (FB + FB / 2 - 2).min((SB + FB) / 2 - 2) })
+            }
+            /// A signed raw with a magnitude below 2^bits.
+            fn sample_bits(rng: &mut Rng, bits: u32) -> i128 {
+                let mask = (1u128 << bits) - 1;
+                let mag = (rng.next() as u128) & mask;
+                let v = mag as i128;
+                if rng.next() & 1 == 1 { -v } else { v }
+            }
+            #[test]
+            fn mul_interval_is_floor_ceil_of_exact_product() {
+                let mut rng = Rng(0x1A7E_57ED);
+                let mut inexact = 0usize;
+                let mut negatives = 0usize;
+                for _ in 0..20_000 {
+                    let a = sample_raw(&mut rng);
+                    let b = sample_raw(&mut rng);
+                    let wide = a * b;
+                    let floor = wide >> FB;
+                    let ceil = if wide & ((1i128 << FB) - 1) != 0 { floor + 1 } else { floor };
+                    let iv = Interval::point(from_i128(a)) * Interval::point(from_i128(b));
+                    assert_eq!(raw_i128(iv.lo()), floor, "floor mismatch for {a} * {b}");
+                    assert_eq!(raw_i128(iv.hi()), ceil, "ceil mismatch for {a} * {b}");
+                    let nearest = from_i128(a) * from_i128(b);
+                    assert!(iv.contains(nearest), "nearest {} outside [{}, {}]", raw_i128(nearest), floor, ceil);
+                    if ceil != floor { inexact += 1; }
+                    if wide < 0 { negatives += 1; }
+                }
+                assert!(inexact > 15_000, "sweep must exercise inexact products, got {inexact}");
+                assert!(negatives > 8_000, "sweep must exercise negative products, got {negatives}");
+            }
+            #[test]
+            fn div_interval_is_floor_ceil_of_exact_quotient() {
+                let mut rng = Rng(0xD1F1_DED);
+                let mut inexact = 0usize;
+                let mut negatives = 0usize;
+                let mut overflowed = 0usize;
+                for _ in 0..20_000 {
+                    // Below 16 fraction bits, FB + FB/2 - 2 bits never reach the realtime
+                    // storage boundary (13 bits at Q22.10): draw both operands wider.
+                    // Above 16, sample_raw >> FB/2 makes nearly every quotient (about
+                    // 1.5 FB bits) overflow: draw b with FB + 4 bits so the quotient has
+                    // about 26 bits, as at Q22.10, and small divisors still overflow.
+                    let a = if SB == 32 && FB != 16 { sample_bits(&mut rng, 30) } else { sample_raw(&mut rng) };
+                    let mut b = if SB == 32 && FB < 16 {
+                        sample_bits(&mut rng, 19) >> 5
+                    } else if SB == 32 && FB > 16 {
+                        sample_bits(&mut rng, FB + 9) >> 5
+                    } else {
+                        sample_raw(&mut rng) >> (FB / 2)
+                    };
+                    if b == 0 { b = 3; }
+                    let num = a << FB;
+                    let q = num / b;
+                    let rem = num - q * b;
+                    let (floor, ceil) = if rem == 0 {
+                        (q, q)
+                    } else if (num < 0) == (b < 0) {
+                        (q, q + 1)
+                    } else {
+                        (q - 1, q)
+                    };
+                    let iv = Interval::point(from_i128(a)).try_div(Interval::point(from_i128(b)));
+                    if !fits_storage(floor) || !fits_storage(ceil) {
+                        // the quotient leaves the storage tier: typed, never wrapped
+                        assert_eq!(iv, Err(OverflowDetected::TierOverflow), "quotient {a} / {b} should overflow storage");
+                        overflowed += 1;
+                        continue;
+                    }
+                    let iv = iv.expect("quotient fits storage");
+                    assert_eq!(raw_i128(iv.lo()), floor, "floor mismatch for {a} / {b}");
+                    assert_eq!(raw_i128(iv.hi()), ceil, "ceil mismatch for {a} / {b}");
+                    let nearest = from_i128(a) / from_i128(b);
+                    assert!(iv.contains(nearest), "nearest {} outside [{}, {}]", raw_i128(nearest), floor, ceil);
+                    if ceil != floor { inexact += 1; }
+                    if (num < 0) != (b < 0) { negatives += 1; }
+                }
+                assert!(inexact > 14_000, "sweep must exercise inexact quotients, got {inexact}");
+                assert!(negatives > 7_000, "sweep must exercise negative quotients, got {negatives}");
+                if SB == 32 {
+                    assert!(overflowed > 0, "realtime sweep must reach the storage boundary");
+                }
+            }
+            #[test]
+            fn interval_mul_encloses_exact_product_of_interval_operands() {
+                let mut rng = Rng(0xE7C1_05E);
+                for _ in 0..5_000 {
+                    let a0 = sample_raw(&mut rng) >> 1;
+                    let a1 = a0 + ((rng.next() & 0xFF) as i128);
+                    let b0 = sample_raw(&mut rng) >> 1;
+                    let b1 = b0 + ((rng.next() & 0xFF) as i128);
+                    let a = Interval::new(from_i128(a0), from_i128(a1));
+                    let b = Interval::new(from_i128(b0), from_i128(b1));
+                    let iv = a * b;
+                    // every corner, and a few interior points, at exact scale
+                    for &x in &[a0, a1, (a0 + a1) / 2] {
+                        for &y in &[b0, b1, (b0 + b1) / 2] {
+                            let wide = x * y;
+                            let lo_scaled = raw_i128(iv.lo()) << FB;
+                            let hi_scaled = raw_i128(iv.hi()) << FB;
+                            assert!(lo_scaled <= wide && wide <= hi_scaled, "product {x}*{y} escaped the enclosure");
+                        }
+                    }
+                }
+            }
+            #[test]
+            fn dot_encloses_exact_sum_with_one_narrowing() {
+                let mut rng = Rng(0xD07_D07);
+                for _ in 0..2_000 {
+                    let n = 1 + (rng.next() % 16) as usize;
+                    let a: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> 4).collect();
+                    let b: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> 4).collect();
+                    let exact: i128 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+                    let floor = exact >> FB;
+                    let ceil = if exact & ((1i128 << FB) - 1) != 0 { floor + 1 } else { floor };
+                    let av: Vec<FixedPoint> = a.iter().map(|&r| from_i128(r)).collect();
+                    let bv: Vec<FixedPoint> = b.iter().map(|&r| from_i128(r)).collect();
+                    let iv = Interval::dot(&av, &bv);
+                    assert_eq!(raw_i128(iv.lo()), floor);
+                    assert_eq!(raw_i128(iv.hi()), ceil);
+                    assert!(iv.width() <= ulp(), "dot widened beyond one narrowing");
+                }
+            }
+            #[test]
+            fn quadratic_form_encloses_exact_value_and_stays_narrow() {
+                let mut rng = Rng(0x0F0_12A);
+                let mut inexact_count = 0usize;
+                let mut negatives = 0usize;
+                for _ in 0..3_000 {
+                    let n = 2 + (rng.next() % 6) as usize;
+                    let v: Vec<i128> = (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect();
+                    let m: Vec<Vec<i128>> = (0..n).map(|_| (0..n).map(|_| sample_raw(&mut rng) >> (FB / 2 + 2)).collect()).collect();
+                    // exact v^T M v at scale 2^(2 FB): sum_i v_i * (sum_j m_ij v_j), inner sum at 2^(2FB)
+                    // then divided by 2^FB exactly (rational); compare via cross-multiplication.
+                    let mut num: i128 = 0; // numerator at scale 2^(3 FB)
+                    for i in 0..n {
+                        let mut mv: i128 = 0;
+                        for j in 0..n { mv += m[i][j] * v[j]; }
+                        num += v[i] * mv;
+                    }
+                    // exact value in raw units = num / 2^(2 FB)
+                    let fv = FixedVector::from_slice(&v.iter().map(|&r| from_i128(r)).collect::<Vec<_>>());
+                    let mut fm = FixedMatrix::new(n, n);
+                    for i in 0..n { for j in 0..n { fm.set(i, j, from_i128(m[i][j])); } }
+                    let iv = Interval::quadratic_form(&fv, &fm);
+                    // One narrowing of one exact value: the interval IS [floor, ceil] of
+                    // num / 2^(2FB) (two-step shifts: 2FB = 128 at Q64.64 is out of range
+                    // for a single i128 shift).
+                    let floor = (num >> FB) >> FB;
+                    let inexact = ((floor << FB) << FB) != num;
+                    let ceil = if inexact { floor + 1 } else { floor };
+                    let round_bit = (num >> (2 * FB - 1)) & 1 == 1;
+                    let nearest = if round_bit { floor + 1 } else { floor };
+                    assert_eq!(raw_i128(iv.lo()), floor, "quadratic form lower endpoint is not the floor of the exact value");
+                    assert_eq!(raw_i128(iv.hi()), ceil, "quadratic form upper endpoint is not the ceil of the exact value");
+                    let width = raw_i128(iv.width());
+                    assert!(width <= 1, "quadratic form width {width} ulp exceeds the one-narrowing bound for n = {n}");
+                    assert_eq!(width == 0, !inexact, "width is zero exactly when the value is representable");
+                    // the fused scalar is the nearest (ties toward +infinity) of the same exact value
+                    let scalar = fused::quadratic_form(&fv, &fm);
+                    assert_eq!(raw_i128(scalar), nearest, "fused quadratic form is not the correctly rounded value");
+                    assert!(iv.contains(scalar));
+                    if inexact { inexact_count += 1; }
+                    if num < 0 { negatives += 1; }
+                }
+                assert!(inexact_count > 2_000, "sweep must exercise inexact values, got {inexact_count}");
+                assert!(negatives > 1_000, "sweep must exercise negative values, got {negatives}");
+            }
+            #[test]
+            fn dot_intervals_encloses_every_corner_and_interior_choice() {
+                let mut rng = Rng(0xD07_1A7);
+                for _ in 0..1_000 {
+                    let n = 1 + (rng.next() % 8) as usize;
+                    let mk = |rng: &mut Rng| {
+                        let lo = sample_raw(rng) >> 4;
+                        let hi = lo + (rng.next() & 0xFF) as i128;
+                        (lo, hi)
+                    };
+                    let a: Vec<(i128, i128)> = (0..n).map(|_| mk(&mut rng)).collect();
+                    let b: Vec<(i128, i128)> = (0..n).map(|_| mk(&mut rng)).collect();
+                    let ai: Vec<Interval> = a.iter().map(|&(l, h)| Interval::new(from_i128(l), from_i128(h))).collect();
+                    let bi: Vec<Interval> = b.iter().map(|&(l, h)| Interval::new(from_i128(l), from_i128(h))).collect();
+                    let iv = Interval::dot_intervals(&ai, &bi);
+                    let lo_scaled = raw_i128(iv.lo()) << FB;
+                    let hi_scaled = raw_i128(iv.hi()) << FB;
+                    // every choice of endpoint per term, plus midpoints, must land inside
+                    for choice in 0..(1u32 << (2 * n).min(16)) {
+                        let mut exact = 0i128;
+                        for k in 0..n {
+                            let x = match (choice >> (2 * k)) & 3 { 0 => a[k].0, 1 => a[k].1, _ => (a[k].0 + a[k].1) / 2 };
+                            let y = match (choice >> (2 * k + 1)) & 1 { 0 => b[k].0, _ => b[k].1 };
+                            exact += x * y;
+                        }
+                        assert!(lo_scaled <= exact && exact <= hi_scaled, "dot_intervals enclosure violated");
+                    }
+                }
+            }
+            #[test]
+            fn sqrt_certificate_holds_for_sampled_inputs() {
+                let mut rng = Rng(0x5A4_7C3);
+                let mut inexact = 0usize;
+                for _ in 0..10_000 {
+                    // x must fit the storage tier, and n = x_raw << FB must fit u128
+                    let bits = (127 - FB).min(SB - 1).min(63);
+                    let x = ((rng.next() as u128) & ((1u128 << bits) - 1)) as i128;
+                    let n = (x as u128) << FB;
+                    let iv = Interval::point(from_i128(x)).sqrt();
+                    let k = raw_i128(iv.lo()) as u128;
+                    let c = raw_i128(iv.hi()) as u128;
+                    assert!(k * k <= n, "floor certificate failed: k^2 > n for x = {x}");
+                    assert!(n < (k + 1) * (k + 1), "floor certificate failed: (k+1)^2 <= n for x = {x}");
+                    assert!(c == k || c == k + 1, "ceil is not floor or floor + 1 for x = {x}");
+                    assert_eq!(c == k, k * k == n, "ceil equals floor iff exact for x = {x}");
+                    if c != k { inexact += 1; }
+                    // the scalar sqrt lies inside
+                    assert!(iv.contains(from_i128(x).sqrt()));
+                }
+                assert!(inexact > 9_000, "sqrt sweep must exercise inexact roots, got {inexact}");
+            }
         }
-    }
+    };
 }
 
-/// Structural pin on every profile: with the identity metric the quadratic
-/// form's first stage is exact, so `quadratic_form(v, I) == dot(v, v)`.
-#[test]
-fn quadratic_form_with_identity_equals_dot() {
-    let v = FixedVector::from_slice(&[fp("0.3"), fp("-1.25"), fp("2.5"), fp("0.001")]);
-    let id = FixedMatrix::identity(4);
-    let qf = Interval::quadratic_form(&v, &id);
-    let vs: Vec<FixedPoint> = (0..4).map(|i| v[i]).collect();
-    let d = Interval::dot(&vs, &vs);
-    assert_eq!(qf, d);
-    assert!(qf.is_certainly_positive());
-    assert!(qf.width() <= ulp());
-}
+for_each_format!(suite);
+narrow_suite!(narrow_suite_q22_10, i32, 10);
+narrow_suite!(narrow_suite_q16_16, i32, 16);
+narrow_suite!(narrow_suite_q32_32, i64, 32);
+narrow_suite!(narrow_suite_q64_64, i128, 64);
 
-/// Chains: the scalar path rounds at every step and must still lie inside the
-/// interval path on every profile.
-#[test]
-fn composed_chain_contains_scalar_result() {
-    // the last field bounds the magnitude of every intermediate (integer part)
-    let cases = [
-        ("0.1", "0.2", "0.3", "0.7", 1),
-        ("-1.5", "2.25", "0.125", "3", 2),
-        ("123.456", "-0.001", "7", "-0.5", 138),
-        ("0.333333", "3", "-0.000001", "1.000001", 1),
-    ];
-    for (a, b, c, d, bound) in cases {
-        // the result (-137.2 for the third case) must fit the storage range
-        // 2^(SB - FB - 1): not at 24 or more realtime fraction bits (+-128)
-        if (bound as i128) >= (1i128 << (ALL_SB - ALL_FB - 1).min(126)) { continue; }
-        let (fa, fb, fc, fd) = (fp(a), fp(b), fp(c), fp(d));
-        let scalar = (fa * fb + fc) / fd - fa;
-        let iv = (pt(a) * pt(b) + pt(c)) / pt(d) - pt(a);
-        assert!(iv.contains(scalar), "scalar escaped chain enclosure for ({a},{b},{c},{d})");
-        // three narrowings: mul, div, and nothing else rounds (add/sub exact)
-        assert!(iv.width() <= ulp() + ulp() + ulp(), "chain width too large for ({a},{b},{c},{d})");
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Property 3: the sqrt certificate
-// ----------------------------------------------------------------------------
-
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-#[test]
-fn sqrt_certificate_holds_for_sampled_inputs() {
-    let mut rng = Rng(0x5A4_7C3);
-    let mut inexact = 0usize;
-    for _ in 0..10_000 {
-        // x must fit the storage tier, and n = x_raw << FB must fit u128
-        let bits = (127 - FB).min(SB - 1).min(63);
-        let x = ((rng.next() as u128) & ((1u128 << bits) - 1)) as i128;
-        let n = (x as u128) << FB;
-        let iv = Interval::point(from_i128(x)).sqrt();
-        let k = raw_i128(iv.lo()) as u128;
-        let c = raw_i128(iv.hi()) as u128;
-        assert!(k * k <= n, "floor certificate failed: k^2 > n for x = {x}");
-        assert!(n < (k + 1) * (k + 1), "floor certificate failed: (k+1)^2 <= n for x = {x}");
-        assert!(c == k || c == k + 1, "ceil is not floor or floor + 1 for x = {x}");
-        assert_eq!(c == k, k * k == n, "ceil equals floor iff exact for x = {x}");
-        if c != k { inexact += 1; }
-        // the scalar sqrt lies inside
-        assert!(iv.contains(from_i128(x).sqrt()));
-    }
-    assert!(inexact > 9_000, "sqrt sweep must exercise inexact roots, got {inexact}");
-}
-
-/// Structural sqrt pins on every profile.
-#[test]
-fn sqrt_pins() {
-    // perfect squares are points
-    for (x, r) in [("4", "2"), ("0.25", "0.5"), ("2.25", "1.5"), ("0", "0"), ("1", "1")] {
-        let iv = pt(x).sqrt();
-        assert!(iv.is_point(), "sqrt({x}) should be exact");
-        assert_eq!(iv.lo(), fp(r));
-    }
-    // sqrt(2) is one ulp wide and contains the scalar
-    let s2 = pt("2").sqrt();
-    assert_eq!(s2.width(), ulp());
-    assert!(s2.contains(fp("2").sqrt()));
-    // interval input: monotone endpoints
-    let iv = Interval::new(fp("4"), fp("9")).sqrt();
-    assert_eq!(iv.lo(), fp("2"));
-    assert_eq!(iv.hi(), fp("3"));
-    // certificate squared back, using interval arithmetic (itself sound):
-    // lo^2 <= x and x <= hi^2 hold in the enclosed products
-    let x = fp("2");
-    let lo2 = Interval::point(s2.lo()) * Interval::point(s2.lo());
-    let hi2 = Interval::point(s2.hi()) * Interval::point(s2.hi());
-    assert!(lo2.lo() <= x, "lo^2 exceeds x");
-    assert!(hi2.hi() >= x, "hi^2 below x");
-}
-
-/// The scalar sqrt engine must lie inside the certified enclosure across the
-/// profile's whole magnitude range, not only the validated [1e-4, 1e4] window.
-/// On the scientific profile this found the Q512.512 engine losing precision
-/// above ~2^200 (fixed by normalising its input); it stays as the gate.
-#[test]
-fn scalar_sqrt_lies_inside_the_certified_enclosure_across_magnitudes() {
-    let mut checked = 0usize;
-    let mut e = -(ALL_FB as i32);
-    while e <= ALL_SB as i32 - ALL_FB as i32 - 2 {
-        for extra in [0i128, 1, 12345] {
-            let x = pow2_plus(e + ALL_FB as i32, extra);
-            if x <= FixedPoint::ZERO { continue; }
-            let iv = Interval::point(x).sqrt();
-            assert!(iv.width() <= ulp(), "sqrt enclosure wider than one ulp at 2^{e}");
-            let scalar = x.sqrt();
-            assert!(iv.contains(scalar), "scalar sqrt escaped the certified enclosure at 2^{e} + {extra} ulp: scalar {scalar}, enclosure [{}, {}]", iv.lo(), iv.hi());
-            checked += 1;
-        }
-        e += 3;
-    }
-    assert!(checked > 30, "ladder too short: {checked}");
-}
-
-#[cfg(table_format = "q16_16")]
-const ALL_FB: u32 = g_math::fixed_point::frac_config::FRAC_BITS;
-#[cfg(table_format = "q32_32")]
-const ALL_FB: u32 = 32;
-#[cfg(table_format = "q64_64")]
-const ALL_FB: u32 = 64;
-#[cfg(table_format = "q128_128")]
-const ALL_FB: u32 = 128;
-#[cfg(table_format = "q256_256")]
-const ALL_FB: u32 = 256;
-#[cfg(table_format = "q16_16")]
-const ALL_SB: u32 = 32;
-#[cfg(table_format = "q32_32")]
-const ALL_SB: u32 = 64;
-#[cfg(table_format = "q64_64")]
-const ALL_SB: u32 = 128;
-#[cfg(table_format = "q128_128")]
-const ALL_SB: u32 = 256;
-#[cfg(table_format = "q256_256")]
-const ALL_SB: u32 = 512;
-
-/// `2^bits + extra` as a raw storage value, on every profile.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
-    let raw = (1i128 << bits) + extra;
-    FixedPoint::from_raw(raw as _)
-}
-#[cfg(table_format = "q128_128")]
-fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
-    FixedPoint::from_raw((g_math::fixed_point::I256::from_i128(1) << (bits as usize)) + g_math::fixed_point::I256::from_i128(extra))
-}
-#[cfg(table_format = "q256_256")]
-fn pow2_plus(bits: i32, extra: i128) -> FixedPoint {
-    FixedPoint::from_raw((g_math::fixed_point::I512::from_i128(1) << (bits as usize)) + g_math::fixed_point::I512::from_i128(extra))
-}
-
-// ----------------------------------------------------------------------------
-// Errors are typed, never wrapped
-// ----------------------------------------------------------------------------
-
-#[test]
-fn errors_are_typed() {
-    let zero_straddle = Interval::new(fp("-1"), fp("1"));
-    assert_eq!(pt("1").try_div(zero_straddle), Err(OverflowDetected::DivisionByZero));
-    assert_eq!(pt("1").try_div(pt("0")), Err(OverflowDetected::DivisionByZero));
-    assert_eq!(Interval::new(fp("-1"), fp("4")).try_sqrt(), Err(OverflowDetected::DomainError));
-    assert_eq!(Interval::try_new(fp("2"), fp("1")), Err(OverflowDetected::InvalidInput));
-
-    let max = Interval::point(FixedPoint::from_raw(max_raw()));
-    assert_eq!(max.try_add(Interval::point(ulp())), Err(OverflowDetected::TierOverflow));
-    assert_eq!(max.try_mul(pt("2")), Err(OverflowDetected::TierOverflow));
-    let min = Interval::point(FixedPoint::from_raw(min_raw()));
-    assert_eq!(min.try_neg(), Err(OverflowDetected::TierOverflow));
-    assert_eq!(min.try_sub(Interval::point(ulp())), Err(OverflowDetected::TierOverflow));
-    // ceil of a value whose floor is the storage maximum has no home
-    assert_eq!(max.try_mul(Interval::new(FixedPoint::one(), FixedPoint::one() + ulp())), Err(OverflowDetected::TierOverflow));
-}
-
-#[cfg(table_format = "q16_16")]
-fn max_raw() -> g_math::fixed_point::imperative::BinaryStorage { i32::MAX }
-#[cfg(table_format = "q32_32")]
-fn max_raw() -> g_math::fixed_point::imperative::BinaryStorage { i64::MAX }
-#[cfg(table_format = "q64_64")]
-fn max_raw() -> g_math::fixed_point::imperative::BinaryStorage { i128::MAX }
-#[cfg(table_format = "q128_128")]
-fn max_raw() -> g_math::fixed_point::imperative::BinaryStorage { g_math::fixed_point::I256::max_value() }
-#[cfg(table_format = "q256_256")]
-fn max_raw() -> g_math::fixed_point::imperative::BinaryStorage { g_math::fixed_point::I512::max_value() }
-
-#[cfg(table_format = "q16_16")]
-fn min_raw() -> g_math::fixed_point::imperative::BinaryStorage { i32::MIN }
-#[cfg(table_format = "q32_32")]
-fn min_raw() -> g_math::fixed_point::imperative::BinaryStorage { i64::MIN }
-#[cfg(table_format = "q64_64")]
-fn min_raw() -> g_math::fixed_point::imperative::BinaryStorage { i128::MIN }
-#[cfg(table_format = "q128_128")]
-fn min_raw() -> g_math::fixed_point::imperative::BinaryStorage { g_math::fixed_point::I256::min_value() }
-#[cfg(table_format = "q256_256")]
-fn min_raw() -> g_math::fixed_point::imperative::BinaryStorage { g_math::fixed_point::I512::min_value() }

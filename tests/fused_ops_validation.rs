@@ -3,554 +3,566 @@
 //! All reference values from mpmath at 60-digit precision.
 //! Tests verify both correctness and precision advantage over unfused paths.
 
-use g_math::fixed_point::{FixedPoint, FixedVector};
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-use g_math::fixed_point::imperative::OverflowDetected;
-use g_math::fixed_point::imperative::fused;
+#[macro_use]
+mod common;
 
-fn fp(s: &str) -> FixedPoint {
-    if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
-    else { FixedPoint::from_str(s) }
-}
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            type FixedPoint = Fixed<$S, $F>;
+            #[allow(dead_code)]
+            const FRAC_BITS: u32 = $F;
+            type FixedVector<T = FixedPoint> = g_math::fixed_point::FixedVector<T>;
+            #[allow(dead_code)]
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            use g_math::fixed_point::{Fixed};
+            #[allow(unused_imports)]
+            use g_math::fixed_point::imperative::OverflowDetected;
+            use g_math::fixed_point::imperative::fused;
 
-fn tight() -> FixedPoint {
-    #[cfg(table_format = "q16_16")]
-    { fp("0.01") }
-    #[cfg(table_format = "q32_32")]
-    { fp("0.0001") }
-    #[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
-    { fp("0.000000001") }
-}
-/// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
-fn ulps(k: i32) -> FixedPoint {
-    let mut u = FixedPoint::one();
-    for _ in 0..g_math::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
-    u * FixedPoint::from_int(k)
-}
-/// `t`, raised to `k` storage units where the split cannot resolve it.
-fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
-/// The 0.001 tolerance of the approximate checks: 0 raw at
-/// GMATH_FRAC_BITS=8, so raised to 1 unit (an exactness check) there.
-fn milli() -> FixedPoint { at_least(fp("0.001"), 1) }
+            fn fp(s: &str) -> FixedPoint {
+                if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
+                else { FixedPoint::from_str(s) }
+            }
 
-#[allow(dead_code)]
-fn ulp1() -> FixedPoint { fp("0.0000000000000000002") } // ~1 ULP at Q64.64
+            fn tight() -> FixedPoint {
+                if BITS == 32 { fp("0.01") } else if BITS == 64 { fp("0.0001") } else { fp("0.000000001") }
+            }
+            /// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+            fn ulps(k: i32) -> FixedPoint {
+                let mut u = FixedPoint::one();
+                for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
+                u * FixedPoint::from_int(k)
+            }
+            /// `t`, raised to `k` storage units where the split cannot resolve it.
+            fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
+            /// The 0.001 tolerance of the approximate checks: 0 raw at
+            /// GMATH_FRAC_BITS=8, so raised to 1 unit (an exactness check) there.
+            fn milli() -> FixedPoint { at_least(fp("0.001"), 1) }
 
-fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
-    let d = (got - exp).abs();
-    assert!(d < tol, "{}: got {}, expected {}, diff={} ({} raw units)", name, got, exp, d, d.raw());
-}
+            #[allow(dead_code)]
+            fn ulp1() -> FixedPoint { fp("0.0000000000000000002") } // ~1 ULP at Q64.64
 
-// ============================================================================
-// sqrt_sum_sq — fused norm
-// ============================================================================
+            fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
+                let d = (got - exp).abs();
+                assert!(d < tol, "{}: got {}, expected {}, diff={} ({} raw units)", name, got, exp, d, d.raw());
+            }
 
-#[test]
-fn test_sqrt_sum_sq_3_4_5_triangle() {
-    // sqrt(3² + 4²) = 5 (exact)
-    let result = fused::sqrt_sum_sq(&[fp("3"), fp("4")]);
-    assert_fp(result, fp("5"), tight(), "sqrt(3²+4²)");
-}
+            // ============================================================================
+            // sqrt_sum_sq — fused norm
+            // ============================================================================
 
-#[test]
-fn test_sqrt_sum_sq_unit_vector() {
-    // sqrt(1²) = 1
-    let result = fused::sqrt_sum_sq(&[fp("1")]);
-    assert_fp(result, fp("1"), tight(), "sqrt(1²)");
-}
+            #[test]
+            fn test_sqrt_sum_sq_3_4_5_triangle() {
+                // sqrt(3² + 4²) = 5 (exact)
+                let result = fused::sqrt_sum_sq(&[fp("3"), fp("4")]);
+                assert_fp(result, fp("5"), tight(), "sqrt(3²+4²)");
+            }
 
-#[test]
-fn test_sqrt_sum_sq_3d() {
-    // sqrt(1² + 2² + 3²) = sqrt(14) = 3.741657386773941...
-    let result = fused::sqrt_sum_sq(&[fp("1"), fp("2"), fp("3")]);
-    assert_fp(result, fp("3.741657386773941"), tight(), "sqrt(1²+2²+3²)");
-}
+            #[test]
+            fn test_sqrt_sum_sq_unit_vector() {
+                // sqrt(1²) = 1
+                let result = fused::sqrt_sum_sq(&[fp("1")]);
+                assert_fp(result, fp("1"), tight(), "sqrt(1²)");
+            }
 
-#[test]
-fn test_sqrt_sum_sq_small_values() {
-    // sqrt(0.1² + 0.2² + 0.3²) = sqrt(0.14) = 0.374165738677394...
-    let result = fused::sqrt_sum_sq(&[fp("0.1"), fp("0.2"), fp("0.3")]);
-    assert_fp(result, fp("0.374165738677394"), tight(), "sqrt(0.1²+0.2²+0.3²)");
-}
+            #[test]
+            fn test_sqrt_sum_sq_3d() {
+                // sqrt(1² + 2² + 3²) = sqrt(14) = 3.741657386773941...
+                let result = fused::sqrt_sum_sq(&[fp("1"), fp("2"), fp("3")]);
+                assert_fp(result, fp("3.741657386773941"), tight(), "sqrt(1²+2²+3²)");
+            }
 
-#[test]
-fn test_sqrt_sum_sq_matches_vector_length() {
-    // Fused should match FixedVector::length() within 1 ULP
-    let v = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3"), fp("4"), fp("5")]);
-    let fused_len = v.length_fused();
-    let naive_len = v.length();
-    let diff = (fused_len - naive_len).abs();
-    // They should be very close — fused may be slightly more precise
-    assert!(diff < tight(),
-        "length_fused={} vs length={}, diff={}", fused_len, naive_len, diff);
-}
+            #[test]
+            fn test_sqrt_sum_sq_small_values() {
+                // sqrt(0.1² + 0.2² + 0.3²) = sqrt(0.14) = 0.374165738677394...
+                let result = fused::sqrt_sum_sq(&[fp("0.1"), fp("0.2"), fp("0.3")]);
+                assert_fp(result, fp("0.374165738677394"), tight(), "sqrt(0.1²+0.2²+0.3²)");
+            }
 
-#[test]
-fn test_sqrt_sum_sq_high_dim() {
-    // 23-dimensional: all 1s → sqrt(23)
-    let vals: Vec<FixedPoint> = vec![fp("1"); 23];
-    let result = fused::sqrt_sum_sq(&vals);
-    // mpmath: sqrt(23) = 4.795831523312719...
-    assert_fp(result, fp("4.795831523312719"), tight(), "sqrt(23×1²)");
-}
+            #[test]
+            fn test_sqrt_sum_sq_matches_vector_length() {
+                // Fused should match FixedVector::length() within 1 ULP
+                let v = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3"), fp("4"), fp("5")]);
+                let fused_len = v.length_fused();
+                let naive_len = v.length();
+                let diff = (fused_len - naive_len).abs();
+                // They should be very close — fused may be slightly more precise
+                assert!(diff < tight(),
+                    "length_fused={} vs length={}, diff={}", fused_len, naive_len, diff);
+            }
 
-// ============================================================================
-// euclidean_distance — fused distance
-// ============================================================================
+            #[test]
+            fn test_sqrt_sum_sq_high_dim() {
+                // 23-dimensional: all 1s → sqrt(23)
+                let vals: Vec<FixedPoint> = vec![fp("1"); 23];
+                let result = fused::sqrt_sum_sq(&vals);
+                // mpmath: sqrt(23) = 4.795831523312719...
+                assert_fp(result, fp("4.795831523312719"), tight(), "sqrt(23×1²)");
+            }
 
-#[test]
-fn test_euclidean_distance_3_4_5() {
-    // dist([0,0], [3,4]) = 5
-    let a = [FixedPoint::ZERO, FixedPoint::ZERO];
-    let b = [fp("3"), fp("4")];
-    let result = fused::euclidean_distance(&a, &b);
-    assert_fp(result, fp("5"), tight(), "dist([0,0],[3,4])");
-}
+            // ============================================================================
+            // euclidean_distance — fused distance
+            // ============================================================================
 
-#[test]
-fn test_euclidean_distance_3d() {
-    // dist([1,2,3], [4,6,3]) = sqrt(9+16+0) = 5
-    let a = [fp("1"), fp("2"), fp("3")];
-    let b = [fp("4"), fp("6"), fp("3")];
-    let result = fused::euclidean_distance(&a, &b);
-    assert_fp(result, fp("5"), tight(), "dist([1,2,3],[4,6,3])");
-}
+            #[test]
+            fn test_euclidean_distance_3_4_5() {
+                // dist([0,0], [3,4]) = 5
+                let a = [FixedPoint::ZERO, FixedPoint::ZERO];
+                let b = [fp("3"), fp("4")];
+                let result = fused::euclidean_distance(&a, &b);
+                assert_fp(result, fp("5"), tight(), "dist([0,0],[3,4])");
+            }
 
-#[test]
-fn test_euclidean_distance_decimal() {
-    // dist([0.1,0.2], [0.4,0.6]) = sqrt(0.09+0.16) = 0.5
-    let a = [fp("0.1"), fp("0.2")];
-    let b = [fp("0.4"), fp("0.6")];
-    let result = fused::euclidean_distance(&a, &b);
-    assert_fp(result, fp("0.5"), tight(), "dist([0.1,0.2],[0.4,0.6])");
-}
+            #[test]
+            fn test_euclidean_distance_3d() {
+                // dist([1,2,3], [4,6,3]) = sqrt(9+16+0) = 5
+                let a = [fp("1"), fp("2"), fp("3")];
+                let b = [fp("4"), fp("6"), fp("3")];
+                let result = fused::euclidean_distance(&a, &b);
+                assert_fp(result, fp("5"), tight(), "dist([1,2,3],[4,6,3])");
+            }
 
-#[test]
-fn test_euclidean_distance_self() {
-    let a = [fp("1"), fp("2"), fp("3")];
-    let result = fused::euclidean_distance(&a, &a);
-    assert!(result.is_zero() || result.abs() < tight(), "dist(a,a)={}", result);
-}
+            #[test]
+            fn test_euclidean_distance_decimal() {
+                // dist([0.1,0.2], [0.4,0.6]) = sqrt(0.09+0.16) = 0.5
+                let a = [fp("0.1"), fp("0.2")];
+                let b = [fp("0.4"), fp("0.6")];
+                let result = fused::euclidean_distance(&a, &b);
+                assert_fp(result, fp("0.5"), tight(), "dist([0.1,0.2],[0.4,0.6])");
+            }
 
-#[test]
-fn test_euclidean_distance_matches_vector() {
-    // Fused distance should match (a-b).length()
-    let a = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
-    let b = FixedVector::from_slice(&[fp("4"), fp("6"), fp("8")]);
-    let fused_dist = a.distance_to(&b);
-    let naive_dist = (&a - &b).length();
-    let diff = (fused_dist - naive_dist).abs();
-    assert!(diff < tight(),
-        "distance_to={} vs (a-b).length()={}, diff={}", fused_dist, naive_dist, diff);
-}
+            #[test]
+            fn test_euclidean_distance_self() {
+                let a = [fp("1"), fp("2"), fp("3")];
+                let result = fused::euclidean_distance(&a, &a);
+                assert!(result.is_zero() || result.abs() < tight(), "dist(a,a)={}", result);
+            }
 
-// ============================================================================
-// softmax — fused stable softmax
-// ============================================================================
+            #[test]
+            fn test_euclidean_distance_matches_vector() {
+                // Fused distance should match (a-b).length()
+                let a = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
+                let b = FixedVector::from_slice(&[fp("4"), fp("6"), fp("8")]);
+                let fused_dist = a.distance_to(&b);
+                let naive_dist = (&a - &b).length();
+                let diff = (fused_dist - naive_dist).abs();
+                assert!(diff < tight(),
+                    "distance_to={} vs (a-b).length()={}, diff={}", fused_dist, naive_dist, diff);
+            }
 
-#[test]
-fn test_softmax_uniform() {
-    let scores = vec![fp("1"); 4];
-    let result = fused::softmax(&scores).unwrap();
-    for (i, w) in result.iter().enumerate() {
-        assert_fp(*w, fp("0.25"), milli(), &format!("softmax_uniform[{i}]"));
-    }
-}
+            // ============================================================================
+            // softmax — fused stable softmax
+            // ============================================================================
 
-#[test]
-fn test_softmax_sums_to_one() {
-    let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
-    let result = fused::softmax(&scores).unwrap();
-    let sum: FixedPoint = result.iter().copied().fold(FixedPoint::ZERO, |a, b| a + b);
-    assert_fp(sum, fp("1"), tight(), "softmax_sum");
-}
+            #[test]
+            fn test_softmax_uniform() {
+                let scores = vec![fp("1"); 4];
+                let result = fused::softmax(&scores).unwrap();
+                for (i, w) in result.iter().enumerate() {
+                    assert_fp(*w, fp("0.25"), milli(), &format!("softmax_uniform[{i}]"));
+                }
+            }
 
-#[test]
-fn test_softmax_monotone() {
-    let scores = vec![fp("1"), fp("2"), fp("3")];
-    let result = fused::softmax(&scores).unwrap();
-    assert!(result[0] < result[1], "softmax not monotone: [0]={} >= [1]={}", result[0], result[1]);
-    assert!(result[1] < result[2], "softmax not monotone: [1]={} >= [2]={}", result[1], result[2]);
-}
+            #[test]
+            fn test_softmax_sums_to_one() {
+                let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
+                let result = fused::softmax(&scores).unwrap();
+                let sum: FixedPoint = result.iter().copied().fold(FixedPoint::ZERO, |a, b| a + b);
+                assert_fp(sum, fp("1"), tight(), "softmax_sum");
+            }
 
-/// Q16.16: softmax probabilities (0.03–0.64) have only 4 significant digits,
-/// mpmath references have 15. The 1e-4 tolerance is unrepresentable.
-#[test]
-#[cfg(not(table_format = "q16_16"))]
-fn test_softmax_mpmath_values() {
-    // mpmath reference: softmax([1,2,3,4])
-    let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
-    let result = fused::softmax(&scores).unwrap();
-    assert_fp(result[0], fp("0.032058603280084"), fp("0.0001"), "softmax[0]");
-    assert_fp(result[1], fp("0.087144318742032"), fp("0.0001"), "softmax[1]");
-    assert_fp(result[2], fp("0.236882818089910"), fp("0.0001"), "softmax[2]");
-    assert_fp(result[3], fp("0.643914259887972"), fp("0.0001"), "softmax[3]");
-}
+            #[test]
+            fn test_softmax_monotone() {
+                let scores = vec![fp("1"), fp("2"), fp("3")];
+                let result = fused::softmax(&scores).unwrap();
+                assert!(result[0] < result[1], "softmax not monotone: [0]={} >= [1]={}", result[0], result[1]);
+                assert!(result[1] < result[2], "softmax not monotone: [1]={} >= [2]={}", result[1], result[2]);
+            }
 
-#[test]
-fn test_softmax_shift_invariance() {
-    // softmax(x + c) = softmax(x) for any constant c
-    let scores1 = vec![fp("1"), fp("2"), fp("3")];
-    let scores2 = vec![fp("101"), fp("102"), fp("103")];
-    let r1 = fused::softmax(&scores1).unwrap();
-    let r2 = fused::softmax(&scores2).unwrap();
-    for i in 0..3 {
-        assert_fp(r1[i], r2[i], milli(),
-            &format!("shift_invariance[{i}]"));
-    }
-}
+            /// Q16.16: softmax probabilities (0.03–0.64) have only 4 significant digits,
+            /// mpmath references have 15. The 1e-4 tolerance is unrepresentable.
+            #[test]
+            fn test_softmax_mpmath_values() {
+                if !(!(BITS == 32)) { return; }
+                // mpmath reference: softmax([1,2,3,4])
+                let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
+                let result = fused::softmax(&scores).unwrap();
+                assert_fp(result[0], fp("0.032058603280084"), fp("0.0001"), "softmax[0]");
+                assert_fp(result[1], fp("0.087144318742032"), fp("0.0001"), "softmax[1]");
+                assert_fp(result[2], fp("0.236882818089910"), fp("0.0001"), "softmax[2]");
+                assert_fp(result[3], fp("0.643914259887972"), fp("0.0001"), "softmax[3]");
+            }
 
-#[test]
-fn test_softmax_empty() {
-    let result = fused::softmax(&[] as &[FixedPoint] as &[FixedPoint]).unwrap();
-    assert!(result.is_empty());
-}
+            #[test]
+            fn test_softmax_shift_invariance() {
+                // softmax(x + c) = softmax(x) for any constant c
+                let scores1 = vec![fp("1"), fp("2"), fp("3")];
+                let scores2 = vec![fp("101"), fp("102"), fp("103")];
+                let r1 = fused::softmax(&scores1).unwrap();
+                let r2 = fused::softmax(&scores2).unwrap();
+                for i in 0..3 {
+                    assert_fp(r1[i], r2[i], milli(),
+                        &format!("shift_invariance[{i}]"));
+                }
+            }
 
-#[test]
-fn test_softmax_single() {
-    let result = fused::softmax(&[fp("5")]).unwrap();
-    assert_fp(result[0], fp("1"), tight(), "softmax_single");
-}
+            #[test]
+            fn test_softmax_empty() {
+                let result = fused::softmax(&[] as &[FixedPoint] as &[FixedPoint]).unwrap();
+                assert!(result.is_empty());
+            }
 
-// ============================================================================
-// rms_norm_factor — fused RMSNorm
-// ============================================================================
+            #[test]
+            fn test_softmax_single() {
+                let result = fused::softmax(&[fp("5")]).unwrap();
+                assert_fp(result[0], fp("1"), tight(), "softmax_single");
+            }
 
-#[test]
-fn test_rms_norm_constant_vector() {
-    // [2,2,2,2]: mean(x²) = 4, sqrt(4+eps) ≈ 2, factor ≈ 0.5
-    let vals = vec![fp("2"); 4];
-    let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
-    assert_fp(factor, fp("0.5"), milli(), "rms_norm_constant");
-}
+            // ============================================================================
+            // rms_norm_factor — fused RMSNorm
+            // ============================================================================
 
-#[test]
-fn test_rms_norm_mpmath() {
-    // [1,2,3]: mean(x²) = 14/3, factor = 1/sqrt(14/3 + 1e-6) = 0.46291...
-    let vals = vec![fp("1"), fp("2"), fp("3")];
-    let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
-    assert_fp(factor, fp("0.46291"), milli(), "rms_norm_1_2_3");
-}
+            #[test]
+            fn test_rms_norm_constant_vector() {
+                // [2,2,2,2]: mean(x²) = 4, sqrt(4+eps) ≈ 2, factor ≈ 0.5
+                let vals = vec![fp("2"); 4];
+                let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
+                assert_fp(factor, fp("0.5"), milli(), "rms_norm_constant");
+            }
 
-#[test]
-fn test_rms_norm_ones() {
-    // [1,1,1]: mean(x²) = 1, factor = 1/sqrt(1+eps) ≈ 1
-    let vals = vec![fp("1"); 3];
-    let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
-    assert_fp(factor, fp("1"), milli(), "rms_norm_ones");
-}
+            #[test]
+            fn test_rms_norm_mpmath() {
+                // [1,2,3]: mean(x²) = 14/3, factor = 1/sqrt(14/3 + 1e-6) = 0.46291...
+                let vals = vec![fp("1"), fp("2"), fp("3")];
+                let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
+                assert_fp(factor, fp("0.46291"), milli(), "rms_norm_1_2_3");
+            }
 
-// ============================================================================
-// silu — fused SiLU activation
-// ============================================================================
+            #[test]
+            fn test_rms_norm_ones() {
+                // [1,1,1]: mean(x²) = 1, factor = 1/sqrt(1+eps) ≈ 1
+                let vals = vec![fp("1"); 3];
+                let factor = fused::rms_norm_factor(&vals, fp("0.000001")).unwrap();
+                assert_fp(factor, fp("1"), milli(), "rms_norm_ones");
+            }
 
-#[test]
-fn test_silu_zero() {
-    let result = fused::silu(FixedPoint::ZERO);
-    assert_fp(result, FixedPoint::ZERO, tight(), "silu(0)");
-}
+            // ============================================================================
+            // silu — fused SiLU activation
+            // ============================================================================
 
-#[test]
-fn test_silu_one() {
-    // mpmath: silu(1) = 0.73105857863000487925...
-    let result = fused::silu(fp("1"));
-    assert_fp(result, fp("0.731058578630004"), tight(), "silu(1)");
-}
+            #[test]
+            fn test_silu_zero() {
+                let result = fused::silu(FixedPoint::ZERO);
+                assert_fp(result, FixedPoint::ZERO, tight(), "silu(0)");
+            }
 
-#[test]
-fn test_silu_two() {
-    // mpmath: silu(2) = 1.76159415595576488...
-    let result = fused::silu(fp("2"));
-    assert_fp(result, fp("1.761594155955764"), tight(), "silu(2)");
-}
+            #[test]
+            fn test_silu_one() {
+                // mpmath: silu(1) = 0.73105857863000487925...
+                let result = fused::silu(fp("1"));
+                assert_fp(result, fp("0.731058578630004"), tight(), "silu(1)");
+            }
 
-#[test]
-fn test_silu_neg_one() {
-    // mpmath: silu(-1) = -0.26894142136999512...
-    let result = fused::silu(fp("-1"));
-    assert_fp(result, fp("-0.268941421369995"), tight(), "silu(-1)");
-}
+            #[test]
+            fn test_silu_two() {
+                // mpmath: silu(2) = 1.76159415595576488...
+                let result = fused::silu(fp("2"));
+                assert_fp(result, fp("1.761594155955764"), tight(), "silu(2)");
+            }
 
-#[test]
-fn test_silu_neg_two() {
-    // mpmath: silu(-2) = -0.23840584404423511...
-    let result = fused::silu(fp("-2"));
-    assert_fp(result, fp("-0.238405844044235"), tight(), "silu(-2)");
-}
+            #[test]
+            fn test_silu_neg_one() {
+                // mpmath: silu(-1) = -0.26894142136999512...
+                let result = fused::silu(fp("-1"));
+                assert_fp(result, fp("-0.268941421369995"), tight(), "silu(-1)");
+            }
 
-#[test]
-fn test_silu_half() {
-    // mpmath: silu(0.5) = 0.31122966560092728...
-    let result = fused::silu(fp("0.5"));
-    assert_fp(result, fp("0.311229665600927"), tight(), "silu(0.5)");
-}
+            #[test]
+            fn test_silu_neg_two() {
+                // mpmath: silu(-2) = -0.23840584404423511...
+                let result = fused::silu(fp("-2"));
+                assert_fp(result, fp("-0.238405844044235"), tight(), "silu(-2)");
+            }
 
-#[test]
-fn test_silu_large_positive() {
-    // silu(x) → x for large x (sigmoid → 1)
-    let x = fp("10");
-    let result = fused::silu(x);
-    assert_fp(result, x, milli(), "silu(10)≈10");
-}
+            #[test]
+            fn test_silu_half() {
+                // mpmath: silu(0.5) = 0.31122966560092728...
+                let result = fused::silu(fp("0.5"));
+                assert_fp(result, fp("0.311229665600927"), tight(), "silu(0.5)");
+            }
 
-#[test]
-fn test_silu_large_negative() {
-    // silu(x) → 0 for large negative x (sigmoid → 0)
-    let result = fused::silu(fp("-10"));
-    assert!(result.abs() < milli(), "silu(-10)={}, expected ~0", result);
-}
+            #[test]
+            fn test_silu_large_positive() {
+                // silu(x) → x for large x (sigmoid → 1)
+                let x = fp("10");
+                let result = fused::silu(x);
+                assert_fp(result, x, milli(), "silu(10)≈10");
+            }
 
-// ============================================================================
-// Precision comparison: fused vs unfused
-// ============================================================================
+            #[test]
+            fn test_silu_large_negative() {
+                // silu(x) → 0 for large negative x (sigmoid → 0)
+                let result = fused::silu(fp("-10"));
+                assert!(result.abs() < milli(), "silu(-10)={}, expected ~0", result);
+            }
 
-#[test]
-fn test_fused_norm_precision_vs_unfused() {
-    // For a large-dimension vector, fused should be at least as precise as unfused
-    let n = 50;
-    let vals: Vec<FixedPoint> = (1..=n).map(|i| fp(&format!("0.{}", i))).collect();
-    let v = FixedVector::from_slice(&vals);
+            // ============================================================================
+            // Precision comparison: fused vs unfused
+            // ============================================================================
 
-    let fused_len = v.length_fused();
-    let naive_len = v.length();
+            #[test]
+            fn test_fused_norm_precision_vs_unfused() {
+                // For a large-dimension vector, fused should be at least as precise as unfused
+                let n = 50;
+                let vals: Vec<FixedPoint> = (1..=n).map(|i| fp(&format!("0.{}", i))).collect();
+                let v = FixedVector::from_slice(&vals);
 
-    // Both should be close to the same value
-    let diff = (fused_len - naive_len).abs();
-    assert!(diff < tight(),
-        "50D norm: fused={} naive={} diff={}", fused_len, naive_len, diff);
-}
+                let fused_len = v.length_fused();
+                let naive_len = v.length();
 
-// ============================================================================
-// softmax_mix — fused softmax + value mix (attention hot path)
-//
-// Oracle: softmax_mix vs exact-rational softmax-dot-V across profiles, covering
-// long-n uniform and near-one-hot cases. References from mpmath at 60-digit
-// precision.
-// ============================================================================
+                // Both should be close to the same value
+                let diff = (fused_len - naive_len).abs();
+                assert!(diff < tight(),
+                    "50D norm: fused={} naive={} diff={}", fused_len, naive_len, diff);
+            }
 
-// mix matrix V (dim=3) shared by the mpmath-referenced cases below.
-fn mix_rows() -> Vec<Vec<FixedPoint>> {
-    vec![
-        vec![fp("1"),  fp("-2"), fp("0.5")],
-        vec![fp("2"),  fp("0"),  fp("-1")],
-        vec![fp("-1"), fp("3"),  fp("0.25")],
-        vec![fp("0.5"), fp("1"), fp("-0.5")],
-    ]
-}
+            // ============================================================================
+            // softmax_mix — fused softmax + value mix (attention hot path)
+            //
+            // Oracle: softmax_mix vs exact-rational softmax-dot-V across profiles, covering
+            // long-n uniform and near-one-hot cases. References from mpmath at 60-digit
+            // precision.
+            // ============================================================================
 
-fn as_refs(rows: &[Vec<FixedPoint>]) -> Vec<&[FixedPoint]> {
-    rows.iter().map(|r| r.as_slice()).collect()
-}
+            // mix matrix V (dim=3) shared by the mpmath-referenced cases below.
+            fn mix_rows() -> Vec<Vec<FixedPoint>> {
+                vec![
+                    vec![fp("1"),  fp("-2"), fp("0.5")],
+                    vec![fp("2"),  fp("0"),  fp("-1")],
+                    vec![fp("-1"), fp("3"),  fp("0.25")],
+                    vec![fp("0.5"), fp("1"), fp("-0.5")],
+                ]
+            }
 
-#[test]
-fn test_softmax_mix_mpmath_distinct_scores() {
-    // scores = [0, 0.5, 1.0, 1.5] (all dyadic → profile-independent reference)
-    let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
-    let rows = mix_rows();
-    let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
-    // mpmath 50-digit: Σⱼ softmax(scores)ⱼ · V[j]
-    assert_fp(out[0], fp("0.38786929090355042852673480927074604798583495025821"), tight(), "mix_distinct[0]");
-    assert_fp(out[1], fp("1.0799946198600885464123755232489173856295230092078"),  tight(), "mix_distinct[1]");
-    assert_fp(out[2], fp("-0.27516296601772463318591156832035660977693791008551"), tight(), "mix_distinct[2]");
-}
+            fn as_refs(rows: &[Vec<FixedPoint>]) -> Vec<&[FixedPoint]> {
+                rows.iter().map(|r| r.as_slice()).collect()
+            }
 
-#[test]
-fn test_softmax_mix_mpmath_near_one_hot() {
-    // One dominant score (8.0): weight mass concentrates on row 2 but the
-    // sub-dominant rows still contribute — the case where storage-tier weight
-    // rounding would zero the tails. Reference computed at full real precision.
-    let scores = [fp("0"), fp("0"), fp("8"), fp("0")];
-    let rows = mix_rows();
-    let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
-    assert_fp(out[0], fp("-0.99782168514830731674125594160540560423650472692288"), tight(), "mix_onehot[0]");
-    assert_fp(out[1], fp("2.9966487463820112565250091409313932372869303491121"),  tight(), "mix_onehot[1]");
-    assert_fp(out[2], fp("0.24941353061685196989187659966299381652521281109462"), tight(), "mix_onehot[2]");
-}
+            #[test]
+            fn test_softmax_mix_mpmath_distinct_scores() {
+                // scores = [0, 0.5, 1.0, 1.5] (all dyadic → profile-independent reference)
+                let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
+                let rows = mix_rows();
+                let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+                // mpmath 50-digit: Σⱼ softmax(scores)ⱼ · V[j]
+                assert_fp(out[0], fp("0.38786929090355042852673480927074604798583495025821"), tight(), "mix_distinct[0]");
+                assert_fp(out[1], fp("1.0799946198600885464123755232489173856295230092078"),  tight(), "mix_distinct[1]");
+                assert_fp(out[2], fp("-0.27516296601772463318591156832035660977693791008551"), tight(), "mix_distinct[2]");
+            }
 
-#[test]
-fn test_softmax_mix_uniform_recovers_exact_mean() {
-    // Uniform scores ⇒ softmax is exactly uniform (1/n each) regardless of the
-    // transcendental exp value, so the mix is the EXACT arithmetic mean of the
-    // value rows — a pure rational oracle needing no mpmath. Rows alternate
-    // M±A so the mean is exactly M (dyadic). Long n is where the naive path's
-    // storage-tier weight floor (2^-FRAC_BITS) collapses 1/n to zero; the fused
-    // path must still return M on every profile.
-    let m = [fp("0.5"), fp("-1.5")];
-    let a = [fp("0.25"), fp("2")];
-    for &n in &[2usize, 100, 3000] {
-        let scores = vec![fp("1"); n]; // all equal
-        let rows: Vec<Vec<FixedPoint>> = (0..n)
-            .map(|j| if j % 2 == 0 {
-                vec![m[0] + a[0], m[1] + a[1]]
-            } else {
-                vec![m[0] - a[0], m[1] - a[1]]
-            })
-            .collect();
-        let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
-        assert_fp(out[0], m[0], tight(), &format!("uniform_mean n={n} [0]"));
-        assert_fp(out[1], m[1], tight(), &format!("uniform_mean n={n} [1]"));
-    }
-}
+            #[test]
+            fn test_softmax_mix_mpmath_near_one_hot() {
+                // One dominant score (8.0): weight mass concentrates on row 2 but the
+                // sub-dominant rows still contribute — the case where storage-tier weight
+                // rounding would zero the tails. Reference computed at full real precision.
+                let scores = [fp("0"), fp("0"), fp("8"), fp("0")];
+                let rows = mix_rows();
+                let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+                assert_fp(out[0], fp("-0.99782168514830731674125594160540560423650472692288"), tight(), "mix_onehot[0]");
+                assert_fp(out[1], fp("2.9966487463820112565250091409313932372869303491121"),  tight(), "mix_onehot[1]");
+                assert_fp(out[2], fp("0.24941353061685196989187659966299381652521281109462"), tight(), "mix_onehot[2]");
+            }
 
-#[test]
-fn test_softmax_mix_observer_weights_sum_to_one() {
-    let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
-    let rows = mix_rows();
-    let (_out, w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
-    let sum = w.iter().fold(FixedPoint::ZERO, |acc, &x| acc + x);
-    assert_fp(sum, fp("1"), tight(), "observer weights Σ=1");
-}
+            #[test]
+            fn test_softmax_mix_uniform_recovers_exact_mean() {
+                // Uniform scores ⇒ softmax is exactly uniform (1/n each) regardless of the
+                // transcendental exp value, so the mix is the EXACT arithmetic mean of the
+                // value rows — a pure rational oracle needing no mpmath. Rows alternate
+                // M±A so the mean is exactly M (dyadic). Long n is where the naive path's
+                // storage-tier weight floor (2^-FRAC_BITS) collapses 1/n to zero; the fused
+                // path must still return M on every profile.
+                let m = [fp("0.5"), fp("-1.5")];
+                let a = [fp("0.25"), fp("2")];
+                for &n in &[2usize, 100, 3000] {
+                    let scores = vec![fp("1"); n]; // all equal
+                    let rows: Vec<Vec<FixedPoint>> = (0..n)
+                        .map(|j| if j % 2 == 0 {
+                            vec![m[0] + a[0], m[1] + a[1]]
+                        } else {
+                            vec![m[0] - a[0], m[1] - a[1]]
+                        })
+                        .collect();
+                    let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+                    assert_fp(out[0], m[0], tight(), &format!("uniform_mean n={n} [0]"));
+                    assert_fp(out[1], m[1], tight(), &format!("uniform_mean n={n} [1]"));
+                }
+            }
 
-#[test]
-#[should_panic(expected = "value row")]
-fn test_softmax_mix_ragged_rows_panic() {
-    // Row-length mismatch is now a hard assert (was debug_assert): a ragged
-    // value matrix would silently mix wrong dimensions in release otherwise.
-    let scores = [fp("0"), fp("1")];
-    let r0 = [fp("1"), fp("2")];
-    let r1 = [fp("3")]; // wrong length
-    let rows: Vec<&[FixedPoint]> = vec![&r0, &r1];
-    let _ = fused::softmax_mix(&scores, &rows);
-}
+            #[test]
+            fn test_softmax_mix_observer_weights_sum_to_one() {
+                let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
+                let rows = mix_rows();
+                let (_out, w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
+                let sum = w.iter().fold(FixedPoint::ZERO, |acc, &x| acc + x);
+                assert_fp(sum, fp("1"), tight(), "observer weights Σ=1");
+            }
 
-// ============================================================================
-// inv_sqrt / try_inv_sqrt / inv_sqrt_sum_sq — reciprocal norm family (0.4.33)
-// ============================================================================
+            #[test]
+            #[should_panic(expected = "value row")]
+            fn test_softmax_mix_ragged_rows_panic() {
+                // Row-length mismatch is now a hard assert (was debug_assert): a ragged
+                // value matrix would silently mix wrong dimensions in release otherwise.
+                let scores = [fp("0"), fp("1")];
+                let r0 = [fp("1"), fp("2")];
+                let r1 = [fp("3")]; // wrong length
+                let rows: Vec<&[FixedPoint]> = vec![&r0, &r1];
+                let _ = fused::softmax_mix(&scores, &rows);
+            }
 
-#[test]
-fn test_inv_sqrt_exact_values() {
-    // 1/sqrt(4) = 0.5, 1/sqrt(0.25) = 2, 1/sqrt(1) = 1 — exactly representable.
-    assert_fp(fp("4").inv_sqrt(), fp("0.5"), tight(), "1/sqrt(4)");
-    assert_fp(fp("0.25").inv_sqrt(), fp("2"), tight(), "1/sqrt(0.25)");
-    assert_fp(fp("1").inv_sqrt(), fp("1"), tight(), "1/sqrt(1)");
-}
+            // ============================================================================
+            // inv_sqrt / try_inv_sqrt / inv_sqrt_sum_sq — reciprocal norm family (0.4.33)
+            // ============================================================================
 
-#[test]
-fn test_inv_sqrt_mpmath_references() {
-    // mpmath 60-digit: 1/sqrt(2), 1/sqrt(3), 1/sqrt(0.1)
-    assert_fp(
-        fp("2").inv_sqrt(),
-        fp("0.707106781186547524400844362104849039284835937688474036588339"),
-        tight(),
-        "1/sqrt(2)",
-    );
-    assert_fp(
-        fp("3").inv_sqrt(),
-        fp("0.577350269189625764509148780501957455647601751270126876018602"),
-        tight(),
-        "1/sqrt(3)",
-    );
-    // 0.1 is not dyadic: the stored input is off by <= 0.5 unit and
-    // |d/dx x^(-1/2)| = 0.5 * 0.1^(-3/2) = 15.81 amplifies that to <= 7.91
-    // units, plus <= 0.5 unit output rounding and <= 0.5 unit reference
-    // rounding: |diff| <= 8.91 units, so < 9 units (measured 7 at
-    // GMATH_FRAC_BITS=8 and 10). Binding only below GMATH_FRAC_BITS=10,
-    // where tight() = 0.01 is under 9 units (3 at 8).
-    assert_fp(
-        fp("0.1").inv_sqrt(),
-        fp("3.16227766016837933199889354443271853371955513932521682685750"),
-        at_least(tight(), 9),
-        "1/sqrt(0.1)",
-    );
-}
+            #[test]
+            fn test_inv_sqrt_exact_values() {
+                // 1/sqrt(4) = 0.5, 1/sqrt(0.25) = 2, 1/sqrt(1) = 1 — exactly representable.
+                assert_fp(fp("4").inv_sqrt(), fp("0.5"), tight(), "1/sqrt(4)");
+                assert_fp(fp("0.25").inv_sqrt(), fp("2"), tight(), "1/sqrt(0.25)");
+                assert_fp(fp("1").inv_sqrt(), fp("1"), tight(), "1/sqrt(1)");
+            }
 
-#[test]
-fn test_inv_sqrt_times_sqrt_is_one() {
-    // Inputs are exact on every split. Each factor is rounded (<= 0.5 unit),
-    // so the product is off by <= 0.5 * (sqrt(x) + 1/sqrt(x)) + 0.5 units
-    // (product rounding): 5.55 units at x = 100, the worst case here, so
-    // < 6 units (measured 4 at x = 100, GMATH_FRAC_BITS=8 and 10). Binding
-    // only below GMATH_FRAC_BITS=10, where tight() = 0.01 is under 6 units.
-    for s in ["0.5", "2", "3", "7.75", "100"] {
-        let x = fp(s);
-        let product = x.inv_sqrt() * x.sqrt();
-        assert_fp(product, fp("1"), at_least(tight(), 6), "inv_sqrt·sqrt at x");
-    }
-}
+            #[test]
+            fn test_inv_sqrt_mpmath_references() {
+                // mpmath 60-digit: 1/sqrt(2), 1/sqrt(3), 1/sqrt(0.1)
+                assert_fp(
+                    fp("2").inv_sqrt(),
+                    fp("0.707106781186547524400844362104849039284835937688474036588339"),
+                    tight(),
+                    "1/sqrt(2)",
+                );
+                assert_fp(
+                    fp("3").inv_sqrt(),
+                    fp("0.577350269189625764509148780501957455647601751270126876018602"),
+                    tight(),
+                    "1/sqrt(3)",
+                );
+                // 0.1 is not dyadic: the stored input is off by <= 0.5 unit and
+                // |d/dx x^(-1/2)| = 0.5 * 0.1^(-3/2) = 15.81 amplifies that to <= 7.91
+                // units, plus <= 0.5 unit output rounding and <= 0.5 unit reference
+                // rounding: |diff| <= 8.91 units, so < 9 units (measured 7 at
+                // GMATH_FRAC_BITS=8 and 10). Binding only below GMATH_FRAC_BITS=10,
+                // where tight() = 0.01 is under 9 units (3 at 8).
+                assert_fp(
+                    fp("0.1").inv_sqrt(),
+                    fp("3.16227766016837933199889354443271853371955513932521682685750"),
+                    at_least(tight(), 9),
+                    "1/sqrt(0.1)",
+                );
+            }
 
-#[test]
-fn test_inv_sqrt_matches_unfused_path() {
-    // Same engines, one fewer storage rounding: must agree within tight().
-    // 1000 exceeds the range of the coarsest realtime splits (+-512 at
-    // GMATH_FRAC_BITS=22): skip inputs the build cannot represent.
-    for s in ["0.5", "2", "42", "1000"] {
-        let Ok(x) = FixedPoint::try_from_str(s) else { continue };
-        let unfused = fp("1") / x.sqrt();
-        assert_fp(x.inv_sqrt(), unfused, tight(), "inv_sqrt vs 1/sqrt");
-    }
-}
+            #[test]
+            fn test_inv_sqrt_times_sqrt_is_one() {
+                // Inputs are exact on every split. Each factor is rounded (<= 0.5 unit),
+                // so the product is off by <= 0.5 * (sqrt(x) + 1/sqrt(x)) + 0.5 units
+                // (product rounding): 5.55 units at x = 100, the worst case here, so
+                // < 6 units (measured 4 at x = 100, GMATH_FRAC_BITS=8 and 10). Binding
+                // only below GMATH_FRAC_BITS=10, where tight() = 0.01 is under 6 units.
+                for s in ["0.5", "2", "3", "7.75", "100"] {
+                    let x = fp(s);
+                    let product = x.inv_sqrt() * x.sqrt();
+                    assert_fp(product, fp("1"), at_least(tight(), 6), "inv_sqrt·sqrt at x");
+                }
+            }
 
-#[test]
-fn test_try_inv_sqrt_domain_errors() {
-    assert!(fp("0").try_inv_sqrt().is_err(), "1/sqrt(0) must be DomainError");
-    assert!(fp("-1").try_inv_sqrt().is_err(), "1/sqrt(-1) must be DomainError");
-    assert!(fp("2").try_inv_sqrt().is_ok());
-}
+            #[test]
+            fn test_inv_sqrt_matches_unfused_path() {
+                // Same engines, one fewer storage rounding: must agree within tight().
+                // 1000 exceeds the range of the coarsest realtime splits (+-512 at
+                // GMATH_FRAC_BITS=22): skip inputs the build cannot represent.
+                for s in ["0.5", "2", "42", "1000"] {
+                    let Ok(x) = FixedPoint::try_from_str(s) else { continue };
+                    let unfused = fp("1") / x.sqrt();
+                    assert_fp(x.inv_sqrt(), unfused, tight(), "inv_sqrt vs 1/sqrt");
+                }
+            }
 
-#[test]
-fn test_inv_sqrt_sum_sq_3_4_5() {
-    // 1/sqrt(3² + 4²) = 0.2 exactly.
-    let result = fused::inv_sqrt_sum_sq(&[fp("3"), fp("4")]);
-    assert_fp(result, fp("0.2"), tight(), "1/sqrt(3²+4²)");
-}
+            #[test]
+            fn test_try_inv_sqrt_domain_errors() {
+                assert!(fp("0").try_inv_sqrt().is_err(), "1/sqrt(0) must be DomainError");
+                assert!(fp("-1").try_inv_sqrt().is_err(), "1/sqrt(-1) must be DomainError");
+                assert!(fp("2").try_inv_sqrt().is_ok());
+            }
 
-#[test]
-fn test_inv_sqrt_sum_sq_matches_scalar_path() {
-    // GeoH normalization pattern: inv_sqrt_sum_sq(v) vs length then inv_sqrt.
-    let v = [fp("1.5"), fp("-2.25"), fp("0.75"), fp("3")];
-    let fused_inv = fused::inv_sqrt_sum_sq(&v);
-    // Scalar path: sum of squares at storage tier, then inv_sqrt — the
-    // GeoH sketch `length_squared().try_inv_sqrt()`.
-    let mut ss = fp("0");
-    for x in &v {
-        ss = ss + *x * *x;
-    }
-    let scalar_inv = ss.inv_sqrt();
-    assert_fp(fused_inv, scalar_inv, tight(), "fused vs scalar reciprocal norm");
-    // And normalizing with it yields a unit vector.
-    let mut sum_sq = fp("0");
-    for x in &v {
-        let n = *x * fused_inv;
-        sum_sq = sum_sq + n * n;
-    }
-    // Error bound in storage units: fused_inv is off by <= 0.5 unit, a
-    // relative error of 0.5 / (inv * 2^F), which doubles in the squared
-    // length (1/inv = 4.11 units); each n = x * inv rounds (<= 0.5 unit,
-    // squared: 2 * sum|n| * 0.5 = 1.83 units) and each n * n rounds
-    // (4 * 0.5 = 2 units): <= 7.94 units, so < 8 units (measured 3 at
-    // GMATH_FRAC_BITS=8, 2 at 10). Binding only below GMATH_FRAC_BITS=10,
-    // where tight() = 0.01 is under 8 units.
-    assert_fp(sum_sq, fp("1"), at_least(tight(), 8), "normalized length");
-}
+            #[test]
+            fn test_inv_sqrt_sum_sq_3_4_5() {
+                // 1/sqrt(3² + 4²) = 0.2 exactly.
+                let result = fused::inv_sqrt_sum_sq(&[fp("3"), fp("4")]);
+                assert_fp(result, fp("0.2"), tight(), "1/sqrt(3²+4²)");
+            }
 
-#[test]
-#[should_panic(expected = "zero norm")]
-fn test_inv_sqrt_sum_sq_zero_vector_panics() {
-    let _ = fused::inv_sqrt_sum_sq(&[fp("0"), fp("0")]);
-}
+            #[test]
+            fn test_inv_sqrt_sum_sq_matches_scalar_path() {
+                // GeoH normalization pattern: inv_sqrt_sum_sq(v) vs length then inv_sqrt.
+                let v = [fp("1.5"), fp("-2.25"), fp("0.75"), fp("3")];
+                let fused_inv = fused::inv_sqrt_sum_sq(&v);
+                // Scalar path: sum of squares at storage tier, then inv_sqrt — the
+                // GeoH sketch `length_squared().try_inv_sqrt()`.
+                let mut ss = fp("0");
+                for x in &v {
+                    ss = ss + *x * *x;
+                }
+                let scalar_inv = ss.inv_sqrt();
+                assert_fp(fused_inv, scalar_inv, tight(), "fused vs scalar reciprocal norm");
+                // And normalizing with it yields a unit vector.
+                let mut sum_sq = fp("0");
+                for x in &v {
+                    let n = *x * fused_inv;
+                    sum_sq = sum_sq + n * n;
+                }
+                // Error bound in storage units: fused_inv is off by <= 0.5 unit, a
+                // relative error of 0.5 / (inv * 2^F), which doubles in the squared
+                // length (1/inv = 4.11 units); each n = x * inv rounds (<= 0.5 unit,
+                // squared: 2 * sum|n| * 0.5 = 1.83 units) and each n * n rounds
+                // (4 * 0.5 = 2 units): <= 7.94 units, so < 8 units (measured 3 at
+                // GMATH_FRAC_BITS=8, 2 at 10). Binding only below GMATH_FRAC_BITS=10,
+                // where tight() = 0.01 is under 8 units.
+                assert_fp(sum_sq, fp("1"), at_least(tight(), 8), "normalized length");
+            }
 
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-#[test]
-fn test_inv_sqrt_extreme_small_input() {
-    // x = 1 raw LSB = 2^-FRAC_BITS: 1/sqrt(x) = 2^(FRAC_BITS/2), exactly
-    // representable. Pins that the wide reciprocal cannot wrap for any
-    // storage-derived input (contract: fail loud, never wrap).
-    let x = FixedPoint::from_raw(1);
-    // 2^(F/2) for the build's split (realtime follows GMATH_FRAC_BITS: 256 at
-    // Q16.16, 32 at Q22.10); an odd split gives sqrt(2) * 2^((F-1)/2)
-    let f = g_math::fixed_point::frac_config::FRAC_BITS;
-    // At coarse-range splits (GMATH_FRAC_BITS >= 21) 2^(F/2) exceeds the
-    // storage range 2^(31-F): the same contract then demands a loud error.
-    if FixedPoint::try_from_int(1 << ((f + 1) / 2)).is_err() {
-        match x.try_inv_sqrt() {
-            Err(OverflowDetected::TierOverflow) => return,
-            other => panic!("1/sqrt(1 raw LSB) out of range: expected Err(TierOverflow), got {other:?}"),
+            #[test]
+            #[should_panic(expected = "zero norm")]
+            fn test_inv_sqrt_sum_sq_zero_vector_panics() {
+                let _ = fused::inv_sqrt_sum_sq(&[fp("0"), fp("0")]);
+            }
+
+            #[test]
+            fn test_inv_sqrt_extreme_small_input() {
+                if !((BITS == 32 || BITS == 64)) { return; }
+                // x = 1 raw LSB = 2^-FRAC_BITS: 1/sqrt(x) = 2^(FRAC_BITS/2), exactly
+                // representable. Pins that the wide reciprocal cannot wrap for any
+                // storage-derived input (contract: fail loud, never wrap).
+                let x = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::from_i64(1));
+                // 2^(F/2) for the build's split (realtime follows GMATH_FRAC_BITS: 256 at
+                // Q16.16, 32 at Q22.10); an odd split gives sqrt(2) * 2^((F-1)/2)
+                let f = FRAC_BITS;
+                // At coarse-range splits (GMATH_FRAC_BITS >= 21) 2^(F/2) exceeds the
+                // storage range 2^(31-F): the same contract then demands a loud error.
+                if FixedPoint::try_from_int(1 << ((f + 1) / 2)).is_err() {
+                    match x.try_inv_sqrt() {
+                        Err(OverflowDetected::TierOverflow) => return,
+                        other => panic!("1/sqrt(1 raw LSB) out of range: expected Err(TierOverflow), got {other:?}"),
+                    }
+                }
+                let expected = if f % 2 == 0 {
+                    FixedPoint::from_int(1 << (f / 2))
+                } else {
+                    fp("1.4142135623730950488016887242096980785697") * FixedPoint::from_int(1 << (f / 2))
+                };
+                assert_fp(x.inv_sqrt(), expected, tight(), "1/sqrt(1 raw LSB)");
+            }
         }
-    }
-    let expected = if f % 2 == 0 {
-        FixedPoint::from_int(1 << (f / 2))
-    } else {
-        fp("1.4142135623730950488016887242096980785697") * FixedPoint::from_int(1 << (f / 2))
     };
-    assert_fp(x.inv_sqrt(), expected, tight(), "1/sqrt(1 raw LSB)");
 }
+
+for_each_format!(suite);

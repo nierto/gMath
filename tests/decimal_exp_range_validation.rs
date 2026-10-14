@@ -26,265 +26,260 @@
 //! GMATH_PROFILE=embedded cargo test --test decimal_exp_range_validation -- --nocapture
 //! ```
 
-use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute::{BinaryStorage, ComputeStorage};
-use g_math::fixed_point::{DecimalTier, Dp};
-use g_math::fixed_point::domains::decimal_fixed::transcendental::{
-    decimal_compute_from_int, decimal_compute_is_zero, decimal_downscale_to_storage, decimal_exp,
-    decimal_upscale_to_compute,
-};
-use g_math::fixed_point::{DecimalFixed, FixedPoint, OverflowDetected};
-use g_math::fixed_point::universal::fasc::stack_evaluator::FascFormat;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+#[macro_use]
+mod common;
 
-include!("data/decimal_exp_range_refs.rs");
+macro_rules! suite {
+    ($m:ident, $S:ty, $F:literal) => {
+        mod $m {
+            #![allow(dead_code, unused_imports)]
+            type FixedPoint = Fixed<$S, $F>;
+            type BinaryStorage = $S;
+            type ComputeStorage = <$S as g_math::fixed_point::Storage>::Compute;
+            const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
+            const FRAC_BITS: u32 = $F;
+            use g_math::fixed_point::{Fixed, DecimalTier, Dp};
+            use g_math::fixed_point::domains::decimal_fixed::transcendental::{decimal_compute_from_int, decimal_compute_is_zero, decimal_downscale_to_storage, decimal_exp, decimal_upscale_to_compute};
+            use g_math::fixed_point::{DecimalFixed, OverflowDetected};
+            use g_math::fixed_point::universal::fasc::stack_evaluator::FascFormat;
+            use std::panic::{catch_unwind, AssertUnwindSafe};
 
-/// Compute-tier integer width in bits (the exp argument range is about this).
-#[cfg(table_format = "q16_16")]
-const COMPUTE_BITS: i64 = 64;
-#[cfg(table_format = "q32_32")]
-const COMPUTE_BITS: i64 = 128;
-#[cfg(table_format = "q64_64")]
-const COMPUTE_BITS: i64 = 256;
-#[cfg(table_format = "q128_128")]
-const COMPUTE_BITS: i64 = 512;
-#[cfg(table_format = "q256_256")]
-const COMPUTE_BITS: i64 = 1024;
+            include!("data/decimal_exp_range_refs.rs");
 
-fn eval<const D: u8>(f: &str, x: i128) -> i128
-where
-    Dp<D>: DecimalTier,
-{
-    let v = DecimalFixed::<D>::from_raw(x);
-    let r = match f {
-        "exp" => v.exp(),
-        "sinh" => v.sinh(),
-        "cosh" => v.cosh(),
-        "tanh" => v.tanh(),
-        "asinh" => v.asinh(),
-        "acosh" => v.acosh(),
-        "sin" => v.sin(),
-        "cos" => v.cos(),
-        other => panic!("unknown function {other}"),
-    };
-    r.raw_value()
-}
+            /// Compute-tier integer width in bits (the exp argument range is about this).
+            const COMPUTE_BITS: i64 = if BITS == 32 { 64 } else if BITS == 64 { 128 } else if BITS == 128 { 256 } else if BITS == 256 { 512 } else { 1024 };
 
-fn eval_at(f: &str, d: u8, x: i128) -> i128 {
-    match d {
-        0 => eval::<0>(f, x),
-        2 => eval::<2>(f, x),
-        4 => eval::<4>(f, x),
-        9 => eval::<9>(f, x),
-        19 => eval::<19>(f, x),
-        28 => eval::<28>(f, x),
-        38 => eval::<38>(f, x),
-        other => panic!("no dispatch for D = {other}"),
-    }
-}
-
-thread_local! {
-    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Run `f`, turning a panic into `None` without printing it (only on this
-/// thread: the other tests keep their panic messages).
-fn quiet<T>(f: impl FnOnce() -> T) -> Option<T> {
-    static HOOK: std::sync::Once = std::sync::Once::new();
-    HOOK.call_once(|| {
-        let default = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            if !QUIET.with(|q| q.get()) {
-                default(info);
+            fn eval<const D: u8>(f: &str, x: i128) -> i128
+            where
+                Dp<D>: DecimalTier,
+            {
+                let v = DecimalFixed::<D>::from_raw(x);
+                let r = match f {
+                    "exp" => v.exp(),
+                    "sinh" => v.sinh(),
+                    "cosh" => v.cosh(),
+                    "tanh" => v.tanh(),
+                    "asinh" => v.asinh(),
+                    "acosh" => v.acosh(),
+                    "sin" => v.sin(),
+                    "cos" => v.cos(),
+                    other => panic!("unknown function {other}"),
+                };
+                r.raw_value()
             }
-        }));
-    });
-    QUIET.with(|q| q.set(true));
-    let r = catch_unwind(AssertUnwindSafe(f)).ok();
-    QUIET.with(|q| q.set(false));
-    r
-}
 
-/// Parse a decimal integer string into the profile's BinaryStorage.
-fn storage(s: &str) -> BinaryStorage {
-    let (neg, digits) = match s.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, s),
-    };
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-    {
-        let v: BinaryStorage = digits.parse().expect("storage literal");
-        if neg { -v } else { v }
-    }
-    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-    {
-        let ten = BinaryStorage::from_i128(10);
-        let mut v = BinaryStorage::from_i128(0);
-        for ch in digits.chars() {
-            v = v * ten + BinaryStorage::from_i128(ch.to_digit(10).expect("digit") as i128);
-        }
-        if neg { -v } else { v }
-    }
-}
-
-fn one_unit() -> BinaryStorage {
-    storage("1")
-}
-
-/// |a - b| in storage units, `u128::MAX` when it does not fit.
-fn units(a: BinaryStorage, b: BinaryStorage) -> u128 {
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-    {
-        (a as i128).checked_sub(b as i128).map_or(u128::MAX, |d| d.unsigned_abs())
-    }
-    #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-    {
-        let d = a - b;
-        if d.fits_in_i128() { d.as_i128().unsigned_abs() } else { u128::MAX }
-    }
-}
-
-#[test]
-fn decimal_fixed_exp_family_is_correctly_rounded() {
-    let mut failures = Vec::new();
-    // (function, D) -> (points, max units, mismatches, panics)
-    let mut stats: Vec<((&str, u8), (usize, u128, usize, usize))> = Vec::new();
-    for &(f, d, x, expected) in FIXED_REFS {
-        let got = quiet(|| eval_at(f, d, x));
-        let idx = match stats.iter().position(|(k, _)| *k == (f, d)) {
-            Some(i) => i,
-            None => {
-                stats.push(((f, d), (0, 0, 0, 0)));
-                stats.len() - 1
+            fn eval_at(f: &str, d: u8, x: i128) -> i128 {
+                match d {
+                    0 => eval::<0>(f, x),
+                    2 => eval::<2>(f, x),
+                    4 => eval::<4>(f, x),
+                    9 => eval::<9>(f, x),
+                    19 => eval::<19>(f, x),
+                    28 => eval::<28>(f, x),
+                    38 => eval::<38>(f, x),
+                    other => panic!("no dispatch for D = {other}"),
+                }
             }
-        };
-        let s = &mut stats[idx].1;
-        s.0 += 1;
-        match got {
-            Some(v) => {
-                let units = (v - expected).unsigned_abs();
-                if units > 0 {
-                    s.2 += 1;
-                    if failures.len() < 20 {
-                        failures.push(format!("{f}<{d}>({x}): got {v}, expected {expected} ({units} units)"));
+
+            thread_local! {
+                static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            }
+
+            /// Run `f`, turning a panic into `None` without printing it (only on this
+            /// thread: the other tests keep their panic messages).
+            fn quiet<T>(f: impl FnOnce() -> T) -> Option<T> {
+                static HOOK: std::sync::Once = std::sync::Once::new();
+                HOOK.call_once(|| {
+                    let default = std::panic::take_hook();
+                    std::panic::set_hook(Box::new(move |info| {
+                        if !QUIET.with(|q| q.get()) {
+                            default(info);
+                        }
+                    }));
+                });
+                QUIET.with(|q| q.set(true));
+                let r = catch_unwind(AssertUnwindSafe(f)).ok();
+                QUIET.with(|q| q.set(false));
+                r
+            }
+
+            /// Parse a decimal integer string into the format's storage word.
+            fn storage(s: &str) -> BinaryStorage {
+                let (neg, digits) = match s.strip_prefix('-') {
+                    Some(rest) => (true, rest),
+                    None => (false, s),
+                };
+                let ten = <BinaryStorage as g_math::fixed_point::WideInt>::from_i128(10);
+                let mut v = <BinaryStorage as g_math::fixed_point::WideInt>::from_i128(0);
+                for ch in digits.chars() {
+                    v = v * ten + <BinaryStorage as g_math::fixed_point::WideInt>::from_i128(ch.to_digit(10).expect("digit") as i128);
+                }
+                if neg { -v } else { v }
+            }
+
+            fn one_unit() -> BinaryStorage {
+                storage("1")
+            }
+
+            /// |a - b| in storage units, `u128::MAX` when it does not fit.
+            fn units(a: BinaryStorage, b: BinaryStorage) -> u128 {
+                let d = match <BinaryStorage as g_math::fixed_point::WideInt>::checked_sub_wide(a, b) {
+                    Some(d) => d,
+                    None => return u128::MAX,
+                };
+                let m = if <BinaryStorage as g_math::fixed_point::WideInt>::is_negative(d) { -d } else { d };
+                let n = <BinaryStorage as g_math::fixed_point::WideInt>::bit_length(m);
+                if n > 128 { return u128::MAX; }
+                let mut acc = 0u128;
+                for k in 0..n { if <BinaryStorage as g_math::fixed_point::WideInt>::bit(m, k) { acc |= 1u128 << k; } }
+                acc
+            }
+
+            #[test]
+            fn decimal_fixed_exp_family_is_correctly_rounded() {
+                let mut failures = Vec::new();
+                // (function, D) -> (points, max units, mismatches, panics)
+                let mut stats: Vec<((&str, u8), (usize, u128, usize, usize))> = Vec::new();
+                for &(f, d, x, expected) in FIXED_REFS {
+                    let got = quiet(|| eval_at(f, d, x));
+                    let idx = match stats.iter().position(|(k, _)| *k == (f, d)) {
+                        Some(i) => i,
+                        None => {
+                            stats.push(((f, d), (0, 0, 0, 0)));
+                            stats.len() - 1
+                        }
+                    };
+                    let s = &mut stats[idx].1;
+                    s.0 += 1;
+                    match got {
+                        Some(v) => {
+                            let units = (v - expected).unsigned_abs();
+                            if units > 0 {
+                                s.2 += 1;
+                                if failures.len() < 20 {
+                                    failures.push(format!("{f}<{d}>({x}): got {v}, expected {expected} ({units} units)"));
+                                }
+                            }
+                            s.1 = s.1.max(units);
+                        }
+                        None => {
+                            s.3 += 1;
+                            if failures.len() < 20 {
+                                failures.push(format!("{f}<{d}>({x}): panicked, expected {expected}"));
+                            }
+                        }
                     }
                 }
-                s.1 = s.1.max(units);
-            }
-            None => {
-                s.3 += 1;
-                if failures.len() < 20 {
-                    failures.push(format!("{f}<{d}>({x}): panicked, expected {expected}"));
+                for ((f, d), (n, max, bad, panics)) in &stats {
+                    eprintln!("DecimalFixed<{d:2}>::{f:5}: points={n:4} max_units={max} mismatches={bad} panics={panics}");
                 }
+                assert!(failures.is_empty(), "{} failures, first:\n{}", failures.len(), failures.join("\n"));
             }
-        }
-    }
-    for ((f, d), (n, max, bad, panics)) in &stats {
-        eprintln!("DecimalFixed<{d:2}>::{f:5}: points={n:4} max_units={max} mismatches={bad} panics={panics}");
-    }
-    assert!(failures.is_empty(), "{} failures, first:\n{}", failures.len(), failures.join("\n"));
-}
 
-/// Just past the largest representable argument the infallible methods
-/// panic (never a wrapped or saturated value).
-#[test]
-fn decimal_fixed_exp_beyond_range_panics() {
-    for f in ["exp", "sinh", "cosh"] {
-        let mut tops: Vec<(u8, i128)> = Vec::new();
-        for &(g, d, x, _) in FIXED_REFS {
-            if g != f {
-                continue;
-            }
-            match tops.iter_mut().find(|(e, _)| *e == d) {
-                Some(t) => t.1 = t.1.max(x),
-                None => tops.push((d, x)),
-            }
-        }
-        for (d, top) in tops {
-            let beyond = quiet(|| eval_at(f, d, top + 1));
-            assert!(beyond.is_none(), "{f}<{d}>({}) should panic, got {:?}", top + 1, beyond);
-        }
-    }
-}
-
-#[test]
-fn engine_exp_at_canonical_storage_is_correctly_rounded() {
-    let dp = <FixedPoint as FascFormat>::DECIMAL_STORAGE_MAX_DP;
-    let mut failures = Vec::new();
-    let (mut errors, mut mismatches, mut max_units) = (0usize, 0usize, 0u128);
-    let start = std::time::Instant::now();
-    for &(x, expected) in ENGINE_EXP_REFS {
-        let xc = decimal_upscale_to_compute::<ComputeStorage>(storage(x), dp).expect("input upscale");
-        match decimal_exp(xc).and_then(|r| decimal_downscale_to_storage(r, dp)) {
-            Ok(v) => {
-                let u = units(v, storage(expected));
-                max_units = max_units.max(u);
-                if u > 0 {
-                    mismatches += 1;
-                    if failures.len() < 20 {
-                        failures.push(format!("exp({x} at dp {dp}): {u} units off, expected {expected}"));
+            /// Just past the largest representable argument the infallible methods
+            /// panic (never a wrapped or saturated value).
+            #[test]
+            fn decimal_fixed_exp_beyond_range_panics() {
+                for f in ["exp", "sinh", "cosh"] {
+                    let mut tops: Vec<(u8, i128)> = Vec::new();
+                    for &(g, d, x, _) in FIXED_REFS {
+                        if g != f {
+                            continue;
+                        }
+                        match tops.iter_mut().find(|(e, _)| *e == d) {
+                            Some(t) => t.1 = t.1.max(x),
+                            None => tops.push((d, x)),
+                        }
+                    }
+                    for (d, top) in tops {
+                        let beyond = quiet(|| eval_at(f, d, top + 1));
+                        assert!(beyond.is_none(), "{f}<{d}>({}) should panic, got {:?}", top + 1, beyond);
                     }
                 }
             }
-            Err(e) => {
-                errors += 1;
-                if failures.len() < 20 {
-                    failures.push(format!("exp({x} at dp {dp}): {e:?}, expected {expected}"));
+
+            #[test]
+            fn engine_exp_at_canonical_storage_is_correctly_rounded() {
+                let dp = <FixedPoint as FascFormat>::DECIMAL_STORAGE_MAX_DP;
+                let mut failures = Vec::new();
+                let (mut errors, mut mismatches, mut max_units) = (0usize, 0usize, 0u128);
+                let start = std::time::Instant::now();
+                for &(x, expected) in ENGINE_EXP_REFS {
+                    let xc = decimal_upscale_to_compute::<ComputeStorage>(storage(x), dp).expect("input upscale");
+                    match decimal_exp(xc).and_then(|r| decimal_downscale_to_storage(r, dp)) {
+                        Ok(v) => {
+                            let u = units(v, storage(expected));
+                            max_units = max_units.max(u);
+                            if u > 0 {
+                                mismatches += 1;
+                                if failures.len() < 20 {
+                                    failures.push(format!("exp({x} at dp {dp}): {u} units off, expected {expected}"));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors += 1;
+                            if failures.len() < 20 {
+                                failures.push(format!("exp({x} at dp {dp}): {e:?}, expected {expected}"));
+                            }
+                        }
+                    }
+                }
+                let per_call = start.elapsed().as_nanos() / ENGINE_EXP_REFS.len().max(1) as u128;
+                eprintln!(
+                    "decimal_exp at dp {dp}: points={} max_units={max_units} mismatches={mismatches} errors={errors} ({per_call} ns/call incl. conversions)",
+                    ENGINE_EXP_REFS.len()
+                );
+                assert!(failures.is_empty(), "first failures:\n{}", failures.join("\n"));
+            }
+
+            #[test]
+            fn engine_exp_reports_overflow() {
+                let dp = <FixedPoint as FascFormat>::DECIMAL_STORAGE_MAX_DP;
+                // one storage unit past the largest argument whose exp fits BinaryStorage:
+                // the engine value exists, the narrowing reports it
+                let past = storage(ENGINE_EXP_TOP) + one_unit();
+                let xc = decimal_upscale_to_compute::<ComputeStorage>(past, dp).expect("input upscale");
+                let r = decimal_exp(xc).and_then(|r| decimal_downscale_to_storage(r, dp));
+                assert_eq!(r, Err(OverflowDetected::TierOverflow));
+                // far past the compute tier: exp itself reports it
+                for k in [COMPUTE_BITS, COMPUTE_BITS + 1, 2 * COMPUTE_BITS] {
+                    assert_eq!(decimal_exp(decimal_compute_from_int::<ComputeStorage>(k)), Err(OverflowDetected::TierOverflow), "exp({k})");
+                }
+                // and far below zero the result is 0, not an error
+                for k in [COMPUTE_BITS, COMPUTE_BITS + 1, 2 * COMPUTE_BITS] {
+                    let r = decimal_exp(decimal_compute_from_int::<ComputeStorage>(-k)).expect("exp of a large negative");
+                    assert!(decimal_compute_is_zero(&r), "exp(-{k}) should round to 0");
+                }
+            }
+
+            /// The inputs from the defect report, pinned by value.
+            #[test]
+            fn reported_defects() {
+                if BITS == 32 {
+                    // mpmath: e^22 = 3584912846.131591561681159...
+                    assert_eq!(DecimalFixed::<4>::from_integer(22).exp().raw_value(), 35849128461316);
+                    // e^23 = 9744803446.2489026 exceeded the i64 compute tier of the
+                    // realtime profile (9223372036.9 at 9 dp) up to 0.6.7; the compute
+                    // word now follows D (I256 at D = 4), so it is a value
+                    assert_eq!(DecimalFixed::<4>::from_integer(23).exp().raw_value(), 97448034462489);
+                    // tanh doubled x at the compute tier and wrapped for |x| > 4.6e9
+                    let big = DecimalFixed::<4>::from_raw(90_000_000_000_000);
+                    assert_eq!(big.tanh().raw_value(), 10_000);
+                    assert_eq!((-big).tanh().raw_value(), -10_000);
+                }
+                if BITS == 128 {
+                    // mpmath: e^40 = 235385266837019985.4078999107490348045...
+                    assert_eq!(
+                        DecimalFixed::<19>::from_integer(40).exp().raw_value(),
+                        2353852668370199854078999107490348045
+                    );
+                    // asinh(1e30) = 69.7727... (x^2 wrapped the compute tier)
+                    assert_eq!(DecimalFixed::<0>::from_raw(1_000_000_000_000_000_000_000_000_000_000).asinh().raw_value(), 70);
                 }
             }
         }
-    }
-    let per_call = start.elapsed().as_nanos() / ENGINE_EXP_REFS.len().max(1) as u128;
-    eprintln!(
-        "decimal_exp at dp {dp}: points={} max_units={max_units} mismatches={mismatches} errors={errors} ({per_call} ns/call incl. conversions)",
-        ENGINE_EXP_REFS.len()
-    );
-    assert!(failures.is_empty(), "first failures:\n{}", failures.join("\n"));
+    };
 }
 
-#[test]
-fn engine_exp_reports_overflow() {
-    let dp = <FixedPoint as FascFormat>::DECIMAL_STORAGE_MAX_DP;
-    // one storage unit past the largest argument whose exp fits BinaryStorage:
-    // the engine value exists, the narrowing reports it
-    let past = storage(ENGINE_EXP_TOP) + one_unit();
-    let xc = decimal_upscale_to_compute::<ComputeStorage>(past, dp).expect("input upscale");
-    let r = decimal_exp(xc).and_then(|r| decimal_downscale_to_storage(r, dp));
-    assert_eq!(r, Err(OverflowDetected::TierOverflow));
-    // far past the compute tier: exp itself reports it
-    for k in [COMPUTE_BITS, COMPUTE_BITS + 1, 2 * COMPUTE_BITS] {
-        assert_eq!(decimal_exp(decimal_compute_from_int::<ComputeStorage>(k)), Err(OverflowDetected::TierOverflow), "exp({k})");
-    }
-    // and far below zero the result is 0, not an error
-    for k in [COMPUTE_BITS, COMPUTE_BITS + 1, 2 * COMPUTE_BITS] {
-        let r = decimal_exp(decimal_compute_from_int::<ComputeStorage>(-k)).expect("exp of a large negative");
-        assert!(decimal_compute_is_zero(&r), "exp(-{k}) should round to 0");
-    }
-}
-
-/// The inputs from the defect report, pinned by value.
-#[test]
-fn reported_defects() {
-    #[cfg(table_format = "q16_16")]
-    {
-        // mpmath: e^22 = 3584912846.131591561681159...
-        assert_eq!(DecimalFixed::<4>::from_integer(22).exp().raw_value(), 35849128461316);
-        // e^23 = 9744803446.2489026 exceeded the i64 compute tier of the
-        // realtime profile (9223372036.9 at 9 dp) up to 0.6.7; the compute
-        // word now follows D (I256 at D = 4), so it is a value
-        assert_eq!(DecimalFixed::<4>::from_integer(23).exp().raw_value(), 97448034462489);
-        // tanh doubled x at the compute tier and wrapped for |x| > 4.6e9
-        let big = DecimalFixed::<4>::from_raw(90_000_000_000_000);
-        assert_eq!(big.tanh().raw_value(), 10_000);
-        assert_eq!((-big).tanh().raw_value(), -10_000);
-    }
-    #[cfg(table_format = "q64_64")]
-    {
-        // mpmath: e^40 = 235385266837019985.4078999107490348045...
-        assert_eq!(
-            DecimalFixed::<19>::from_integer(40).exp().raw_value(),
-            2353852668370199854078999107490348045
-        );
-        // asinh(1e30) = 69.7727... (x^2 wrapped the compute tier)
-        assert_eq!(DecimalFixed::<0>::from_raw(1_000_000_000_000_000_000_000_000_000_000).asinh().raw_value(), 70);
-    }
-}
+for_each_format!(suite);
