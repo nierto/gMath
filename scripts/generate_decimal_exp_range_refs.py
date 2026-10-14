@@ -6,9 +6,10 @@ Decimal exp and the functions built on it (sinh, cosh, tanh), plus the
 large-argument asinh/acosh path and the sin/cos range reduction, across the
 FULL representable range of each profile:
 
-  * DecimalFixed<D> (i128 storage): every D the decimal tests use per
-    profile. The result must fit both i128 at D decimals and the decimal
-    compute tier (value * 10^compute_dp inside the compute integer).
+  * DecimalFixed<D> (i128 storage): every D the decimal tests use, one
+    table for every build, since the compute word follows D (I256 at 38
+    digits up to D = 19, I512 at 77 digits to D = 38; `Dp<D>: DecimalTier`).
+    The result must fit both i128 at D decimals and that compute word.
   * The engine at the canonical (FASC) storage: decimal_exp at compute dp,
     materialised at DECIMAL_STORAGE_MAX_DP into BinaryStorage.
 
@@ -205,15 +206,18 @@ def main():
         "// Do not edit by hand. Expected values: f(x) * 10^D rounded half to even.",
         "",
     ]
+    # DecimalFixed<D>: the compute word follows D, so one table for every build
+    lines.append("/// every build: (function, D, x_raw at D, expected raw at D); the compute")
+    lines.append("/// word follows D (I256 at 38 digits to D = 19, I512 at 77 digits to D = 38)")
+    lines.append("pub const FIXED_REFS: &[(&str, u8, i128, i128)] = &[")
+    for d in (0, 2, 4, 9, 19, 28, 38):
+        c, w = (38, 256) if d <= 19 else (77, 512)
+        for fn in ("exp", "sinh", "cosh", "tanh", "asinh", "acosh", "sin", "cos"):
+            for x, e in fixed_corpus(fn, d, c, w, rng):
+                lines.append(f'    ("{fn}", {d}, {x}, {e}),')
+    lines.append("];")
+    lines.append("")
     for name, (cfg, c, w, s, bs_bits, ds) in PROFILES.items():
-        lines.append(f"/// {name}: (function, D, x_raw at D, expected raw at D)")
-        lines.append(f'#[cfg(table_format = "{cfg}")]')
-        lines.append("pub const FIXED_REFS: &[(&str, u8, i128, i128)] = &[")
-        for d in ds:
-            for fn in ("exp", "sinh", "cosh", "tanh", "asinh", "acosh", "sin", "cos"):
-                for x, e in fixed_corpus(fn, d, c, w, rng):
-                    lines.append(f'    ("{fn}", {d}, {x}, {e}),')
-        lines.append("];")
         engine, top = engine_corpus(s, bs_bits, w, rng)
         lines.append(f"/// {name}: decimal_exp at storage dp {s} (x_raw, expected), BinaryStorage range")
         lines.append(f'#[cfg(table_format = "{cfg}")]')

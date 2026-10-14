@@ -70,6 +70,9 @@ pub use domains::decimal_fixed::{Currency, HighPrecisionCurrency};
 pub use domains::decimal_fixed::DecimalRounding;
 /// Certified decimal enclosures: `g_math::fixed_point::DecimalInterval` is a supported public type.
 pub use domains::decimal_fixed::DecimalInterval;
+/// The compute word `DecimalFixed<D>` runs its transcendentals on, and the
+/// marker a generic bound names it through (`where Dp<D>: DecimalTier`).
+pub use domains::decimal_fixed::transcendental::{DecimalTier, Dp};
 
 // Rational arithmetic types (used in stack_evaluator)
 #[doc(hidden)] pub use domains::symbolic::rational::{RationalNumber, OverflowDetected};

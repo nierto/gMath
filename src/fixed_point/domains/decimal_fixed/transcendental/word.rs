@@ -1235,3 +1235,54 @@ impl DecimalWord for I1024 {
         }
     }
 }
+
+/// The marker that maps a decimal place count to its compute word; a
+/// function generic over `D` that calls a `DecimalFixed<D>` transcendental
+/// bounds it with `where Dp<D>: DecimalTier`.
+pub struct Dp<const D: u8>;
+
+mod tier_sealed {
+    pub trait Sealed {}
+}
+
+/// The compute words `DecimalFixed<D>` runs its transcendentals on.
+///
+/// `Fast` is tried first: i128 (19 compute digits) up to D = 9, I256 (38)
+/// to 19, I512 (77) to 38, I1024 (154) to 77, so every `D` has at least
+/// ten guard digits. `Word` is the sure word one step wider, used when the
+/// fast word overflows (an argument or result beyond its range), when the
+/// rounding to `D` is ambiguous (the discarded digits within 10^-4 of the
+/// guard range of a rounding boundary: the fast engines are measured to
+/// within about a thousand units of their last digit, the margin is a
+/// thousand times that) or when a function's own guard asks for it (tan
+/// with a large result, where cancellation in cos outruns any margin).
+/// The decision depends only on the input, so the result is the same on
+/// every build. Measured (`tests/decimal_tier_by_d_validation.rs`): a word
+/// with fewer than ten guard digits misrounds (i64 at D = 4 and 9, i128 at
+/// 19, I256 at 38, by 1 to 20 units); with ten, the fast word is exact on
+/// the corpus except at the ties and overflows the fallback catches. Above
+/// D = 38 the sure word is the fast word (I1024 has no wider decimal
+/// word). A `D` above 77 has no compute word, so the transcendentals are
+/// absent for it by trait bound.
+pub trait DecimalTier: tier_sealed::Sealed {
+    /// The sure compute word.
+    #[doc(hidden)]
+    type Word: DecimalWord;
+    /// The fast compute word, tried first.
+    #[doc(hidden)]
+    type Fast: DecimalWord;
+    /// Whether `Fast` is narrower than `Word` (otherwise one pass).
+    #[doc(hidden)]
+    const LADDER: bool;
+}
+
+macro_rules! decimal_tier {
+    ($fast:ty => $sure:ty, $ladder:literal: $($d:literal),*) => { $(
+        impl tier_sealed::Sealed for Dp<$d> {}
+        impl DecimalTier for Dp<$d> { type Word = $sure; type Fast = $fast; const LADDER: bool = $ladder; }
+    )* };
+}
+decimal_tier!(i128 => I256, true: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+decimal_tier!(I256 => I512, true: 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
+decimal_tier!(I512 => I1024, true: 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38);
+decimal_tier!(I1024 => I1024, false: 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77);

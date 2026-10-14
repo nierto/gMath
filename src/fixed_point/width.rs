@@ -226,6 +226,20 @@ pub trait Storage: WideInt {
     fn narrow_orient(o: Self::Orient) -> Option<Self>;
     /// The accumulator value as a compute value if it fits, `None` otherwise.
     fn narrow_orient_to_compute(o: Self::Orient) -> Option<Self::Compute>;
+
+    /// The code the serialized format names this word by: 1 for i32, 2 for
+    /// i64, 3 for i128, 4 for I256, 5 for I512.
+    #[doc(hidden)]
+    const CODE: u8;
+    /// The word's size in bytes.
+    #[doc(hidden)]
+    const BYTES: usize;
+    /// The word as big-endian bytes (`BYTES` of them).
+    #[doc(hidden)]
+    fn to_be_vec(self) -> Vec<u8>;
+    /// The word from its first `BYTES` big-endian bytes.
+    #[doc(hidden)]
+    fn from_be_slice(bytes: &[u8]) -> Self;
     /// `sum a_i * b_i` on the compute word by a width-specific fast path,
     /// `None` when there is none or its preconditions fail. The same integer
     /// as the checked loop; the caller takes the checked loop on `None`.
@@ -326,6 +340,10 @@ macro_rules! budgeted_widening_product {
 }
 
 impl Storage for i32 {
+    const CODE: u8 = 1;
+    const BYTES: usize = 4;
+    #[inline] fn to_be_vec(self) -> Vec<u8> { self.to_be_bytes().to_vec() }
+    #[inline] fn from_be_slice(bytes: &[u8]) -> Self { i32::from_be_bytes(bytes[..4].try_into().expect("4 bytes")) }
     type Compute = i64;
     type Orient = i128; // W = 32: 66 / 99 bits
     #[inline] fn widen(self) -> i64 { self as i64 }
@@ -456,6 +474,10 @@ impl CircleStorage for i32 {
 }
 
 impl Storage for i64 {
+    const CODE: u8 = 2;
+    const BYTES: usize = 8;
+    #[inline] fn to_be_vec(self) -> Vec<u8> { self.to_be_bytes().to_vec() }
+    #[inline] fn from_be_slice(bytes: &[u8]) -> Self { i64::from_be_bytes(bytes[..8].try_into().expect("8 bytes")) }
     type Compute = i128;
     type Orient = I256; // W = 64: 130 / 195 bits
     #[inline] fn widen(self) -> i128 { self as i128 }
@@ -498,6 +520,10 @@ impl CircleStorage for i64 {
 }
 
 impl Storage for i128 {
+    const CODE: u8 = 3;
+    const BYTES: usize = 16;
+    #[inline] fn to_be_vec(self) -> Vec<u8> { self.to_be_bytes().to_vec() }
+    #[inline] fn from_be_slice(bytes: &[u8]) -> Self { i128::from_be_bytes(bytes[..16].try_into().expect("16 bytes")) }
     type Compute = I256;
     type Orient = I512; // W = 128: 258 / 387 bits
     #[inline] fn widen(self) -> I256 { I256::from_i128(self) }
@@ -527,6 +553,10 @@ impl CircleStorage for i128 {
 }
 
 impl Storage for I256 {
+    const CODE: u8 = 4;
+    const BYTES: usize = 32;
+    #[inline] fn to_be_vec(self) -> Vec<u8> { self.to_bytes_le().into_iter().rev().collect() }
+    #[inline] fn from_be_slice(bytes: &[u8]) -> Self { I256::from_bytes_le(&bytes[..32].iter().rev().copied().collect::<Vec<u8>>()) }
     type Compute = I512;
     type Orient = I1024; // W = 256: 514 / 771 bits
     #[inline] fn widen(self) -> I512 { I512::from_i256(self) }
@@ -556,6 +586,10 @@ impl CircleStorage for I256 {
 }
 
 impl Storage for I512 {
+    const CODE: u8 = 5;
+    const BYTES: usize = 64;
+    #[inline] fn to_be_vec(self) -> Vec<u8> { self.to_bytes_le().into_iter().rev().collect() }
+    #[inline] fn from_be_slice(bytes: &[u8]) -> Self { I512::from_bytes_le(&bytes[..64].iter().rev().copied().collect::<Vec<u8>>()) }
     type Compute = I1024;
     type Orient = I2048; // W = 512: 1026 / 1539 bits; circle predicates exceed 2048
     #[inline] fn widen(self) -> I1024 { I1024::from_i512(self) }

@@ -36,13 +36,21 @@ fn test_fixedpoint_raw_bytes_roundtrip() {
 }
 
 #[test]
-fn test_fixedpoint_profile_tag() {
+fn test_fixedpoint_format_tag() {
     let val = fp("1");
     let bytes = val.to_bytes();
-    let tag = bytes[0];
-    // 0x01..=0x05 name a profile; 0x80 | F names a non-default realtime split
-    assert!((0x01..=0x05).contains(&tag) || tag & 0x80 != 0, "unexpected profile tag: {:#x}", tag);
-    assert_eq!(tag, FixedPoint::profile_tag());
+    // 0x20 | storage code (1 to 5), then the fractional bits as two bytes
+    assert!((0x21..=0x25).contains(&bytes[0]), "unexpected format tag: {:#x}", bytes[0]);
+    assert_eq!(u16::from_be_bytes([bytes[1], bytes[2]]) as u32, g_math::fixed_point::frac_config::FRAC_BITS);
+    assert_eq!([bytes[0], bytes[1], bytes[2]], FixedPoint::format_tag());
+    // the 0.6.x tag is read only through the legacy entry
+    let legacy = FixedPoint::profile_tag();
+    assert!((0x01..=0x05).contains(&legacy) || legacy & 0x80 != 0, "unexpected legacy tag: {:#x}", legacy);
+    let mut old = vec![legacy];
+    old.extend_from_slice(&bytes[3..]);
+    assert!(FixedPoint::from_bytes(&old).is_err());
+    assert_eq!(FixedPoint::from_bytes_legacy(&old).unwrap(), val);
+    assert!(FixedPoint::from_bytes_legacy(&bytes).is_err());
 }
 
 #[test]
@@ -63,15 +71,15 @@ fn test_fixedpoint_truncated_bytes() {
 fn test_fixedvector_serialization_roundtrip() {
     let v = FixedVector::from_slice(&[fp("1.5"), fp("-2.7"), fp("0"), fp("3.14")]);
     let bytes = v.to_bytes();
-    let recovered = FixedVector::from_bytes(&bytes).unwrap();
+    let recovered = FixedVector::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(v, recovered);
 }
 
 #[test]
 fn test_fixedvector_empty_roundtrip() {
-    let v = FixedVector::new(0);
+    let v = FixedVector::<FixedPoint>::new(0);
     let bytes = v.to_bytes();
-    let recovered = FixedVector::from_bytes(&bytes).unwrap();
+    let recovered = FixedVector::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(v.len(), recovered.len());
 }
 
@@ -82,15 +90,15 @@ fn test_fixedmatrix_serialization_roundtrip() {
         fp("4"), fp("5"), fp("6"),
     ]);
     let bytes = m.to_bytes();
-    let recovered = FixedMatrix::from_bytes(&bytes).unwrap();
+    let recovered = FixedMatrix::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(m, recovered);
 }
 
 #[test]
 fn test_fixedmatrix_identity_roundtrip() {
-    let m = FixedMatrix::identity(4);
+    let m = FixedMatrix::<FixedPoint>::identity(4);
     let bytes = m.to_bytes();
-    let recovered = FixedMatrix::from_bytes(&bytes).unwrap();
+    let recovered = FixedMatrix::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(m, recovered);
 }
 
@@ -103,7 +111,7 @@ fn test_serialization_byte_sizes() {
 
     let val = fp("1");
     let bytes = val.to_bytes();
-    assert_eq!(bytes.len(), 1 + raw_len); // 1 tag + raw
+    assert_eq!(bytes.len(), 3 + raw_len); // 3 tag bytes + raw
 
     let v = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
     let vbytes = v.to_bytes();

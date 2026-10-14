@@ -460,41 +460,65 @@ Refined for the build (2026-10-06, after phase 4), in three sub-phases:
 
 Refined for the build (2026-10-10, after phase 5), in two sub-phases:
 
-- **6a, the decimal compute word from `D`.** IMPLEMENTED (2026-10-10).
-  The decimal engines are generic over their compute word (phase 5b,
-  `DecimalWord`), so `DecimalFixed<D>` picks the word through a marker:
-  `Dp<D>: DecimalTier` with `type Word`, one impl per `D` from 0 to 77; the
-  transcendental block of `DecimalFixed` carries the bound (a generic
-  function over `D` that calls one writes `where Dp<D>: DecimalTier`);
-  arithmetic, parsing and formatting stay unbounded. The rule was measured,
-  not assumed (`tests/decimal_tier_by_d_validation.rs`: every word at every
-  `D` against mpmath, 1105 cases): a word with fewer than about ten guard
-  digits beyond `D` misrounds (i64 at D = 4 by one unit through double
-  rounding, at D = 9 by 20; i128 at D = 19 by 14; I256 at D = 38 by 12),
-  and a word whose integer range is below the i128 storage range at `D`
-  overflows on results that fit storage (i128 at 19 digits holds 1.7e19,
-  storage at D = 9 holds 1.7e29: embedded's `exp` at D = 9 from 45 to 67
-  would have become `TierOverflow`). So: I256 (38 digits) up to D = 19,
-  I512 (77) to 38, I1024 (154) to 77; every case correctly rounded, the
-  full storage range at every `D`. Behaviour change, stated: on realtime
-  and compact the decimal transcendentals now run on I256 (slower, see the
-  perf note) and return the correctly rounded value with the full storage
-  range (0.6.7's realtime results at D = 4 carried double-rounding errors,
-  at D above 9 they were coarse; the `PrecisionLimit` those profiles raised
-  is gone); on embedded (I256, D <= 19) and balanced (I512, D from 20 to
-  38) the results are identical to 0.6.7; on balanced below D = 20 and on
-  scientific the word is narrower than 0.6.7's but both are correctly
-  rounded. Gates: the differential gate per build at nine `D` (identical
-  outcomes required wherever 0.6.7's word had ten guard digits, differences
-  counted and an error-to-value change allowed where it had not), the
-  mpmath gate over `D` in one build, the exp-range references regenerated
-  for the `D`-selected words (one table for every build, tops at the
-  storage range), the decimal suites with their profile-bound expectations
-  rewritten (the tan pole, the atanh next to one, the huge-ratio atan2,
-  the compute-tier argument cases).
-- **6b, serialization v2.** IMPLEMENTED (2026-10-10). `to_bytes` on every
-  `Fixed<S, F>` writes `[0x20 | storage code, F][raw big-endian]` (codes 1
-  to 5 for i32, i64, i128, I256, I512; `format_tag()` returns the pair);
+- **6a, the decimal compute word from `D`.** IMPLEMENTED (2026-10-10,
+  redone 2026-10-14 with the ladder). The decimal engines are generic over
+  their compute word (phase 5b, `DecimalWord`), so `DecimalFixed<D>` picks
+  its words through a marker: `Dp<D>: DecimalTier` with a `Fast` word and a
+  sure `Word` one step wider (i128 then I256 up to D = 9, I256 then I512 to
+  19, I512 then I1024 to 38, I1024 alone to 77); the transcendental block of
+  `DecimalFixed` carries the bound (a generic function over `D` that calls
+  one writes `where Dp<D>: DecimalTier`); arithmetic, parsing and formatting
+  stay unbounded. Every transcendental runs on the fast word and moves to
+  the sure word when the fast one overflows (argument or result beyond its
+  range), when the rounding to `D` is ambiguous (the discarded digits within
+  10^-4 of the guard range of a boundary: zero, a half or a whole unit) or
+  when a function's own guard asks (tan with |result| above 10^k, k = (guard
+  digits - 2) / 2: next to a pole the quotient's error grows with tan^2 and
+  outruns any rounding margin). The decision depends only on the input, so
+  every build returns the same integer. The rule was measured, not assumed
+  (`tests/decimal_tier_by_d_validation.rs`: every word at every `D` against
+  mpmath, 1105 ordinary cases plus 468 next to the singularities and range
+  limits): a word with fewer than about ten guard digits misrounds (i64 at
+  D = 4 by one unit through double rounding, at D = 9 by 20; i128 at D = 19
+  by 14; I256 at D = 38 by 12); with ten guard digits and no fallback the
+  misses were the overflows (1e30 at D <= 9, sinh(83) at D = 2), two ties
+  (atanh at D = 9, sqrt at D = 19 on I256 itself) and tan next to pi/2 (0.74
+  at D = 9); with the ladder 1573 of 1573 cases are exact. One formula
+  defect found on the way: `atanh` formed (1+x)/(1-x) on x itself, a tiny
+  quotient with ten significant digits next to -1; it now works on |x| and
+  negates (0.6.7 has the loss on every profile). Perf (release, one binary
+  per crate, 0.6.7 / tree, ns): compact at parity for D <= 9 (exp 1970 /
+  1959, ln 739 / 750, sqrt 3952 / 3968, atan 1083 / 1095); embedded 5 to 30
+  times faster at D <= 9 (ln 22727 / 747, atan 25987 / 1068) and at parity
+  at D = 19; realtime slower at D <= 9 because its i64 word is gone (ln 131
+  / 750, exp 1356 / 1963, atan 179 / 1095), the price of correct rounding
+  and the full storage range there (0.6.7's realtime results at D = 4
+  carried double-rounding errors and at D above 9 were coarse; its
+  `PrecisionLimit` is gone). Compact and realtime at D = 19 move to I256
+  (0.6.7 computed D = 19 on i128 with no guard digit, 14 units off). One
+  residual on embedded: exp at D = 19 reads +7 percent with 32-byte branch
+  padding on both crates (sqrt at D = 19 reads -1), and the experiments
+  split it three ways at about 2 percent each: the I256 path as such,
+  the ladder's branch, and the presence of the I512 sure instantiation;
+  the narrowing itself measures equal (760 against 764 ns on I256 values
+  above the i128 boundary, 99 against 100 below it). It is the
+  division-bound I256 engine reacting to code placement, the same class as
+  the sqrt and atan2 reading of phase 5c, and the word-serial division of
+  the ROADMAP follow-up is the fix that shrinks it. Gates:
+  the differential gate per build at nine `D` (identical outcomes required
+  wherever 0.6.7's word had ten guard digits and is not the fast word
+  itself; elsewhere differences counted and an error-to-value change
+  allowed), the mpmath gate over `D` in one build, the exp-range references
+  regenerated for the `D`-selected words (one table for every build, tops at
+  the storage range), the decimal suites with their profile-bound
+  expectations rewritten (the tan pole, the atanh next to one, the
+  huge-ratio atan2, the compute-tier argument cases).
+- **6b, serialization v2.** IMPLEMENTED (2026-10-10, redone 2026-10-14).
+  `to_bytes` on every `Fixed<S, F>` writes `[0x20 | storage code, F as two
+  big-endian bytes][raw big-endian]` (codes 1 to 5 for i32, i64, i128,
+  I256, I512; `format_tag()` returns the three bytes; the first pass wrote
+  `F` in one byte and the scientific gate caught Q256.256's F = 256
+  wrapping to 0);
   `from_bytes` accepts only that pair; `from_bytes_legacy` reads the 0.6.x
   tags (0x01 to 0x05 and 0x80 | F) when the storage word matches and, where
   the tag names a split, the split matches too (0x05 is taken for the

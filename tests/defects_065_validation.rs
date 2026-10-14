@@ -73,24 +73,37 @@ fn profile_tag_names_the_split() {
             assert_eq!(tag, 0x80 | f as u8);
         }
     }
+    // since 0.7.0 the written tag is the two-byte format tag; the 0.6.x
+    // tag is what the legacy reader accepts
     let x = fp("1.5");
     let bytes = x.to_bytes();
-    assert_eq!(bytes[0], tag);
+    assert_eq!([bytes[0], bytes[1], bytes[2]], FixedPoint::format_tag());
     assert_eq!(FixedPoint::from_bytes(&bytes), Ok(x));
+    let mut old = vec![tag];
+    old.extend_from_slice(&bytes[3..]);
+    assert_eq!(FixedPoint::from_bytes_legacy(&old), Ok(x));
 }
 
-/// A non-default realtime split refuses the Q16.16 tag instead of reading the
-/// payload at the wrong scale; the explicit raw read still works.
+/// A non-default realtime split refuses another split's tag instead of
+/// reading the payload at the wrong scale, through both readers; the
+/// explicit raw read still works.
 #[cfg(table_format = "q16_16")]
 #[test]
 fn non_default_split_refuses_q16_16_bytes() {
     let x = fp("1.5");
-    let mut bytes = x.to_bytes();
-    if g_math::fixed_point::frac_config::FRAC_BITS != 16 {
-        bytes[0] = 0x05;
-        assert_eq!(FixedPoint::from_bytes(&bytes), Err(OverflowDetected::InvalidInput));
-    }
-    assert_eq!(FixedPoint::from_raw_bytes(&bytes[1..]), Ok(x));
+    let bytes = x.to_bytes();
+    let f = g_math::fixed_point::frac_config::FRAC_BITS;
+    let mut other = bytes.clone();
+    other[2] = if f == 16 { 10 } else { 16 };
+    assert_eq!(FixedPoint::from_bytes(&other), Err(OverflowDetected::InvalidInput));
+    let mut legacy_other = vec![0x80 | if f == 16 { 10u8 } else { 16u8 }];
+    legacy_other.extend_from_slice(&bytes[3..]);
+    assert_eq!(FixedPoint::from_bytes_legacy(&legacy_other), Err(OverflowDetected::InvalidInput));
+    // 0x05 was written by every split up to 0.6.4: taken for the reader's split
+    let mut legacy_default = vec![0x05];
+    legacy_default.extend_from_slice(&bytes[3..]);
+    assert_eq!(FixedPoint::from_bytes_legacy(&legacy_default), Ok(x));
+    assert_eq!(FixedPoint::from_raw_bytes(&bytes[3..]), Ok(x));
 }
 
 // ============================================================================

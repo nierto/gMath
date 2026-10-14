@@ -40,7 +40,7 @@ fn assert_fp(got: FixedPoint, exp: FixedPoint, tol: FixedPoint, name: &str) {
 fn test_tensor_roundtrip_rank0() {
     let t = Tensor::from_data(&[], &[fp("3.14")]);
     let bytes = t.to_bytes();
-    let t2 = Tensor::from_bytes(&bytes).unwrap();
+    let t2 = Tensor::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(t2.rank(), 0);
     assert_fp(t2.to_scalar(), fp("3.14"), tight(), "rank-0 roundtrip");
 }
@@ -50,7 +50,7 @@ fn test_tensor_roundtrip_rank1() {
     let v = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
     let t = Tensor::from(&v);
     let bytes = t.to_bytes();
-    let t2 = Tensor::from_bytes(&bytes).unwrap();
+    let t2 = Tensor::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(t2.rank(), 1);
     assert_eq!(t2.shape(), &[3]);
     let v2 = t2.to_vector();
@@ -67,7 +67,7 @@ fn test_tensor_roundtrip_rank2() {
     ]);
     let t = Tensor::from(&m);
     let bytes = t.to_bytes();
-    let t2 = Tensor::from_bytes(&bytes).unwrap();
+    let t2 = Tensor::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(t2.rank(), 2);
     assert_eq!(t2.shape(), &[2, 3]);
     let m2 = t2.to_matrix();
@@ -86,7 +86,7 @@ fn test_tensor_roundtrip_rank4() {
     t.set(&[1, 0, 1, 0], fp("-1.5"));
 
     let bytes = t.to_bytes();
-    let t2 = Tensor::from_bytes(&bytes).unwrap();
+    let t2 = Tensor::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(t2.rank(), 4);
     assert_eq!(t2.shape(), &[2, 2, 2, 2]);
     assert_fp(t2.get(&[0, 1, 0, 1]), fp("1.5"), tight(), "rank-4[0,1,0,1]");
@@ -96,9 +96,9 @@ fn test_tensor_roundtrip_rank4() {
 
 #[test]
 fn test_tensor_invalid_bytes() {
-    assert!(Tensor::from_bytes(&[]).is_err());
+    assert!(Tensor::<FixedPoint>::from_bytes(&[]).is_err());
     // rank=2 but not enough shape bytes
-    assert!(Tensor::from_bytes(&[2, 0]).is_err());
+    assert!(Tensor::<FixedPoint>::from_bytes(&[2, 0]).is_err());
 }
 
 // ============================================================================
@@ -247,7 +247,7 @@ fn test_manifold_point_euclidean_roundtrip() {
     let coords = FixedVector::from_slice(&[fp("1"), fp("2"), fp("3")]);
     let mp = ManifoldPoint::euclidean(3, coords.clone());
     let bytes = mp.to_bytes();
-    let mp2 = ManifoldPoint::from_bytes(&bytes).unwrap();
+    let mp2 = ManifoldPoint::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(mp2.manifold_tag, 0x01);
     assert_eq!(mp2.params, vec![3]);
     for i in 0..3 {
@@ -260,7 +260,7 @@ fn test_manifold_point_sphere_roundtrip() {
     let coords = FixedVector::from_slice(&[fp("0.5"), fp("0.5"), fp("0.7071067811865475")]);
     let mp = ManifoldPoint::sphere(2, coords.clone());
     let bytes = mp.to_bytes();
-    let mp2 = ManifoldPoint::from_bytes(&bytes).unwrap();
+    let mp2 = ManifoldPoint::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(mp2.manifold_tag, 0x02);
     assert_eq!(mp2.params, vec![2]);
     for i in 0..3 {
@@ -273,7 +273,7 @@ fn test_manifold_point_hyperbolic_roundtrip() {
     let coords = FixedVector::from_slice(&[fp("1.5"), fp("0.3"), fp("0.7")]);
     let mp = ManifoldPoint::hyperbolic(2, coords.clone());
     let bytes = mp.to_bytes();
-    let mp2 = ManifoldPoint::from_bytes(&bytes).unwrap();
+    let mp2 = ManifoldPoint::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(mp2.manifold_tag, 0x03);
 }
 
@@ -283,7 +283,7 @@ fn test_manifold_point_spd_roundtrip() {
     let coords = FixedVector::from_slice(&[fp("2"), fp("0.5"), fp("3")]);
     let mp = ManifoldPoint::spd(2, coords.clone());
     let bytes = mp.to_bytes();
-    let mp2 = ManifoldPoint::from_bytes(&bytes).unwrap();
+    let mp2 = ManifoldPoint::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(mp2.manifold_tag, 0x04);
     assert_eq!(mp2.params, vec![2]);
 }
@@ -297,7 +297,7 @@ fn test_manifold_point_grassmannian_roundtrip() {
     ]);
     let mp = ManifoldPoint::grassmannian(2, 4, coords.clone());
     let bytes = mp.to_bytes();
-    let mp2 = ManifoldPoint::from_bytes(&bytes).unwrap();
+    let mp2 = ManifoldPoint::<FixedPoint>::from_bytes(&bytes).unwrap();
     assert_eq!(mp2.manifold_tag, 0x05);
     assert_eq!(mp2.params, vec![2, 4]); // k=2, n=4
     assert_eq!(mp2.coordinates.len(), 8);
@@ -315,7 +315,7 @@ fn test_manifold_point_cross_node_determinism() {
     let mp = ManifoldPoint::sphere(2, coords);
 
     let wire = mp.to_bytes();
-    let received = ManifoldPoint::from_bytes(&wire).unwrap();
+    let received = ManifoldPoint::<FixedPoint>::from_bytes(&wire).unwrap();
 
     // Bit-identical comparison (not tolerance — EXACT)
     for i in 0..3 {
@@ -341,7 +341,7 @@ fn test_manifold_coordinate_transport() {
     // Serialize
     let wire_bytes = coords.to_bytes();
     // Deserialize on another node
-    let received = FixedVector::from_bytes(&wire_bytes).unwrap();
+    let received = FixedVector::<FixedPoint>::from_bytes(&wire_bytes).unwrap();
 
     // Exact match — deterministic wire format
     for i in 0..3 {
@@ -359,7 +359,7 @@ fn test_tensor_shard_transport() {
     ]);
 
     let wire = shard.to_bytes();
-    let received = Tensor::from_bytes(&wire).unwrap();
+    let received = Tensor::<FixedPoint>::from_bytes(&wire).unwrap();
 
     assert_eq!(received.shape(), shard.shape());
     for i in 0..2 {
@@ -368,4 +368,25 @@ fn test_tensor_shard_transport() {
                 "Tensor shard [{},{}] must be bit-identical", i, j);
         }
     }
+}
+
+/// The word's minimum has no magnitude in the word: its compact form is the
+/// full class with the two's complement bytes (0.6.7 panicked in `abs`).
+#[test]
+fn test_compact_minimum_round_trips() {
+    let n = FixedPoint::raw_byte_len();
+    let mut min_be = vec![0u8; n];
+    min_be[0] = 0x80;
+    let min = FixedPoint::from_raw_bytes(&min_be).unwrap();
+    assert!(min.is_negative());
+    let bytes = min.to_compact_bytes();
+    assert_eq!(bytes.len(), 1 + FixedPoint::raw_byte_len());
+    assert_eq!(bytes[0], 0b110);
+    let (back, used) = FixedPoint::from_compact_bytes(&bytes).unwrap();
+    assert_eq!(back, min);
+    assert_eq!(used, bytes.len());
+    min_be[n - 1] = 0x01;
+    let next = FixedPoint::from_raw_bytes(&min_be).unwrap();
+    let (back, _) = FixedPoint::from_compact_bytes(&next.to_compact_bytes()).unwrap();
+    assert_eq!(back, next);
 }

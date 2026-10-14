@@ -293,7 +293,7 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `tanh` | `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, exactly ±1 for \|x\| > 2 * compute dp (where 1 - \|tanh x\| < e^(-4 dp) is below half a unit at the compute dp). |
 | `try_tanh` | Fallible `tanh(x)`, `Err(TierOverflow)` only when the argument is outside the compute tier. |
 | `asinh` | `asinh(x)` = sign(x) ln(\|x\| + sqrt(x^2 + 1)), composed at the compute tier. |
-| `try_asinh` | Fallible `asinh(x)`, `Err(TierOverflow)` when the argument is outside the compute tier. |
+| `try_asinh` | Fallible `asinh(x)`, `Err(TierOverflow)` when the result does not fit i128 at `DECIMALS`. |
 | `acosh` | `acosh(x)` = ln(x + sqrt(x^2 - 1)), composed at the compute tier. |
 | `try_acosh` | Fallible `acosh(x)`, `Err(DomainError)` for x < 1. |
 | `atanh` | `atanh(x)` = ln((1+x)/(1-x)) / 2, composed at the compute tier. |
@@ -1382,18 +1382,26 @@ Modules: g_math::fixed_point::imperative::serialization
 | `MANIFOLD_TAG_SPD` | const |  |
 | `MANIFOLD_TAG_GRASSMANNIAN` | const |  |
 
+### Fixed
+
+| Method | Summary |
+| --- | --- |
+| `to_bytes` | Serialize with the format tag (big-endian). |
+| `from_bytes` | Deserialize bytes written by [`Self::to_bytes`] for this format. |
+| `from_bytes_legacy` | Deserialize bytes written by `to_bytes` of a 0.6.x build: a one-byte profile tag and the raw bytes. |
+| `to_raw_bytes` | Serialize raw storage only (no tag), big-endian. |
+| `from_raw_bytes` | Deserialize raw storage only (no tag), big-endian. |
+| `format_tag` | The three tag bytes [`Self::to_bytes`] writes: `0x20 \| storage code` and `F` as two big-endian bytes (Q256.256 has F = 256). |
+| `legacy_tag` | The one-byte tag a 0.6.x build of this format wrote (0x05 for Q16.16, 0x80 \| F for another split on i32, 0x04 for i64, 0x01 for i128, 0x02 for I256, 0x03 for I512); what [`Self::from_bytes_legacy`] accepts. |
+| `raw_byte_len` | Size in bytes of the raw storage (without tag). |
+| `to_compact_bytes` | Encode a value in compact format. |
+| `from_compact_bytes` | Decode a value from compact format. |
+
 ### FixedPoint
 
 | Method | Summary |
 | --- | --- |
-| `to_bytes` | Serialize to bytes with profile tag prefix (big-endian). |
-| `from_bytes` | Deserialize from bytes with profile tag prefix. |
-| `to_raw_bytes` | Serialize raw storage only (no profile tag), big-endian. |
-| `from_raw_bytes` | Deserialize raw storage only (no profile tag), big-endian. |
-| `profile_tag` | The profile tag byte for the current compilation profile and, on the realtime profile, its fractional split (see the module docs). |
-| `raw_byte_len` | Size in bytes of the raw storage (without profile tag). |
-| `to_compact_bytes` | Encode a FixedPoint value in compact format. |
-| `from_compact_bytes` | Decode a FixedPoint value from compact format. |
+| `profile_tag` | The tag a 0.6.x build of this profile and split wrote; the same as [`Fixed::legacy_tag`] (kept under its 0.6.x name). |
 
 ### FixedVector
 
@@ -1432,39 +1440,7 @@ A serializable point on a manifold with its manifold type.
 | `to_bytes` | Serialize to bytes. |
 | `from_bytes` | Deserialize from bytes. |
 
-### FixedPointVisitor
-
-| Method | Summary |
-| --- | --- |
-| `expecting` |  |
-| `visit_bytes` |  |
-| `visit_byte_buf` |  |
-
-### VecVisitor
-
-| Method | Summary |
-| --- | --- |
-| `expecting` |  |
-| `visit_bytes` |  |
-| `visit_byte_buf` |  |
-
-### MatVisitor
-
-| Method | Summary |
-| --- | --- |
-| `expecting` |  |
-| `visit_bytes` |  |
-| `visit_byte_buf` |  |
-
-### TensorVisitor
-
-| Method | Summary |
-| --- | --- |
-| `expecting` |  |
-| `visit_bytes` |  |
-| `visit_byte_buf` |  |
-
-### MpVisitor
+### V
 
 | Method | Summary |
 | --- | --- |

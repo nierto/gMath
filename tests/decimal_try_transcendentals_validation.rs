@@ -12,9 +12,12 @@
 //!    |1|, atan2(0, 0), and tan where cos x is exactly 0 at the compute dp.
 //! 3. Results beyond i128 at D, and arguments or intermediates beyond the
 //!    decimal compute tier, are `Err(TierOverflow)`, never a panic or a
-//!    wrapped value. An in-domain argument that only reaches a domain
-//!    boundary because the compute dp is coarser than D (realtime D > 9,
-//!    compact D > 19) is `Err(PrecisionLimit)`.
+//!    wrapped value. The compute word follows D (`Dp<D>: DecimalTier`, at
+//!    least ten guard digits at every D on every build), so an in-domain
+//!    argument never reaches a domain boundary at the compute tier; the
+//!    `PrecisionLimit` that the narrow profiles' coarse compute dp caused up
+//!    to 0.6.7 is gone, and the results at every D are the same on every
+//!    build.
 //! 4. `try_` never panics, for any raw at any D: swept below over the i128
 //!    and compute-tier extremes and every power of ten, at D in
 //!    {0, 2, 4, 9, 18, 19, 20, 28, 38} on every profile.
@@ -28,7 +31,7 @@
 //! GMATH_PROFILE=embedded cargo test --test decimal_try_transcendentals_validation
 //! ```
 
-use g_math::fixed_point::domains::decimal_fixed::transcendental::DECIMAL_COMPUTE_DP;
+use g_math::fixed_point::{DecimalTier, Dp};
 use g_math::fixed_point::{DecimalFixed, OverflowDetected};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -85,7 +88,10 @@ fn quiet<T>(f: impl FnOnce() -> T) -> Option<T> {
     r
 }
 
-fn infallible<const D: u8>(f: &str, x: DecimalFixed<D>) -> Vec<i128> {
+fn infallible<const D: u8>(f: &str, x: DecimalFixed<D>) -> Vec<i128>
+where
+    Dp<D>: DecimalTier,
+{
     let one = |v: DecimalFixed<D>| vec![v.raw_value()];
     let two = |(a, b): (DecimalFixed<D>, DecimalFixed<D>)| vec![a.raw_value(), b.raw_value()];
     match f {
@@ -110,7 +116,10 @@ fn infallible<const D: u8>(f: &str, x: DecimalFixed<D>) -> Vec<i128> {
     }
 }
 
-fn fallible<const D: u8>(f: &str, x: DecimalFixed<D>) -> R<Vec<i128>> {
+fn fallible<const D: u8>(f: &str, x: DecimalFixed<D>) -> R<Vec<i128>>
+where
+    Dp<D>: DecimalTier,
+{
     let one = |v: R<DecimalFixed<D>>| v.map(|v| vec![v.raw_value()]);
     let two = |v: R<(DecimalFixed<D>, DecimalFixed<D>)>| v.map(|(a, b)| vec![a.raw_value(), b.raw_value()]);
     match f {
@@ -149,12 +158,18 @@ fn agree(label: &str, inf: impl FnOnce() -> Vec<i128>, tr: impl FnOnce() -> R<Ve
     }
 }
 
-fn agree_unary<const D: u8>(f: &str, raw: i128) -> Result<R<Vec<i128>>, String> {
+fn agree_unary<const D: u8>(f: &str, raw: i128) -> Result<R<Vec<i128>>, String>
+where
+    Dp<D>: DecimalTier,
+{
     let x = DecimalFixed::<D>::from_raw(raw);
     agree(&format!("{f}<{D}>(raw {raw})"), || infallible(f, x), || fallible(f, x))
 }
 
-fn agree_atan2<const D: u8>(y: i128, x: i128) -> Result<R<Vec<i128>>, String> {
+fn agree_atan2<const D: u8>(y: i128, x: i128) -> Result<R<Vec<i128>>, String>
+where
+    Dp<D>: DecimalTier,
+{
     let (yv, xv) = (DecimalFixed::<D>::from_raw(y), DecimalFixed::<D>::from_raw(x));
     agree(
         &format!("atan2<{D}>(raw {y}, raw {x})"),
@@ -339,7 +354,10 @@ fn expect_err(label: &str, r: Result<R<Vec<i128>>, String>, want: OverflowDetect
     }
 }
 
-fn domain_cases<const D: u8>(failures: &mut Vec<String>) {
+fn domain_cases<const D: u8>(failures: &mut Vec<String>)
+where
+    Dp<D>: DecimalTier,
+{
     let s = DecimalFixed::<D>::SCALE;
     let dom = OverflowDetected::DomainError;
     for (f, raw) in [
@@ -364,32 +382,23 @@ fn domain_violations_are_domain_errors() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// tan at pi/2 rounded to D, where D >= the compute dp: the reduced argument
-/// rounds to 0 there, so cos x is exactly 0 and tan is `DomainError` (as
-/// `FixedPoint::try_tan`); the infallible `tan` panics. |x - pi/2| is
-/// 2.05e-10 at D = 9, 3.1e-20 at D = 19, 1.4e-39 at D = 38 (mpmath).
+/// tan at pi/2 rounded to D: the pole is reachable only where D equals the
+/// compute dp, which the D-selected compute word rules out (at least ten
+/// guard digits), so cos is a small nonzero value there and tan is a large
+/// finite value or, beyond i128 at D, `TierOverflow`; never `DomainError`,
+/// never a panic, on every build. |x - pi/2| is 2.05e-10 at D = 9, 3.1e-20
+/// at D = 19, 1.4e-39 at D = 38 (mpmath), so |tan| is 4.9e9, 3.2e19 and
+/// 7.1e38.
 #[test]
-fn tan_at_a_reachable_pole_is_a_domain_error() {
+fn tan_at_pi_half_rounded_to_d_is_finite_or_tier_overflow() {
     let mut failures = Vec::new();
-    let mut checked = 0;
     for &d in &[9u8, 19, 38] {
-        if d < DECIMAL_COMPUTE_DP {
-            continue;
-        }
-        checked += 1;
-        let raw = round_str(PI_HALF, d);
-        expect_err(&format!("tan<{d}>(pi/2)"), run_d(d, "tan", raw), OverflowDetected::DomainError, &mut failures);
-    }
-    // below the compute dp the pole is not reachable: tan(pi/2 at D) is a
-    // large finite value
-    let d = PROFILE_D[PROFILE_D.len() - 2];
-    if d < DECIMAL_COMPUTE_DP {
         match run_d(d, "tan", round_str(PI_HALF, d)) {
-            Ok(Ok(_)) | Ok(Err(OverflowDetected::TierOverflow)) => {}
+            Ok(Ok(v)) if v.len() == 1 && v[0].unsigned_abs() > 10u128.pow(18) => {}
+            Ok(Err(OverflowDetected::TierOverflow)) if d >= 19 => {}
             other => failures.push(format!("tan<{d}>(pi/2): {other:?}")),
         }
     }
-    eprintln!("pole cases checked: {checked}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -397,7 +406,10 @@ fn tan_at_a_reachable_pole_is_a_domain_error() {
 // Contract 3: overflow and precision limits
 // ============================================================================
 
-fn overflow_cases<const D: u8>(failures: &mut Vec<String>) {
+fn overflow_cases<const D: u8>(failures: &mut Vec<String>)
+where
+    Dp<D>: DecimalTier,
+{
     let s = DecimalFixed::<D>::SCALE;
     let tier = OverflowDetected::TierOverflow;
     // e^200 = 7.2e86 is beyond i128 at every D; 200 fits every compute tier
@@ -438,28 +450,7 @@ fn overflow_is_tier_overflow_never_wrapped() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Arguments outside the decimal compute tier (realtime: i64 at 9 dp,
-/// compact: i128 at 19 dp) are `TierOverflow` for every function whose
-/// storage domain admits them.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-#[test]
-fn argument_beyond_the_compute_tier_is_tier_overflow() {
-    let mut failures = Vec::new();
-    let raw = 10i128.pow(30); // 10^30 at D = 0
-    for f in UNARY {
-        let r = agree_unary::<0>(f, raw);
-        let want = match *f {
-            "asin" | "acos" | "atanh" => OverflowDetected::DomainError,
-            _ => OverflowDetected::TierOverflow,
-        };
-        expect_err(&format!("{f}<0>(1e30)"), r, want, &mut failures);
-    }
-    expect_err("atan2<0>(1e30, 1)", agree_atan2::<0>(raw, 1), OverflowDetected::TierOverflow, &mut failures);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
 /// Results beyond i128 at D = 38 from in-range arguments: ln(1e-38) = -87.5.
-#[cfg(not(any(table_format = "q16_16", table_format = "q32_32")))]
 #[test]
 fn ln_result_beyond_storage_is_tier_overflow() {
     let mut failures = Vec::new();
@@ -467,63 +458,48 @@ fn ln_result_beyond_storage_is_tier_overflow() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Where D exceeds the compute dp, an in-domain argument can round onto a
-/// domain boundary at the compute tier: `PrecisionLimit`, not
-/// `DomainError` (the argument is in the domain) and not a wrong value.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+/// D = 19 computes on I256 at 38 dp (its fast word) on every build, so
+/// (1+x)/(1-x) = 2e19 for x = 1 - 1e-19 fits the compute tier and atanh is
+/// finite: mpmath
+/// atanh(1 - 1e-19) = 22.2211319737234066528545348802 (up to 0.6.7 the
+/// compact profile computed D = 19 on i128 at 19 dp and reported
+/// `TierOverflow` here).
 #[test]
-fn boundary_collapse_below_the_compute_dp_is_precision_limit() {
-    let mut failures = Vec::new();
-    let s = DecimalFixed::<38>::SCALE;
-    let lim = OverflowDetected::PrecisionLimit;
-    expect_err("ln<38>(1e-38)", agree_unary::<38>("ln", 1), lim, &mut failures);
-    expect_err("asin<38>(1 - 1e-38)", agree_unary::<38>("asin", s - 1), lim, &mut failures);
-    expect_err("asin<38>(-1 + 1e-38)", agree_unary::<38>("asin", -s + 1), lim, &mut failures);
-    expect_err("acos<38>(1 - 1e-38)", agree_unary::<38>("acos", s - 1), lim, &mut failures);
-    expect_err("atanh<38>(1 - 1e-38)", agree_unary::<38>("atanh", s - 1), lim, &mut failures);
-    expect_err("atanh<38>(-1 + 1e-38)", agree_unary::<38>("atanh", -s + 1), lim, &mut failures);
-    expect_err("atan2<38>(1e-38, 1e-38)", agree_atan2::<38>(1, 1), lim, &mut failures);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-/// compact at D = 19: (1+x)/(1-x) for x = 1 - 1e-19 is 2e19, beyond the
-/// i128 compute tier at 19 dp, so atanh is `TierOverflow` (an intermediate
-/// limit; the result 22.1 itself would fit).
-#[cfg(table_format = "q32_32")]
-#[test]
-fn compact_atanh_next_to_one_is_tier_overflow() {
-    let mut failures = Vec::new();
-    let s = DecimalFixed::<19>::SCALE;
-    expect_err("atanh<19>(1 - 1e-19)", agree_unary::<19>("atanh", s - 1), OverflowDetected::TierOverflow, &mut failures);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+fn atanh_next_to_one_at_d19_is_finite_on_every_build() {
+    match agree_unary::<19>("atanh", DecimalFixed::<19>::SCALE - 1) {
+        Ok(Ok(v)) if v == vec![222211319737234066529] => {}
+        other => panic!("atanh<19>(1 - 1e-19): {other:?}, expected Ok([222211319737234066529])"),
+    }
 }
 
 /// |y/x| beyond the compute tier: atan2 = sign(y) pi/2 - atan(x/y). mpmath:
 /// atan2(1e6, 1e-4) = 1.57079632669..., atan2(1e15, 1e-9) = 1.5707963267948966192313206...
-/// Reachable only where the compute tier is narrow (realtime, compact).
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+/// D = 4 and D = 9 run on i128 at 19 dp (their fast word) on every build,
+/// where both ratios fit, so both cases are reachable everywhere.
 #[test]
 fn atan2_with_a_huge_ratio_is_correctly_rounded() {
-    #[cfg(table_format = "q16_16")]
-    let (y, x, expected) = (1_000_000 * 10_000i128, 1i128, 15708i128);
-    #[cfg(table_format = "q32_32")]
-    let (y, x, expected) = (10i128.pow(15) * 10i128.pow(9), 1i128, 1_570_796_327i128);
-    #[cfg(table_format = "q16_16")]
-    type T = DecimalFixed<4>;
-    #[cfg(table_format = "q32_32")]
-    type T = DecimalFixed<9>;
-    for (yr, xr, e) in [(y, x, expected), (-y, x, -expected), (y, -x, expected), (-y, -x, -expected)] {
-        let (yv, xv) = (T::from_raw(yr), T::from_raw(xr));
-        assert_eq!(yv.try_atan2(xv).map(|v| v.raw_value()), Ok(e), "try_atan2({yr}, {xr})");
-        assert_eq!(yv.atan2(xv).raw_value(), e, "atan2({yr}, {xr})");
+    fn check<const D: u8>(y: i128, x: i128, expected: i128)
+    where
+        Dp<D>: DecimalTier,
+    {
+        for (yr, xr, e) in [(y, x, expected), (-y, x, -expected), (y, -x, expected), (-y, -x, -expected)] {
+            let (yv, xv) = (DecimalFixed::<D>::from_raw(yr), DecimalFixed::<D>::from_raw(xr));
+            assert_eq!(yv.try_atan2(xv).map(|v| v.raw_value()), Ok(e), "try_atan2<{D}>({yr}, {xr})");
+            assert_eq!(yv.atan2(xv).raw_value(), e, "atan2<{D}>({yr}, {xr})");
+        }
     }
+    check::<4>(1_000_000 * 10_000i128, 1, 15708);
+    check::<9>(10i128.pow(15) * 10i128.pow(9), 1, 1_570_796_327);
 }
 
 // ============================================================================
 // Boundary values (as FixedPoint pins them)
 // ============================================================================
 
-fn boundary_cases<const D: u8>(failures: &mut Vec<String>) {
+fn boundary_cases<const D: u8>(failures: &mut Vec<String>)
+where
+    Dp<D>: DecimalTier,
+{
     let s = DecimalFixed::<D>::SCALE;
     let pi_half = round_str(PI_HALF, D);
     // pi is beyond i128 at D = 38 (3.14e38 > 1.7e38): TierOverflow there

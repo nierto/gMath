@@ -92,8 +92,10 @@ reduction by the truncated π/2: 1390 below `2^12`, 8e-11 absolute below
   variant returning `Result<_, OverflowDetected>`: `DomainError` outside the
   domain, `TierOverflow` out of range, and on `DecimalFixed` `PrecisionLimit`
   when an in-domain argument rounds onto a domain boundary at its compute
-  precision. The `try_` forms never panic and equal the infallible ones
-  whenever those return.
+  precision (not reachable from storage since the compute word follows
+  `DECIMALS` with at least ten guard digits; up to 0.6.7 the realtime and
+  compact profiles reached it). The `try_` forms never panic and equal the
+  infallible ones whenever those return.
 - On `DecimalFixed`, transcendentals run natively in the decimal domain, no
   round-trip through binary. `exp` (and `sinh`, `cosh`, `tanh`) and `sin`/`cos`
   reduce their argument at a working precision wider than the compute tier

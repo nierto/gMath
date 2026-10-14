@@ -25,6 +25,7 @@
 #![cfg(table_format = "q128_128")]
 
 use g_math::fixed_point::DecimalFixed;
+use g_math::fixed_point::{DecimalTier, Dp};
 use std::path::PathBuf;
 
 /// Storage scale of the fixtures. Lands on decimal-scaled's d38_s28 grid point.
@@ -314,7 +315,10 @@ fn in_domain(func: &str, input: i128, s: u8) -> bool {
 }
 
 /// Compute func at compile-time scale S; raw result integer at scale S.
-fn compute_unary<const S: u8>(func: &str, input: i128) -> i128 {
+fn compute_unary<const S: u8>(func: &str, input: i128) -> i128
+where
+    Dp<S>: DecimalTier,
+{
     let d = DecimalFixed::<S>::from_raw(input);
     match func {
         "exp" => d.exp().raw_value(),
@@ -336,7 +340,10 @@ fn compute_unary<const S: u8>(func: &str, input: i128) -> i128 {
     }
 }
 
-fn grade_scale<const S: u8>(func: &str, lines: &[GoldenLine], r: &mut O2) {
+fn grade_scale<const S: u8>(func: &str, lines: &[GoldenLine], r: &mut O2)
+where
+    Dp<S>: DecimalTier,
+{
     for g in lines {
         if !in_domain(func, g.input, S) {
             r.skipped_domain += 1;
@@ -715,7 +722,10 @@ fn arith_gated(_op: &str) -> bool {
     true
 }
 
-fn compute_binary<const S: u8>(op: &str, a: i128, b: i128) -> Option<i128> {
+fn compute_binary<const S: u8>(op: &str, a: i128, b: i128) -> Option<i128>
+where
+    Dp<S>: DecimalTier,
+{
     let x = DecimalFixed::<S>::from_raw(a);
     let y = DecimalFixed::<S>::from_raw(b);
     Some(match op {

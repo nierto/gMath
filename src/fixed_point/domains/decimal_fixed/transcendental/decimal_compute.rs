@@ -475,6 +475,42 @@ pub fn try_decimal_compute_to_i128<C: DecimalWord>(value: C, dp: u8) -> Result<i
     C::compute_to_i128(result)
 }
 
+/// [`try_decimal_compute_to_i128`] that refuses to round when the digits
+/// it would discard lie within a margin of a rounding boundary (zero, a
+/// half, or a whole unit at `dp`): `None` means the caller must recompute
+/// on a wider word. The margin is 10^-4 of the guard range, which is about
+/// a thousand times the engines' measured error at their last digit; with
+/// fewer than five guard digits every rounding counts as ambiguous.
+pub fn try_decimal_compute_to_i128_unless_ambiguous<C: DecimalWord>(value: C, dp: u8) -> Option<Result<i128, OverflowDetected>> {
+    if dp >= C::DP {
+        return Some(try_decimal_compute_to_i128::<C>(value, dp));
+    }
+    let guard = C::DP - dp;
+    if guard < 5 {
+        return None;
+    }
+    // one power of ten (a loop of wide multiplications), the divisor from it
+    let margin = C::pow10_compute_ct(guard - 4);
+    let divisor = margin * C::from_i64(10_000);
+    let q = value.divmod(divisor).0;
+    let r = decimal_compute_abs(value - q * divisor); // |r| < divisor
+    let d_minus_r = divisor - r;
+    // |2r - divisor| without doubling
+    let half_gap = if r < d_minus_r { d_minus_r - r } else { r - d_minus_r };
+    if r < margin || d_minus_r < margin || half_gap < margin + margin {
+        return None;
+    }
+    // round half to even from the quotient and remainder in hand (one wide
+    // division, not a second one in `div_round_half_even`); the tie itself
+    // is inside the margin, so only the strict comparison decides
+    let rounded = if r > d_minus_r {
+        if C::decimal_compute_is_negative(&value) { q - C::decimal_compute_unit() } else { q + C::decimal_compute_unit() }
+    } else {
+        q
+    };
+    Some(C::compute_to_i128(rounded))
+}
+
 #[cfg(all(test, table_format = "q64_64"))]
 mod tests {
     use super::*;

@@ -45,10 +45,11 @@ fn decimal_exp_small_is_unchanged() {
 }
 
 /// e^50 = 5.18e21 fits the compute tier but not i128 at 19 decimals: the
-/// unchecked `as_i128` returned a wrapped value on embedded and wider.
-#[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
+/// unchecked `as_i128` returned a wrapped value on embedded and wider up to
+/// 0.6.3. The compute word follows D now, so the case is the same on every
+/// build and the infallible boundary reports the ladder's `TierOverflow`.
 #[test]
-#[should_panic(expected = "DecimalFixed: result outside the i128 storage range")]
+#[should_panic(expected = "decimal exp overflow: TierOverflow")]
 fn decimal_exp_beyond_i128_panics() {
     let _ = DecimalFixed::<19>::from_integer(50).exp();
 }
@@ -96,15 +97,11 @@ fn realtime_decimal_sqrt_of_wide_raw() {
     assert!((r - expected).abs() <= 1_000_000_000, "sqrt(20) at 18 dp: {r}");
 }
 
-/// 10^20 at 0 decimals exceeds the realtime (i64 at 9 dp) and compact
-/// (i128 at 19 dp) compute tiers: loud, not truncated or wrapped.
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-#[test]
-#[should_panic(expected = "DecimalFixed: value outside the decimal compute range")]
-fn narrow_profile_decimal_input_beyond_compute_panics() {
-    let _ = DecimalFixed::<0>::from_raw(100_000_000_000_000_000_000).sqrt();
-}
-
+/// 10^20 at 0 decimals exceeded the realtime (i64 at 9 dp) and compact
+/// (i128 at 19 dp) compute tiers up to 0.6.7; `DecimalFixed` now computes on
+/// the word `D` selects (I256 at 38 digits up to D = 19), which every i128
+/// raw fits, so the engine helper on the profile's word is what still
+/// reports the overflow.
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[test]
 fn narrow_profile_upscale_reports_overflow() {

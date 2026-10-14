@@ -40,7 +40,7 @@ pub mod sqrt;
 pub mod sin_cos;
 pub mod atan;
 
-pub use word::DecimalWord;
+pub use word::{DecimalTier, DecimalWord, Dp};
 pub use decimal_compute::{
     DECIMAL_COMPUTE_DP,
     DECIMAL_STORAGE_MAX_DP,

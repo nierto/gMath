@@ -1255,3 +1255,201 @@ fn fasc_evaluation_is_identical_to_0_6_7() {
     }
     unary.report_in_domain();
 }
+
+// ============================================================================
+// DecimalFixed<D>: the compute word follows D (phase 6a)
+// ============================================================================
+
+/// The decimal compute digits of this build's profile up to 0.6.7 (the
+/// word every `DecimalFixed<D>` ran on, whatever `D`).
+#[cfg(table_format = "q16_16")]
+const OLD_DECIMAL_DP: u8 = 9;
+#[cfg(table_format = "q32_32")]
+const OLD_DECIMAL_DP: u8 = 19;
+#[cfg(table_format = "q64_64")]
+const OLD_DECIMAL_DP: u8 = 38;
+#[cfg(table_format = "q128_128")]
+const OLD_DECIMAL_DP: u8 = 77;
+#[cfg(table_format = "q256_256")]
+const OLD_DECIMAL_DP: u8 = 154;
+
+/// Both crates' `try_` transcendentals at one `D` on the same raws. Where
+/// the word `D` selects is the word 0.6.7's profile used, the outcomes must
+/// be identical. Elsewhere the two words are compared: where 0.6.7's word
+/// had at least ten guard digits beyond `D`, both are correctly rounded and
+/// the outcomes must still be identical; where it had fewer (the narrow
+/// profiles at the larger `D`, where 0.6.7 misrounded or overflowed a
+/// compute tier narrower than the storage), differences are counted and
+/// reported, and an error in 0.6.7 may become a value.
+fn decimal_at_d<const D: u8>(same: &mut Tally, other: &mut (usize, usize, u128, Vec<String>))
+where
+    g_math::fixed_point::Dp<D>: g_math::fixed_point::DecimalTier,
+{
+    use g_math::fixed_point::DecimalFixed as NewDec;
+    use g_math_065::fixed_point::DecimalFixed as OldDec;
+    let new_dp = <<g_math::fixed_point::Dp<D> as g_math::fixed_point::DecimalTier>::Fast as g_math::fixed_point::domains::decimal_fixed::transcendental::DecimalWord>::DP;
+    let word = std::any::type_name::<<g_math::fixed_point::Dp<D> as g_math::fixed_point::DecimalTier>::Fast>();
+    // identical outcomes required where 0.6.7's word was well guarded; where
+    // it IS the fast word, the ladder's fallbacks (ties, overflows, tan next
+    // to a pole) are the only differences and are counted, not required
+    let same_word = OLD_DECIMAL_DP >= D + 10 && new_dp != OLD_DECIMAL_DP;
+    let grid: &[(i128, u32)] = &[
+        (0, 0), (5, 1), (-5, 1), (25, 2), (-25, 2), (75, 2), (-75, 2), (9999, 4), (-9999, 4), (1, 3), (-1, 3),
+        (1, 0), (-1, 0), (10001, 4), (15, 1), (-15, 1), (2, 0), (-225, 2), (3, 0), (73, 1), (-73, 1), (10, 0),
+        (-10, 0), (123456, 3), (-123456, 3), (1_000_000, 0), (1, 1), (33, 2), (-99, 2), (999, 3), (1, 2),
+    ];
+    let raws: Vec<i128> = grid
+        .iter()
+        .filter(|(_, k)| *k <= D as u32)
+        .filter_map(|&(n, k)| n.checked_mul(10i128.pow(D as u32 - k)))
+        .collect();
+    macro_rules! case {
+        ($label:expr, $raw:expr, |$o:ident| $old:expr, |$n:ident| $new:expr) => {{
+            let old = fallible(|| { let $o = OldDec::<D>::from_raw($raw); $old });
+            let new = fallible(|| { let $n = NewDec::<D>::from_raw($raw); $new });
+            if same_word {
+                same.check(old, new, &format!("{}<{}>({})", $label, D, $raw));
+            } else {
+                other.0 += 1;
+                if old != new {
+                    other.1 += 1;
+                    if let (Outcome::Value(a), Outcome::Value(b)) = (&old, &new) {
+                        let units = a.iter().zip(b.iter()).map(|(x, y)| (x - y).unsigned_abs()).max().unwrap_or(0);
+                        other.2 = other.2.max(units);
+                        // 0.6.7 under-guarded: counted above, not bounded (atanh near 1
+                        // at D = 6 on 9 digits was 5 units off)
+                    } else if !matches!((&old, &new), (Outcome::Error(_), Outcome::Value(_))) {
+                        other.3.push(format!("{}<{}>({}): 0.6.7 {:?}, tree {:?}", $label, D, $raw, old, new));
+                    }
+                }
+            }
+        }};
+    }
+    for &raw in &raws {
+        case!("exp", raw, |o| o.try_exp().map(|v| vec![v.raw_value()]), |n| n.try_exp().map(|v| vec![v.raw_value()]));
+        case!("ln", raw, |o| o.try_ln().map(|v| vec![v.raw_value()]), |n| n.try_ln().map(|v| vec![v.raw_value()]));
+        case!("sqrt", raw, |o| o.try_sqrt().map(|v| vec![v.raw_value()]), |n| n.try_sqrt().map(|v| vec![v.raw_value()]));
+        case!("sin", raw, |o| o.try_sin().map(|v| vec![v.raw_value()]), |n| n.try_sin().map(|v| vec![v.raw_value()]));
+        case!("cos", raw, |o| o.try_cos().map(|v| vec![v.raw_value()]), |n| n.try_cos().map(|v| vec![v.raw_value()]));
+        case!("sincos", raw, |o| o.try_sincos().map(|(a, b)| vec![a.raw_value(), b.raw_value()]), |n| n.try_sincos().map(|(a, b)| vec![a.raw_value(), b.raw_value()]));
+        case!("tan", raw, |o| o.try_tan().map(|v| vec![v.raw_value()]), |n| n.try_tan().map(|v| vec![v.raw_value()]));
+        case!("atan", raw, |o| o.try_atan().map(|v| vec![v.raw_value()]), |n| n.try_atan().map(|v| vec![v.raw_value()]));
+        case!("asin", raw, |o| o.try_asin().map(|v| vec![v.raw_value()]), |n| n.try_asin().map(|v| vec![v.raw_value()]));
+        case!("acos", raw, |o| o.try_acos().map(|v| vec![v.raw_value()]), |n| n.try_acos().map(|v| vec![v.raw_value()]));
+        case!("sinh", raw, |o| o.try_sinh().map(|v| vec![v.raw_value()]), |n| n.try_sinh().map(|v| vec![v.raw_value()]));
+        case!("cosh", raw, |o| o.try_cosh().map(|v| vec![v.raw_value()]), |n| n.try_cosh().map(|v| vec![v.raw_value()]));
+        case!("sinhcosh", raw, |o| o.try_sinhcosh().map(|(a, b)| vec![a.raw_value(), b.raw_value()]), |n| n.try_sinhcosh().map(|(a, b)| vec![a.raw_value(), b.raw_value()]));
+        case!("tanh", raw, |o| o.try_tanh().map(|v| vec![v.raw_value()]), |n| n.try_tanh().map(|v| vec![v.raw_value()]));
+        case!("asinh", raw, |o| o.try_asinh().map(|v| vec![v.raw_value()]), |n| n.try_asinh().map(|v| vec![v.raw_value()]));
+        case!("acosh", raw, |o| o.try_acosh().map(|v| vec![v.raw_value()]), |n| n.try_acosh().map(|v| vec![v.raw_value()]));
+        case!("atanh", raw, |o| o.try_atanh().map(|v| vec![v.raw_value()]), |n| n.try_atanh().map(|v| vec![v.raw_value()]));
+        for &x in &raws[..raws.len().min(8)] {
+            case!("atan2", raw, |o| o.try_atan2(OldDec::<D>::from_raw(x)).map(|v| vec![v.raw_value()]), |n| n.try_atan2(NewDec::<D>::from_raw(x)).map(|v| vec![v.raw_value()]));
+        }
+    }
+    println!(
+        "DecimalFixed<{D}> fast on {word} ({new_dp} digits; 0.6.7 {OLD_DECIMAL_DP}): {}",
+        if same_word { "identical required" } else { "compared" }
+    );
+}
+
+#[test]
+fn decimal_fixed_transcendentals_against_0_6_7() {
+    silence_panics();
+    let mut same = Tally::new("decimal same word");
+    let mut other = (0usize, 0usize, 0u128, Vec::new());
+    decimal_at_d::<0>(&mut same, &mut other);
+    decimal_at_d::<2>(&mut same, &mut other);
+    decimal_at_d::<4>(&mut same, &mut other);
+    decimal_at_d::<6>(&mut same, &mut other);
+    decimal_at_d::<9>(&mut same, &mut other);
+    decimal_at_d::<12>(&mut same, &mut other);
+    decimal_at_d::<19>(&mut same, &mut other);
+    decimal_at_d::<28>(&mut same, &mut other);
+    decimal_at_d::<38>(&mut same, &mut other);
+    if same.cases > 0 {
+        same.report_in_domain();
+    } else {
+        same.report();
+    }
+    println!(
+        "decimal other word     {:>6} cases: {:>6} differ from 0.6.7, at most {} unit(s) at D",
+        other.0, other.1, other.2
+    );
+    assert!(other.3.is_empty(), "{} unexpected differences:\n{}", other.3.len(), other.3[..other.3.len().min(30)].join("\n"));
+}
+
+// ============================================================================
+// Serialization (phase 6b): 0.6.7 bytes through the legacy reader, the
+// untagged forms identical in both directions
+// ============================================================================
+
+#[test]
+fn serialization_reads_0_6_7_bytes_and_writes_the_same_untagged_forms() {
+    silence_panics();
+    let raws = {
+        let mut v = specials();
+        v.extend(inputs(0x5e71a1, 40, 0));
+        v
+    };
+    // scalars: 0.6.7's tagged bytes read through the legacy entry and refused
+    // by the 0.7.0 reader; the raw forms identical
+    let mut scalar = Tally::new("scalar bytes");
+    for &r in &raws {
+        let old = raw::old(r);
+        let new = raw::new(r);
+        let old_bytes = old.to_bytes();
+        assert_eq!(old_bytes[0], New::legacy_tag(), "0.6.7 tag is the legacy tag");
+        assert_eq!(New::from_bytes_legacy(&old_bytes).map(raw::new_raw), Ok(r), "legacy read of 0.6.7 bytes");
+        assert!(New::from_bytes(&old_bytes).is_err(), "0.7.0 reader refuses a 0.6.7 tag");
+        let new_bytes = new.to_bytes();
+        assert_eq!(new_bytes[3..], old_bytes[1..], "the raw payload is unchanged");
+        assert!(Old::from_bytes(&new_bytes).is_err(), "0.6.7 refuses the 0.7.0 tag");
+        scalar.check(value(|| old.to_raw_bytes()), value(|| new.to_raw_bytes()), &r);
+        // the compact form of the word's minimum panicked in 0.6.7 (abs); it
+        // is the full class now, checked by the round trip below instead
+        if quiet(|| old.to_compact_bytes()).is_some() {
+            scalar.check(value(|| old.to_compact_bytes()), value(|| new.to_compact_bytes()), &r);
+            scalar.check(
+                fallible(|| Old::from_compact_bytes(&old.to_compact_bytes()).map(|(v, n)| (raw::old_raw(v), n))),
+                fallible(|| New::from_compact_bytes(&new.to_compact_bytes()).map(|(v, n)| (raw::new_raw(v), n))),
+                &r,
+            );
+        } else {
+            assert_eq!(New::from_compact_bytes(&new.to_compact_bytes()).map(|(v, _)| raw::new_raw(v)), Ok(r), "compact round trip of the minimum");
+        }
+    }
+    scalar.report();
+    // vectors, matrices, tensors, manifold points: the same bytes, readable
+    // by the other crate
+    let mut forms = Tally::new("container bytes");
+    for n in [0usize, 1, 3, 7] {
+        let chunk = &raws[..n.min(raws.len())];
+        let (ov, nv) = (old_vec(chunk), new_vec(chunk));
+        let (ob, nb) = (ov.to_bytes(), nv.to_bytes());
+        forms.check(value(|| ob.clone()), value(|| nb.clone()), &n);
+        assert_eq!(new_raws(&NewVector::from_bytes(&ob).unwrap()), chunk, "vector from 0.6.7 bytes");
+        assert_eq!(old_raws(&OldVector::from_bytes(&nb).unwrap()), chunk, "0.6.7 vector from 0.7.0 bytes");
+        forms.check(value(|| ov.to_compact_bytes()), value(|| nv.to_compact_bytes()), &n);
+        assert_eq!(new_raws(&NewVector::from_compact_bytes(&ov.to_compact_bytes()).unwrap().0), chunk);
+        if n > 0 {
+            let (om, nm) = (old_mat(1, n, chunk), new_mat(1, n, chunk));
+            let (ob, nb) = (om.to_bytes(), nm.to_bytes());
+            forms.check(value(|| ob.clone()), value(|| nb.clone()), &n);
+            assert_eq!(new_mraws(&NewMatrix::from_bytes(&ob).unwrap()), chunk, "matrix from 0.6.7 bytes");
+            assert_eq!(old_mraws(&OldMatrix::from_bytes(&nb).unwrap()), chunk);
+            let (ot, nt) = (old_tensor(&[n], chunk), new_tensor(&[n], chunk));
+            let (ob, nb) = (ot.to_bytes(), nt.to_bytes());
+            forms.check(value(|| ob.clone()), value(|| nb.clone()), &n);
+            assert_eq!(new_traws(&geo_new::Tensor::from_bytes(&ob).unwrap()), chunk, "tensor from 0.6.7 bytes");
+            assert_eq!(old_traws(&geo_old::Tensor::from_bytes(&nb).unwrap()), chunk);
+        }
+        let op = g_math_065::fixed_point::imperative::ManifoldPoint::sphere(n, ov.clone());
+        let np = g_math::fixed_point::imperative::ManifoldPoint::sphere(n, nv.clone());
+        let (ob, nb) = (op.to_bytes(), np.to_bytes());
+        forms.check(value(|| ob.clone()), value(|| nb.clone()), &n);
+        let back = g_math::fixed_point::imperative::ManifoldPoint::<New>::from_bytes(&ob).unwrap();
+        assert_eq!((back.manifold_tag, back.params.clone(), new_raws(&back.coordinates)), (op.manifold_tag, op.params.clone(), chunk.to_vec()));
+    }
+    forms.report();
+}

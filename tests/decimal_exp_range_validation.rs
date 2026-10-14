@@ -27,6 +27,7 @@
 //! ```
 
 use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute::{BinaryStorage, ComputeStorage};
+use g_math::fixed_point::{DecimalTier, Dp};
 use g_math::fixed_point::domains::decimal_fixed::transcendental::{
     decimal_compute_from_int, decimal_compute_is_zero, decimal_downscale_to_storage, decimal_exp,
     decimal_upscale_to_compute, DECIMAL_STORAGE_MAX_DP,
@@ -48,7 +49,10 @@ const COMPUTE_BITS: i64 = 512;
 #[cfg(table_format = "q256_256")]
 const COMPUTE_BITS: i64 = 1024;
 
-fn eval<const D: u8>(f: &str, x: i128) -> i128 {
+fn eval<const D: u8>(f: &str, x: i128) -> i128
+where
+    Dp<D>: DecimalTier,
+{
     let v = DecimalFixed::<D>::from_raw(x);
     let r = match f {
         "exp" => v.exp(),
@@ -263,8 +267,10 @@ fn reported_defects() {
     {
         // mpmath: e^22 = 3584912846.131591561681159...
         assert_eq!(DecimalFixed::<4>::from_integer(22).exp().raw_value(), 35849128461316);
-        // e^23 = 9744803446.2 exceeds the i64 compute tier (9223372036.9 at 9 dp)
-        assert!(quiet(|| DecimalFixed::<4>::from_integer(23).exp()).is_none());
+        // e^23 = 9744803446.2489026 exceeded the i64 compute tier of the
+        // realtime profile (9223372036.9 at 9 dp) up to 0.6.7; the compute
+        // word now follows D (I256 at D = 4), so it is a value
+        assert_eq!(DecimalFixed::<4>::from_integer(23).exp().raw_value(), 97448034462489);
         // tanh doubled x at the compute tier and wrapped for |x| > 4.6e9
         let big = DecimalFixed::<4>::from_raw(90_000_000_000_000);
         assert_eq!(big.tanh().raw_value(), 10_000);
