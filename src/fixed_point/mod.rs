@@ -37,6 +37,7 @@ pub(crate) mod width;
 pub(crate) mod fixed_num;
 
 /// Build-time Q-format configuration (FRAC_BITS and derived constants).
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 #[doc(hidden)] pub mod frac_config;
 
 // Internal modules — pub for integration test access, hidden from docs

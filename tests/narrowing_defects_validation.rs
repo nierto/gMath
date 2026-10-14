@@ -8,11 +8,11 @@
 //! mpmath at 80 digits (`scripts/generate_narrowing_defects_refs.py`) or exact
 //! integer arithmetic. No floats.
 
+use g_math::fixed_point::universal::fasc::stack_evaluator::FascFormat;
 use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute::{
     ComputeStorage,
     decimal_compute_div_int, decimal_compute_from_int, decimal_compute_neg, decimal_compute_to_i128,
     i128_upscale_to_compute, try_decimal_compute_to_i128, try_i128_upscale_to_compute,
-    DECIMAL_COMPUTE_DP,
 };
 use g_math::fixed_point::imperative::BinaryStorage;
 use g_math::fixed_point::{DecimalFixed, FixedPoint, FixedVector, OverflowDetected, I512};
@@ -115,7 +115,7 @@ fn narrow_profile_upscale_reports_overflow() {
 /// truncated before 0.6.4: 15 -> 1, 16 -> 1).
 #[test]
 fn upscale_past_compute_dp_rounds_half_to_even() {
-    let dp = DECIMAL_COMPUTE_DP + 1;
+    let dp = <FixedPoint as FascFormat>::DECIMAL_COMPUTE_DP + 1;
     let unit = |n: i128| i128_upscale_to_compute::<ComputeStorage>(n * 10, dp);
     assert_eq!(i128_upscale_to_compute::<ComputeStorage>(15, dp), unit(2));
     assert_eq!(i128_upscale_to_compute::<ComputeStorage>(25, dp), unit(2));
@@ -124,7 +124,7 @@ fn upscale_past_compute_dp_rounds_half_to_even() {
     assert_eq!(i128_upscale_to_compute::<ComputeStorage>(-15, dp), unit(-2));
     assert_eq!(i128_upscale_to_compute::<ComputeStorage>(-16, dp), unit(-2));
     // beyond 38 extra digits every i128 rounds to zero
-    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(i128::MAX, DECIMAL_COMPUTE_DP + 39), unit(0));
+    assert_eq!(i128_upscale_to_compute::<ComputeStorage>(i128::MAX, <FixedPoint as FascFormat>::DECIMAL_COMPUTE_DP + 39), unit(0));
     assert_eq!(try_i128_upscale_to_compute::<ComputeStorage>(-15, dp), Ok(unit(-2)));
 }
 

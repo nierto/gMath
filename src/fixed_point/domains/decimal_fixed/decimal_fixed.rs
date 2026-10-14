@@ -684,7 +684,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     ///
     /// # Example
     /// ```rust,ignore
-    /// let binary_result = exp_binary_i512(q256_input);
+    /// let binary_result = exp_q256_256_native(q256_input);
     /// let decimal = DecimalFixed::<77>::from_binary_q256(binary_result);
     /// ```
     pub fn from_binary_q256(q256: crate::fixed_point::I512) -> Self {

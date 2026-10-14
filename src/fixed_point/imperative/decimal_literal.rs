@@ -7,10 +7,6 @@
 //! accepted; digits that cannot affect the rounding only set a sticky flag.
 
 use crate::fixed_point::core_types::errors::OverflowDetected;
-#[cfg(table_format = "q128_128")]
-use crate::fixed_point::I256;
-#[cfg(table_format = "q256_256")]
-use crate::fixed_point::I512;
 
 /// Magnitude words: 512 bits of storage plus room for the rounding carry.
 pub(crate) const WORDS: usize = 9;

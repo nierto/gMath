@@ -88,14 +88,6 @@ pub type Q256_256 = Fixed<I512, 256>;
 /// bits.
 pub type Compute<T> = <<T as FixedNum>::Storage as Storage>::Compute;
 
-/// The format this build's profile selects (`GMATH_PROFILE`,
-/// `GMATH_FRAC_BITS`). The profile-bound layers compute through it until
-/// they are generic themselves.
-pub(crate) type ProfileFormat = Fixed<
-    crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage,
-    { crate::fixed_point::frac_config::FRAC_BITS },
->;
-
 /// The kernels of one fixed-point format.
 ///
 /// Compute-tier values are raw integers with `2 * FRAC_BITS` fractional

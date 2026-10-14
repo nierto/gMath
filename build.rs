@@ -2087,6 +2087,10 @@ fn main() {
 
     let out_dir = env::var("OUT_DIR").unwrap();
 
+    // SCAFFOLDING (width-types phase 7): the profile selects nothing in the
+    // library any more (every layer is generic over `Fixed<S, F>`); the
+    // `table_format` cfg and `frac_config.rs` emitted below exist for the
+    // profile-bound tests only and go in 7c, together with the env reads.
     // Detect profile and configure precision
     let profile = detect_deployment_profile();
     let config = PrecisionConfig::for_profile(profile);

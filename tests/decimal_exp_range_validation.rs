@@ -30,9 +30,10 @@ use g_math::fixed_point::domains::decimal_fixed::transcendental::decimal_compute
 use g_math::fixed_point::{DecimalTier, Dp};
 use g_math::fixed_point::domains::decimal_fixed::transcendental::{
     decimal_compute_from_int, decimal_compute_is_zero, decimal_downscale_to_storage, decimal_exp,
-    decimal_upscale_to_compute, DECIMAL_STORAGE_MAX_DP,
+    decimal_upscale_to_compute,
 };
-use g_math::fixed_point::{DecimalFixed, OverflowDetected};
+use g_math::fixed_point::{DecimalFixed, FixedPoint, OverflowDetected};
+use g_math::fixed_point::universal::fasc::stack_evaluator::FascFormat;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 include!("data/decimal_exp_range_refs.rs");
@@ -207,7 +208,7 @@ fn decimal_fixed_exp_beyond_range_panics() {
 
 #[test]
 fn engine_exp_at_canonical_storage_is_correctly_rounded() {
-    let dp = DECIMAL_STORAGE_MAX_DP;
+    let dp = <FixedPoint as FascFormat>::DECIMAL_STORAGE_MAX_DP;
     let mut failures = Vec::new();
     let (mut errors, mut mismatches, mut max_units) = (0usize, 0usize, 0u128);
     let start = std::time::Instant::now();
@@ -242,7 +243,7 @@ fn engine_exp_at_canonical_storage_is_correctly_rounded() {
 
 #[test]
 fn engine_exp_reports_overflow() {
-    let dp = DECIMAL_STORAGE_MAX_DP;
+    let dp = <FixedPoint as FascFormat>::DECIMAL_STORAGE_MAX_DP;
     // one storage unit past the largest argument whose exp fits BinaryStorage:
     // the engine value exists, the narrowing reports it
     let past = storage(ENGINE_EXP_TOP) + one_unit();

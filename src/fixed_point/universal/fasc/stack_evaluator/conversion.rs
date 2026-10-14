@@ -1,24 +1,12 @@
 //! Storage type conversion helpers
 //!
-//! Converts between i128 and profile-specific BinaryStorage,
-//! handles decimal-to-rational reduction and trailing zero detection.
+//! Decimal-to-rational reduction and trailing zero detection.
 
-use super::format::FascFormat;
-use crate::fixed_point::fixed_num::ProfileFormat;
-use super::BinaryStorage;
 #[allow(unused_imports)]
 use crate::fixed_point::i256::I256;
 #[allow(unused_imports)]
 use crate::fixed_point::i512::I512;
 use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalNumber, OverflowDetected};
-
-/// Checked i128 -> BinaryStorage: `Err(TierOverflow)` when the value does not
-/// fit (realtime i32, compact i64); lossless on the wider profiles. The
-/// unchecked `as` casts this replaced wrapped silently.
-#[inline(always)]
-pub(crate) fn try_to_binary_storage(val: i128) -> Result<BinaryStorage, OverflowDetected> {
-    <ProfileFormat as FascFormat>::try_to_binary_storage(val)
-}
 
 /// Reduce a decimal rational (scaled_value / 10^dp) by common factors of 2 and 5.
 pub(super) fn reduce_decimal_to_rational(raw_num: i128, decimals: u8) -> Result<RationalNumber, OverflowDetected> {

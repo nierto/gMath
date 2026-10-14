@@ -114,14 +114,13 @@ pub fn reset_gmath_mode() {
 /// Skips runtime string parsing: dp, scaled value, and shadow are computed
 /// at compile time by the proc-macro. ~60 ns faster than `gmath("0.1")`.
 #[doc(hidden)]
-pub fn __pre_decimal(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -> LazyExpr {
-    use super::universal::fasc::stack_evaluator::conversion::try_to_binary_storage;
+pub fn __pre_decimal<T: FascFormat>(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -> LazyExpr<T> {
     use super::domains::symbolic::rational::RationalNumber;
     let shadow = CompactShadow::from_rational(shadow_num, shadow_den);
-    match try_to_binary_storage(scaled) {
+    match T::try_to_binary_storage(scaled) {
         Ok(storage) => LazyExpr::Value(Box::new(StackValue::Decimal(dp, storage, shadow))),
-        // beyond the realtime / compact decimal storage: the exact rational,
-        // as the runtime parser does (this narrowed with a wrapping cast)
+        // beyond the format's decimal storage: the exact rational, as the
+        // runtime parser does (this narrowed with a wrapping cast)
         Err(_) => LazyExpr::Value(Box::new(StackValue::Symbolic(
             RationalNumber::new(scaled, 10u128.pow(dp as u32)),
         ))),
@@ -130,14 +129,11 @@ pub fn __pre_decimal(dp: u8, scaled: i128, shadow_num: i128, shadow_den: u128) -
 
 /// Construct a pre-parsed Binary integer LazyExpr. Called by `gmath!("255")` expansion.
 #[doc(hidden)]
-pub fn __pre_integer(value: i128) -> LazyExpr {
-    use super::fixed_num::ProfileFormat;
-    use super::universal::fasc::stack_evaluator::FascFormat;
+pub fn __pre_integer<T: FascFormat>(value: i128) -> LazyExpr<T> {
     use super::domains::symbolic::rational::RationalNumber;
     let shadow = CompactShadow::from_rational(value, 1);
-    let tier = <ProfileFormat as FascFormat>::MAX_BINARY_TIER;
-    match <ProfileFormat as FascFormat>::integer_value(value) {
-        Some(storage) => LazyExpr::Value(Box::new(StackValue::Binary(tier, storage, shadow))),
+    match T::integer_value(value) {
+        Some(storage) => LazyExpr::Value(Box::new(StackValue::Binary(T::MAX_BINARY_TIER, storage, shadow))),
         // beyond the integer range of the storage word: the exact rational,
         // as the runtime parser does (this shifted with a wrapping cast)
         None => LazyExpr::Value(Box::new(StackValue::Symbolic(RationalNumber::from_ratio(value, 1)))),

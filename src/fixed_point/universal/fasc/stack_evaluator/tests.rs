@@ -324,7 +324,7 @@ fn test_sinh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::<FixedPoint>::new();
     let val = eval.to_binary_storage(&result).unwrap();
-    let zero = try_to_binary_storage(0).unwrap();
+    let zero = <FixedPoint as FascFormat>::try_to_binary_storage(0).unwrap();
     assert_eq!(val, zero, "sinh(0) should be exactly 0");
 }
 
@@ -346,7 +346,7 @@ fn test_tanh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::<FixedPoint>::new();
     let val = eval.to_binary_storage(&result).unwrap();
-    let zero = try_to_binary_storage(0).unwrap();
+    let zero = <FixedPoint as FascFormat>::try_to_binary_storage(0).unwrap();
     assert_eq!(val, zero, "tanh(0) should be exactly 0");
 }
 
@@ -437,7 +437,7 @@ fn test_asinh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::<FixedPoint>::new();
     let _val = eval.to_binary_storage(&result).unwrap();
-    let _zero = try_to_binary_storage(0).unwrap();
+    let _zero = <FixedPoint as FascFormat>::try_to_binary_storage(0).unwrap();
     // Allow small tolerance from ln(1) computation
     #[cfg(table_format = "q256_256")]
     {
@@ -482,7 +482,7 @@ fn test_atanh_zero() {
     let result = evaluate(&expr).unwrap();
     let eval = StackEvaluator::<FixedPoint>::new();
     let _val = eval.to_binary_storage(&result).unwrap();
-    let _zero = try_to_binary_storage(0).unwrap();
+    let _zero = <FixedPoint as FascFormat>::try_to_binary_storage(0).unwrap();
     #[cfg(table_format = "q256_256")]
     {
         let diff = if _val > _zero { _val - _zero } else { _zero - _val };
@@ -635,22 +635,22 @@ fn test_acos_zero() {
     let _result_bs = eval.to_binary_storage(&result).unwrap();
     #[cfg(table_format = "q256_256")]
     {
-        use crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i512;
-        let expected = pi_half_i512();
+        use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::PI_HALF_Q256;
+        let expected = I512::from_words(PI_HALF_Q256);
         let diff = if _result_bs > expected { _result_bs - expected } else { expected - _result_bs };
         assert!(diff <= I512::from_i128(1), "acos(0) should be π/2 within 1 ULP, diff = {:?}", diff);
     }
     #[cfg(table_format = "q128_128")]
     {
-        use crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i256;
-        let expected = pi_half_i256();
+        use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::PI_HALF_Q128;
+        let expected = I256::from_words(PI_HALF_Q128);
         let diff = if _result_bs > expected { _result_bs - expected } else { expected - _result_bs };
         assert!(diff <= I256::from_i128(1), "acos(0) should be π/2 within 1 ULP, diff = {:?}", diff);
     }
     #[cfg(table_format = "q64_64")]
     {
-        use crate::fixed_point::domains::binary_fixed::transcendental::pi_half_i128;
-        let expected = pi_half_i128();
+        use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::PI_HALF_Q64;
+        let expected = PI_HALF_Q64;
         let diff = if _result_bs > expected { (_result_bs - expected).abs() } else { (expected - _result_bs).abs() };
         assert!(diff <= 1, "acos(0) should be π/2 within 1 ULP, diff = {}", diff);
     }
@@ -1247,7 +1247,6 @@ fn test_shadow_negation_preserves() {
 #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 #[test]
 fn decimal_compute_to_binary_rounds_to_nearest() {
-    use crate::fixed_point::domains::decimal_fixed::transcendental::DECIMAL_COMPUTE_DP;
     // values within a quarter of the storage range: |v| < 2^(31 - F) * 10^9 / 4
     #[cfg(table_format = "q16_16")]
     let (f, bound) = {
@@ -1256,13 +1255,13 @@ fn decimal_compute_to_binary_rounds_to_nearest() {
     };
     #[cfg(table_format = "q32_32")]
     let (f, bound) = (32u32, 1i128 << 60);
-    let den = 10i128.pow(DECIMAL_COMPUTE_DP as u32);
+    let den = 10i128.pow(<FixedPoint as FascFormat>::DECIMAL_COMPUTE_DP as u32);
     let mut state: u64 = 0x2545_F491_4F6C_DD1D;
     let mut differs_from_truncation = 0;
     for _ in 0..50_000 {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let val = ((state >> 1) as i128 % bound) * if state & 1 == 0 { 1 } else { -1 };
-        let got = decimal_compute_to_binary_storage(val as _).unwrap() as i128;
+        let got = <FixedPoint as FascFormat>::decimal_compute_to_binary_storage(val as _).unwrap() as i128;
         let t = val << f;
         let want = (2 * t + den).div_euclid(2 * den);
         assert_eq!(got, want, "{val}");
@@ -1271,5 +1270,5 @@ fn decimal_compute_to_binary_rounds_to_nearest() {
     assert!(differs_from_truncation > 10_000, "{differs_from_truncation}");
     // beyond the storage range: an error, never a wrapped value
     #[cfg(table_format = "q16_16")]
-    assert!(decimal_compute_to_binary_storage(i64::MAX).is_err());
+    assert!(<FixedPoint as FascFormat>::decimal_compute_to_binary_storage(i64::MAX).is_err());
 }

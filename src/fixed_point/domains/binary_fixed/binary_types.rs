@@ -65,14 +65,11 @@ pub enum BinaryRaw {
 pub const SCALE_Q16_16: i32 = 1 << 16;
 
 
-/// Tier 1's fraction bits when no format says otherwise: the profile's
-/// `F` on the 32-bit profile, 16 for the internal Q16.16 tier elsewhere.
-pub const TIER1_DEFAULT_FRAC_BITS: u32 = {
-    #[cfg(table_format = "q16_16")]
-    { crate::fixed_point::frac_config::FRAC_BITS as u32 }
-    #[cfg(not(table_format = "q16_16"))]
-    { 16 }
-};
+/// Tier 1's fraction bits when no format says otherwise: the internal
+/// Q16.16 tier. The evaluator passes its format's `TIER1_FRAC_BITS`
+/// explicitly (`checked_mul_with_frac`, `multiply_with_tier1_frac`); this
+/// default serves the ladder's own wider tiers and the unit tests.
+pub const TIER1_DEFAULT_FRAC_BITS: u32 = 16;
 pub const SCALE_Q32_32: i64 = 1 << 32;
 
 // ============================================================================

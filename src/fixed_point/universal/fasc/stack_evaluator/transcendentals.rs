@@ -13,7 +13,7 @@ use super::{StackValue, StackEvaluator};
 use super::compute::*;
 use crate::fixed_point::width::WideInt;
 #[allow(unused_imports)]
-use super::conversion::{try_to_binary_storage, reduce_decimal_to_rational};
+use super::conversion::reduce_decimal_to_rational;
 #[allow(unused_imports)]
 use super::formatting::pow10_i256;
 use crate::fixed_point::domains::balanced_ternary::ternary_types::{UniversalTernaryFixed, TernaryRaw};

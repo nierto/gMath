@@ -10,6 +10,7 @@ use std::ops::{Add, Sub, Mul, Div, Neg, AddAssign, SubAssign, MulAssign, DivAssi
 use crate::fixed_point::canonical::{
     LazyExpr, StackValue, evaluate_in, gmath_parse_in, CompactShadow, FascFormat,
 };
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::fixed_num::{Compute, FixedNum};
 pub use crate::fixed_point::fixed_num::Fixed;
@@ -30,6 +31,7 @@ pub use crate::fixed_point::core_types::errors::OverflowDetected;
 /// size, alignment and bit pattern, and every bit pattern of the raw type is a
 /// valid `FixedPoint`. [`FixedPoint::raw_slice`] and
 /// [`FixedPoint::from_raw_slice`] reinterpret slices without copying.
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 pub type FixedPoint = Fixed<BinaryStorage, { crate::fixed_point::frac_config::FRAC_BITS }>;
 
 impl<S: PartialEq, const F: u32> PartialEq for Fixed<S, F> {

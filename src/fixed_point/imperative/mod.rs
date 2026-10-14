@@ -24,9 +24,6 @@ pub mod projective;
 pub mod fiber_bundle;
 pub mod interval;
 pub mod predicates;
-// the profile-bound accumulator helpers survive only as the reference of their tests
-#[cfg(test)]
-mod wide_acc;
 pub(crate) mod kernels;
 pub(crate) mod decimal_literal;
 mod serialization;
@@ -39,7 +36,7 @@ pub use fixed_matrix::FixedMatrix;
 pub use interval::Interval;
 pub use scalar::Scalar;
 
-// Re-export the underlying storage type for from_raw()/raw() interop
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 pub use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 
 // Re-export ManifoldPoint for wire transport

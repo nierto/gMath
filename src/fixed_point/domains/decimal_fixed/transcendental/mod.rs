@@ -42,8 +42,6 @@ pub mod atan;
 
 pub use word::{DecimalTier, DecimalWord, Dp};
 pub use decimal_compute::{
-    DECIMAL_COMPUTE_DP,
-    DECIMAL_STORAGE_MAX_DP,
     decimal_compute_scale,
     decimal_compute_zero,
     decimal_compute_one,

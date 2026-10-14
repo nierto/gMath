@@ -17,11 +17,31 @@
 #[cfg(table_format = "q64_64")]
 mod q64_64 {
     use g_math::fixed_point::domains::binary_fixed::transcendental::{
-        exp_binary_i128, ln_binary_i128, sqrt_binary_i128,
-        sin_binary_i128, cos_binary_i128,
-        atan_binary_i128, atan2_binary_i128,
+        atan_tier_n_plus_1::{atan2_q64_64_native, atan_q64_64_native},
+        exp_tier_n_plus_1::exp_q64_64_native,
+        ln_tier_n_plus_1::ln_q128_128_native,
+        sin_cos_tier_n_plus_1::{cos_q64_64, sin_q64_64, PI_HALF_Q64},
+        sqrt_tier_n_plus_1::sqrt_q64_64_native,
     };
     use g_math::fixed_point::domains::binary_fixed::{I256, mul_i128_to_i256};
+
+    // The Q64.64 profile's routing of each function, as the 0.6.x
+    // `*_binary_i128` wrappers had it (bodies moved here when the wrappers
+    // left the library in 0.7.0).
+    fn exp_binary_i128(x: i128) -> i128 { exp_q64_64_native(x) }
+    fn ln_binary_i128(x: i128) -> i128 {
+        if x <= 0 { return i128::MIN; }
+        let x_q128 = I256::from_i128(x) << 64;
+        let result_q128 = ln_q128_128_native(x_q128);
+        let rounding = I256::from_i128(1i128 << 63);
+        ((result_q128 + rounding) >> 64).as_i128()
+    }
+    fn sqrt_binary_i128(x: i128) -> i128 { sqrt_q64_64_native(x) }
+    fn sin_binary_i128(x: i128) -> i128 { sin_q64_64(x) }
+    fn cos_binary_i128(x: i128) -> i128 { cos_q64_64(x) }
+    fn atan_binary_i128(x: i128) -> i128 { atan_q64_64_native(x) }
+    fn atan2_binary_i128(y: i128, x: i128) -> i128 { atan2_q64_64_native(y, x) }
+    fn pi_half_i128() -> i128 { PI_HALF_Q64 }
 
     include!("data/ulp_refs_q64_64.rs");
 
@@ -227,7 +247,6 @@ mod q64_64 {
     #[test]
     fn validate_acos_ulp() {
         // acos(x) = pi/2 - asin(x)
-        use g_math::fixed_point::domains::binary_fixed::transcendental::pi_half_i128;
         let pi_half = pi_half_i128();
         let mut max_ulp: i128 = 0;
         let mut worst_label = "";
@@ -382,11 +401,37 @@ mod q64_64 {
 mod q128_128 {
     use g_math::fixed_point::domains::binary_fixed::{I256, I512};
     use g_math::fixed_point::domains::binary_fixed::transcendental::{
-        exp_binary_i256, ln_binary_i256, sqrt_binary_i256,
-        sin_binary_i256, cos_binary_i256,
-        atan_binary_i256, atan2_binary_i256,
-        pi_half_i256,
+        atan_tier_n_plus_1::{atan2_q256_256_compute, atan_q256_256_compute},
+        exp_tier_n_plus_1::{downscale_q256_to_q128, exp_q256_256_native, upscale_q128_to_q256},
+        ln_tier_n_plus_1::ln_q256_256_native,
+        sin_cos_tier_n_plus_1::{cos_q256_256, sin_q256_256, PI_HALF_Q128},
+        sqrt_tier_n_plus_1::sqrt_q256_256_native,
     };
+
+    // The Q128.128 profile's routing of each function, as the 0.6.x
+    // `*_binary_i256` wrappers had it (bodies moved here when the wrappers
+    // left the library in 0.7.0).
+    fn exp_binary_i256(x: I256) -> I256 {
+        downscale_q256_to_q128(exp_q256_256_native(upscale_q128_to_q256(x)))
+    }
+    fn ln_binary_i256(x: I256) -> I256 {
+        if x <= I256::zero() { return I256::min_value(); }
+        let x_q256 = I512::from_i256(x) << 128;
+        let result_q256 = ln_q256_256_native(x_q256);
+        let rounding = I512::from_i256(I256::from_i128(1)) << 127;
+        ((result_q256 + rounding) >> 128).as_i256()
+    }
+    fn sqrt_binary_i256(x: I256) -> I256 {
+        if x < I256::zero() { return I256::min_value(); }
+        downscale_q256_to_q128(sqrt_q256_256_native(upscale_q128_to_q256(x)))
+    }
+    fn sin_binary_i256(x: I256) -> I256 { downscale_q256_to_q128(sin_q256_256(upscale_q128_to_q256(x))) }
+    fn cos_binary_i256(x: I256) -> I256 { downscale_q256_to_q128(cos_q256_256(upscale_q128_to_q256(x))) }
+    fn atan_binary_i256(x: I256) -> I256 { downscale_q256_to_q128(atan_q256_256_compute(upscale_q128_to_q256(x))) }
+    fn atan2_binary_i256(y: I256, x: I256) -> I256 {
+        downscale_q256_to_q128(atan2_q256_256_compute(upscale_q128_to_q256(y), upscale_q128_to_q256(x)))
+    }
+    fn pi_half_i256() -> I256 { I256::from_words(PI_HALF_Q128) }
 
     include!("data/ulp_refs_q128_128.rs");
 
@@ -798,13 +843,32 @@ mod q128_128 {
 
 #[cfg(table_format = "q256_256")]
 mod q256_256 {
-    use g_math::fixed_point::domains::binary_fixed::{I512, I1024};
+    use g_math::fixed_point::domains::binary_fixed::{I256, I512, I1024};
     use g_math::fixed_point::domains::binary_fixed::transcendental::{
-        exp_binary_i512, ln_binary_i512, sqrt_binary_i512,
-        sin_binary_i512, cos_binary_i512,
-        atan_binary_i512, atan2_binary_i512,
-        pi_half_i512,
+        atan_tier_n_plus_1::{atan2_q256_256_native, atan_q256_256_native},
+        exp_tier_n_plus_1::exp_q256_256_native,
+        ln_tier_n_plus_1::ln_q512_512_native,
+        sin_cos_tier_n_plus_1::{cos_q256_256, sin_q256_256, PI_HALF_Q256},
+        sqrt_tier_n_plus_1::sqrt_q256_256_native,
     };
+
+    // The Q256.256 profile's routing of each function, as the 0.6.x
+    // `*_binary_i512` wrappers had it (bodies moved here when the wrappers
+    // left the library in 0.7.0).
+    fn exp_binary_i512(x: I512) -> I512 { exp_q256_256_native(x) }
+    fn ln_binary_i512(x: I512) -> I512 {
+        if x <= I512::zero() { return I512::min_value(); }
+        let x_q512 = I1024::from_i512(x) << 256;
+        let result_q512 = ln_q512_512_native(x_q512);
+        let rounding = I1024::from_i512(I512::from_i256(I256::from_i128(1))) << 255;
+        ((result_q512 + rounding) >> 256).as_i512()
+    }
+    fn sqrt_binary_i512(x: I512) -> I512 { sqrt_q256_256_native(x) }
+    fn sin_binary_i512(x: I512) -> I512 { sin_q256_256(x) }
+    fn cos_binary_i512(x: I512) -> I512 { cos_q256_256(x) }
+    fn atan_binary_i512(x: I512) -> I512 { atan_q256_256_native(x) }
+    fn atan2_binary_i512(y: I512, x: I512) -> I512 { atan2_q256_256_native(y, x) }
+    fn pi_half_i512() -> I512 { I512::from_words(PI_HALF_Q256) }
 
     include!("data/ulp_refs_q256_256.rs");
 

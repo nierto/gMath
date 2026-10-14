@@ -94,9 +94,16 @@ fn wide_matches_the_native_engines_bit_for_bit() {
     // the 0.6.3 compute-tier wrappers on the profiles whose compute tier is Q64.64
     #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
     {
+        // the 0.6.x `*_binary_i128` routing of these profiles, by name since 0.7.0
         use g_math::fixed_point::domains::binary_fixed::transcendental::{
-            cos_binary_i128, exp_binary_i128, ln_binary_i128, sin_binary_i128,
+            exp_tier_n_plus_1::exp_q64_64_native,
+            ln_tier_n_plus_1::ln_q64_64_native,
+            sin_cos_tier_n_plus_1::{cos_q64_64, sin_q64_64},
         };
+        fn exp_binary_i128(x: i128) -> i128 { exp_q64_64_native(x) }
+        fn ln_binary_i128(x: i128) -> i128 { if x <= 0 { i128::MIN } else { ln_q64_64_native(x) } }
+        fn sin_binary_i128(x: i128) -> i128 { sin_q64_64(x) }
+        fn cos_binary_i128(x: i128) -> i128 { cos_q64_64(x) }
         for &(x, _) in refs::EXP { assert_eq!(wide::exp_q64(x), exp_binary_i128(x)); }
         for &(x, _) in refs::LN { assert_eq!(wide::ln_q64(x), Some(ln_binary_i128(x))); }
         for &(name, _) in SINCOS_MAX_UNITS.iter() {

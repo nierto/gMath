@@ -16,7 +16,6 @@ use super::word::DecimalWord;
 #[allow(unused_imports)]
 use crate::fixed_point::width::WideInt;
 #[allow(unused_imports)]
-use super::decimal_compute::ComputeStorage;
 use super::decimal_compute::{decimal_compute_one, decimal_compute_halve, decimal_compute_add, decimal_compute_sub, decimal_compute_mul, decimal_compute_div, decimal_compute_cmp, decimal_compute_neg};
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
@@ -132,9 +131,11 @@ pub fn decimal_ln<C: DecimalWord>(x: C) -> Result<C, OverflowDetected> {
     Ok(decimal_compute_add(k_ln2, ln_m))
 }
 
-#[cfg(all(test, table_format = "q64_64"))]
+#[cfg(test)]
 mod tests {
+    //! On the 38-digit compute word (I256), in every build.
     use super::*;
+    type ComputeStorage = crate::fixed_point::I256;
     #[allow(unused_imports)]
     use super::super::decimal_compute::*;
     use super::super::decimal_compute::pow10_compute_ct;

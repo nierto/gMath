@@ -9,8 +9,6 @@
 use super::word::{DecimalWord, HpWord};
 #[allow(unused_imports)]
 use crate::fixed_point::width::WideInt;
-#[allow(unused_imports)]
-use super::decimal_compute::ComputeStorage;
 use super::decimal_compute::decimal_compute_neg;
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 

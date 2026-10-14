@@ -28,8 +28,6 @@ use crate::fixed_point::i512::I512;
 use crate::fixed_point::I1024;
 
 use core::cell::RefCell;
-#[cfg(test)]
-use crate::fixed_point::fixed_num::ProfileFormat;
 use core::marker::PhantomData;
 use std::any::{Any, TypeId};
 use std::rc::Rc;
@@ -40,9 +38,7 @@ use core::fmt::{self, Display};
 
 // Re-export sub-module functions used by sibling modules and tests
 #[allow(unused_imports)]
-pub(crate) use conversion::try_to_binary_storage;
 #[allow(unused_imports)]
-pub(crate) use compute::{downscale_to_storage};
 
 // ============================================================================
 // PROFILE-SPECIFIC STORAGE TYPES (TIER N+1 PRECISION PRESERVATION)
@@ -57,6 +53,7 @@ pub(crate) use compute::{downscale_to_storage};
 /// - Scientific: 64 bytes (I512) - Q256.256 storage
 ///
 /// **PRECISION GUARANTEE**: Tier N+1 computation results stored without downconversion
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 #[cfg(table_format = "q256_256")]
 pub type BinaryStorage = I512;  // Q256.256: 77 decimals
 
@@ -86,6 +83,7 @@ pub type BinaryStorage = i32;   // Q16.16: 4 decimals
 /// - Embedded: I256 (Q128.128 compute for Q64.64 storage)
 /// - Balanced: I512 (Q256.256 compute for Q128.128 storage)
 /// - Scientific: I1024 (Q512.512 compute for Q256.256 storage)
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 #[cfg(table_format = "q256_256")]
 pub type ComputeStorage = I1024;  // Q512.512
 
@@ -109,17 +107,6 @@ pub type ComputeStorage = i64;    // Q32.32 (tier N+1 for Q16.16)
 // ============================================================================
 // DECIMAL → BINARY STORAGE HELPER (used by as_binary_storage)
 // ============================================================================
-
-#[cfg(test)]
-#[cfg(test)]
-#[allow(dead_code)]
-/// Convert a DecimalCompute value directly to profile BinaryStorage via
-/// `val × 2^frac_bits / 10^compute_dp`, no intermediate Decimal materialization.
-///
-/// This is lossless (within rounding) because we do one big-integer division.
-fn decimal_compute_to_binary_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    <ProfileFormat as FascFormat>::decimal_compute_to_binary_storage(val)
-}
 
 // ============================================================================
 // STACK VALUE — UNIFIED DOMAIN REPRESENTATION

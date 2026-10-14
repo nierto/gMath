@@ -105,7 +105,7 @@ pub(crate) fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 /// **ALGORITHM**: Newton-Raphson in I256 (Q128.128) with 7 iterations
 /// **DOMAIN**: x >= 0 (returns i128::MIN for x < 0)
 #[allow(dead_code)]
-pub(crate) fn sqrt_q64_64_native(x: i128) -> i128 {
+pub fn sqrt_q64_64_native(x: i128) -> i128 {
     // Domain: sqrt(x) undefined for x < 0
     if x < 0 {
         return i128::MIN;
@@ -161,7 +161,7 @@ pub(crate) fn sqrt_q64_64_native(x: i128) -> i128 {
 /// **ALGORITHM**: Newton-Raphson in I512 (Q256.256) with 9 iterations
 /// **DOMAIN**: x >= 0 (returns I256::min_value() for x < 0)
 #[allow(dead_code)]
-pub(crate) fn sqrt_q128_128_native(x: I256) -> I256 {
+pub fn sqrt_q128_128_native(x: I256) -> I256 {
     if x < I256::zero() {
         return I256::min_value();
     }
@@ -205,7 +205,7 @@ pub(crate) fn sqrt_q128_128_native(x: I256) -> I256 {
 /// **ALGORITHM**: Newton-Raphson in I1024 (Q512.512) with 10 iterations
 /// **DOMAIN**: x >= 0 (returns I512::min_value() for x < 0)
 #[allow(dead_code)]
-pub(crate) fn sqrt_q256_256_native(x: I512) -> I512 {
+pub fn sqrt_q256_256_native(x: I512) -> I512 {
     if x < I512::zero() {
         return I512::min_value();
     }
@@ -255,7 +255,7 @@ pub(crate) fn sqrt_q256_256_native(x: I512) -> I512 {
 /// x = 2^254). With m in [1, 4) every intermediate keeps its full precision.
 /// **DOMAIN**: x >= 0
 #[allow(dead_code)]
-pub(crate) fn sqrt_q512_512_native(x: I1024) -> I1024 {
+pub fn sqrt_q512_512_native(x: I1024) -> I1024 {
     if x < I1024::zero() {
         return I1024::min_value();
     }
@@ -365,218 +365,82 @@ pub(crate) fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
 // ============================================================================
 
 // For scientific profile (Q256.256), provide wrappers for lower tiers
-#[cfg(table_format = "q256_256")]
-pub fn sqrt_binary_i128(x: i128) -> i128 {
-    if x < 0 { return i128::MIN; }
-    let x_q256 = upscale_q64_to_q256(x);
-    let result_q256 = sqrt_q256_256_native(x_q256);
-    downscale_q256_to_q64(result_q256)
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn sqrt_binary_i256(x: I256) -> I256 {
-    if x < I256::zero() { return I256::min_value(); }
-    let x_q256 = upscale_q128_to_q256(x);
-    let result_q256 = sqrt_q256_256_native(x_q256);
-    downscale_q256_to_q128(result_q256)
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn sqrt_binary_i512(x: I512) -> I512 {
-    // Direct Q256.256 computation
-    sqrt_q256_256_native(x)
-}
 
 // For balanced profile (Q128.128), provide wrappers
-#[cfg(table_format = "q128_128")]
-pub fn sqrt_binary_i128(x: i128) -> i128 {
-    if x < 0 { return i128::MIN; }
-    let x_q128 = upscale_q64_to_q128(x);
-    let result_q128 = sqrt_q128_128_native(x_q128);
-    downscale_q128_to_q64(result_q128)
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn sqrt_binary_i256(x: I256) -> I256 {
-    if x < I256::zero() { return I256::min_value(); }
-    let x_q256 = upscale_q128_to_q256(x);
-    let result_q256 = sqrt_q256_256_native(x_q256);
-    downscale_q256_to_q128(result_q256)
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn sqrt_binary_i512(x: I512) -> I512 {
-    // Direct Q256.256 computation (compute tier for balanced profile)
-    sqrt_q256_256_native(x)
-}
 
 // For performance/embedded profile (Q64.64), provide wrappers
-#[cfg(table_format = "q64_64")]
-pub fn sqrt_binary_i128(x: i128) -> i128 {
-    // Direct Q64.64 computation
-    sqrt_q64_64_native(x)
-}
-
-#[cfg(table_format = "q64_64")]
-pub fn sqrt_binary_i256(x: I256) -> I256 {
-    // Tier N+1: compute sqrt at Q128.128 natively
-    sqrt_q128_128_native(x)
-}
-
-#[cfg(table_format = "q64_64")]
-pub fn sqrt_binary_i512(x: I512) -> I512 {
-    // Compute sqrt at Q256.256 for Q64.64 profile
-    sqrt_q256_256_native(x)
-}
 
 // I1024 sqrt for scientific profile tier N+1 computation
-#[cfg(any(table_format = "q256_256", table_format = "q512_512"))]
-pub fn sqrt_binary_i1024(x: I1024) -> I1024 {
-    sqrt_q512_512_native(x)
-}
 
-// ============================================================================
-// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
-// ============================================================================
-
-/// sqrt() for Q32.32 storage (i64): tier N+1 via Q64.64
-///
-/// For Q16.16 profile: ComputeStorage = i64, BinaryStorage = i32
-/// For Q32.32 profile: BinaryStorage = i64
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn sqrt_binary_i64(x: i64) -> i64 {
-    if x < 0 { return i64::MIN; }
-    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
-    let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = sqrt_q64_64_native(x_q64);
-    downscale_q64_to_q32(result_q64)
-}
-
-/// sqrt() for Q32.32 profile: i128 is the compute tier (Q64.64)
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn sqrt_binary_i128(x: i128) -> i128 {
-    sqrt_q64_64_native(x)
-}
-
-/// sqrt() for Q32.32 profile: I256 is tier N+1 (Q128.128)
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn sqrt_binary_i256(x: I256) -> I256 {
-    // Tier N+1: compute sqrt at Q128.128 natively
-    sqrt_q128_128_native(x)
-}
-
-/// sqrt() for Q32.32 profile: I512 wrapper
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn sqrt_binary_i512(x: I512) -> I512 {
-    // Compute sqrt at Q256.256 for Q32.32 profile
-    sqrt_q256_256_native(x)
-}
 
 // ============================================================================
 // TESTS
 // ============================================================================
 
 #[cfg(test)]
-#[cfg(not(any(table_format = "q32_32", table_format = "q16_16")))]
 mod tests {
+    //! Each engine at its own format, in every build.
     use super::*;
 
     #[test]
     fn test_sqrt_zero() {
-        assert_eq!(sqrt_binary_i128(0), 0);
+        assert_eq!(sqrt_q64_64_native(0), 0);
     }
 
     #[test]
     fn test_sqrt_one() {
-        #[cfg(table_format = "q64_64")]
         let one: i128 = 1_i128 << 64;
-        #[cfg(table_format = "q128_128")]
-        let one: i128 = 1_i128 << 64;
-        #[cfg(table_format = "q256_256")]
-        let one: i128 = 1_i128 << 64;
-
-        let result = sqrt_binary_i128(one);
-        // sqrt(1.0) should be exactly 1.0
-        assert_eq!(result, one);
+        assert_eq!(sqrt_q64_64_native(one), one);
     }
 
     #[test]
     fn test_sqrt_four() {
-        // sqrt(4.0) = 2.0 exactly
-        #[cfg(table_format = "q64_64")]
-        {
-            let four: i128 = 4_i128 << 64;
-            let two: i128 = 2_i128 << 64;
-            let result = sqrt_binary_i128(four);
-            // Allow 1 ULP tolerance
-            let diff = (result - two).abs();
-            assert!(diff <= 1, "sqrt(4.0) should be 2.0, diff={}", diff);
-        }
-        #[cfg(table_format = "q128_128")]
-        {
-            let four: i128 = 4_i128 << 64;
-            let two: i128 = 2_i128 << 64;
-            let result = sqrt_binary_i128(four);
-            let diff = (result - two).abs();
-            assert!(diff <= 1, "sqrt(4.0) should be 2.0, diff={}", diff);
-        }
-        #[cfg(table_format = "q256_256")]
-        {
-            let four: i128 = 4_i128 << 64;
-            let two: i128 = 2_i128 << 64;
-            let result = sqrt_binary_i128(four);
-            let diff = (result - two).abs();
-            assert!(diff <= 1, "sqrt(4.0) should be 2.0, diff={}", diff);
-        }
+        let four: i128 = 4_i128 << 64;
+        let two: i128 = 2_i128 << 64;
+        let diff = (sqrt_q64_64_native(four) - two).abs();
+        assert!(diff <= 1, "sqrt(4.0) should be 2.0, diff={}", diff);
     }
 
     #[test]
     fn test_sqrt_negative_returns_sentinel() {
         let neg = -1_i128 << 64;
-        let result = sqrt_binary_i128(neg);
-        assert_eq!(result, i128::MIN);
+        assert_eq!(sqrt_q64_64_native(neg), i128::MIN);
     }
 
     #[test]
     fn test_sqrt_nine() {
-        // sqrt(9.0) = 3.0 exactly
         let nine: i128 = 9_i128 << 64;
         let three: i128 = 3_i128 << 64;
-        let result = sqrt_binary_i128(nine);
-        let diff = (result - three).abs();
+        let diff = (sqrt_q64_64_native(nine) - three).abs();
         assert!(diff <= 1, "sqrt(9.0) should be 3.0, diff={}", diff);
     }
 
     #[test]
     fn test_sqrt_i256_one() {
         let one = I256::from_i128(1) << 128;
-        let result = sqrt_binary_i256(one);
-        assert_eq!(result, one);
+        assert_eq!(sqrt_q128_128_native(one), one);
     }
 
     #[test]
     fn test_sqrt_i256_four() {
         let four = I256::from_i128(4) << 128;
         let two = I256::from_i128(2) << 128;
-        let result = sqrt_binary_i256(four);
+        let result = sqrt_q128_128_native(four);
         let diff = if result > two { result - two } else { two - result };
         assert!(diff <= I256::from_i128(1), "sqrt(4.0) should be 2.0 in I256");
     }
 
-    #[cfg(table_format = "q256_256")]
     #[test]
     fn test_sqrt_i512_one() {
         let one = I512::one_q256_256();
-        let result = sqrt_binary_i512(one);
-        assert_eq!(result, one);
+        assert_eq!(sqrt_q256_256_native(one), one);
     }
 
-    #[cfg(table_format = "q256_256")]
     #[test]
     fn test_sqrt_i512_four() {
         let four = I512::from_i256(I256::from_i128(4)) << 256;
         let two = I512::from_i256(I256::from_i128(2)) << 256;
-        let result = sqrt_binary_i512(four);
+        let result = sqrt_q256_256_native(four);
         let diff = if result > two { result - two } else { two - result };
         assert!(diff <= I512::from_i256(I256::from_i128(1)), "sqrt(4.0) should be 2.0 in I512");
     }

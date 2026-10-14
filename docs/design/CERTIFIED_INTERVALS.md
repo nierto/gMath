@@ -300,7 +300,7 @@ profiles in the same order, with the narrowing to storage shifting by `2F`.
 
 All derived from `BinaryStorage` / `ComputeStorage` per `table_format`; no width
 is hand-maintained per profile beyond the existing type aliases and the
-accumulator table shared with the predicates (`imperative/wide_acc.rs`).
+accumulator table shared with the predicates (`imperative/kernels.rs`, generic over the storage word since 0.7.0).
 
 ## 9. Positive definiteness by interval Cholesky (`predicates::pd_verdict`)
 

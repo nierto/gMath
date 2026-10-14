@@ -42,10 +42,13 @@
 
 use crate::fixed_point::fixed_num::{Compute, FixedNum};
 
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 pub use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
 
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 pub use crate::fixed_point::frac_config::FRAC_BITS;
 
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 pub use crate::fixed_point::frac_config::COMPUTE_FRAC_BITS;
 
 /// 1.0 at the compute tier of the format `T`.

@@ -7,9 +7,7 @@
 #[cfg(test)]
 use super::format::FascFormat;
 #[cfg(test)]
-use crate::fixed_point::fixed_num::ProfileFormat;
-#[cfg(test)]
-use super::BinaryStorage;
+use crate::fixed_point::imperative::FixedPoint;
 #[cfg(test)]
 use crate::fixed_point::i256::I256;
 #[cfg(test)]
@@ -21,19 +19,6 @@ use crate::fixed_point::domains::balanced_ternary::ternary_types::UniversalTerna
 #[cfg(test)]
 use crate::fixed_point::domains::balanced_ternary::ternary_types::TernaryRaw;
 use crate::fixed_point::universal::tier_types::CompactShadow;
-#[cfg(test)]
-use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
-
-#[cfg(test)]
-#[allow(dead_code)]
-/// Convert UniversalTernaryFixed result back to (tier, BinaryStorage): full precision.
-///
-/// Fallible: a tier raw that does not fit the profile\'s BinaryStorage is a
-/// TierOverflow error, never a silent wrap (e.g. `0t3281` parses to Tier 2
-/// with raw 3281·3^16 ≈ 1.4e11, which cannot live in realtime\'s i32).
-pub(super) fn ternary_to_storage(ternary: &UniversalTernaryFixed) -> Result<(u8, BinaryStorage), OverflowDetected> {
-    <ProfileFormat as FascFormat>::ternary_to_storage(ternary)
-}
 
 /// Euclid's gcd for shadow normalization.
 pub(super) fn shadow_gcd(mut a: u128, mut b: u128) -> u128 {
@@ -167,6 +152,12 @@ mod ternary_storage_arm_tests {
     //! raws convert exactly on every profile, raws exceeding the profile's
     //! BinaryStorage are a loud TierOverflow, never a wrap.
     use super::*;
+
+    fn ternary_to_storage(
+        t: &UniversalTernaryFixed,
+    ) -> Result<(u8, <FixedPoint as crate::fixed_point::fixed_num::FixedNum>::Storage), crate::fixed_point::core_types::errors::OverflowDetected> {
+        <FixedPoint as FascFormat>::ternary_to_storage(t)
+    }
 
     fn tier4(v: i128) -> UniversalTernaryFixed {
         UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(I256::from_i128(v))).unwrap()

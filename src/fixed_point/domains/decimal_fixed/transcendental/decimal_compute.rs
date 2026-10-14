@@ -17,6 +17,7 @@
 //! | scientific | I1024      | I2048      | I1024::mul_to_i2048        |
 
 #[allow(unused_imports)]
+// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
 pub use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
 #[allow(unused_imports)]
 #[allow(unused_imports)]
@@ -29,8 +30,6 @@ use crate::fixed_point::i256::I256;
 use crate::fixed_point::i512::I512;
 #[allow(unused_imports)]
 use crate::fixed_point::I1024;
-#[cfg(table_format = "q256_256")]
-use crate::fixed_point::I2048;
 
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
@@ -42,49 +41,6 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDe
 ///
 /// Chosen so `compute_dp ≈ 2 × storage_dp`, giving the decimal equivalent of binary
 /// tier N+1 precision.
-#[cfg(table_format = "q16_16")]
-pub const DECIMAL_COMPUTE_DP: u8 = 9;
-#[cfg(table_format = "q32_32")]
-pub const DECIMAL_COMPUTE_DP: u8 = 19;
-#[cfg(table_format = "q64_64")]
-pub const DECIMAL_COMPUTE_DP: u8 = 38;
-#[cfg(table_format = "q128_128")]
-pub const DECIMAL_COMPUTE_DP: u8 = 77;
-#[cfg(table_format = "q256_256")]
-pub const DECIMAL_COMPUTE_DP: u8 = 154;
-
-/// Maximum storage dp supported for decimal transcendentals (conservative bound).
-#[cfg(table_format = "q16_16")]
-pub const DECIMAL_STORAGE_MAX_DP: u8 = 4;
-#[cfg(table_format = "q32_32")]
-pub const DECIMAL_STORAGE_MAX_DP: u8 = 9;
-#[cfg(table_format = "q64_64")]
-pub const DECIMAL_STORAGE_MAX_DP: u8 = 19;
-#[cfg(table_format = "q128_128")]
-pub const DECIMAL_STORAGE_MAX_DP: u8 = 38;
-#[cfg(table_format = "q256_256")]
-pub const DECIMAL_STORAGE_MAX_DP: u8 = 77;
-
-// ============================================================================
-// WIDE COMPUTE TYPE — one tier wider than C for widening multiply
-// ============================================================================
-
-#[cfg(table_format = "q16_16")]
-#[allow(dead_code)]
-pub(crate) type WideCompute = i128;
-#[cfg(table_format = "q32_32")]
-#[allow(dead_code)]
-pub(crate) type WideCompute = I256;
-#[cfg(table_format = "q64_64")]
-#[allow(dead_code)]
-pub(crate) type WideCompute = I512;
-#[cfg(table_format = "q128_128")]
-#[allow(dead_code)]
-pub(crate) type WideCompute = I1024;
-#[cfg(table_format = "q256_256")]
-#[allow(dead_code)]
-pub(crate) type WideCompute = I2048;
-
 // ============================================================================
 // CONSTANTS — zero, one, scale factor (10^C::DP)
 // ============================================================================
@@ -511,8 +467,10 @@ pub fn try_decimal_compute_to_i128_unless_ambiguous<C: DecimalWord>(value: C, dp
     Some(C::compute_to_i128(rounded))
 }
 
-#[cfg(all(test, table_format = "q64_64"))]
+#[cfg(test)]
 mod tests {
+    //! On the 38-digit compute word (I256), in every build.
+    type ComputeStorage = crate::fixed_point::I256;
     use super::*;
     #[allow(unused_imports)]
     use super::super::decimal_compute::*;
@@ -603,32 +561,41 @@ mod tests {
     }
 }
 
-#[cfg(all(test, any(table_format = "q128_128", table_format = "q256_256")))]
+#[cfg(test)]
 mod wide_div_scale_tests {
+    //! The limb-wise division by 10^DP is bit-identical to the general one,
+    //! on both words that use it (I512 and I1024), in every build.
     use super::*;
     #[allow(unused_imports)]
     use super::super::decimal_compute::*;
+    use crate::fixed_point::{I1024, I512};
 
-    /// The limb-wise division by 10^DP is bit-identical to the general one.
+    macro_rules! check {
+        ($c:ty, $seed:expr) => {{
+            let mut state: u64 = $seed;
+            let scale = wide_scale::<$c>();
+            for case in 0..400 {
+                let mut w = wide_scale::<$c>();
+                // random magnitudes from below 10^DP up to the product range
+                let mut words = w.words;
+                let used = case % words.len() + 1;
+                for (i, word) in words.iter_mut().enumerate() {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    *word = if i < used { state } else { 0 };
+                }
+                let last = words.len() - 1;
+                words[last] &= 0x3FFF_FFFF_FFFF_FFFF;
+                w.words = words;
+                for v in [w, -w, w >> 1, -(w >> 3)] {
+                    assert_eq!(wide_div_scale::<$c>(v), wide_div::<$c>(v, scale), "case {case}");
+                }
+            }
+        }};
+    }
+
     #[test]
     fn matches_the_general_division() {
-        let mut state: u64 = 0x1234_5678_9ABC_DEF1;
-        let scale = wide_scale::<ComputeStorage>();
-        for case in 0..400 {
-            let mut w = wide_scale::<ComputeStorage>();
-            // random magnitudes from below 10^DP up to the product range
-            let mut words = w.words;
-            let used = case % words.len() + 1;
-            for (i, word) in words.iter_mut().enumerate() {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                *word = if i < used { state } else { 0 };
-            }
-            let last = words.len() - 1;
-            words[last] &= 0x3FFF_FFFF_FFFF_FFFF;
-            w.words = words;
-            for v in [w, -w, w >> 1, -(w >> 3)] {
-                assert_eq!(wide_div_scale::<ComputeStorage>(v), wide_div::<ComputeStorage>(v, scale), "case {case}");
-            }
-        }
+        check!(I512, 0x1234_5678_9ABC_DEF1);
+        check!(I1024, 0x1234_5678_9ABC_DEF1);
     }
 }

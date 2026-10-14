@@ -29,7 +29,6 @@ use super::word::{DecimalWord, HpWord};
 #[allow(unused_imports)]
 use crate::fixed_point::width::WideInt;
 #[allow(unused_imports)]
-use super::decimal_compute::ComputeStorage;
 use super::decimal_compute::{decimal_compute_one, decimal_compute_add, decimal_compute_sub, decimal_compute_mul, decimal_compute_neg};
 use super::hp::*;
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
@@ -215,9 +214,11 @@ fn sincos_taylor<C: DecimalWord>(r: C) -> (C, C) {
     (sin_sum, cos_sum)
 }
 
-#[cfg(all(test, table_format = "q64_64"))]
+#[cfg(test)]
 mod tests {
+    //! On the 38-digit compute word (I256), in every build.
     use super::*;
+    type ComputeStorage = crate::fixed_point::I256;
     #[allow(unused_imports)]
     use super::super::decimal_compute::*;
     use crate::fixed_point::i256::I256;

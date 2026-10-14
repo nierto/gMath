@@ -47,47 +47,8 @@ use atan_trig_consts::*;
 // Q64.64 IMPLEMENTATION
 // ============================================================================
 
-#[cfg(table_format = "q64_64")]
-pub fn atan_binary_i128(x: i128) -> i128 {
-    atan_q64_64_native(x)
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan_binary_i256(x: I256) -> I256 {
-    // Tier N+1: compute atan at Q128.128 natively
-    atan_q128_128_native(x)
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan_binary_i512(x: I512) -> I512 {
-    // Compute at Q256.256 for Q64.64/Q32.32 profile
-    let x_q256 = x;
-    atan_q256_256_native(x_q256)
-}
-
-/// atan2(y, x): full quadrant arctangent in Q64.64
-#[cfg(table_format = "q64_64")]
-pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
-    atan2_q64_64_native(y, x)
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
-    // Tier N+1: compute atan2 at Q128.128 natively
-    atan2_q128_128_compute(y, x)
-}
-
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
-    // Downscale to Q128.128, compute, upscale back
-    let y_q128 = (y >> 128).as_i256();
-    let x_q128 = (x >> 128).as_i256();
-    let result_q128 = atan2_q128_128_compute(y_q128, x_q128);
-    I512::from_i256(result_q128) << 128
-}
-
 #[allow(dead_code)]
-pub(crate) fn atan_q64_64_native(x: i128) -> i128 {
+pub fn atan_q64_64_native(x: i128) -> i128 {
     let one_q64: i128 = 1i128 << 64;
 
     if x == 0 {
@@ -179,7 +140,7 @@ pub(crate) fn atan_core_q64_64(x: i128) -> i128 {
 
 /// atan2(y, x) in Q64.64: handles all quadrants
 #[allow(dead_code)]
-pub(crate) fn atan2_q64_64_native(y: i128, x: i128) -> i128 {
+pub fn atan2_q64_64_native(y: i128, x: i128) -> i128 {
     if x == 0 && y == 0 {
         return 0; // undefined, return 0
     }
@@ -226,48 +187,8 @@ pub(crate) fn atan2_q64_64_native(y: i128, x: i128) -> i128 {
 // Q128.128 IMPLEMENTATION
 // ============================================================================
 
-#[cfg(table_format = "q128_128")]
-pub fn atan_binary_i128(x: i128) -> i128 {
-    let x_q128 = upscale_q64_to_q128(x);
-    downscale_q128_to_q64(atan_q128_128_native(x_q128))
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn atan_binary_i256(x: I256) -> I256 {
-    // UGOD Tier N+1: Q128.128 storage → compute at Q256.256 → downscale
-    let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan_q256_256_compute(x_q256))
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn atan_binary_i512(x: I512) -> I512 {
-    // Direct Q256.256 computation (compute tier for balanced profile)
-    atan_q256_256_compute(x)
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
-    let y_q128 = upscale_q64_to_q128(y);
-    let x_q128 = upscale_q64_to_q128(x);
-    downscale_q128_to_q64(atan2_q128_128_native(y_q128, x_q128))
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
-    // UGOD Tier N+1: Q128.128 storage → compute at Q256.256 → downscale
-    let y_q256 = upscale_q128_to_q256(y);
-    let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan2_q256_256_compute(y_q256, x_q256))
-}
-
-#[cfg(table_format = "q128_128")]
-pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
-    // Direct Q256.256 computation (compute tier for balanced profile)
-    atan2_q256_256_compute(y, x)
-}
-
 #[allow(dead_code)]
-pub(crate) fn atan_q128_128_native(x: I256) -> I256 {
+pub fn atan_q128_128_native(x: I256) -> I256 {
     let one_q128 = I256::from_i128(1) << 128;
 
     if x == I256::zero() {
@@ -348,7 +269,7 @@ pub(crate) fn atan_core_q128_128(x: I256) -> I256 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn atan2_q128_128_native(y: I256, x: I256) -> I256 {
+pub fn atan2_q128_128_native(y: I256, x: I256) -> I256 {
     let zero = I256::zero();
     if x == zero && y == zero {
         return zero;
@@ -390,44 +311,8 @@ pub(crate) fn atan2_q128_128_native(y: I256, x: I256) -> I256 {
 // Q256.256 IMPLEMENTATION
 // ============================================================================
 
-#[cfg(table_format = "q256_256")]
-pub fn atan_binary_i128(x: i128) -> i128 {
-    let x_q256 = upscale_q64_to_q256(x);
-    downscale_q256_to_q64(atan_q256_256_native(x_q256))
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn atan_binary_i256(x: I256) -> I256 {
-    let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan_q256_256_native(x_q256))
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn atan_binary_i512(x: I512) -> I512 {
-    atan_q256_256_native(x)
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
-    let y_q256 = upscale_q64_to_q256(y);
-    let x_q256 = upscale_q64_to_q256(x);
-    downscale_q256_to_q64(atan2_q256_256_native(y_q256, x_q256))
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn atan2_binary_i256(y: I256, x: I256) -> I256 {
-    let y_q256 = upscale_q128_to_q256(y);
-    let x_q256 = upscale_q128_to_q256(x);
-    downscale_q256_to_q128(atan2_q256_256_native(y_q256, x_q256))
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn atan2_binary_i512(y: I512, x: I512) -> I512 {
-    atan2_q256_256_native(y, x)
-}
-
 #[allow(dead_code)]
-pub(crate) fn atan_q256_256_native(x: I512) -> I512 {
+pub fn atan_q256_256_native(x: I512) -> I512 {
     let one_q256 = I512::from_i128(1) << 256;
 
     if x == I512::zero() {
@@ -509,7 +394,7 @@ pub(crate) fn atan_core_q256_256(x: I512) -> I512 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn atan2_q256_256_native(y: I512, x: I512) -> I512 {
+pub fn atan2_q256_256_native(y: I512, x: I512) -> I512 {
     let zero = I512::zero();
     if x == zero && y == zero {
         return zero;
@@ -551,18 +436,8 @@ pub(crate) fn atan2_q256_256_native(y: I512, x: I512) -> I512 {
 // Q512.512 IMPLEMENTATION (I1024) — COMPUTE TIER FOR SCIENTIFIC PROFILE
 // ============================================================================
 
-#[cfg(table_format = "q256_256")]
-pub fn atan_binary_i1024(x: I1024) -> I1024 {
-    atan_q512_512_native(x)
-}
-
-#[cfg(table_format = "q256_256")]
-pub fn atan2_binary_i1024(y: I1024, x: I1024) -> I1024 {
-    atan2_q512_512_native(y, x)
-}
-
 #[allow(dead_code)]
-pub(crate) fn atan_q512_512_native(x: I1024) -> I1024 {
+pub fn atan_q512_512_native(x: I1024) -> I1024 {
     let one_q512 = I1024::from_i128(1) << 512;
 
     let is_neg = (x.words[15] & 0x8000_0000_0000_0000) != 0;
@@ -642,7 +517,7 @@ pub(crate) fn atan_core_q512_512(x: I1024) -> I1024 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn atan2_q512_512_native(y: I1024, x: I1024) -> I1024 {
+pub fn atan2_q512_512_native(y: I1024, x: I1024) -> I1024 {
     let zero = I1024::zero();
     if x == zero && y == zero {
         return zero;
@@ -690,42 +565,6 @@ pub(crate) fn atan2_q512_512_native(y: I1024, x: I1024) -> I1024 {
 // COMPUTE-TIER DISPATCH FUNCTIONS
 // ============================================================================
 
-/// Compute atan at compute tier for scientific profile
-#[cfg(table_format = "q256_256")]
-pub fn atan_compute_tier_i1024(x: I1024) -> I1024 {
-    atan_binary_i1024(x)
-}
-
-/// Compute atan2 at compute tier for scientific profile
-#[cfg(table_format = "q256_256")]
-pub fn atan2_compute_tier_i1024(y: I1024, x: I1024) -> I1024 {
-    atan2_binary_i1024(y, x)
-}
-
-/// Compute atan at compute tier for balanced profile (Q256.256 on I512)
-#[cfg(table_format = "q128_128")]
-pub fn atan_compute_tier_i512(x: I512) -> I512 {
-    atan_q256_256_compute(x)
-}
-
-/// Compute atan2 at compute tier for balanced profile
-#[cfg(table_format = "q128_128")]
-pub fn atan2_compute_tier_i512(y: I512, x: I512) -> I512 {
-    atan2_q256_256_compute(y, x)
-}
-
-/// Compute atan at compute tier for embedded/performance profile (Q128.128 on I256)
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan_compute_tier_i256(x: I256) -> I256 {
-    atan_q128_128_compute(x)
-}
-
-/// Compute atan2 at compute tier for embedded/performance profile
-#[cfg(any(table_format = "q64_64", table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan2_compute_tier_i256(y: I256, x: I256) -> I256 {
-    atan2_q128_128_compute(y, x)
-}
-
 // ============================================================================
 // CROSS-PROFILE IMPLEMENTATIONS
 // ============================================================================
@@ -733,7 +572,7 @@ pub fn atan2_compute_tier_i256(y: I256, x: I256) -> I256 {
 // Q128.128 atan available under q64_64 for tier N+1
 
 #[allow(dead_code)]
-pub(crate) fn atan_q128_128_compute(x: I256) -> I256 {
+pub fn atan_q128_128_compute(x: I256) -> I256 {
     let one_q128 = I256::from_i128(1) << 128;
 
     let is_neg = x < I256::zero();
@@ -807,7 +646,7 @@ pub(crate) fn atan_core_q128_128_compute(x: I256) -> I256 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn atan2_q128_128_compute(y: I256, x: I256) -> I256 {
+pub fn atan2_q128_128_compute(y: I256, x: I256) -> I256 {
     let zero = I256::zero();
     if x == zero && y == zero { return zero; }
     if x > zero {
@@ -842,7 +681,7 @@ pub(crate) fn atan2_q128_128_compute(y: I256, x: I256) -> I256 {
 // Q256.256 atan available under q128_128 for tier N+1
 
 #[allow(dead_code)]
-pub(crate) fn atan_q256_256_compute(x: I512) -> I512 {
+pub fn atan_q256_256_compute(x: I512) -> I512 {
     let one_q256 = I512::from_i128(1) << 256;
 
     if x == I512::zero() { return I512::zero(); }
@@ -919,7 +758,7 @@ pub(crate) fn atan_core_q256_256_compute(x: I512) -> I512 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn atan2_q256_256_compute(y: I512, x: I512) -> I512 {
+pub fn atan2_q256_256_compute(y: I512, x: I512) -> I512 {
     let zero = I512::zero();
     if x == zero && y == zero { return zero; }
     if x > zero {
@@ -951,46 +790,3 @@ pub(crate) fn atan2_q256_256_compute(y: I512, x: I512) -> I512 {
     if y > zero { pi_half } else { zero - pi_half }
 }
 
-// ============================================================================
-// Q32.32 / Q16.16 PROFILE WRAPPERS (i64 storage)
-// ============================================================================
-
-/// atan() for Q32.32 storage (i64): tier N+1 via Q64.64
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan_binary_i64(x: i64) -> i64 {
-    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
-    let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = atan_q64_64_native(x_q64);
-    downscale_q64_to_q32(result_q64)
-}
-
-/// atan() at compute tier for Q16.16 profile (Q32.32 on i64)
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan_compute_tier_i64(x: i64) -> i64 {
-    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
-    let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = atan_q64_64_native(x_q64);
-    downscale_q64_to_q32(result_q64)
-}
-
-/// atan2() at compute tier for Q16.16 profile (Q32.32 on i64)
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan2_compute_tier_i64(y: i64, x: i64) -> i64 {
-    use super::exp_tier_n_plus_1::{upscale_q32_to_q64, downscale_q64_to_q32};
-    let y_q64 = upscale_q32_to_q64(y);
-    let x_q64 = upscale_q32_to_q64(x);
-    let result_q64 = atan2_q64_64_native(y_q64, x_q64);
-    downscale_q64_to_q32(result_q64)
-}
-
-/// atan() for Q32.32 profile: i128 is the compute tier (Q64.64)
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan_binary_i128(x: i128) -> i128 {
-    atan_q64_64_native(x)
-}
-
-/// atan2() for Q32.32 profile: i128 is the compute tier (Q64.64)
-#[cfg(any(table_format = "q32_32", table_format = "q16_16"))]
-pub fn atan2_binary_i128(y: i128, x: i128) -> i128 {
-    atan2_q64_64_native(y, x)
-}

@@ -1,8 +1,6 @@
 //! Compute-tier arithmetic and transcendental dispatchers
 //!
-//! All functions operate at tier N+1 (ComputeStorage) for maximum precision.
-
-use super::{BinaryStorage, ComputeStorage};
+//! Compile-time power-of-ten tables for the decimal paths.
 
 // Build-time Q-format constants (FRAC_BITS, COMPUTE_FRAC_BITS, etc.)
 #[allow(unused_imports)]
@@ -11,19 +9,7 @@ use crate::fixed_point::i256::I256;
 use crate::fixed_point::i512::I512;
 #[allow(unused_imports)]
 use crate::fixed_point::I1024;
-use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
-/// Downscale from compute tier to storage tier with round-to-nearest.
-///
-/// Shifts right by (COMPUTE_FRAC_BITS - STORAGE_FRAC_BITS) with rounding.
-///
-/// Returns `Err(TierOverflow)` if the compute-tier value does not fit in
-/// the storage tier; this is the UGOD overflow detection point that
-/// prevents silent truncation of large results (e.g., exp(44) in Q64.64).
-#[inline]
-pub(crate) fn downscale_to_storage(val: ComputeStorage) -> Result<BinaryStorage, OverflowDetected> {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::downscale_to_storage(val)
-}
 // ============================================================================
 // CONST POW10 TABLE GENERATORS — compile-time word-level multiplication
 // ============================================================================
@@ -142,15 +128,6 @@ pub(super) fn pow10_compute_fallback_i1024(exp: u8) -> I1024 {
 // ============================================================================
 // COMPUTE-TIER ARITHMETIC HELPERS
 // ============================================================================
-/// Create a compute-tier integer (e.g., 1, 2 in the compute Q-format).
-///
-/// On realtime the tier holds only +-2^(63 - 2F): a larger `n` panics
-/// instead of wrapping (use `compute_mul_div_int` to scale by a large integer).
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn make_compute_int(n: i64) -> ComputeStorage {
-    <crate::fixed_point::fixed_num::ProfileFormat as crate::fixed_point::fixed_num::FixedNum>::make_compute_int(n)
-}
 // ============================================================================
 // COMPUTE-TIER TRANSCENDENTAL DISPATCH FUNCTIONS
 // ============================================================================

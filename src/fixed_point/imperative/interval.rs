@@ -92,19 +92,6 @@ where
     Fixed::<S, F>::upscale_to_compute(Fixed::ZERO.raw())
 }
 
-/// Exact product of two storage values at the compute tier.
-///
-/// The raw product `a_raw * b_raw` is the value `a * b` at exactly the
-/// compute-tier scale (2 * FRAC_BITS), so no rounding occurs here. On the wide
-/// profiles the unsigned wide multiply is applied to magnitudes and the sign
-/// reapplied, the same pattern as the scalar `fixed_multiply`; on Q64.64
-/// `mul_i128_to_i256` is sign-correct by itself.
-#[inline]
-#[cfg(test)]
-pub(crate) fn exact_product<W: Storage>(a: W, b: W) -> W::Compute {
-    a.mul_wide(b)
-}
-
 /// Directed quotient of two storage values: `(floor(a/b), ceil(a/b))` at the
 /// storage scale, computed from the truncating integer quotient and its
 /// remainder. Mirrors `fixed_divide`'s widening per profile.

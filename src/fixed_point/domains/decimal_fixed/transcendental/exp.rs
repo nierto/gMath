@@ -32,7 +32,6 @@ use super::word::{DecimalWord, HpWord};
 #[allow(unused_imports)]
 use crate::fixed_point::width::WideInt;
 #[allow(unused_imports)]
-use super::decimal_compute::ComputeStorage;
 use super::decimal_compute::{decimal_compute_one, decimal_compute_cmp, decimal_compute_neg};
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
@@ -244,9 +243,11 @@ pub fn decimal_sinhcosh<C: DecimalWord>(x: C) -> Result<(C, C), OverflowDetected
     Ok((if negative { decimal_compute_neg(sinh) } else { sinh }, cosh))
 }
 
-#[cfg(all(test, table_format = "q64_64"))]
+#[cfg(test)]
 mod tests {
+    //! On the 38-digit compute word (I256), in every build.
     use super::*;
+    type ComputeStorage = crate::fixed_point::I256;
     #[allow(unused_imports)]
     use super::super::decimal_compute::*;
     use super::super::decimal_compute::{decimal_compute_from_int, pow10_compute_ct};
@@ -330,12 +331,14 @@ mod tests {
     }
 
     /// mpmath: exp(-1) = 0.36787944117144232839...
-    /// Storage-tier validation (compute-tier rounding from 1/exp(1) is acceptable
-    /// as long as storage-tier result is exact: covered by decimal_transcendental_validation).
+    /// Storage-tier validation at Q64.64 in every build (compute-tier rounding
+    /// from 1/exp(1) is acceptable as long as the storage-tier result is
+    /// exact: covered by decimal_transcendental_validation).
     #[test]
     fn exp_neg_one() {
-        use crate::canonical::{gmath, evaluate};
-        let result = evaluate(&gmath("-1.0").exp()).unwrap();
+        use crate::canonical::{evaluate_in, gmath_in};
+        use crate::fixed_point::Q64_64;
+        let result = evaluate_in(&gmath_in::<Q64_64>("-1.0").exp()).unwrap();
         let s = format!("{}", result);
         // exp(-1) ≈ 0.36787944117144232...
         assert!(s.starts_with("0.3678794411714"),

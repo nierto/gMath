@@ -152,13 +152,16 @@ where
     }
 }
 
-impl FixedVector<FixedPoint> {
+impl<S: Storage, const F: u32> FixedVector<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
     /// Fused length: sqrt(Σ x_i²) entirely at compute tier.
     ///
     /// More precise than `length()` which materializes the dot product
     /// before taking sqrt. This version keeps the accumulated sum at
     /// tier N+1 and takes sqrt there: single downscale at the end.
-    pub fn length_fused(&self) -> FixedPoint {
+    pub fn length_fused(&self) -> Fixed<S, F> {
         super::fused::sqrt_sum_sq(&self.data)
     }
 
@@ -166,7 +169,7 @@ impl FixedVector<FixedPoint> {
     /// entirely at compute tier.
     ///
     /// Saves 2 materializations vs `(self - other).length()`.
-    pub fn distance_to(&self, other: &Self) -> FixedPoint {
+    pub fn distance_to(&self, other: &Self) -> Fixed<S, F> {
         assert_eq!(self.len(), other.len(), "FixedVector::distance_to: dimension mismatch");
         super::fused::euclidean_distance(&self.data, &other.data)
     }

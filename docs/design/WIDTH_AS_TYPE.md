@@ -538,6 +538,85 @@ Refined for the build (2026-10-10, after phase 5), in two sub-phases:
   lib, `linalg_validation`, `s1_serialization_extended` and `defects_065`
   pins moved to the new tag.
 
+- **7, the library without a profile.** Refined for the build (2026-10-14,
+  after phase 6, census on d4c4cf5). What still reads the profile in
+  `src/`: `ProfileFormat` (`Fixed<BinaryStorage, FRAC_BITS>` from the cfg)
+  behind twelve delegating wrappers (`__pre_integer`, `ternary_to_storage`,
+  `try_to_binary_storage`, `decimal_compute_to_binary_storage`,
+  `downscale_to_storage`, `make_compute_int`, `storage_frac_bits`,
+  `compute_bit_length`, `narrow_triple_floor/ceil/nearest`,
+  `divide_to_storage_nearest`, linalg's `round_to_storage`,
+  `upscale_to_compute`, `compute_zero/add/sub`, `compute_tier_mul_pair`)
+  whose callers are unit tests or one function (`compute_tier_trit_dot_raw`);
+  the profile-named engine wrappers `*_binary_iN`, `*_compute_tier_iN`,
+  `pi_half_iN` (five engine files plus their re-exports; callers: seven
+  integration tests and the evaluator's unit tests, no library code); the
+  `BinaryStorage` / `ComputeStorage` aliases; `frac_config` (behind
+  `FixedPoint`, `compute_tier::{FRAC_BITS, COMPUTE_FRAC_BITS, ComputeStorage}`,
+  `TIER1_DEFAULT_FRAC_BITS`, the realtime `exp_binary_i64` upshift, one
+  unit test); `DECIMAL_COMPUTE_DP` / `DECIMAL_STORAGE_MAX_DP` / `WideCompute`
+  in `decimal_compute.rs` (dead since 5b, the format trait carries them);
+  the per-profile unit test modules of the decimal engines; two
+  `FixedPoint`-only impls (`FixedVector<FixedPoint>::{length_fused,
+  distance_to}`); 46 `T = FixedPoint` defaults. On the test side: 99
+  integration files, 980 lines naming `FixedPoint`, 427 `cfg(table_format)`
+  lines in 73 files, 74 `frac_config` reads in 44, 39 reference tables of
+  which 19 are per profile. In three steps:
+  - **7a, the library.** IMPLEMENTED (2026-10-14; the record follows the
+    plan). `ProfileFormat` and every wrapper deleted; a live
+    caller becomes generic, a test-only wrapper's tests call the kernel with
+    an explicit format. The engine wrappers deleted (their tests call the
+    format-named engines, `exp_q64_64` and so on, or the `Fixed` methods).
+    `BinaryStorage`, `ComputeStorage`, the `compute_tier` re-exports and the
+    dead decimal constants deleted. `TIER1_DEFAULT_FRAC_BITS` becomes the
+    constant 16: the only callers of the no-parameter tier-1 forms are the
+    ladder's own wider tiers and unit tests, the evaluator has passed the
+    format's `TIER1_FRAC_BITS` since 5b. The `FixedPoint`-only impls become
+    `impl<T: FixedNum>`. `FixedPoint`, `frac_config` and the `table_format`
+    cfg stay as SCAFFOLDING for the tests (marked in the source as such,
+    `build.rs` emits nothing else per profile); the `T = FixedPoint`
+    defaults stay with them until 7c. Gate: the ten-build sweep unchanged,
+    the differential and all-widths suites, `PUBLIC_API.md` regenerated,
+    and a grep check that `src/` outside `cfg(test)` names none of
+    `table_format`, `frac_config`, `BinaryStorage`, `ComputeStorage`,
+    `ProfileFormat` beyond the scaffolding definitions.
+    As built: every one of the 115 engine wrappers and the twelve
+    delegating wrappers was dead or test-only, so the public surface did not
+    move (`PUBLIC_API.md` regenerated: no diff); their bodies live on
+    verbatim in the two tests that pinned their per-profile routing
+    (`transcendental_ulp_validation`, `wide_q64_validation`), the engines
+    `sqrt_q*`, `sin_q*`, `atan*_q*` are `pub` in the hidden module like
+    `exp_q*`; `wide_acc.rs` went entirely (its four tests are generic over
+    six formats in `kernels`); four print-only `trace_*` tests were deleted;
+    the decimal engine unit tests that ran only on embedded run on I256 (and
+    the limb division on I512 and I1024) in every build, so the realtime
+    library test count rose from 332 to 373. Gate script
+    `.gates/no_profile_in_lib.py` (local): 0 reads outside tests and the
+    marked scaffolding.
+  - **7b, the tests.** Each integration test generic over `T: FixedNum`
+    (or `FascFormat`), instantiated through one `for_each_format!` in
+    `tests/common/` at `Fixed<i32, 10>`, `Q16_16`, `Q32_32`, `Q64_64`,
+    `Q128_128`, `Q256_256`, with the realtime splits F = 2..30 as types
+    where a suite had a per-split corpus; a profile cfg arm becomes a
+    `match` on `(T::Storage::BITS, T::FRAC_BITS)` or a per-format table;
+    the per-profile reference tables get a format selector; the
+    differential suite picks its format from the published crate's own
+    constants (`g_math_065`'s `FRAC_BITS` and word size), so the profile
+    matrix survives only there. File by file, the scaffolding shrinks as
+    files convert, each file green on the ten builds before the next.
+  - **7c, one build.** Scaffolding, `frac_config`, `FixedPoint`, the
+    defaults, the profile features, `GMATH_PROFILE` / `GMATH_FRAC_BITS` in
+    `build.rs`, `table_format` in `check-cfg` all deleted; CI one build per
+    toolchain with `--features inference,serde`, plus the differential
+    job's five-profile matrix for the published crate. The `w32..w512`
+    width features of section 9 are DEFERRED: the full lib's compile time
+    is measured first and recorded; if one build is short the features are
+    not worth their cfg surface.
+  - Kept from the spec: no default width (section 3); the `Q16_16` to
+    `Q256_256` aliases exist since phase 2; `gmath!` (its feature is not
+    built) emits text; `LazyExpr<T>` without a default means
+    `evaluate::<Q64_64>` names the format at the root of a tree.
+
 ## 9. Cargo features
 
 `w32`, `w64`, `w128`, `w256`, `w512`, one per storage word, additive. A feature
@@ -568,7 +647,7 @@ generic code, while new tests exercise all widths in one build.
 | 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d, IMPLEMENTED) | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-format evaluators), canonical API. IMPLEMENTED (5a format trait, 5b typed value + registry, 5c matrix layer + scalar string paths) | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D (6a); serialization v2 (6b). IMPLEMENTED | decimal gates per D, legacy-read tests |
-| 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain | full gate set in one build |
+| 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain. 7a IN PROGRESS (2026-10-14) | full gate set in one build |
 | 8 | Docs (README, PUBLIC_API regen, CHANGELOG, CONTRACT, ROADMAP), consumer upgrade notes, 0.7.0 | release checklist |
 
 ## 11. Acceptance gates

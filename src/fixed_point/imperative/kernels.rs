@@ -454,3 +454,99 @@ where
     }
     Ok(sum)
 }
+
+#[cfg(test)]
+mod narrowing_tests {
+    //! The three narrowings and the storage-nearest division on the exact
+    //! quadratic form, on every format in one build (these were the tests of
+    //! the former `wide_acc` module, which was bound to the build's profile).
+    use super::*;
+    use crate::fixed_point::{I256, I512};
+
+    fn qf<S: Storage, const F: u32>(v: &[Fixed<S, F>], m: &FixedMatrix<Fixed<S, F>>) -> Orient<Fixed<S, F>>
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+    {
+        quadratic_form_exact(Fixed::raw_slice(v), m).unwrap()
+    }
+
+    fn check<S: Storage, const F: u32>()
+    where
+        Fixed<S, F>: FixedNum<Storage = S>,
+    {
+        let one = Fixed::<S, F>::one();
+        let s_one = S::one();
+        let zero = S::ZERO;
+        // a storage value widened to the accumulator, times 2^(2F), narrows
+        // back under all three rules with nothing discarded
+        let third = (one / Fixed::<S, F>::from_int(3)).raw();
+        let mut m = FixedMatrix::<Fixed<S, F>>::new(1, 1);
+        m.set(0, 0, Fixed::from_raw(third));
+        let a = qf(&[one], &m);
+        assert_eq!(narrow_triple_floor::<Fixed<S, F>>(a).unwrap(), third);
+        assert_eq!(narrow_triple_ceil::<Fixed<S, F>>(a).unwrap(), third);
+        assert_eq!(narrow_triple_nearest::<Fixed<S, F>>(a).unwrap(), third);
+        // v = [1/2], m = [[2 ulp]]: exactly half an ulp, a tie; floor 0, ceil
+        // 1, nearest toward +infinity 1; the negative twin -1, 0, 0
+        let half = one / Fixed::<S, F>::from_int(2);
+        let two_ulp = Fixed::<S, F>::from_raw(s_one + s_one);
+        m.set(0, 0, two_ulp);
+        let a = qf(&[half], &m);
+        assert_eq!(narrow_triple_floor::<Fixed<S, F>>(a).unwrap(), zero);
+        assert_eq!(narrow_triple_ceil::<Fixed<S, F>>(a).unwrap(), s_one);
+        assert_eq!(narrow_triple_nearest::<Fixed<S, F>>(a).unwrap(), s_one);
+        m.set(0, 0, -two_ulp);
+        let a = qf(&[half], &m);
+        assert_eq!(narrow_triple_floor::<Fixed<S, F>>(a).unwrap(), -s_one);
+        assert_eq!(narrow_triple_ceil::<Fixed<S, F>>(a).unwrap(), zero);
+        assert_eq!(narrow_triple_nearest::<Fixed<S, F>>(a).unwrap(), zero);
+        // dividing by the compute-tier one is narrowing by 2^(2F): the
+        // quotient rounding equals narrow_triple_nearest, ties included
+        let one_c = Fixed::<S, F>::make_compute_int(1);
+        let mut state: u64 = 0x5DEE_CE66_D1CE_4E5B;
+        let mut cases = 0;
+        for k in -30i32..=30 {
+            for tweak in [0i32, 1, 2, 3] {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let ulps = (state >> 40) as i32 % 16 + k * 3 + tweak;
+                m.set(0, 0, Fixed::<S, F>::from_raw(s_one) * Fixed::<S, F>::from_int(ulps));
+                let a = qf(&[half], &m);
+                assert_eq!(
+                    divide_to_storage_nearest::<Fixed<S, F>>(a, one_c),
+                    narrow_triple_nearest::<Fixed<S, F>>(a),
+                    "{ulps}"
+                );
+                cases += 1;
+            }
+        }
+        assert!(cases > 200);
+        // the pairing (m_ij + m_ji) v_i v_j assumes no symmetry: an
+        // antisymmetric off-diagonal contributes nothing, a one-sided one its
+        // full product
+        let v = [Fixed::<S, F>::from_int(3), Fixed::<S, F>::from_int(5)];
+        let mut m = FixedMatrix::<Fixed<S, F>>::new(2, 2);
+        m.set(0, 1, Fixed::from_int(7));
+        m.set(1, 0, Fixed::from_int(-7));
+        assert_eq!(narrow_triple_nearest::<Fixed<S, F>>(qf(&v, &m)).unwrap(), zero);
+        m.set(1, 0, Fixed::from_raw(zero));
+        assert_eq!(narrow_triple_nearest::<Fixed<S, F>>(qf(&v, &m)).unwrap(), Fixed::<S, F>::from_int(105).raw());
+        // a result beyond the storage tier is a typed overflow, never a wrap
+        let big = Fixed::<S, F>::from_raw(s_one.shl_bits(S::BITS - 2));
+        let mut m = FixedMatrix::<Fixed<S, F>>::new(1, 1);
+        m.set(0, 0, big);
+        let a = qf(&[big], &m);
+        assert_eq!(narrow_triple_floor::<Fixed<S, F>>(a), Err(OverflowDetected::TierOverflow));
+        assert_eq!(narrow_triple_ceil::<Fixed<S, F>>(a), Err(OverflowDetected::TierOverflow));
+        assert_eq!(narrow_triple_nearest::<Fixed<S, F>>(a), Err(OverflowDetected::TierOverflow));
+    }
+
+    #[test]
+    fn narrowings_on_every_format() {
+        check::<i32, 10>();
+        check::<i32, 16>();
+        check::<i64, 32>();
+        check::<i128, 64>();
+        check::<I256, 128>();
+        check::<I512, 256>();
+    }
+}
