@@ -223,24 +223,33 @@ mod hardcoded_constants {
         pub const SQRT_5_DEN: [u64; 4] = [0xd3ac2c2e0a61ec0, 0x16, 0, 0];
     }
 
-    /// 77 decimal precision (I512 via string representation)
+    /// Best rational approximations with denominators below 2^192 (errors
+    /// 2^-381 to 2^-390, from the continued fractions of mpmath values at
+    /// 400 digits): every format, Q256.256 included, rounds them with more
+    /// than 120 bits to spare. Before 0.7.0 these were 38 to 40 digit
+    /// convergents, phi had 138 bits, sqrt 3 188 bits and sqrt 2 253 bits,
+    /// below a Q256.256 unit.
     pub mod tier_77d {
-        pub const PI_NUM_STR: &str = "4170167120753626267426951858176848373908";
-        pub const PI_DEN_STR: &str = "1327405421574472826819306015318500841729";
-        pub const E_NUM_STR: &str = "3224546177070375504839670260260400797251";
-        pub const E_DEN_STR: &str = "1186244245652160441069426743288856160849";
-        pub const SQRT_2_NUM_STR: &str = "94741125149636933417873079920900017937";
-        pub const SQRT_2_DEN_STR: &str = "66992092050551637663438906713182313772";
-        pub const LN_2_NUM_STR: &str = "245136811127310559099810329887594754993";
-        pub const LN_2_DEN_STR: &str = "353657661752705407042003521780857290376";
-        pub const PHI_NUM_STR: &str = "573147844013817084101";
-        pub const PHI_DEN_STR: &str = "354224848179261915075";
-        pub const LN_10_NUM_STR: &str = "3453684117652085635286271321032656666369";
-        pub const LN_10_DEN_STR: &str = "1499915954533201960943129396032093884739";
-        pub const SQRT_3_NUM_STR: &str = "19785515999613069781581367687";
-        pub const SQRT_3_DEN_STR: &str = "11423172988432253331946397284";
-        pub const SQRT_5_NUM_STR: &str = "1576282345991202924472633606870413747838";
-        pub const SQRT_5_DEN_STR: &str = "704934895473834571656017795987798259457";
+        pub const PI_NUM_STR: &str = "13332340003488521441913841164584503044855821083601526292324";
+        pub const PI_DEN_STR: &str = "4243815629074030584895147608928062600269139719947529665793";
+        pub const E_NUM_STR: &str = "13823891428306770374331665289458907890372191037173036666131";
+        pub const E_DEN_STR: &str = "5085525453460186301777867529962655859538011626631066055111";
+        pub const SQRT_2_NUM_STR: &str = "7601060262229312579947535254619071479585600250365480594497";
+        pub const SQRT_2_DEN_STR: &str = "5374761255629944076990017936922797131639108666151522930248";
+        pub const LN_2_NUM_STR: &str = "678285039039320287244063811222441860326049085269592368999";
+        pub const LN_2_DEN_STR: &str = "978558462131204322844039825711398124081918895566693544824";
+        pub const PHI_NUM_STR: &str = "9079598147510263717870894449029933369491131786514446266146";
+        pub const PHI_DEN_STR: &str = "5611500259351924431073312796924978741056961814867751431689";
+        pub const LN_10_NUM_STR: &str = "10123382760721611643371373704089800782089177258740109000038";
+        pub const LN_10_DEN_STR: &str = "4396529271175903494775254661102053322823200486812731863859";
+        pub const SQRT_3_NUM_STR: &str = "7982907128430983182578345419670238815296157924832556217629";
+        pub const SQRT_3_DEN_STR: &str = "4608933579515410555630342578190118663834948678898748000891";
+        pub const SQRT_5_NUM_STR: &str = "10151299333107056290008760021439945425802527708124974564762";
+        pub const SQRT_5_DEN_STR: &str = "4539799073755131858935447224514966684745565893257223133073";
+        pub const EULER_GAMMA_NUM_STR: &str = "908854103589400801912103334995054243164898335448675446027";
+        pub const EULER_GAMMA_DEN_STR: &str = "1574548576647589936927092156825376178495731923734207127719";
+        pub const E_SQUARED_NUM_STR: &str = "2727284024010542773027751614885254488090495661095227114381";
+        pub const E_SQUARED_DEN_STR: &str = "369097755856155615651949209662851722715567229392378610429";
     }
 }
 
@@ -338,6 +347,8 @@ fn generate_mathematical_constants(out_dir: &str, config: &PrecisionConfig) {
         ("LN_10", hardcoded_constants::tier_77d::LN_10_NUM_STR, hardcoded_constants::tier_77d::LN_10_DEN_STR),
         ("SQRT_3", hardcoded_constants::tier_77d::SQRT_3_NUM_STR, hardcoded_constants::tier_77d::SQRT_3_DEN_STR),
         ("SQRT_5", hardcoded_constants::tier_77d::SQRT_5_NUM_STR, hardcoded_constants::tier_77d::SQRT_5_DEN_STR),
+        ("EULER_GAMMA", hardcoded_constants::tier_77d::EULER_GAMMA_NUM_STR, hardcoded_constants::tier_77d::EULER_GAMMA_DEN_STR),
+        ("E_SQUARED", hardcoded_constants::tier_77d::E_SQUARED_NUM_STR, hardcoded_constants::tier_77d::E_SQUARED_DEN_STR),
     ];
 
     for (name, num_str, den_str) in constants {
@@ -386,10 +397,6 @@ fn generate_mathematical_constants(out_dir: &str, config: &PrecisionConfig) {
     writeln!(file, "    }}").unwrap();
     writeln!(file, "").unwrap();
 
-    writeln!(file, "    pub fn E_SQUARED() -> ([u64; 8], [u64; 8]) {{").unwrap();
-    writeln!(file, "        Self::E()  // Computed at runtime").unwrap();
-    writeln!(file, "    }}").unwrap();
-    writeln!(file, "").unwrap();
 
     // ========================================================================
     // HELPER FUNCTIONS: Runtime Precision Extraction
@@ -1101,7 +1108,7 @@ fn generate_q512_512_tables(out_dir: &str, _config: &PrecisionConfig) {
 
     for k in 0..1024 {
         let x = BigRational::new(BigInt::from(k), BigInt::from(1024));
-        let exp_x = exp_rational(&x, 300);
+        let exp_x = exp_rational(&x, 600);
         let (main, comp) = rational_to_q512_512(&exp_x);
         writeln!(file, "    (I1024::from_words({:?}), I512::from_words({:?})), // e^({}/1024)", main, comp, k).unwrap();
     }
@@ -1116,7 +1123,7 @@ fn generate_q512_512_tables(out_dir: &str, _config: &PrecisionConfig) {
 
     for j in 0..1024 {
         let x = BigRational::new(BigInt::from(j), BigInt::from(1i128 << 20));
-        let exp_x = exp_rational(&x, 300);
+        let exp_x = exp_rational(&x, 600);
         let (main, comp) = rational_to_q512_512(&exp_x);
         writeln!(file, "    (I1024::from_words({:?}), I512::from_words({:?})), // e^({}/2^20)", main, comp, j).unwrap();
     }
@@ -1131,7 +1138,7 @@ fn generate_q512_512_tables(out_dir: &str, _config: &PrecisionConfig) {
 
     for m in 0..1024 {
         let x = BigRational::new(BigInt::from(m), BigInt::from(1024 * 1024 * 1024));  // 2^30
-        let exp_x = exp_rational(&x, 300);
+        let exp_x = exp_rational(&x, 600);
         let (main, comp) = rational_to_q512_512(&exp_x);
         writeln!(file, "    (I1024::from_words({:?}), I512::from_words({:?})), // e^({}/2^30)", main, comp, m).unwrap();
     }

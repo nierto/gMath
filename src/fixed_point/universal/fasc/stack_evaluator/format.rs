@@ -106,9 +106,59 @@ pub trait FascFormat: FixedNum + 'static {
     fn decimal_compute_to_binary_compute(val: &Compute<Self>) -> Result<Compute<Self>, OverflowDetected>;
     #[doc(hidden)]
     fn ternary_wide_from_rational(tier: u8, rational: &RationalNumber) -> Option<Result<(u8, Self::Storage), OverflowDetected>>;
+    /// The imperative, correctly rounded evaluation of one transcendental of
+    /// storage values (`y` only for pow and atan2); `None` where the
+    /// imperative path does not cover the call (pow of a non-positive base,
+    /// atan2(0, 0)).
+    #[doc(hidden)]
+    fn settled_function(op: SettledOp, x: Self::Storage, y: Self::Storage) -> Option<Result<Self::Storage, OverflowDetected>>;
+}
+
+/// The transcendentals the canonical evaluator hands to the imperative
+/// ladder when a tree is one function of stored values.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettledOp { Exp, Ln, Sqrt, Sin, Cos, Tan, Atan, Asin, Acos, Sinh, Cosh, Tanh, Asinh, Acosh, Atanh, Pow, Atan2 }
+
+/// `settled_function` for every format.
+fn settled<S: crate::fixed_point::width::Storage, const F: u32>(op: SettledOp, x: S, y: S) -> Option<Result<S, OverflowDetected>>
+where
+    Fixed<S, F>: FascFormat + FixedNum<Storage = S>,
+{
+    let (a, b) = (Fixed::<S, F>::from_raw(x), Fixed::<S, F>::from_raw(y));
+    let r = match op {
+        SettledOp::Exp => a.try_exp(),
+        SettledOp::Ln => a.try_ln(),
+        SettledOp::Sqrt => a.try_sqrt(),
+        SettledOp::Sin => a.try_sin(),
+        SettledOp::Cos => a.try_cos(),
+        SettledOp::Tan => a.try_tan(),
+        SettledOp::Atan => a.try_atan(),
+        SettledOp::Asin => a.try_asin(),
+        SettledOp::Acos => a.try_acos(),
+        SettledOp::Sinh => a.try_sinh(),
+        SettledOp::Cosh => a.try_cosh(),
+        SettledOp::Tanh => a.try_tanh(),
+        SettledOp::Asinh => a.try_asinh(),
+        SettledOp::Acosh => a.try_acosh(),
+        SettledOp::Atanh => a.try_atanh(),
+        SettledOp::Pow => {
+            if !(x > S::ZERO) { return None; }
+            a.try_pow(b)
+        }
+        SettledOp::Atan2 => {
+            if x == S::ZERO && y == S::ZERO { return None; }
+            a.try_atan2(b)
+        }
+    };
+    Some(r.map(|v| v.raw()))
 }
 
 impl<const F: u32> FascFormat for Fixed<i32, F> {
+    #[inline]
+    fn settled_function(op: SettledOp, x: Self::Storage, y: Self::Storage) -> Option<Result<Self::Storage, OverflowDetected>> {
+        settled::<i32, F>(op, x, y)
+    }
     const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = Self::MAX_DECIMAL_DIGITS as u16;
     const DECIMAL_COMPUTE_DP: u8 = 9;
     const DECIMAL_STORAGE_MAX_DP: u8 = 4;
@@ -605,6 +655,10 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
 }
 
 impl FascFormat for Fixed<i64, 32> {
+    #[inline]
+    fn settled_function(op: SettledOp, x: Self::Storage, y: Self::Storage) -> Option<Result<Self::Storage, OverflowDetected>> {
+        settled::<i64, 32>(op, x, y)
+    }
     const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 9;
     const DECIMAL_COMPUTE_DP: u8 = 19;
     const DECIMAL_STORAGE_MAX_DP: u8 = 9;
@@ -1101,6 +1155,10 @@ impl FascFormat for Fixed<i64, 32> {
 }
 
 impl FascFormat for Fixed<i128, 64> {
+    #[inline]
+    fn settled_function(op: SettledOp, x: Self::Storage, y: Self::Storage) -> Option<Result<Self::Storage, OverflowDetected>> {
+        settled::<i128, 64>(op, x, y)
+    }
     const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 18;
     const DECIMAL_COMPUTE_DP: u8 = 38;
     const DECIMAL_STORAGE_MAX_DP: u8 = 19;
@@ -1599,6 +1657,10 @@ impl FascFormat for Fixed<i128, 64> {
 }
 
 impl FascFormat for Fixed<I256, 128> {
+    #[inline]
+    fn settled_function(op: SettledOp, x: Self::Storage, y: Self::Storage) -> Option<Result<Self::Storage, OverflowDetected>> {
+        settled::<I256, 128>(op, x, y)
+    }
     const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 38;
     const DECIMAL_COMPUTE_DP: u8 = 77;
     const DECIMAL_STORAGE_MAX_DP: u8 = 38;
@@ -2125,6 +2187,10 @@ impl FascFormat for Fixed<I256, 128> {
 }
 
 impl FascFormat for Fixed<I512, 256> {
+    #[inline]
+    fn settled_function(op: SettledOp, x: Self::Storage, y: Self::Storage) -> Option<Result<Self::Storage, OverflowDetected>> {
+        settled::<I512, 256>(op, x, y)
+    }
     const DECIMAL_DP_PROMOTION_THRESHOLD: u16 = 76;
     const DECIMAL_COMPUTE_DP: u8 = 154;
     const DECIMAL_STORAGE_MAX_DP: u8 = 77;

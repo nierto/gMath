@@ -29,3 +29,7 @@ NOTE_FROM_*.md
 g_math_macros/
 tests/gmath_macro_test.rs
 NOTE_FOR_*.md
+.gates/
+target-chain/
+target-chain*/
+target-sweep/

@@ -508,8 +508,8 @@ impl RationalNumber {
             RationalStorage::Large { num, .. } => BigInt::from(*num),
             RationalStorage::Huge { num, .. } => BigInt::from(*num),
             #[cfg(not(feature = "embedded"))]
-            RationalStorage::Massive { num, .. } => BigInt::from(num.as_i128()),
-            RationalStorage::Ultra { num, .. } => BigInt::from(num.as_i128()),
+            RationalStorage::Massive { num, .. } => BigInt::from_signed_bytes_le(&num.to_bytes_le()),
+            RationalStorage::Ultra { num, .. } => BigInt::from_signed_bytes_le(&num.to_bytes_le()),
             RationalStorage::Infinite { num, .. } => num.clone(),
         }
     }
@@ -524,8 +524,8 @@ impl RationalNumber {
             RationalStorage::Large { den, .. } => BigInt::from(*den),
             RationalStorage::Huge { den, .. } => BigInt::from(*den),
             #[cfg(not(feature = "embedded"))]
-            RationalStorage::Massive { den, .. } => BigInt::from(den.as_i128()),
-            RationalStorage::Ultra { den, .. } => BigInt::from(den.as_i128()),
+            RationalStorage::Massive { den, .. } => BigInt::from_signed_bytes_le(&den.to_bytes_le()),
+            RationalStorage::Ultra { den, .. } => BigInt::from_signed_bytes_le(&den.to_bytes_le()),
             RationalStorage::Infinite { den, .. } => den.clone(),
         }
     }
@@ -1428,11 +1428,10 @@ impl RationalNumber {
             RationalStorage::Huge { num, den } => (BigInt::from(*num), BigInt::from(*den)),
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { num, den } => {
-                // I256::as_i128() returns i128 directly (not Option)
-                (BigInt::from(num.as_i128()), BigInt::from(den.as_i128()))
+                (BigInt::from_signed_bytes_le(&num.to_bytes_le()), BigInt::from_signed_bytes_le(&den.to_bytes_le()))
             },
             RationalStorage::Ultra { num, den } => {
-                (BigInt::from(num.as_i128()), BigInt::from(den.as_i128()))
+                (BigInt::from_signed_bytes_le(&num.to_bytes_le()), BigInt::from_signed_bytes_le(&den.to_bytes_le()))
             },
             // Tier 8: Proper use case
             RationalStorage::Infinite { num, den } => (num.clone(), den.clone()),
@@ -1787,14 +1786,10 @@ impl fmt::Display for RationalNumber {
             },
             #[cfg(not(feature = "embedded"))]
             RationalStorage::Massive { num, den } => {
-                let num_i128 = num.as_i128();
-                let den_i128 = den.as_i128();
-                if den_i128 == 1 { write!(f, "{}", num_i128) } else { write!(f, "{}/{}", num_i128, den_i128) }
+                if *den == I256::from_i128(1) { write!(f, "{}", num) } else { write!(f, "{}/{}", num, den) }
             },
             RationalStorage::Ultra { num, den } => {
-                let num_i128 = num.as_i128();
-                let den_i128 = den.as_i128();
-                if den_i128 == 1 { write!(f, "{}", num_i128) } else { write!(f, "{}/{}", num_i128, den_i128) }
+                if *den == I512::from_i128(1) { write!(f, "{}", num) } else { write!(f, "{}/{}", num, den) }
             },
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { num, den } => {
@@ -2089,8 +2084,8 @@ impl RationalNumber {
             RationalStorage::Large { den, .. } => *den == 1,
             RationalStorage::Huge { den, .. } => *den == 1,
             #[cfg(not(feature = "embedded"))]
-            RationalStorage::Massive { den, .. } => den.as_i128() == 1,
-            RationalStorage::Ultra { den, .. } => den.as_i128() == 1,
+            RationalStorage::Massive { den, .. } => *den == I256::from_i128(1),
+            RationalStorage::Ultra { den, .. } => *den == I512::from_i128(1),
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { den, .. } => den == &BigInt::from(1),
         }
@@ -2110,8 +2105,8 @@ impl RationalNumber {
             RationalStorage::Large { num, den } => *num == 1 && *den == 1,
             RationalStorage::Huge { num, den } => *num == 1 && *den == 1,
             #[cfg(not(feature = "embedded"))]
-            RationalStorage::Massive { num, den } => num.as_i128() == 1 && den.as_i128() == 1,
-            RationalStorage::Ultra { num, den } => num.as_i128() == 1 && den.as_i128() == 1,
+            RationalStorage::Massive { num, den } => *num == I256::from_i128(1) && *den == I256::from_i128(1),
+            RationalStorage::Ultra { num, den } => *num == I512::from_i128(1) && *den == I512::from_i128(1),
             #[cfg(feature = "infinite-precision")]
             RationalStorage::Infinite { num, den } => num == &BigInt::from(1) && den == &BigInt::from(1),
         }
@@ -2345,6 +2340,31 @@ fn gcd_i1024(a: I1024, b: I1024) -> I1024 {
 
 #[cfg(test)]
 mod tests {
+    /// The I256 and I512 tiers convert to BigInt exactly (the conversion took
+    /// the low 128 bits, so a tier-7 operand promoted to tier 8 changed value).
+    #[cfg(feature = "infinite-precision")]
+    #[test]
+    fn wide_tiers_convert_to_bigint_exactly() {
+        use super::*;
+        let big = (I512::from_i128(1) << 300usize) + I512::from_i128(1);
+        let r = RationalNumber::from_i512_pair(-big, I512::from_i128(3));
+        let want = -((BigInt::from(1) << 300usize) + BigInt::from(1));
+        assert_eq!(r.numerator(), want);
+        assert_eq!(r.denominator(), BigInt::from(3));
+        assert_eq!(r.extract_exact_rational(), (want.clone(), BigInt::from(3)));
+        assert_eq!(format!("{}", r), format!("{}/3", want));
+        // a denominator whose low 128 bits are 1 is not an integer
+        let odd = RationalNumber::from_i512_pair(I512::from_i128(5), (I512::from_i128(1) << 300usize) + I512::from_i128(1));
+        assert!(!odd.is_integer());
+        assert!(!RationalNumber::from_i512_pair((I512::from_i128(1) << 300usize) + I512::from_i128(1), I512::from_i128(1)).is_one());
+        #[cfg(not(feature = "embedded"))]
+        {
+            let b256 = (I256::from_i128(1) << 200usize) - I256::from_i128(7);
+            let r = RationalNumber::from_i256_pair(b256, b256 + I256::from_i128(2));
+            assert_eq!(r.numerator(), (BigInt::from(1) << 200usize) - BigInt::from(7));
+            assert_eq!(r.denominator(), (BigInt::from(1) << 200usize) - BigInt::from(5));
+        }
+    }
     use super::*;
     
     #[test]

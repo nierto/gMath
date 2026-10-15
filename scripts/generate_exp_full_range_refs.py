@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""mpmath references for the exp family of the binary formats across the
+whole output range: the correctly rounded storage raw (nearest, ties toward
++infinity, the crate's binary rule) of exp, sinh, cosh, tanh and pow at
+arguments whose results reach the top of each format's range.
+
+The earlier gates used small arguments; the compute tiers' engines carry an
+error relative to the result, so a result near the top of the range has the
+least margin. Writes tests/data/exp_full_range_refs.rs: one table per format
+and a `refs` facade that selects by the including module's BITS and FRAC_BITS.
+"""
+import os, random
+from mpmath import mp, mpf, exp, sinh, cosh, tanh, log, floor, sqrt, sin, cos, tan, atan, atan2, asin, acos, asinh, acosh, atanh
+
+mp.dps = 500
+SEED = int(os.environ.get("SEED", "20261014"))
+FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256)]
+PER_FN = int(os.environ.get("PER_FN", "160"))
+
+
+def nearest_raw(v, f):
+    s = v * (mpf(2) ** f)
+    fl = floor(s)
+    frac = s - fl
+    n = int(fl)
+    if frac >= mpf("0.5"):
+        n += 1
+    return n
+
+
+def fits(raw, w):
+    return -(1 << (w - 1)) <= raw <= (1 << (w - 1)) - 1
+
+
+def arg_raw(rng, lo, hi, f):
+    """A raw argument uniform in [lo, hi] (values), exact at the format."""
+    a = int(lo * (2 ** f)); b = int(hi * (2 ** f))
+    return rng.randint(min(a, b), max(a, b))
+
+
+def corpus(w, f, rng):
+    top = (w - f - 1) * log(mpf(2)) * mpf("0.9999")      # ln of the storage maximum
+    rows = []
+    def add(name, xs, fn, extra=None):
+        for xr in xs:
+            x = mpf(xr) / (mpf(2) ** f)
+            if extra is None:
+                v = fn(x)
+                rr = nearest_raw(v, f)
+                if fits(rr, w):
+                    rows.append((name, str(xr), "0", str(rr)))
+            else:
+                yr = extra(xr)
+                y = mpf(yr) / (mpf(2) ** f)
+                v = fn(x, y)
+                rr = nearest_raw(v, f)
+                if fits(rr, w):
+                    rows.append((name, str(xr), str(yr), str(rr)))
+    # exp: half the corpus in the top quarter of the argument range, the rest spread
+    xs = [arg_raw(rng, top * 0.75, top, f) for _ in range(PER_FN // 2)] + [arg_raw(rng, -top, top, f) for _ in range(PER_FN // 2)]
+    add("exp", xs, exp)
+    top_h = top + log(mpf(2)) * mpf("0.999")               # sinh/cosh reach the max at ln(2 max)
+    xs = [arg_raw(rng, top_h * 0.75, top_h, f) * rng.choice([1, -1]) for _ in range(PER_FN // 2)] + [arg_raw(rng, -top_h, top_h, f) for _ in range(PER_FN // 2)]
+    add("sinh", xs, sinh)
+    add("cosh", xs, cosh)
+    xs = [arg_raw(rng, -min(top, 40), min(top, 40), f) for _ in range(PER_FN)]
+    add("tanh", xs, tanh)
+    # pow(b, y) = exp(y ln b): bases in [1.25, 16], exponents taking the result to the top
+    def base(_):
+        return arg_raw(rng, mpf("1.25"), mpf(16) if w - f - 1 > 6 else mpf(3), f)
+    bs = [base(i) for i in range(PER_FN)]
+    def expo(br):
+        b = mpf(br) / (mpf(2) ** f)
+        ymax = top / log(b)
+        return arg_raw(rng, ymax * 0.6, ymax, f)
+    add("pow", bs, lambda x, y: x ** y, extra=expo)
+    # the rest of the transcendentals across their whole domain
+    vmax = mpf(2) ** (w - f - 1) * mpf("0.999")
+    def logspace(lo_bits, hi_bits, n, sign=False):
+        out = []
+        for _ in range(n):
+            e = rng.uniform(lo_bits, hi_bits)
+            v = mpf(2) ** e
+            r = int(v * (mpf(2) ** f))
+            if r < 1: r = 1
+            if sign and rng.random() < 0.5: r = -r
+            out.append(r)
+        return out
+    ib = w - f - 1                                         # integer bits of the format
+    add("ln", logspace(-f, ib - 0.01, PER_FN), log)
+    add("sqrt", logspace(-f, ib - 0.01, PER_FN), sqrt)
+    add("sin", logspace(-f + 4, ib - 0.01, PER_FN, sign=True), sin)
+    add("cos", logspace(-f + 4, ib - 0.01, PER_FN, sign=True), cos)
+    add("tan", logspace(-f + 4, ib - 0.01, PER_FN, sign=True), tan)
+    add("atan", logspace(-f, ib - 0.01, PER_FN, sign=True), atan)
+    unit = [rng.randint(-(1 << f), 1 << f) for _ in range(PER_FN // 2)]
+    near = [rng.choice([1, -1]) * ((1 << f) - rng.randint(0, 1 << max(0, f // 2))) for _ in range(PER_FN // 2)]
+    add("asin", unit + near, asin)
+    add("acos", unit + near, acos)
+    add("asinh", logspace(-f, ib - 0.01, PER_FN, sign=True), asinh)
+    add("acosh", [r for r in logspace(0, ib - 0.01, PER_FN) if r >= (1 << f)], acosh)
+    inner = [rng.randint(-(1 << f) + 1, (1 << f) - 1) for _ in range(PER_FN // 2)]
+    edge = [rng.choice([1, -1]) * ((1 << f) - rng.randint(1, 1 << max(1, f // 2))) for _ in range(PER_FN // 2)]
+    add("atanh", inner + edge, atanh)
+    ys = logspace(-f, ib - 0.01, PER_FN, sign=True)
+    add("atan2", ys, lambda yv, xv: atan2(yv, xv), extra=lambda yr: logspace(-f, ib - 0.01, 1, sign=True)[0])
+    return rows
+
+
+def main():
+    rng = random.Random(SEED)
+    out = ["// GENERATED by scripts/generate_exp_full_range_refs.py (mpmath, 400 digits). Do not edit.",
+           "// (function, x_raw, y_raw (pow only, else 0), expected_raw): the expected raw is the",
+           "// nearest storage value of the exact result, ties toward +infinity.", ""]
+    names = []
+    for w, f in FORMATS:
+        rows = corpus(w, f, rng)
+        name = f"REFS_Q{w - f}_{f}"
+        names.append((w, f, name))
+        out.append(f"/// Q{w - f}.{f} on the {w}-bit word: {len(rows)} cases.")
+        out.append(f"pub const {name}: &[(&str, &str, &str, &str)] = &[")
+        for fn, x, y, r in rows:
+            out.append(f'    ("{fn}", "{x}", "{y}", "{r}"),')
+        out.append("];")
+        out.append("")
+    out.append("/// The table of the including module's format (it defines BITS and FRAC_BITS).")
+    arms = " ".join(f"({w}, {f}) => {n}," for w, f, n in names)
+    out.append(f"pub const REFS: &[(&str, &str, &str, &str)] = match (BITS, FRAC_BITS) {{ {arms} _ => &[] }};")
+    path = os.path.join(os.path.dirname(__file__), "..", "tests", "data", "exp_full_range_refs.rs")
+    with open(path, "w") as fh:
+        fh.write("\n".join(out) + "\n")
+    print("wrote", os.path.normpath(path), sum(1 for l in out if l.startswith('    ("')), "cases")
+
+
+if __name__ == "__main__":
+    main()

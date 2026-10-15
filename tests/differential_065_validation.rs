@@ -236,11 +236,50 @@ struct Tally {
     values: usize,
     errors: usize,
     panics: usize,
+    /// Differences where 0.6.7 was not correctly rounded and the new crate
+    /// equals the sure path (transcendentals), or where a composition moved
+    /// by at most `NEAR_UNITS` because a transcendental inside it now rounds
+    /// correctly (geometry). Every other difference fails the gate.
+    corrected: usize,
+    worst: u128,
+}
+
+/// The largest move of a geometric composition allowed when the
+/// transcendentals inside it became correctly rounded.
+const NEAR_UNITS: u128 = 4;
+
+/// Distance in storage units between two results.
+trait Units {
+    fn units(&self, other: &Self) -> u128;
+}
+impl Units for Raw {
+    fn units(&self, other: &Self) -> u128 {
+        let d = match self.checked_sub_wide(*other) { Some(d) => d, None => return u128::MAX };
+        let m = if d.is_negative() { -d } else { d };
+        let n = m.bit_length();
+        if n > 127 { return u128::MAX; }
+        (0..n).fold(0u128, |acc, k| if m.bit(k) { acc | (1u128 << k) } else { acc })
+    }
+}
+impl Units for usize {
+    fn units(&self, other: &Self) -> u128 { if self == other { 0 } else { u128::MAX } }
+}
+impl<A: Units, B: Units> Units for (A, B) {
+    fn units(&self, other: &Self) -> u128 { self.0.units(&other.0).max(self.1.units(&other.1)) }
+}
+impl<A: Units, B: Units, C: Units> Units for (A, B, C) {
+    fn units(&self, other: &Self) -> u128 { self.0.units(&other.0).max(self.1.units(&other.1)).max(self.2.units(&other.2)) }
+}
+impl<T: Units> Units for Vec<T> {
+    fn units(&self, other: &Self) -> u128 {
+        if self.len() != other.len() { return u128::MAX; }
+        self.iter().zip(other).map(|(a, b)| a.units(b)).max().unwrap_or(0)
+    }
 }
 
 impl Tally {
     fn new(name: &'static str) -> Self {
-        Tally { name, cases: 0, values: 0, errors: 0, panics: 0 }
+        Tally { name, cases: 0, values: 0, errors: 0, panics: 0, corrected: 0, worst: 0 }
     }
     fn check<T: PartialEq + std::fmt::Debug>(&mut self, old: Outcome<T>, new: Outcome<T>, input: &dyn std::fmt::Debug) {
         assert_eq!(old, new, "{} differs from 0.6.5 on input {:?}", self.name, input);
@@ -253,9 +292,59 @@ impl Tally {
     }
     fn report(&self) {
         println!(
-            "{:<22} {:>6} cases: {:>6} values, {:>5} errors, {:>5} panics, 0 differences",
-            self.name, self.cases, self.values, self.errors, self.panics
+            "{:<22} {:>6} cases: {:>6} values, {:>5} errors, {:>5} panics, {} corrected (worst {} units), 0 other differences",
+            self.name, self.cases, self.values, self.errors, self.panics, self.corrected, self.worst
         );
+    }
+    /// As `check`, where the new crate may differ from 0.6.7 only by being
+    /// the correctly rounded value the sure path computes (`oracle`, `None`
+    /// where the result does not exist or leaves storage).
+    /// Raw compute-tier words (compared as their Debug text): a difference
+    /// passes only when every new component is no farther from the exact
+    /// value (`Mpf` at 1088 bits) than the 0.6.7 one, and counts as corrected.
+    fn check_closer(&mut self, old: Outcome<String>, new: Outcome<String>, frac: u32, exact: impl FnOnce() -> Vec<ExactValue>, input: &dyn std::fmt::Debug) {
+        if old == new { return self.check(old, new, input); }
+        let (Outcome::Value(o), Outcome::Value(n)) = (&old, &new) else {
+            panic!("{} differs from 0.6.7 on input {:?} in kind: old {:?}, new {:?}", self.name, input, old, new);
+        };
+        let (ov, nv, ev) = (debug_words(o), debug_words(n), exact());
+        assert!(ov.len() == ev.len() && nv.len() == ev.len(), "{}: component counts", self.name);
+        for ((ow, nw), e) in ov.iter().zip(&nv).zip(&ev) {
+            let e = match e { Ok(e) => *e, Err(_) => continue };
+            let dist = |w: &I1024| Mpf::<C17>::from_raw(*w, frac).sub(e).abs();
+            let worse = dist(ow).sub(dist(nw)).is_negative();
+            assert!(!worse, "{} differs from 0.6.7 on input {:?} and is farther from the exact value: old {}, new {}", self.name, input, o, n);
+        }
+        self.cases += 1;
+        self.corrected += 1;
+        self.values += 1;
+    }
+
+    fn check_oracle<T: PartialEq + std::fmt::Debug + Units>(&mut self, old: Outcome<T>, new: Outcome<T>, oracle: impl FnOnce() -> Option<T>, input: &dyn std::fmt::Debug) {
+        if old == new { return self.check(old, new, input); }
+        let want = oracle();
+        let ok = match (&new, &want) {
+            (Outcome::Value(v), Some(w)) => *v == *w,
+            (Outcome::Value(_), None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        };
+        assert!(ok, "{} differs from 0.6.7 on input {:?} and is not the correctly rounded value: old {:?}, new {:?}, sure {:?}", self.name, input, old, new, want);
+        if let (Outcome::Value(o), Outcome::Value(n)) = (&old, &new) { self.worst = self.worst.max(o.units(n)); }
+        self.cases += 1;
+        self.corrected += 1;
+        if let Outcome::Value(_) = new { self.values += 1 } else { self.errors += 1 }
+    }
+    /// As `check`, where a geometric composition may move by at most
+    /// `NEAR_UNITS` (a transcendental inside it now rounds correctly).
+    fn check_near<T: PartialEq + std::fmt::Debug + Units>(&mut self, old: Outcome<T>, new: Outcome<T>, input: &dyn std::fmt::Debug) {
+        if old == new { return self.check(old, new, input); }
+        let u = match (&old, &new) { (Outcome::Value(o), Outcome::Value(n)) => o.units(n), _ => u128::MAX };
+        assert!(u <= NEAR_UNITS, "{} differs from 0.6.7 by {} units on input {:?}: old {:?}, new {:?}", self.name, u, input, old, new);
+        self.worst = self.worst.max(u);
+        self.cases += 1;
+        self.corrected += 1;
+        self.values += 1;
     }
     /// As `report`, for inputs chosen inside the function's domain: a gate
     /// that only ever compared errors or panics would prove nothing.
@@ -280,17 +369,46 @@ fn silence_panics() {
 
 // ---- the gates ----------------------------------------------------------------
 
+/// The correctly rounded value of a unary function at the new crate's
+/// format, from the sure path (`None` outside the domain or the word).
+fn oracle(name: &str, r: Raw) -> Option<Raw> {
+    use g_math::fixed_point::domains::binary_fixed::transcendental::sure;
+    let f = FRAC;
+    let one: Raw = <Raw as WideInt>::one().shl_bits(f);
+    // |v|, with the word's minimum (no magnitude) mapped to the maximum
+    let mag = |v: Raw| if v.is_negative() { v.checked_neg_wide().unwrap_or(<Raw as WideInt>::one().shl_bits(<Raw as WideInt>::BITS - 2)) } else { v };
+    match name {
+        "exp" => sure::exp_raw_to_raw(r, f),
+        "sinh" => sure::sinh_cosh_to_raw(r, f, false),
+        "cosh" => sure::sinh_cosh_to_raw(r, f, true),
+        "tanh" => sure::tanh_to_raw(r, f),
+        "sin" => sure::sin_cos_to_raw(r, f, false),
+        "cos" => sure::sin_cos_to_raw(r, f, true),
+        "tan" => sure::tan_to_raw(r, f),
+        "atan" => sure::atan_to_raw(r, f),
+        "asinh" => sure::asinh_to_raw(r, f),
+        "ln" => sure::ln_to_raw(r, f),
+        "sqrt" => sure::sqrt_to_raw(r, f),
+        "asin" => if mag(r) > one { None } else { sure::asin_acos_to_raw(r, f, false) },
+        "acos" => if mag(r) > one { None } else { sure::asin_acos_to_raw(r, f, true) },
+        "atanh" => if !(mag(r) < one) { None } else { sure::atanh_to_raw(r, f) },
+        "acosh" => sure::acosh_to_raw(r, f),
+        _ => None,
+    }
+}
+
 macro_rules! unary_gate {
     ($t:ident, $report:ident, $inputs:expr; $($name:literal => $try_m:ident / $m:ident),+ $(,)?) => {$(
         let mut tally = Tally::new($name);
         let mut infallible = Tally::new(concat!($name, " (panicking)"));
         for &r in $inputs.iter() {
-            tally.check(
+            tally.check_oracle(
                 fallible(|| raw::old(r).$try_m().map(raw::old_raw)),
                 fallible(|| raw::new(r).$try_m().map(raw::new_raw)),
+                || oracle($name, r),
                 &r,
             );
-            infallible.check(value(|| raw::old_raw(raw::old(r).$m())), value(|| raw::new_raw(raw::new(r).$m())), &r);
+            infallible.check_oracle(value(|| raw::old_raw(raw::old(r).$m())), value(|| raw::new_raw(raw::new(r).$m())), || oracle($name, r), &r);
         }
         tally.$report();
         infallible.$report();
@@ -421,12 +539,22 @@ fn conversions_are_bit_identical_to_0_6_5() {
         }
         parse.check(fallible(|| Old::try_from_str(&s).map(raw::old_raw)), fallible(|| New::try_from_str(&s).map(raw::new_raw)), &s);
     }
+    // named constants: a difference must be the correctly rounded constant,
+    // its 120 mpmath digits through the exact decimal parser (0.6.7's sqrt 2
+    // carried 253 bits, 9 units off at Q256.256)
+    let digits = |name: &str| -> Option<&'static str> { match name {
+        "pi" => Some("3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117067982148086513282306647"),
+        "e" => Some("2.718281828459045235360287471352662497757247093699959574966967627724076630353547594571382178525166427427466391932003059922"),
+        "sqrt2" => Some("1.414213562373095048801688724209698078569671875376948073176679737990732478462107038850387534327641572735013846230912297025"),
+        _ => None,
+    } };
     for literal in ["pi", "1/3", "0x1F", "0b101", "0t12", "0.3...", "", " ", "abc", "1e", "--1", "e", "sqrt2"] {
-        parse.check(
-            fallible(|| Old::try_from_str(literal).map(raw::old_raw)),
-            fallible(|| New::try_from_str(literal).map(raw::new_raw)),
-            &literal,
-        );
+        let old = fallible(|| Old::try_from_str(literal).map(raw::old_raw));
+        let new = fallible(|| New::try_from_str(literal).map(raw::new_raw));
+        match digits(literal) {
+            Some(d) => parse.check_oracle(old, new, || New::try_from_str(d).ok().map(raw::new_raw), &literal),
+            None => parse.check(old, new, &literal),
+        }
     }
     for t in [&to_int, &to_float, &display, &from_int, &from_float, &parse] {
         t.report();
@@ -503,17 +631,20 @@ fn transcendentals_are_bit_identical_to_0_6_5() {
     let ys = inputs(0x7EA_0003, n, FRAC + 2);
     for (&x, &y) in near.iter().zip(ys.iter()) {
         let (ox, oy, nx, ny) = (raw::old(x), raw::old(y), raw::new(x), raw::new(y));
-        sincos.check(
+        sincos.check_oracle(
             fallible(|| ox.try_sincos().map(|(s, c)| (raw::old_raw(s), raw::old_raw(c)))),
             fallible(|| nx.try_sincos().map(|(s, c)| (raw::new_raw(s), raw::new_raw(c)))),
+            || Some((oracle("sin", x)?, oracle("cos", x)?)),
             &x,
         );
-        sinhcosh.check(
+        sinhcosh.check_oracle(
             fallible(|| ox.try_sinhcosh().map(|(s, c)| (raw::old_raw(s), raw::old_raw(c)))),
             fallible(|| nx.try_sinhcosh().map(|(s, c)| (raw::new_raw(s), raw::new_raw(c)))),
+            || Some((oracle("sinh", x)?, oracle("cosh", x)?)),
             &x,
         );
-        pow.check(fallible(|| ox.try_pow(oy).map(raw::old_raw)), fallible(|| nx.try_pow(ny).map(raw::new_raw)), &(x, y));
+        let pow_oracle = || if x > <Raw as WideInt>::ZERO { g_math::fixed_point::domains::binary_fixed::transcendental::sure::pow_to_raw(x, y, FRAC) } else { None };
+        pow.check_oracle(fallible(|| ox.try_pow(oy).map(raw::old_raw)), fallible(|| nx.try_pow(ny).map(raw::new_raw)), pow_oracle, &(x, y));
         // pow with a non-positive base: ln's sentinel times the exponent
         // overflows the compute tier and `pow` panics on every profile. On
         // Q256.256 the published crate's I2048 fits check read the wrong sign
@@ -532,10 +663,11 @@ fn transcendentals_are_bit_identical_to_0_6_5() {
         if wrapped_in_published {
             pow.check(Outcome::Panic, new_pow, &(x, y));
         } else {
-            pow.check(old_pow, new_pow, &(x, y));
+            pow.check_oracle(old_pow, new_pow, pow_oracle, &(x, y));
         }
-        atan2.check(fallible(|| oy.try_atan2(ox).map(raw::old_raw)), fallible(|| ny.try_atan2(nx).map(raw::new_raw)), &(y, x));
-        atan2.check(value(|| raw::old_raw(oy.atan2(ox))), value(|| raw::new_raw(ny.atan2(nx))), &(y, x));
+        let atan2_oracle = || g_math::fixed_point::domains::binary_fixed::transcendental::sure::atan2_to_raw(y, x, FRAC);
+        atan2.check_oracle(fallible(|| oy.try_atan2(ox).map(raw::old_raw)), fallible(|| ny.try_atan2(nx).map(raw::new_raw)), atan2_oracle, &(y, x));
+        atan2.check_oracle(value(|| raw::old_raw(oy.atan2(ox))), value(|| raw::new_raw(ny.atan2(nx))), atan2_oracle, &(y, x));
     }
     for t in [&sincos, &sinhcosh, &pow, &atan2] {
         t.report();
@@ -821,12 +953,12 @@ fn geometry_is_bit_identical_to_0_6_5() {
         let (np, nq) = (unit_new(new_vec(&a)), unit_new(new_vec(&b)));
         let s_o = o_::Sphere { dim: 2 };
         let s_n = n_::Sphere { dim: 2 };
-        sph.check(fallible(|| s_o.distance(&op, &oq).map(raw::old_raw)), fallible(|| s_n.distance(&np, &nq).map(raw::new_raw)), &(&a, &b));
-        sph.check(fallible(|| s_o.log_map(&op, &oq).map(|v| old_raws(&v))), fallible(|| s_n.log_map(&np, &nq).map(|v| new_raws(&v))), &(&a, &b));
+        sph.check_near(fallible(|| s_o.distance(&op, &oq).map(raw::old_raw)), fallible(|| s_n.distance(&np, &nq).map(raw::new_raw)), &(&a, &b));
+        sph.check_near(fallible(|| s_o.log_map(&op, &oq).map(|v| old_raws(&v))), fallible(|| s_n.log_map(&np, &nq).map(|v| new_raws(&v))), &(&a, &b));
         let (ot, nt) = (o_::Manifold::log_map(&s_o, &op, &oq), n_::Manifold::log_map(&s_n, &np, &nq));
         if let (Ok(ot), Ok(nt)) = (ot, nt) {
-            sph.check(fallible(|| s_o.exp_map(&op, &ot).map(|v| old_raws(&v))), fallible(|| s_n.exp_map(&np, &nt).map(|v| new_raws(&v))), &(&a, &b));
-            sph.check(fallible(|| s_o.parallel_transport(&op, &oq, &ot).map(|v| old_raws(&v))), fallible(|| s_n.parallel_transport(&np, &nq, &nt).map(|v| new_raws(&v))), &(&a, &b));
+            sph.check_near(fallible(|| s_o.exp_map(&op, &ot).map(|v| old_raws(&v))), fallible(|| s_n.exp_map(&np, &nt).map(|v| new_raws(&v))), &(&a, &b));
+            sph.check_near(fallible(|| s_o.parallel_transport(&op, &oq, &ot).map(|v| old_raws(&v))), fallible(|| s_n.parallel_transport(&np, &nq, &nt).map(|v| new_raws(&v))), &(&a, &b));
         }
         // hyperboloid H^2: x0 = sqrt(1 + x1^2 + x2^2)
         let (a, b) = (small(&mut rng, 2, FRAC - 1), small(&mut rng, 2, FRAC - 1));
@@ -835,10 +967,10 @@ fn geometry_is_bit_identical_to_0_6_5() {
         let (op, oq, np, nq) = (lift_old(&a), lift_old(&b), lift_new(&a), lift_new(&b));
         let h_o = o_::HyperbolicSpace { dim: 2 };
         let h_n = n_::HyperbolicSpace { dim: 2 };
-        hyp.check(fallible(|| h_o.distance(&op, &oq).map(raw::old_raw)), fallible(|| h_n.distance(&np, &nq).map(raw::new_raw)), &(&a, &b));
-        hyp.check(fallible(|| h_o.log_map(&op, &oq).map(|v| old_raws(&v))), fallible(|| h_n.log_map(&np, &nq).map(|v| new_raws(&v))), &(&a, &b));
+        hyp.check_near(fallible(|| h_o.distance(&op, &oq).map(raw::old_raw)), fallible(|| h_n.distance(&np, &nq).map(raw::new_raw)), &(&a, &b));
+        hyp.check_near(fallible(|| h_o.log_map(&op, &oq).map(|v| old_raws(&v))), fallible(|| h_n.log_map(&np, &nq).map(|v| new_raws(&v))), &(&a, &b));
         if let (Ok(ot), Ok(nt)) = (h_o.log_map(&op, &oq), h_n.log_map(&np, &nq)) {
-            hyp.check(fallible(|| h_o.exp_map(&op, &ot).map(|v| old_raws(&v))), fallible(|| h_n.exp_map(&np, &nt).map(|v| new_raws(&v))), &(&a, &b));
+            hyp.check_near(fallible(|| h_o.exp_map(&op, &ot).map(|v| old_raws(&v))), fallible(|| h_n.exp_map(&np, &nt).map(|v| new_raws(&v))), &(&a, &b));
         }
         // SPD(2): M^T M + I, tangents symmetric
         let (m, w) = (small(&mut rng, 4, FRAC - 1), small(&mut rng, 4, FRAC - 2));
@@ -852,24 +984,24 @@ fn geometry_is_bit_identical_to_0_6_5() {
         let (npv, nqv, ntv) = (new_vec(&new_mraws(&np)), new_vec(&new_mraws(&nq)), new_vec(&sv));
         let p_o = o_::SPDManifold { n: 2 };
         let p_n = n_::SPDManifold { n: 2 };
-        spd.check(fallible(|| p_o.distance(&opv, &oqv).map(raw::old_raw)), fallible(|| p_n.distance(&npv, &nqv).map(raw::new_raw)), &(&m, &w));
-        spd.check(fallible(|| p_o.exp_map(&opv, &otv).map(|v| old_raws(&v))), fallible(|| p_n.exp_map(&npv, &ntv).map(|v| new_raws(&v))), &(&m, &w));
-        spd.check(fallible(|| p_o.log_map(&opv, &oqv).map(|v| old_raws(&v))), fallible(|| p_n.log_map(&npv, &nqv).map(|v| new_raws(&v))), &(&m, &w));
+        spd.check_near(fallible(|| p_o.distance(&opv, &oqv).map(raw::old_raw)), fallible(|| p_n.distance(&npv, &nqv).map(raw::new_raw)), &(&m, &w));
+        spd.check_near(fallible(|| p_o.exp_map(&opv, &otv).map(|v| old_raws(&v))), fallible(|| p_n.exp_map(&npv, &ntv).map(|v| new_raws(&v))), &(&m, &w));
+        spd.check_near(fallible(|| p_o.log_map(&opv, &oqv).map(|v| old_raws(&v))), fallible(|| p_n.log_map(&npv, &nqv).map(|v| new_raws(&v))), &(&m, &w));
         // SO(3), SE(3), SO(n)
         let xi = small(&mut rng, 3, FRAC);
         let (oxi, nxi) = (old_vec(&xi), new_vec(&xi));
-        so3.check(fallible(|| o_::SO3.lie_exp(&oxi).map(|g| old_mraws(&g))), fallible(|| n_::SO3.lie_exp(&nxi).map(|g| new_mraws(&g))), &xi);
+        so3.check_near(fallible(|| o_::SO3.lie_exp(&oxi).map(|g| old_mraws(&g))), fallible(|| n_::SO3.lie_exp(&nxi).map(|g| new_mraws(&g))), &xi);
         if let (Ok(og), Ok(ng)) = (o_::SO3.lie_exp(&oxi), n_::SO3.lie_exp(&nxi)) {
-            so3.check(fallible(|| o_::SO3.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SO3.lie_log(&ng).map(|v| new_raws(&v))), &xi);
-            so3.check(fallible(|| o_::SO3.adjoint(&og, &oxi).map(|v| old_raws(&v))), fallible(|| n_::SO3.adjoint(&ng, &nxi).map(|v| new_raws(&v))), &xi);
-            son.check(fallible(|| o_::SOn { n: 3 }.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SOn { n: 3 }.lie_log(&ng).map(|v| new_raws(&v))), &xi);
+            so3.check_near(fallible(|| o_::SO3.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SO3.lie_log(&ng).map(|v| new_raws(&v))), &xi);
+            so3.check_near(fallible(|| o_::SO3.adjoint(&og, &oxi).map(|v| old_raws(&v))), fallible(|| n_::SO3.adjoint(&ng, &nxi).map(|v| new_raws(&v))), &xi);
+            son.check_near(fallible(|| o_::SOn { n: 3 }.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SOn { n: 3 }.lie_log(&ng).map(|v| new_raws(&v))), &xi);
         }
-        son.check(fallible(|| o_::SOn { n: 3 }.lie_exp(&oxi).map(|g| old_mraws(&g))), fallible(|| n_::SOn { n: 3 }.lie_exp(&nxi).map(|g| new_mraws(&g))), &xi);
+        son.check_near(fallible(|| o_::SOn { n: 3 }.lie_exp(&oxi).map(|g| old_mraws(&g))), fallible(|| n_::SOn { n: 3 }.lie_exp(&nxi).map(|g| new_mraws(&g))), &xi);
         let xi6 = small(&mut rng, 6, FRAC);
         let (oxi6, nxi6) = (old_vec(&xi6), new_vec(&xi6));
-        se3.check(fallible(|| o_::SE3.lie_exp(&oxi6).map(|g| old_mraws(&g))), fallible(|| n_::SE3.lie_exp(&nxi6).map(|g| new_mraws(&g))), &xi6);
+        se3.check_near(fallible(|| o_::SE3.lie_exp(&oxi6).map(|g| old_mraws(&g))), fallible(|| n_::SE3.lie_exp(&nxi6).map(|g| new_mraws(&g))), &xi6);
         if let (Ok(og), Ok(ng)) = (o_::SE3.lie_exp(&oxi6), n_::SE3.lie_exp(&nxi6)) {
-            se3.check(fallible(|| o_::SE3.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SE3.lie_log(&ng).map(|v| new_raws(&v))), &xi6);
+            se3.check_near(fallible(|| o_::SE3.lie_log(&og).map(|v| old_raws(&v))), fallible(|| n_::SE3.lie_log(&ng).map(|v| new_raws(&v))), &xi6);
         }
         // curvature on the round sphere (radius in (1, 2)) and the hyperbolic plane
         let r = rng.raw(FRAC - 1);
@@ -879,27 +1011,27 @@ fn geometry_is_bit_identical_to_0_6_5() {
             NewVector::from_slice(&[raw::new(ang[0]).abs_or_self() + New::one() / New::from_int(2), raw::new(ang[1])]),
         );
         let (sm_o, sm_n) = (o_::SphereMetric { radius: Old::one() + raw::old(r).abs_or_self() }, n_::SphereMetric { radius: New::one() + raw::new(r).abs_or_self() });
-        curv.check(fallible(|| o_::christoffel(&sm_o, &otp).map(|t| old_traws(&t))), fallible(|| n_::christoffel(&sm_n, &ntp).map(|t| new_traws(&t))), &(r, &ang));
-        curv.check(fallible(|| o_::riemann_curvature(&sm_o, &otp).map(|t| old_traws(&t))), fallible(|| n_::riemann_curvature(&sm_n, &ntp).map(|t| new_traws(&t))), &(r, &ang));
-        curv.check(fallible(|| o_::scalar_curvature(&sm_o, &otp).map(raw::old_raw)), fallible(|| n_::scalar_curvature(&sm_n, &ntp).map(raw::new_raw)), &(r, &ang));
+        curv.check_near(fallible(|| o_::christoffel(&sm_o, &otp).map(|t| old_traws(&t))), fallible(|| n_::christoffel(&sm_n, &ntp).map(|t| new_traws(&t))), &(r, &ang));
+        curv.check_near(fallible(|| o_::riemann_curvature(&sm_o, &otp).map(|t| old_traws(&t))), fallible(|| n_::riemann_curvature(&sm_n, &ntp).map(|t| new_traws(&t))), &(r, &ang));
+        curv.check_near(fallible(|| o_::scalar_curvature(&sm_o, &otp).map(raw::old_raw)), fallible(|| n_::scalar_curvature(&sm_n, &ntp).map(raw::new_raw)), &(r, &ang));
         let (ohp, nhp) = (OldVector::from_slice(&[raw::old(ang[0]), raw::old(ang[1])]), NewVector::from_slice(&[raw::new(ang[0]), raw::new(ang[1])]));
-        curv.check(fallible(|| o_::scalar_curvature(&o_::HyperbolicMetric, &ohp).map(raw::old_raw)), fallible(|| n_::scalar_curvature(&n_::HyperbolicMetric, &nhp).map(raw::new_raw)), &ang);
+        curv.check_near(fallible(|| o_::scalar_curvature(&o_::HyperbolicMetric, &ohp).map(raw::old_raw)), fallible(|| n_::scalar_curvature(&n_::HyperbolicMetric, &nhp).map(raw::new_raw)), &ang);
         // ODE: one RK4 step and a short RK45 run of the oscillator, Verlet
         let x = small(&mut rng, 2, FRAC);
         let h = rng.raw(FRAC - 3);
         let (ox, nx, oh, nh) = (old_vec(&x), new_vec(&x), raw::old(h).abs_or_self(), raw::new(h).abs_or_self());
         let osc_o = o_::ode_fn(|_t: Old, x: &OldVector| OldVector::from_slice(&[x[1], -x[0]]));
         let osc_n = n_::ode_fn(|_t: New, x: &NewVector| NewVector::from_slice(&[x[1], -x[0]]));
-        ode.check(value(|| old_raws(&o_::rk4_step(&osc_o, Old::ZERO, &ox, oh))), value(|| new_raws(&n_::rk4_step(&osc_n, New::ZERO, &nx, nh))), &(&x, h));
+        ode.check_near(value(|| old_raws(&o_::rk4_step(&osc_o, Old::ZERO, &ox, oh))), value(|| new_raws(&n_::rk4_step(&osc_n, New::ZERO, &nx, nh))), &(&x, h));
         let end_o = oh * Old::from_int(3);
         let end_n = nh * New::from_int(3);
-        ode.check(
+        ode.check_near(
             fallible(|| o_::rk45_integrate(&osc_o, &ox, Old::ZERO, end_o, &o_::Rk45Config::new(oh, oh)).map(|(pts, s)| (pts.iter().map(|p| (raw::old_raw(p.t), old_raws(&p.x))).collect::<Vec<_>>(), s))),
             fallible(|| n_::rk45_integrate(&osc_n, &nx, New::ZERO, end_n, &n_::Rk45Config::new(nh, nh)).map(|(pts, s)| (pts.iter().map(|p| (raw::new_raw(p.t), new_raws(&p.x))).collect::<Vec<_>>(), s))),
             &(&x, h),
         );
         let (oq, nq) = (old_vec(&x[..1]), new_vec(&x[..1]));
-        ode.check(
+        ode.check_near(
             value(|| o_::verlet_integrate(&Oscillator, &oq, &oq, Old::ZERO, end_o, oh).iter().map(|p| (old_raws(&p.q), old_raws(&p.p), raw::old_raw(p.energy))).collect::<Vec<_>>()),
             value(|| n_::verlet_integrate(&Oscillator, &nq, &nq, New::ZERO, end_n, nh).iter().map(|p| (new_raws(&p.q), new_raws(&p.p), raw::new_raw(p.energy))).collect::<Vec<_>>()),
             &(&x, h),
@@ -907,29 +1039,29 @@ fn geometry_is_bit_identical_to_0_6_5() {
         // projective: Moebius maps, the cross ratio, stereographic projection
         let c = small(&mut rng, 5, FRAC);
         let (mo, mn) = (o_::Moebius::new(raw::old(c[0]), raw::old(c[1]), raw::old(c[2]), raw::old(c[3])), n_::Moebius::new(raw::new(c[0]), raw::new(c[1]), raw::new(c[2]), raw::new(c[3])));
-        proj.check(fallible(|| mo.apply(raw::old(c[4])).map(raw::old_raw)), fallible(|| mn.apply(raw::new(c[4])).map(raw::new_raw)), &c);
-        proj.check(value(|| old_mraws(&mo.compose(&mo.inverse()).to_matrix())), value(|| new_mraws(&mn.compose(&mn.inverse()).to_matrix())), &c);
+        proj.check_near(fallible(|| mo.apply(raw::old(c[4])).map(raw::old_raw)), fallible(|| mn.apply(raw::new(c[4])).map(raw::new_raw)), &c);
+        proj.check_near(value(|| old_mraws(&mo.compose(&mo.inverse()).to_matrix())), value(|| new_mraws(&mn.compose(&mn.inverse()).to_matrix())), &c);
         let q4 = small(&mut rng, 4, FRAC + 1);
-        proj.check(
+        proj.check_near(
             fallible(|| o_::cross_ratio_1d(raw::old(q4[0]), raw::old(q4[1]), raw::old(q4[2]), raw::old(q4[3])).map(raw::old_raw)),
             fallible(|| n_::cross_ratio_1d(raw::new(q4[0]), raw::new(q4[1]), raw::new(q4[2]), raw::new(q4[3])).map(raw::new_raw)),
             &q4,
         );
         let (a3, b3) = (small(&mut rng, 3, FRAC), small(&mut rng, 2, FRAC));
         let (op3, np3) = (unit_old(old_vec(&a3)), unit_new(new_vec(&a3)));
-        proj.check(fallible(|| o_::stereo_project(&op3).map(|v| old_raws(&v))), fallible(|| n_::stereo_project(&np3).map(|v| new_raws(&v))), &a3);
-        proj.check(value(|| old_raws(&o_::stereo_unproject(&old_vec(&b3)))), value(|| new_raws(&n_::stereo_unproject(&new_vec(&b3)))), &b3);
-        proj.check(fallible(|| o_::from_homogeneous(&o_::to_homogeneous(&old_vec(&a3))).map(|v| old_raws(&v))), fallible(|| n_::from_homogeneous(&n_::to_homogeneous(&new_vec(&a3))).map(|v| new_raws(&v))), &a3);
+        proj.check_near(fallible(|| o_::stereo_project(&op3).map(|v| old_raws(&v))), fallible(|| n_::stereo_project(&np3).map(|v| new_raws(&v))), &a3);
+        proj.check_near(value(|| old_raws(&o_::stereo_unproject(&old_vec(&b3)))), value(|| new_raws(&n_::stereo_unproject(&new_vec(&b3)))), &b3);
+        proj.check_near(fallible(|| o_::from_homogeneous(&o_::to_homogeneous(&old_vec(&a3))).map(|v| old_raws(&v))), fallible(|| n_::from_homogeneous(&n_::to_homogeneous(&new_vec(&a3))).map(|v| new_raws(&v))), &a3);
         // tensors: contraction, trace, symmetrisation, the three decompositions
         let (ta, tb) = (small(&mut rng, 6, FRAC), small(&mut rng, 6, FRAC));
-        ten.check(value(|| old_traws(&o_::contract(&old_tensor(&[2, 3], &ta), &old_tensor(&[3, 2], &tb), &[(1, 0)]))), value(|| new_traws(&n_::contract(&new_tensor(&[2, 3], &ta), &new_tensor(&[3, 2], &tb), &[(1, 0)]))), &(&ta, &tb));
+        ten.check_near(value(|| old_traws(&o_::contract(&old_tensor(&[2, 3], &ta), &old_tensor(&[3, 2], &tb), &[(1, 0)]))), value(|| new_traws(&n_::contract(&new_tensor(&[2, 3], &ta), &new_tensor(&[3, 2], &tb), &[(1, 0)]))), &(&ta, &tb));
         let t8 = small(&mut rng, 8, FRAC);
-        ten.check(value(|| old_traws(&o_::trace(&old_tensor(&[2, 2, 2], &t8), 0, 2))), value(|| new_traws(&n_::trace(&new_tensor(&[2, 2, 2], &t8), 0, 2))), &t8);
-        ten.check(value(|| old_traws(&o_::symmetrize(&old_tensor(&[2, 2, 2], &t8), &[0, 1]))), value(|| new_traws(&n_::symmetrize(&new_tensor(&[2, 2, 2], &t8), &[0, 1]))), &t8);
+        ten.check_near(value(|| old_traws(&o_::trace(&old_tensor(&[2, 2, 2], &t8), 0, 2))), value(|| new_traws(&n_::trace(&new_tensor(&[2, 2, 2], &t8), 0, 2))), &t8);
+        ten.check_near(value(|| old_traws(&o_::symmetrize(&old_tensor(&[2, 2, 2], &t8), &[0, 1]))), value(|| new_traws(&n_::symmetrize(&new_tensor(&[2, 2, 2], &t8), &[0, 1]))), &t8);
         let m9 = small(&mut rng, 9, FRAC);
-        ten.check(fallible(|| o_::truncated_svd(&old_mat(3, 3, &m9), 2).map(|d| old_mraws(&d.reconstruct()))), fallible(|| n_::truncated_svd(&new_mat(3, 3, &m9), 2).map(|d| new_mraws(&d.reconstruct()))), &m9);
-        ten.check(fallible(|| o_::tucker_decompose(&old_tensor(&[2, 2, 2], &t8), &[2, 2, 2]).map(|d| old_traws(&d.reconstruct()))), fallible(|| n_::tucker_decompose(&new_tensor(&[2, 2, 2], &t8), &[2, 2, 2]).map(|d| new_traws(&d.reconstruct()))), &t8);
-        ten.check(
+        ten.check_near(fallible(|| o_::truncated_svd(&old_mat(3, 3, &m9), 2).map(|d| old_mraws(&d.reconstruct()))), fallible(|| n_::truncated_svd(&new_mat(3, 3, &m9), 2).map(|d| new_mraws(&d.reconstruct()))), &m9);
+        ten.check_near(fallible(|| o_::tucker_decompose(&old_tensor(&[2, 2, 2], &t8), &[2, 2, 2]).map(|d| old_traws(&d.reconstruct()))), fallible(|| n_::tucker_decompose(&new_tensor(&[2, 2, 2], &t8), &[2, 2, 2]).map(|d| new_traws(&d.reconstruct()))), &t8);
+        ten.check_near(
             fallible(|| o_::cp_decompose(&old_tensor(&[2, 2, 2], &t8), 2, 8, Old::ZERO).map(|d| old_traws(&d.reconstruct(&[2, 2, 2])))),
             fallible(|| n_::cp_decompose(&new_tensor(&[2, 2, 2], &t8), 2, 8, New::ZERO).map(|d| new_traws(&d.reconstruct(&[2, 2, 2])))),
             &t8,
@@ -941,7 +1073,7 @@ fn geometry_is_bit_identical_to_0_6_5() {
         let vb_o = o_::VectorBundle::with_connection(2, 2, coeffs.iter().map(|&r| raw::old(r)).collect());
         let vb_n = n_::VectorBundle::with_connection(2, 2, coeffs.iter().map(|&r| raw::new(r)).collect());
         let (opath, npath): (Vec<OldVector>, Vec<NewVector>) = (path.iter().map(|p| old_vec(p)).collect(), path.iter().map(|p| new_vec(p)).collect());
-        fib.check(fallible(|| vb_o.parallel_transport_along(&opath, &old_vec(&f0)).map(|v| old_raws(&v))), fallible(|| vb_n.parallel_transport_along(&npath, &new_vec(&f0)).map(|v| new_raws(&v))), &(&coeffs, &path, &f0));
+        fib.check_near(fallible(|| vb_o.parallel_transport_along(&opath, &old_vec(&f0)).map(|v| old_raws(&v))), fallible(|| vb_n.parallel_transport_along(&npath, &new_vec(&f0)).map(|v| new_raws(&v))), &(&coeffs, &path, &f0));
     }
     for t in [&sph, &hyp, &spd, &so3, &se3, &son, &curv, &ode, &proj, &ten, &fib] {
         t.report();
@@ -1010,18 +1142,46 @@ fn fused_and_compute_tier_are_bit_identical_to_0_6_5() {
         // compute tier (the compute words are different types per crate: compared as their Debug text)
         let x = rng.raw(FRAC + 3);
         let (ox, nx) = (oct::from_fixed(raw::old(x)), nct::from_fixed(raw::new(x)));
-        ct.check(value(|| format!("{:?}", oct::exp(ox))), value(|| format!("{:?}", nct::exp::<New>(nx))), &x);
-        ct.check(value(|| format!("{:?}", oct::sigmoid(ox))), value(|| format!("{:?}", nct::sigmoid::<New>(nx))), &x);
-        ct.check(value(|| format!("{:?}", oct::softplus(ox))), value(|| format!("{:?}", nct::softplus::<New>(nx))), &x);
-        ct.check(value(|| format!("{:?}", oct::sinhcosh(ox))), value(|| format!("{:?}", nct::sinhcosh::<New>(nx))), &x);
-        ct.check(value(|| format!("{:?}", oct::ln(ox))), value(|| format!("{:?}", nct::ln::<New>(nx))), &x);
-        ct.check(value(|| format!("{:?}", oct::sqrt(ox))), value(|| format!("{:?}", nct::sqrt::<New>(nx))), &x);
-        ct.check(value(|| format!("{:?}", oct::ln1p(ox))), value(|| format!("{:?}", nct::ln1p::<New>(nx))), &x);
+        let cf = 2 * FRAC;
+        let xm = || Mpf::<C17>::from_raw(x, FRAC);
+        let one = || Mpf::<C17>::from_int(1);
+        ct.check_closer(value(|| format!("{:?}", oct::exp(ox))), value(|| format!("{:?}", nct::exp::<New>(nx))), cf, || vec![xm().exp()], &x);
+        ct.check_closer(value(|| format!("{:?}", oct::sigmoid(ox))), value(|| format!("{:?}", nct::sigmoid::<New>(nx))), cf, || vec![xm().neg().exp().and_then(|e| one().div(one().add(e)))], &x);
+        ct.check_closer(value(|| format!("{:?}", oct::softplus(ox))), value(|| format!("{:?}", nct::softplus::<New>(nx))), cf, || vec![xm().exp().and_then(|e| e.ln1p())], &x);
+        ct.check_closer(value(|| format!("{:?}", oct::sinhcosh(ox))), value(|| format!("{:?}", nct::sinhcosh::<New>(nx))), cf, || vec![xm().sinh(), xm().cosh()], &x);
+        ct.check_closer(value(|| format!("{:?}", oct::ln(ox))), value(|| format!("{:?}", nct::ln::<New>(nx))), cf, || vec![xm().ln()], &x);
+        ct.check_closer(value(|| format!("{:?}", oct::sqrt(ox))), value(|| format!("{:?}", nct::sqrt::<New>(nx))), cf, || vec![xm().sqrt()], &x);
+        ct.check_closer(value(|| format!("{:?}", oct::ln1p(ox))), value(|| format!("{:?}", nct::ln1p::<New>(nx))), cf, || vec![xm().ln1p()], &x);
         ct.check(value(|| oct::try_to_fixed(oct::exp(ox)).map(raw::old_raw)), value(|| nct::try_to_fixed::<New>(nct::exp::<New>(nx)).map(raw::new_raw)), &x);
     }
     for t in [&norms, &soft, &mix, &gates, &rms, &ct] {
         t.report();
     }
+}
+
+use g_math::fixed_point::domains::binary_fixed::transcendental::mpf::{Mpf, MpfErr, C17};
+use g_math::fixed_point::I1024;
+type ExactValue = Result<Mpf<C17>, MpfErr>;
+
+/// Every integer in a compute word's Debug text, two's complement words
+/// (`words: [..]`) or a native integer, as I1024 values.
+fn debug_words(s: &str) -> Vec<I1024> {
+    let mut out = Vec::new();
+    if s.contains("words") {
+        for part in s.split("words: [").skip(1) {
+            let list = &part[..part.find(']').expect("]")];
+            let ws: Vec<u64> = list.split(',').map(|t| t.trim().parse().expect("word")).collect();
+            let neg = ws.last().map_or(false, |w| w >> 63 == 1);
+            let mut all = [if neg { u64::MAX } else { 0 }; 16];
+            all[..ws.len()].copy_from_slice(&ws);
+            out.push(I1024::from_words(all));
+        }
+    } else {
+        for t in s.split(|c: char| !(c.is_ascii_digit() || c == '-')).filter(|t| !t.is_empty()) {
+            out.push(I1024::from_i128(t.parse().expect("integer")));
+        }
+    }
+    out
 }
 
 // ---- the certified interval and the exact predicates (width-types phase 4c) --
@@ -1219,9 +1379,66 @@ macro_rules! fasc_case {
                 .map(|v| (format!("{v}"), v.to_decimal_string(30)))
                 .map_err(|e| format!("{e:?}"))
         });
-        $tally.check(old, new, &$label);
+        let label: String = ($label).to_string();
+        if old != new && DOMAIN_CORRECTIONS.contains(&label.as_str()) && new == Outcome::Error(format!("{:?}", "DomainError")) {
+            // 0.6.7 returned a value for an expression with no value; the
+            // exact evaluation reports the domain error
+            $tally.cases += 1;
+            $tally.corrected += 1;
+        } else if old != new && VALUE_CORRECTIONS.iter().any(|&(l, bits, frac, want)| l == label && bits == 8 * std::mem::size_of::<New>() && frac == FRAC
+            && matches!(&new, Outcome::Value((d, _)) if d == want)) {
+            // 0.6.7's chain was off; the new value is the exact one (mpmath)
+            $tally.cases += 1;
+            $tally.corrected += 1;
+        } else if old != new {
+            FASC_DIFFS.with(|d| d.borrow_mut().push(format!("{label}: old {old:?}, new {new:?}")));
+            $tally.cases += 1;
+        } else {
+            $tally.check(old, new, &label);
+        }
     }};
 }
+
+thread_local! {
+    /// Every canonical difference from 0.6.7 not in a corrections list,
+    /// reported together at the end of the test.
+    static FASC_DIFFS: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// Canonical expressions that are undefined (a function outside its domain
+/// inside the tree), for which 0.6.7 returned a value: ln of zero or of a
+/// negative number has no real value.
+/// Canonical chains where 0.6.7 was off and the new display is the exactly
+/// rounded value: (label, word bits, fraction bits, display), each checked
+/// with mpmath (sin(e^100) = 0.14219812365823863777...).
+/// The scientific rows are symbolic results on the 0.7.0 constants (0.6.7
+/// carried pi, sqrt 2 and the rest at 253 to 265 bits).
+const VALUE_CORRECTIONS: &[(&str, usize, u32, &str)] = &[
+    ("sin(exp(100))", 32, 10, "0.142"),
+    ("sin(exp(100))", 32, 16, "0.1421"),
+    ("sin(exp(100))", 32, 24, "0.14219"),
+    ("sin(exp(100))", 64, 32, "0.142198123"),
+    ("sin(exp(100))", 128, 64, "0.1421981236582386377"),
+    ("sin(exp(100))", 256, 128, "0.14219812365823863777245030647868525633"),
+    ("sin(exp(100))", 512, 256, "0.1421981236582386377724503064786852563347376095638780236589265895941923231058"),
+    // 1e-9 is exact (symbolic); 0.6.7 rounded it to 0 first and reported a domain error
+    ("ln(0.000000001)", 32, 10, "-20.723"),
+    ("pow(0.000000001, 0.5)", 32, 10, "0.000"),
+    ("ln(0.000000001)", 32, 16, "-20.7232"),
+    ("ln(0.000000001)", 32, 24, "-20.72326"),
+    ("sqrt2", 512, 256, "1.4142135623730950488016887242096980785696718753769480731766797379907324784621"),
+    ("0t12 * pi", 512, 256, "37.6991118430775188615517205993540346103660327925012698516993351076937968754345"),
+    ("pi * 0t12", 512, 256, "37.6991118430775188615517205993540346103660327925012698516993351076937968754345"),
+    ("pi / 0.1", 512, 256, "31.41592653589793238462643383279502884197169399375105820974944592307816406286208"),
+    ("pi / 0.000000001", 512, 256, "3141592653.58979323846264338327950288419716939937510582097494459230781640628620899862803"),
+    ("pi * 214748.3647", 512, 256, "674651.88491194168257096980859854856741027560088468517694382031087121177227779418261"),
+    ("214748.3647 * pi", 512, 256, "674651.88491194168257096980859854856741027560088468517694382031087121177227779418261"),
+    ("214748.3647 / pi", 512, 256, "68356.52752581217035985041065725843234832794794180868600026185015248069555603395431"),
+    ("pi * 0x10", 512, 256, "50.26548245743669181540229413247204614715471039000169313559911347692506250057934"),
+    ("0x10 * pi", 512, 256, "50.26548245743669181540229413247204614715471039000169313559911347692506250057934"),
+];
+
+const DOMAIN_CORRECTIONS: &[&str] = &["exp(ln(0))", "exp(ln(-0.5))", "exp(ln(-2))"];
 
 #[test]
 fn fasc_evaluation_is_identical_to_0_6_7() {
@@ -1275,6 +1492,8 @@ fn fasc_evaluation_is_identical_to_0_6_7() {
         fasc_case!(unary, format!("atan2({a}, 2)"), |p| p(a)?.atan2(p("2")?));
     }
     unary.report_in_domain();
+    let diffs = FASC_DIFFS.with(|d| d.borrow().clone());
+    assert!(diffs.is_empty(), "{} canonical differences from 0.6.7:\n{}", diffs.len(), diffs.join("\n"));
 }
 
 // ============================================================================

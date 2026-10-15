@@ -379,8 +379,7 @@ impl<T: FascFormat> StackEvaluator<T> {
                 SymbolicConstants::ln_10()
             }
             "gamma" | "γ" => {
-                // Euler-Mascheroni — no high-precision build.rs constant available
-                RationalNumber::new(577215665, 1000000000)
+                SymbolicConstants::euler_gamma_high_precision()
             }
             _ => {
                 return Err(OverflowDetected::ParseError);
@@ -441,9 +440,7 @@ impl<T: FascFormat> StackEvaluator<T> {
                 Ok(StackValue::Symbolic(SymbolicConstants::golden_ratio_high_precision()))
             }
             ConstantId::EulerGamma => {
-                // Euler-Mascheroni — no high-precision build.rs constant available
-                let rational = RationalNumber::from_ratio(5772, 10000);
-                Ok(StackValue::Symbolic(rational))
+                Ok(StackValue::Symbolic(SymbolicConstants::euler_gamma_high_precision()))
             }
         }
     }

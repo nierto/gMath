@@ -14,9 +14,15 @@ use crate::fixed_point::canonical::{
 use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::fixed_num::{Compute, FixedNum};
 pub use crate::fixed_point::fixed_num::Fixed;
-use crate::fixed_point::width::Storage;
+use crate::fixed_point::width::{Storage, WideInt};
+use crate::fixed_point::domains::binary_fixed::transcendental::sure;
 use crate::fixed_point::domains::binary_fixed::transcendental::sin_cos_tier_n_plus_1::sincos_q64_64_native;
 pub use crate::fixed_point::core_types::errors::OverflowDetected;
+
+/// The engines reduce trigonometric arguments with a pi of fixed precision,
+/// so their error grows with |x| faster than the margin model assumes: above
+/// 2^24 the sure path (pi at 1500 bits) evaluates sin, cos and tan.
+const TRIG_ENGINE_INT_BITS: u32 = 25;
 
 /// The fixed-point format this build's profile selects (`GMATH_PROFILE`,
 /// and `GMATH_FRAC_BITS` on the realtime profile).
@@ -326,6 +332,72 @@ where
         Self { raw: Self::downscale_to_storage(result).expect("transcendental overflow") }
     }
 
+    /// Round a compute-tier result to storage when the engine's error cannot
+    /// move it across a rounding boundary; otherwise (or when the engine
+    /// saturated) let `sure` decide it at about 1000 bits.
+    ///
+    /// The engines' error is at most a few units of the compute tier's last
+    /// place times the result's magnitude (they compute at `2F` fraction bits
+    /// with a relative error). The margin is `2^ABS + (|value| + 1) * 2^REL`
+    /// compute units, times `2^extra_bits` for compositions whose error grows
+    /// further (pow: the exponent's size); a result whose discarded `F` bits
+    /// lie farther than that from one half is decided by the engine alone.
+    #[inline]
+    fn settle<G: FnOnce() -> Option<S>>(c: Compute<Self>, extra_bits: u32, sure: G) -> Result<S, OverflowDetected> {
+        const ABS: u32 = 2;
+        let rel = Self::engine_rel_bits();
+        type C<S> = <S as Storage>::Compute;
+        let one = <C<S> as WideInt>::one();
+        let floor = c.shr_bits(F).shl_bits(F);
+        let below = c - floor;
+        let half = one.shl_bits(F - 1);
+        let dist = if below < half { half - below } else { below - half };
+        let decided = match c.checked_neg_wide() {
+            Some(neg) => {
+                let mag = if c.is_negative() { neg } else { c };
+                let int_part = mag.shr_bits(2 * F) + one;
+                let need = int_part.bit_length() + rel + extra_bits;
+                need + 2 < <C<S> as WideInt>::BITS && {
+                    let margin = int_part.shl_bits(rel + extra_bits) + one.shl_bits(ABS);
+                    dist > margin
+                }
+            }
+            None => false,
+        };
+        if decided {
+            if let Ok(r) = Self::downscale_to_storage(c) { return Ok(r); }
+        }
+        sure().ok_or(OverflowDetected::TierOverflow)
+    }
+
+    /// The engines' relative error bound in compute units, log2: the realtime
+    /// engines run the Q64.64 engines and round once to 2F bits (measured
+    /// within half a unit at F = 6..28, sin and cos up to 2^20 included); the
+    /// wider ones carry a few units relative (measured up to 2^4 for exp).
+    /// The same margins serve the canonical evaluator's compute-tier stage.
+    #[inline]
+    pub(crate) fn engine_rel_bits() -> u32 { if S::BITS == 32 { 1 } else { 6 } }
+
+    /// The extra margin of sin and cos: their error grows with the argument
+    /// on the wide engines, not on the realtime ones.
+    #[inline]
+    fn trig_extra(self) -> u32 { if S::BITS == 32 { 0 } else { self.int_bits() + 4 } }
+
+    /// Bits of the integer part of |x| plus one (the argument's size, for
+    /// errors that grow with it).
+    #[inline]
+    fn int_bits(self) -> u32 {
+        let m = match self.raw.checked_neg_wide() { Some(n) => if self.raw.is_negative() { n } else { self.raw }, None => return S::BITS };
+        (m.shr_bits(F) + <S as WideInt>::one()).bit_length()
+    }
+
+    /// Bits of the integer part of a compute value's magnitude plus one.
+    #[inline]
+    fn compute_int_bits(c: Compute<Self>) -> u32 {
+        let m = match c.checked_neg_wide() { Some(n) => if c.is_negative() { n } else { c }, None => return <Compute<Self> as WideInt>::BITS };
+        (m.shr_bits(2 * F) + <Compute<Self> as WideInt>::one()).bit_length()
+    }
+
     /// Fallible version of direct_unary.
     #[inline]
     fn try_direct_unary<E: FnOnce(Compute<Self>) -> Compute<Self>>(self, f: E) -> Result<Self, OverflowDetected> {
@@ -335,81 +407,33 @@ where
     }
 
     /// e^x
-    pub fn exp(self) -> Self { self.direct_unary(Self::direct_exp) }
+    pub fn exp(self) -> Self { self.try_exp().expect("transcendental overflow") }
     /// ln(x), x > 0
-    pub fn ln(self) -> Self { self.direct_unary(Self::direct_ln) }
+    pub fn ln(self) -> Self { self.try_ln().expect("transcendental overflow") }
     /// sqrt(x), x >= 0
-    pub fn sqrt(self) -> Self { self.direct_unary(Self::direct_sqrt) }
+    pub fn sqrt(self) -> Self { self.try_sqrt().expect("transcendental overflow") }
     /// sin(x)
-    pub fn sin(self) -> Self { self.direct_unary(Self::direct_sin) }
+    pub fn sin(self) -> Self { self.try_sin().expect("transcendental overflow") }
     /// cos(x)
-    pub fn cos(self) -> Self { self.direct_unary(Self::direct_cos) }
+    pub fn cos(self) -> Self { self.try_cos().expect("transcendental overflow") }
     /// Fused (sin(x), cos(x)): single range reduction, ~2× faster than separate calls.
     pub fn sincos(self) -> (Self, Self) {
         self.try_sincos().expect("sincos: overflow or domain error")
     }
     /// tan(x) = sin(x) / cos(x): direct composition, no FASC
-    pub fn tan(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let s = Self::direct_sin(c);
-        let c_val = Self::direct_cos(c);
-        let result = Self::compute_divide_direct(s, c_val);
-        Self { raw: Self::downscale_to_storage(result).expect("tan overflow") }
-    }
+    pub fn tan(self) -> Self { self.try_tan().expect("tan overflow") }
     /// atan(x)
-    pub fn atan(self) -> Self { self.direct_unary(Self::direct_atan) }
+    pub fn atan(self) -> Self { self.try_atan().expect("transcendental overflow") }
     /// asin(x) = atan(x / sqrt(1 - x^2)), |x| <= 1: direct composition
-    pub fn asin(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let one = Self::compute_one();
-        let x2 = Self::compute_multiply(c, c);
-        let denom = Self::direct_sqrt(Self::compute_subtract(one, x2));
-        let ratio = Self::compute_divide_direct(c, denom);
-        Self { raw: Self::downscale_to_storage(Self::direct_atan(ratio)).expect("asin overflow") }
-    }
+    pub fn asin(self) -> Self { self.try_asin().expect("asin overflow") }
     /// acos(x) = pi/2 - asin(x), |x| <= 1: direct composition
-    pub fn acos(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let one = Self::compute_one();
-        let x2 = Self::compute_multiply(c, c);
-        let denom = Self::direct_sqrt(Self::compute_subtract(one, x2));
-        let ratio = Self::compute_divide_direct(c, denom);
-        let asin_val = Self::direct_atan(ratio);
-        let pi_half = Self::compute_pi_half();
-        Self { raw: Self::downscale_to_storage(Self::compute_subtract(pi_half, asin_val)).expect("acos overflow") }
-    }
-    /// sinh(x) = (exp(x) - exp(-x)) / 2: direct composition
-    pub fn sinh(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let ep = Self::direct_exp(c);
-        let en = Self::direct_exp(Self::compute_negate(c));
-        // A ceiling exp means |sinh| already exceeds the storage tier, and
-        // the ceiling VALUE would downscale cleanly to a plausible-wrong
-        // maximum — fail loud instead.
-        assert!(
-            !Self::exp_sentinel_reached(&ep) && !Self::exp_sentinel_reached(&en),
-            "sinh overflow: exp at compute ceiling"
-        );
-        let result = Self::compute_halve(Self::compute_subtract(ep, en));
-        Self { raw: Self::downscale_to_storage(result).expect("sinh overflow") }
-    }
-    /// cosh(x) = (exp(x) + exp(-x)) / 2: direct composition
-    pub fn cosh(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let ep = Self::direct_exp(c);
-        let en = Self::direct_exp(Self::compute_negate(c));
-        // A ceiling exp means cosh already exceeds the storage tier. The
-        // checked add alone is NOT a sufficient guard: on wide profiles the
-        // ceiling fits the compute type and downscales to a plausible-wrong
-        // maximum — fail loud instead.
-        assert!(
-            !Self::exp_sentinel_reached(&ep) && !Self::exp_sentinel_reached(&en),
-            "cosh overflow: exp at compute ceiling"
-        );
-        let sum = Self::compute_checked_add(ep, en).expect("cosh overflow");
-        let result = Self::compute_halve(sum);
-        Self { raw: Self::downscale_to_storage(result).expect("cosh overflow") }
-    }
+    pub fn acos(self) -> Self { self.try_acos().expect("acos overflow") }
+    /// sinh(x) = (exp(x) - exp(-x)) / 2, correctly rounded (panics where the
+    /// result leaves storage; `try_sinh` returns the error)
+    pub fn sinh(self) -> Self { self.try_sinh().expect("sinh overflow") }
+    /// cosh(x) = (exp(x) + exp(-x)) / 2, correctly rounded (panics where the
+    /// result leaves storage; `try_cosh` returns the error)
+    pub fn cosh(self) -> Self { self.try_cosh().expect("cosh overflow") }
     /// Fused (sinh(x), cosh(x)): single shared exp-pair evaluation at compute tier.
     ///
     /// ~2× faster than separate `sinh` + `cosh` (2 exp calls instead of 4).
@@ -420,49 +444,39 @@ where
         self.try_sinhcosh().expect("sinhcosh: overflow or domain error")
     }
     /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1): direct composition
-    pub fn tanh(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let two_x = Self::compute_add(c, c);
-        let e2x = Self::direct_exp(two_x);
-        let one = Self::compute_one();
-        // exp(2x) at the compute-tier ceiling (saturated downscale or overflow
-        // sentinel): tanh = 1 − 2/(exp(2x)+1) rounds to exactly 1 at every
-        // storage width — and the denominator add below would wrap.
-        let den = match Self::compute_checked_add(e2x, one) {
-            Ok(v) => v,
-            Err(_) => return Self::one(),
-        };
-        let num = Self::compute_subtract(e2x, one);
-        Self { raw: Self::downscale_to_storage(Self::compute_divide_direct(num, den)).expect("tanh overflow") }
-    }
+    pub fn tanh(self) -> Self { self.try_tanh().expect("tanh overflow") }
     /// asinh(x) = ln(x + sqrt(x^2 + 1)): direct composition
-    pub fn asinh(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let one = Self::compute_one();
-        let x2 = Self::compute_multiply(c, c);
-        let inner = Self::direct_sqrt(Self::compute_add(x2, one));
-        Self { raw: Self::downscale_to_storage(Self::direct_ln(Self::compute_add(c, inner))).expect("asinh overflow") }
-    }
+    pub fn asinh(self) -> Self { self.try_asinh().expect("asinh overflow") }
     /// acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1: direct composition
-    pub fn acosh(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let one = Self::compute_one();
-        let x2 = Self::compute_multiply(c, c);
-        let inner = Self::direct_sqrt(Self::compute_subtract(x2, one));
-        Self { raw: Self::downscale_to_storage(Self::direct_ln(Self::compute_add(c, inner))).expect("acosh overflow") }
-    }
+    pub fn acosh(self) -> Self { self.try_acosh().expect("acosh overflow") }
     /// atanh(x) = ln((1+x)/(1-x)) / 2, |x| < 1: direct composition
-    pub fn atanh(self) -> Self {
-        let c = Self::upscale_to_compute(self.raw);
-        let one = Self::compute_one();
-        let num = Self::compute_add(one, c);
-        let den = Self::compute_subtract(one, c);
-        let ratio = Self::compute_divide_direct(num, den);
-        Self { raw: Self::downscale_to_storage(Self::compute_halve(Self::direct_ln(ratio))).expect("atanh overflow") }
+    pub fn atanh(self) -> Self { self.try_atanh().expect("atanh overflow") }
+
+    /// `x^y` for a positive base: the engine composition `exp(y ln x)`,
+    /// decided by the sure path when it lands near a rounding boundary (the
+    /// exponent's error grows with |y|, hence the extra margin bits). `None`
+    /// for a base that is not positive.
+    fn pow_positive_base(self, exponent: Self) -> Option<Result<Self, OverflowDetected>> {
+        if !(self.raw > S::ZERO) { return None; }
+        let xc = Self::upscale_to_compute(self.raw);
+        let yc = Self::upscale_to_compute(exponent.raw);
+        let sure = || sure::pow_to_raw::<S>(self.raw, exponent.raw, F);
+        let y_ln_x = match Self::compute_checked_multiply(yc, Self::direct_ln(xc)) {
+            Ok(v) => v,
+            Err(_) => return Some(sure().map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow)),
+        };
+        let e = Self::direct_exp(y_ln_x);
+        if Self::exp_sentinel_reached(&e) {
+            return Some(sure().map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow));
+        }
+        let y_mag = if exponent.raw.is_negative() { exponent.raw.checked_neg_wide().unwrap_or(exponent.raw) } else { exponent.raw };
+        let extra = (y_mag.shr_bits(F) + <S as WideInt>::one()).bit_length() + 1;
+        Some(Self::settle(e, extra, sure).map(|raw| Self { raw }))
     }
 
-    /// x^y = exp(y * ln(x)): direct composition
+    /// x^y = exp(y * ln(x)), correctly rounded for a positive base
     pub fn pow(self, exponent: Self) -> Self {
+        if let Some(r) = self.pow_positive_base(exponent) { return r.expect("pow overflow"); }
         let xc = Self::upscale_to_compute(self.raw);
         let yc = Self::upscale_to_compute(exponent.raw);
         let ln_x = Self::direct_ln(xc);
@@ -472,10 +486,15 @@ where
 
     /// atan2(self=y, x): direct binary engine
     pub fn atan2(self, x: Self) -> Self {
-        let yc = Self::upscale_to_compute(self.raw);
-        let xc = Self::upscale_to_compute(x.raw);
-        let result = Self::direct_atan2(yc, xc);
-        Self { raw: Self::downscale_to_storage(result).expect("atan2 overflow") }
+        self.atan2_settled(x).expect("atan2 overflow")
+    }
+
+    /// atan2 by the engine, decided by the sure path near a rounding
+    /// boundary. (0, 0) is a `DomainError`.
+    fn atan2_settled(self, x: Self) -> Result<Self, OverflowDetected> {
+        if self.raw == S::ZERO && x.raw == S::ZERO { return Err(OverflowDetected::DomainError); }
+        let v = Self::direct_atan2(Self::upscale_to_compute(self.raw), Self::upscale_to_compute(x.raw));
+        Ok(Self { raw: Self::settle(v, 4, || sure::atan2_to_raw::<S>(self.raw, x.raw, F))? })
     }
 
     // ========================================================================
@@ -483,14 +502,18 @@ where
     // ========================================================================
 
     /// Fallible e^x: returns `Err(TierOverflow)` if result exceeds storage tier.
-    pub fn try_exp(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(Self::direct_exp) }
+    pub fn try_exp(self) -> Result<Self, OverflowDetected> {
+        let c = Self::direct_exp(Self::upscale_to_compute(self.raw));
+        Ok(Self { raw: Self::settle(c, 0, || sure::exp_raw_to_raw::<S>(self.raw, F))? })
+    }
     /// Fallible ln(x): returns `Err(DomainError)` if x <= 0.
     pub fn try_ln(self) -> Result<Self, OverflowDetected> {
         // Domain check before the engine: the raw engine is infallible and
         // signals out-of-domain input with a MIN sentinel that downscale
         // would misreport as TierOverflow.
         if self <= Self::ZERO { return Err(OverflowDetected::DomainError); }
-        self.try_direct_unary(Self::direct_ln)
+        let v = Self::direct_ln(Self::upscale_to_compute(self.raw));
+        Ok(Self { raw: Self::settle(v, 2, || sure::ln_to_raw::<S>(self.raw, F))? })
     }
     /// 1/√x computed at compute tier without materializing √x at storage.
     ///
@@ -517,18 +540,32 @@ where
     /// Fallible sqrt(x): returns `Err(DomainError)` if x < 0.
     pub fn try_sqrt(self) -> Result<Self, OverflowDetected> {
         if self < Self::ZERO { return Err(OverflowDetected::DomainError); }
-        self.try_direct_unary(Self::direct_sqrt)
+        let v = Self::direct_sqrt(Self::upscale_to_compute(self.raw));
+        Ok(Self { raw: Self::settle(v, 2, || sure::sqrt_to_raw::<S>(self.raw, F))? })
     }
     /// Fallible sin(x).
-    pub fn try_sin(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(Self::direct_sin) }
+    pub fn try_sin(self) -> Result<Self, OverflowDetected> {
+        if self.int_bits() > TRIG_ENGINE_INT_BITS { return sure::sin_cos_to_raw::<S>(self.raw, F, false).map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow); }
+        let v = Self::direct_sin(Self::upscale_to_compute(self.raw));
+        Ok(Self { raw: Self::settle(v, self.trig_extra(), || sure::sin_cos_to_raw::<S>(self.raw, F, false))? })
+    }
     /// Fallible cos(x).
-    pub fn try_cos(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(Self::direct_cos) }
+    pub fn try_cos(self) -> Result<Self, OverflowDetected> {
+        if self.int_bits() > TRIG_ENGINE_INT_BITS { return sure::sin_cos_to_raw::<S>(self.raw, F, true).map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow); }
+        let v = Self::direct_cos(Self::upscale_to_compute(self.raw));
+        Ok(Self { raw: Self::settle(v, self.trig_extra(), || sure::sin_cos_to_raw::<S>(self.raw, F, true))? })
+    }
     /// Fused sin+cos: single shared range reduction at compute tier.
     /// Returns (sin(x), cos(x)). More efficient than separate try_sin + try_cos.
     pub fn try_sincos(self) -> Result<(Self, Self), OverflowDetected> {
+        if self.int_bits() > TRIG_ENGINE_INT_BITS { return Ok((self.try_sin()?, self.try_cos()?)); }
         let compute_val = Self::upscale_to_compute(self.raw());
         let (sin_c, cos_c) = Self::sincos_at_compute_tier(compute_val);
-        Ok((Self::from_raw(Self::downscale_to_storage(sin_c).expect("round_to_storage: result exceeds storage tier range")), Self::from_raw(Self::downscale_to_storage(cos_c).expect("round_to_storage: result exceeds storage tier range"))))
+        let extra = self.trig_extra();
+        Ok((
+            Self { raw: Self::settle(sin_c, extra, || sure::sin_cos_to_raw::<S>(self.raw, F, false))? },
+            Self { raw: Self::settle(cos_c, extra, || sure::sin_cos_to_raw::<S>(self.raw, F, true))? },
+        ))
     }
 
     /// Fallible fused sinh+cosh: single shared exp-pair at compute tier.
@@ -539,8 +576,8 @@ where
         let compute_val = Self::upscale_to_compute(self.raw);
         let (sinh_c, cosh_c) = Self::sinhcosh_at_compute_tier(compute_val);
         Ok((
-            Self { raw: Self::downscale_to_storage(sinh_c)? },
-            Self { raw: Self::downscale_to_storage(cosh_c)? },
+            Self { raw: Self::settle(sinh_c, 0, || sure::sinh_cosh_to_raw::<S>(self.raw, F, false))? },
+            Self { raw: Self::settle(cosh_c, 0, || sure::sinh_cosh_to_raw::<S>(self.raw, F, true))? },
         ))
     }
 
@@ -554,50 +591,50 @@ where
     /// Fallible tan(x) = sin(x)/cos(x): `Err(DomainError)` if cos(x) is zero
     /// at the compute tier.
     pub fn try_tan(self) -> Result<Self, OverflowDetected> {
+        if self.int_bits() > TRIG_ENGINE_INT_BITS { return sure::tan_to_raw::<S>(self.raw, F).map(|raw| Self { raw }).ok_or(OverflowDetected::TierOverflow); }
         let c = Self::upscale_to_compute(self.raw);
         let s = Self::direct_sin(c);
         let c_val = Self::direct_cos(c);
         if Self::compute_is_zero(&c_val) { return Err(OverflowDetected::DomainError); }
-        Ok(Self { raw: Self::downscale_to_storage(Self::compute_divide_direct(s, c_val))? })
+        let sure = || sure::tan_to_raw::<S>(self.raw, F);
+        let t = match Self::compute_checked_divide(s, c_val) {
+            Ok(t) => t,
+            Err(_) => return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? }),
+        };
+        // sin / cos near a pole multiplies the engines' error by about 1 + tan^2
+        let t_int = Self::compute_int_bits(t);
+        Ok(Self { raw: Self::settle(t, self.trig_extra() + 2 * t_int + 2, sure)? })
     }
     /// Fallible atan(x).
-    pub fn try_atan(self) -> Result<Self, OverflowDetected> { self.try_direct_unary(Self::direct_atan) }
+    pub fn try_atan(self) -> Result<Self, OverflowDetected> {
+        let v = Self::direct_atan(Self::upscale_to_compute(self.raw));
+        Ok(Self { raw: Self::settle(v, 4, || sure::atan_to_raw::<S>(self.raw, F))? })
+    }
     /// Fallible asin(x) = atan(x / sqrt(1 - x²)): `Err(DomainError)` if |x| > 1.
-    pub fn try_asin(self) -> Result<Self, OverflowDetected> {
+    pub fn try_asin(self) -> Result<Self, OverflowDetected> { self.asin_acos_settled(false) }
+    /// Fallible acos(x) = π/2 - asin(x): `Err(DomainError)` if |x| > 1.
+    pub fn try_acos(self) -> Result<Self, OverflowDetected> { self.asin_acos_settled(true) }
+
+    /// asin / acos by the engines (atan of x / sqrt(1 - x^2)), decided by
+    /// the sure path near a rounding boundary; the error of sqrt(1 - x^2)
+    /// grows as 1 / (1 - |x|), hence the extra margin there.
+    fn asin_acos_settled(self, acos: bool) -> Result<Self, OverflowDetected> {
         let one = Self::one();
         let neg_one = Self::ZERO - one;
         if self > one || self < neg_one { return Err(OverflowDetected::DomainError); }
-        // Boundary: asin(±1) = ±π/2 exactly (avoids division by sqrt(0))
-        if self == one {
-            return Ok(Self { raw: Self::downscale_to_storage(Self::compute_pi_half())? });
-        }
-        if self == neg_one {
-            return Ok(Self { raw: Self::downscale_to_storage(Self::compute_negate(Self::compute_pi_half()))? });
+        let sure = || sure::asin_acos_to_raw::<S>(self.raw, F, acos);
+        if self == one || self == neg_one {
+            return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? });
         }
         let c = Self::upscale_to_compute(self.raw);
         let x2 = Self::compute_multiply(c, c);
         let denom = Self::direct_sqrt(Self::compute_subtract(Self::compute_one(), x2));
-        let ratio = Self::compute_divide_direct(c, denom);
-        Ok(Self { raw: Self::downscale_to_storage(Self::direct_atan(ratio))? })
-    }
-    /// Fallible acos(x) = π/2 - asin(x): `Err(DomainError)` if |x| > 1.
-    pub fn try_acos(self) -> Result<Self, OverflowDetected> {
-        let one = Self::one();
-        let neg_one = Self::ZERO - one;
-        if self > one || self < neg_one { return Err(OverflowDetected::DomainError); }
-        let pi_half = Self::compute_pi_half();
-        // Boundaries: acos(1) = 0, acos(-1) = π
-        let asin_c = if self == one {
-            pi_half
-        } else if self == neg_one {
-            Self::compute_negate(pi_half)
-        } else {
-            let c = Self::upscale_to_compute(self.raw);
-            let x2 = Self::compute_multiply(c, c);
-            let denom = Self::direct_sqrt(Self::compute_subtract(Self::compute_one(), x2));
-            Self::direct_atan(Self::compute_divide_direct(c, denom))
-        };
-        Ok(Self { raw: Self::downscale_to_storage(Self::compute_subtract(pi_half, asin_c))? })
+        let asin_c = Self::direct_atan(Self::compute_divide_direct(c, denom));
+        let v = if acos { Self::compute_subtract(Self::compute_pi_half(), asin_c) } else { asin_c };
+        let mag = if self.raw.is_negative() { -self.raw } else { self.raw };
+        let gap = Self::one_storage() - mag;
+        let extra = (F + 2).saturating_sub(gap.bit_length()) + 4;
+        Ok(Self { raw: Self::settle(v, extra, sure)? })
     }
     /// Fallible sinh(x) = (exp(x) - exp(-x)) / 2: `Err(TierOverflow)` when
     /// the result exceeds the storage tier (a ceiling exp means it already
@@ -606,10 +643,11 @@ where
         let c = Self::upscale_to_compute(self.raw);
         let ep = Self::direct_exp(c);
         let en = Self::direct_exp(Self::compute_negate(c));
+        let sure = || sure::sinh_cosh_to_raw::<S>(self.raw, F, false);
         if Self::exp_sentinel_reached(&ep) || Self::exp_sentinel_reached(&en) {
-            return Err(OverflowDetected::TierOverflow);
+            return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? });
         }
-        Ok(Self { raw: Self::downscale_to_storage(Self::compute_halve(Self::compute_subtract(ep, en)))? })
+        Ok(Self { raw: Self::settle(Self::compute_halve(Self::compute_subtract(ep, en)), 0, sure)? })
     }
     /// Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when
     /// the result exceeds the storage tier (a ceiling exp means cosh already
@@ -618,42 +656,67 @@ where
         let c = Self::upscale_to_compute(self.raw);
         let ep = Self::direct_exp(c);
         let en = Self::direct_exp(Self::compute_negate(c));
+        let sure = || sure::sinh_cosh_to_raw::<S>(self.raw, F, true);
         if Self::exp_sentinel_reached(&ep) || Self::exp_sentinel_reached(&en) {
-            return Err(OverflowDetected::TierOverflow);
+            return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? });
         }
-        let sum = Self::compute_checked_add(ep, en)?;
-        Ok(Self { raw: Self::downscale_to_storage(Self::compute_halve(sum))? })
+        match Self::compute_checked_add(ep, en) {
+            Ok(sum) => Ok(Self { raw: Self::settle(Self::compute_halve(sum), 0, sure)? }),
+            Err(_) => Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? }),
+        }
     }
     /// Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Saturates to exactly
     /// 1 when exp(2x) reaches the compute-tier ceiling (matches `tanh`).
     pub fn try_tanh(self) -> Result<Self, OverflowDetected> {
         let c = Self::upscale_to_compute(self.raw);
+        let sure = || sure::tanh_to_raw::<S>(self.raw, F);
         let e2x = Self::direct_exp(Self::compute_add(c, c));
         let one = Self::compute_one();
         let den = match Self::compute_checked_add(e2x, one) {
             Ok(v) => v,
-            Err(_) => return Ok(Self::one()),
+            Err(_) => return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? }),
         };
+        if Self::exp_sentinel_reached(&e2x) { return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? }); }
         let num = Self::compute_subtract(e2x, one);
-        Ok(Self { raw: Self::downscale_to_storage(Self::compute_divide_direct(num, den))? })
+        Ok(Self { raw: Self::settle(Self::compute_divide_direct(num, den), 4, sure)? })
     }
     /// Fallible asinh(x) = ln(x + sqrt(x² + 1)).
     pub fn try_asinh(self) -> Result<Self, OverflowDetected> {
-        // ln argument is provably positive at compute tier: for x >= 0 it is
-        // >= 1, and for x < 0 it is ~1/(2|x|) >= 2^-(FRAC_BITS+1), far above
-        // one compute-tier ulp for any storable x.
-        let c = Self::upscale_to_compute(self.raw);
-        let x2 = Self::compute_multiply(c, c);
-        let inner = Self::direct_sqrt(Self::compute_add(x2, Self::compute_one()));
-        Ok(Self { raw: Self::downscale_to_storage(Self::direct_ln(Self::compute_add(c, inner)))? })
+        // odd: evaluate on |x| (for x < 0, x + sqrt(x^2 + 1) cancels), then
+        // negate; the word's minimum has no magnitude, the sure path takes it
+        let sure_all = || sure::asinh_to_raw::<S>(self.raw, F);
+        let neg = self.raw.is_negative();
+        let mag = if neg {
+            match self.raw.checked_neg_wide() { Some(m) => m, None => return Ok(Self { raw: sure_all().ok_or(OverflowDetected::TierOverflow)? }) }
+        } else { self.raw };
+        let c = Self::upscale_to_compute(mag);
+        let x2 = match Self::compute_checked_multiply(c, c) {
+            Ok(v) => v,
+            Err(_) => return Ok(Self { raw: sure_all().ok_or(OverflowDetected::TierOverflow)? }),
+        };
+        let inner = match Self::compute_checked_add(x2, Self::compute_one()) {
+            Ok(v) => Self::direct_sqrt(v),
+            Err(_) => return Ok(Self { raw: sure_all().ok_or(OverflowDetected::TierOverflow)? }),
+        };
+        let v = Self::direct_ln(Self::compute_add(c, inner));
+        let r = Self::settle(v, 4, || sure::asinh_to_raw::<S>(mag, F))?;
+        Ok(Self { raw: if neg { -r } else { r } })
     }
     /// Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1.
     pub fn try_acosh(self) -> Result<Self, OverflowDetected> {
         if self < Self::one() { return Err(OverflowDetected::DomainError); }
+        let sure = || sure::acosh_to_raw::<S>(self.raw, F);
         let c = Self::upscale_to_compute(self.raw);
-        let x2 = Self::compute_multiply(c, c);
+        let x2 = match Self::compute_checked_multiply(c, c) {
+            Ok(v) => v,
+            Err(_) => return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? }),
+        };
         let inner = Self::direct_sqrt(Self::compute_subtract(x2, Self::compute_one()));
-        Ok(Self { raw: Self::downscale_to_storage(Self::direct_ln(Self::compute_add(c, inner)))? })
+        let v = Self::direct_ln(Self::compute_add(c, inner));
+        // sqrt(x^2 - 1) near x = 1 amplifies the error as 1 / sqrt(x - 1)
+        let gap = self.raw - Self::one_storage();
+        let extra = (F + 2).saturating_sub(gap.bit_length()) + 4;
+        Ok(Self { raw: Self::settle(v, extra, sure)? })
     }
     /// Fallible atanh(x) = ln((1+x)/(1-x)) / 2: `Err(DomainError)` if |x| >= 1.
     pub fn try_atanh(self) -> Result<Self, OverflowDetected> {
@@ -661,8 +724,16 @@ where
         if self >= one || self <= Self::ZERO - one { return Err(OverflowDetected::DomainError); }
         let c = Self::upscale_to_compute(self.raw);
         let one_c = Self::compute_one();
-        let ratio = Self::compute_divide_direct(Self::compute_add(one_c, c), Self::compute_subtract(one_c, c));
-        Ok(Self { raw: Self::downscale_to_storage(Self::compute_halve(Self::direct_ln(ratio)))? })
+        let sure = || sure::atanh_to_raw::<S>(self.raw, F);
+        let ratio = match Self::compute_checked_divide(Self::compute_add(one_c, c), Self::compute_subtract(one_c, c)) {
+            Ok(r) => r,
+            Err(_) => return Ok(Self { raw: sure().ok_or(OverflowDetected::TierOverflow)? }),
+        };
+        // the ratio's relative error grows as 1 / (1 - |x|)
+        let mag = if self.raw.is_negative() { -self.raw } else { self.raw };
+        let gap = Self::one_storage() - mag;
+        let extra = (F + 2).saturating_sub(gap.bit_length()) + 4;
+        Ok(Self { raw: Self::settle(Self::compute_halve(Self::direct_ln(ratio)), extra, sure)? })
     }
 
 
@@ -726,6 +797,7 @@ where
     }
     /// Fallible x^y = exp(y * ln(x)).
     pub fn try_pow(self, exponent: Self) -> Result<Self, OverflowDetected> {
+        if let Some(r) = self.pow_positive_base(exponent) { return r; }
         let sv1 = self.to_stack_value();
         let sv2 = exponent.to_stack_value();
         let expr = LazyExpr::from(sv1).pow(LazyExpr::from(sv2));
@@ -734,6 +806,7 @@ where
     }
     /// Fallible atan2(self=y, x).
     pub fn try_atan2(self, x: Self) -> Result<Self, OverflowDetected> {
+        if !(self.raw == S::ZERO && x.raw == S::ZERO) { return self.atan2_settled(x); }
         let sv_y = self.to_stack_value();
         let sv_x = x.to_stack_value();
         let expr = LazyExpr::from(sv_y).atan2(LazyExpr::from(sv_x));

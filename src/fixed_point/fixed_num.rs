@@ -985,8 +985,10 @@ impl FixedNum for Fixed<i128, 64> {
     fn direct_atan2(y: I256, x: I256) -> I256 { atan2_q128_128_compute(y, x) }
     #[inline]
     fn compute_pi_half() -> I256 {
-        // the Q64.64 constant at the compute tier (its low 64 bits are zero)
-        Self::upscale_to_compute(PI_HALF_Q64)
+        // pi/2 at the compute tier's own precision (Q128.128). The Q64.64
+        // constant upscaled left the low 64 bits zero, an error up to 2^-65
+        // that moved acos by one storage unit on about a third of its domain.
+        I256::from_words(PI_HALF_Q128)
     }
 
     #[inline]
@@ -1217,8 +1219,9 @@ impl FixedNum for Fixed<I256, 128> {
     fn direct_atan2(y: I512, x: I512) -> I512 { atan2_q256_256_compute(y, x) }
     #[inline]
     fn compute_pi_half() -> I512 {
-        // the Q128.128 constant at the compute tier (its low 128 bits are zero)
-        Self::upscale_to_compute(I256::from_words(PI_HALF_Q128))
+        // pi/2 at the compute tier's own precision (Q256.256); the upscaled
+        // Q128.128 constant moved acos by one storage unit
+        I512::from_words(PI_HALF_Q256)
     }
 
     #[inline]

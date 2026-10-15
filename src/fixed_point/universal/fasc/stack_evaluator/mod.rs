@@ -12,6 +12,8 @@ pub(crate) mod format;
 mod parsing;
 mod arithmetic;
 mod transcendentals;
+mod exact;
+
 #[cfg(test)]
 mod tests;
 
@@ -673,10 +675,120 @@ pub fn with_evaluator<T: FascFormat, R>(f: impl FnOnce(&mut StackEvaluator<T>) -
 pub fn evaluate_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<StackValue<T>, OverflowDetected> {
     with_evaluator(|evaluator| {
         evaluator.reset();
-        let result = evaluator.evaluate(expr)?;
-        let materialized = evaluator.materialize_compute(result)?;
+        let materialized = evaluator.evaluate(expr).and_then(|r| evaluator.materialize_compute(r));
+        let materialized = settle_tree(evaluator, expr, materialized)?;
         evaluator.apply_output_mode(materialized)
     })
+}
+
+/// A tree with at least one operation, whose result is a binary storage
+/// value (or is wanted as one, or failed on the compute tier), is rounded
+/// once from its exact value: one function of stored values by the
+/// imperative ladder, anything deeper by the exact evaluation on `Big`
+/// (`exact.rs`, on `Mpf` from just above the format's width). Where the exact evaluation cannot decide (or does not
+/// cover the tree), the compute-tier result stands.
+fn settle_tree<T: FascFormat>(
+    evaluator: &mut StackEvaluator<T>,
+    expr: &LazyExpr<T>,
+    materialized: Result<StackValue<T>, OverflowDetected>,
+) -> Result<StackValue<T>, OverflowDetected> {
+    use crate::fixed_point::domains::binary_fixed::transcendental::mpf::MpfErr;
+    use crate::fixed_point::universal::fasc::mode::{get_mode, OutputMode};
+    if matches!(expr, LazyExpr::Literal(_) | LazyExpr::Value(_) | LazyExpr::Constant(_) | LazyExpr::Variable(_)) {
+        return materialized;
+    }
+    let want_binary = matches!(get_mode().output, OutputMode::Binary);
+    // a decimal result: its reading at the storage places must be the exact
+    // value rounded once; the compute value stays when it already reads so
+    if let Ok(StackValue::<T>::DecimalCompute(tier, val, _)) = &materialized {
+        if !want_binary {
+            let (tier, val) = (*tier, *val);
+            return match exact::rounded_decimal(evaluator, expr) {
+                Ok((dp, scaled)) => {
+                    if StackEvaluator::<T>::materialize_decimal_compute_adaptive(val).ok() == Some((dp, scaled)) {
+                        materialized
+                    } else {
+                        match crate::fixed_point::domains::decimal_fixed::transcendental::decimal_upscale_to_compute::<Compute<T>>(scaled, dp) {
+                            Ok(v) => Ok(StackValue::<T>::DecimalCompute(tier, v, CompactShadow::None)),
+                            Err(_) => materialized,
+                        }
+                    }
+                }
+                Err(MpfErr::Domain) => Err(OverflowDetected::DomainError),
+                Err(_) => materialized,
+            };
+        }
+    }
+    let (tier, old_raw, shadow) = match &materialized {
+        Ok(StackValue::<T>::Binary(tier, raw, shadow)) if *tier == T::STORAGE_TIER => (*tier, Some(*raw), shadow.clone()),
+        Ok(StackValue::<T>::Binary(..)) => return materialized,
+        // an evaluator error can be a compute-tier artifact (tanh rounded to 1
+        // before atanh): a value the exact evaluation decides replaces it;
+        // otherwise the error stands with its own kind (below)
+        Err(_) => (T::STORAGE_TIER, None, CompactShadow::None),
+        Ok(_) if want_binary => (T::STORAGE_TIER, None, CompactShadow::None),
+        Ok(_) => return materialized,
+    };
+    if let Some(settled) = settle_single_function(evaluator, expr, &materialized) {
+        return settled;
+    }
+    match exact::rounded(evaluator, expr) {
+        Ok(raw) => {
+            // a shadow describes the old raw's exact value; keep it only if the raw stands
+            let shadow = if old_raw == Some(raw) { shadow } else { CompactShadow::None };
+            Ok(StackValue::<T>::Binary(tier, raw, shadow))
+        }
+        // a value the evaluator returned is replaced by the exact verdict;
+        // an error it returned keeps its own kind
+        Err(MpfErr::Domain) if materialized.is_ok() => Err(OverflowDetected::DomainError),
+        Err(MpfErr::Overflow) if materialized.is_ok() => Err(OverflowDetected::TierOverflow),
+        Err(_) => materialized,
+    }
+}
+
+/// A tree that is one transcendental of stored binary values is rounded
+/// like the imperative function: the compute-tier result, decided near a
+/// rounding boundary by the sure path. Deeper trees keep the compute-tier
+/// chain and its single rounding.
+fn settle_single_function<T: FascFormat>(
+    evaluator: &mut StackEvaluator<T>,
+    expr: &LazyExpr<T>,
+    materialized: &Result<StackValue<T>, OverflowDetected>,
+) -> Option<Result<StackValue<T>, OverflowDetected>> {
+    use format::SettledOp as Op;
+    let (op, a, b): (Op, &LazyExpr<T>, Option<&LazyExpr<T>>) = match expr {
+        LazyExpr::Exp(a) => (Op::Exp, a, None), LazyExpr::Ln(a) => (Op::Ln, a, None), LazyExpr::Sqrt(a) => (Op::Sqrt, a, None),
+        LazyExpr::Sin(a) => (Op::Sin, a, None), LazyExpr::Cos(a) => (Op::Cos, a, None), LazyExpr::Tan(a) => (Op::Tan, a, None),
+        LazyExpr::Atan(a) => (Op::Atan, a, None), LazyExpr::Asin(a) => (Op::Asin, a, None), LazyExpr::Acos(a) => (Op::Acos, a, None),
+        LazyExpr::Sinh(a) => (Op::Sinh, a, None), LazyExpr::Cosh(a) => (Op::Cosh, a, None), LazyExpr::Tanh(a) => (Op::Tanh, a, None),
+        LazyExpr::Asinh(a) => (Op::Asinh, a, None), LazyExpr::Acosh(a) => (Op::Acosh, a, None), LazyExpr::Atanh(a) => (Op::Atanh, a, None),
+        LazyExpr::Pow(a, b) => (Op::Pow, a, Some(b)), LazyExpr::Atan2(a, b) => (Op::Atan2, a, Some(b)),
+        _ => return None,
+    };
+    // a binary result is replaced by the settled one; an error of the
+    // compute-tier composition (an intermediate leaving the compute word
+    // while the result fits) is retried on the imperative path too
+    let (tier, shadow) = match &materialized {
+        Ok(StackValue::<T>::Binary(tier, _, shadow)) => (*tier, shadow.clone()),
+        Err(_) => (T::STORAGE_TIER, CompactShadow::None),
+        _ => (T::STORAGE_TIER, CompactShadow::None),
+    };
+    let stored = |evaluator: &mut StackEvaluator<T>, e: &LazyExpr<T>| -> Option<T::Storage> {
+        if !matches!(e, LazyExpr::Value(_) | LazyExpr::Literal(_)) { return None; }
+        match evaluator.evaluate(e).ok()? {
+            StackValue::<T>::Binary(_, raw, _) => Some(raw),
+            _ => None,
+        }
+    };
+    let x = match stored(evaluator, a) { Some(v) => v, None => return None };
+    let y = match b {
+        Some(b) => match stored(evaluator, b) { Some(v) => v, None => return None },
+        None => <T::Storage as crate::fixed_point::width::WideInt>::ZERO,
+    };
+    match T::settled_function(op, x, y) {
+        Some(Ok(raw)) => Some(Ok(StackValue::<T>::Binary(tier, raw, shadow))),
+        _ => None,
+    }
 }
 
 /// Evaluate expression using thread-local evaluator

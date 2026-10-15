@@ -486,6 +486,20 @@ where
     se3_log_compute(&se3_inverse_compute(&g_base).mat_mul(&g_target))
 }
 
+/// The raws of a vector and of a matrix (row-major).
+fn vraws<S: Storage, const F: u32>(v: &FixedVector<Fixed<S, F>>) -> Vec<S> where Fixed<S, F>: FixedNum<Storage = S> { (0..v.len()).map(|i| v[i].raw()).collect() }
+fn mraws<S: Storage, const F: u32>(m: &FixedMatrix<Fixed<S, F>>) -> Vec<S> where Fixed<S, F>: FixedNum<Storage = S> {
+    let mut out = Vec::with_capacity(m.rows() * m.cols());
+    for i in 0..m.rows() { for j in 0..m.cols() { out.push(m.get(i, j).raw()); } }
+    out
+}
+fn as_vector<S: Storage, const F: u32>(r: Vec<S>) -> FixedVector<Fixed<S, F>> where Fixed<S, F>: FixedNum<Storage = S> {
+    FixedVector::from_slice(&r.into_iter().map(Fixed::<S, F>::from_raw).collect::<Vec<_>>())
+}
+fn as_matrix<S: Storage, const F: u32>(n: usize, r: Vec<S>) -> FixedMatrix<Fixed<S, F>> where Fixed<S, F>: FixedNum<Storage = S> {
+    FixedMatrix::from_slice(n, n, &r.into_iter().map(Fixed::<S, F>::from_raw).collect::<Vec<_>>())
+}
+
 impl SO3 {
     /// hat: ω = [wx, wy, wz] → 3×3 skew-symmetric matrix.
     pub fn hat_so3<S: Storage, const F: u32>(omega: &FixedVector<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>>
@@ -520,7 +534,10 @@ impl SO3 {
         Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
         {
         assert_eq!(omega.len(), 3);
-        down_matrix(&rodrigues_exp_compute(&up_all(omega))?)
+        match exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3Exp, &vraws(omega), &[], &[])? {
+            Some(r) => Ok(as_matrix(3, r)),
+            None => down_matrix(&rodrigues_exp_compute(&up_all(omega))?),
+        }
     }
 
     /// Rodrigues logarithm: rotation matrix R → axis-angle ω.
@@ -535,7 +552,10 @@ impl SO3 {
         Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
         {
         assert!(r.rows() == 3 && r.cols() == 3, "rodrigues_log: R must be 3x3");
-        down_vector(&rodrigues_log_compute(&ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(r))?.0)
+        match exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3Log, &mraws(r), &[], &[])? {
+            Some(v) => Ok(as_vector(v)),
+            None => down_vector(&rodrigues_log_compute(&ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(r))?.0),
+        }
     }
 }
 
@@ -553,6 +573,7 @@ where
     /// log(exp(base) exp(tangent)) with both exps, the product and the log
     /// at the compute tier; each component rounded once.
     fn exp_map(&self, base: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3ExpMap, &vraws(base), &vraws(tangent), &[])? { return Ok(as_vector(v)); }
         let g_base = rodrigues_exp_compute(&up_all(base))?;
         let g_tangent = rodrigues_exp_compute(&up_all(tangent))?;
         down_vector(&rodrigues_log_compute(&g_base.mat_mul(&g_tangent))?.0)
@@ -560,17 +581,20 @@ where
 
     /// log(exp(base)ᵀ exp(target)) entirely at the compute tier, rounded once.
     fn log_map(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3LogMap, &vraws(base), &vraws(target), &[])? { return Ok(as_vector(v)); }
         down_vector(&so3_log_map_compute(base, target)?)
     }
 
-    /// |log_map| from the compute-tier log, one rounding.
+    /// |log_map| of the exact values, one rounding.
     fn distance(&self, p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3Dist, &vraws(p), &vraws(q), &[])? { return Ok(Fixed::from_raw(v[0])); }
         norm_to_storage(&so3_log_map_compute(p, q)?)
     }
 
     /// vee(R_half [v]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2),
     /// the whole chain at the compute tier and each component rounded once.
     fn parallel_transport(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3Transport, &vraws(base), &vraws(target), &vraws(tangent))? { return Ok(as_vector(v)); }
         let diff = so3_log_map_compute(base, target)?;
         let half = [Fixed::<S, F>::compute_halve(diff[0]), Fixed::<S, F>::compute_halve(diff[1]), Fixed::<S, F>::compute_halve(diff[2])];
         let r_half = rodrigues_exp_compute(&half)?;
@@ -683,7 +707,10 @@ impl SE3 {
         Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
         {
         assert_eq!(xi.len(), 6);
-        down_matrix(&se3_exp_compute(&up_all(xi))?)
+        match exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::Se3Exp, &vraws(xi), &[], &[])? {
+            Some(r) => Ok(as_matrix(4, r)),
+            None => down_matrix(&se3_exp_compute(&up_all(xi))?),
+        }
     }
 
     /// SE(3) logarithm: [[R, t], [0, 1]] → [ω, v].
@@ -696,7 +723,10 @@ impl SE3 {
     where
         Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
         {
-        down_vector(&se3_log_compute(&ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(g))?)
+        match exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::Se3Log, &mraws(g), &[], &[])? {
+            Some(v) => Ok(as_vector(v)),
+            None => down_vector(&se3_log_compute(&ComputeMatrix::<Fixed<S, F>>::from_fixed_matrix(g))?),
+        }
     }
 }
 
@@ -713,6 +743,7 @@ where
 
     /// log(exp(base) exp(tangent)) entirely at the compute tier, rounded once.
     fn exp_map(&self, base: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::Se3ExpMap, &vraws(base), &vraws(tangent), &[])? { return Ok(as_vector(v)); }
         let g_base = se3_exp_compute(&up_all(base))?;
         let g_tangent = se3_exp_compute(&up_all(tangent))?;
         down_vector(&se3_log_compute(&g_base.mat_mul(&g_tangent))?)
@@ -721,11 +752,13 @@ where
     /// log(exp(base)⁻¹ exp(target)) entirely at the compute tier (the inverse
     /// [[Rᵀ, -Rᵀt], [0, 1]] included), rounded once.
     fn log_map(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::Se3LogMap, &vraws(base), &vraws(target), &[])? { return Ok(as_vector(v)); }
         down_vector(&se3_log_map_compute(base, target)?)
     }
 
     /// |log_map| from the compute-tier log, one rounding.
     fn distance(&self, p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected> {
+        if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::Se3Dist, &vraws(p), &vraws(q), &[])? { return Ok(Fixed::from_raw(v[0])); }
         norm_to_storage(&se3_log_map_compute(p, q)?)
     }
 
@@ -1343,4 +1376,238 @@ where
     }
 
     fn act(&self, g: &FixedMatrix<Fixed<S, F>>, point: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> { g.mul_vector(point) }
+}
+
+// ============================================================================
+// Correctly rounded closed forms (`docs/design/CORRECT_ROUNDING.md`)
+// ============================================================================
+//
+// SO(3) and SE(3) exp, log and the manifold maps built on them, written once
+// over `exact::Num` and settled per component (compute tier first, `Mpf`
+// while undecided). Each output is the exact value of the formula on the
+// stored inputs, rounded once. A branch the formula takes on a sign (the
+// trace beyond 90 degrees, the axis orientation) must be certain on the
+// backend, or the evaluation moves up in precision; if no precision settles
+// it (an exactly 90 degree composite), the compute-tier result stands.
+
+pub(crate) mod exact_forms {
+    use super::*;
+    use crate::fixed_point::domains::binary_fixed::transcendental::mpf::MpfErr;
+    use crate::fixed_point::exact::{settle, Formula, Num};
+
+    type R<X> = Result<X, MpfErr>;
+    type M3<B> = [[B; 3]; 3];
+
+    fn w<T: FixedNum, B: Num<T>>(x: T::Storage) -> R<B> { B::from_word(x, T::FRAC_BITS) }
+
+    fn vec3<T: FixedNum, B: Num<T>>(x: &[T::Storage]) -> R<[B; 3]> { Ok([w::<T, B>(x[0])?, w::<T, B>(x[1])?, w::<T, B>(x[2])?]) }
+
+    fn mat3<T: FixedNum, B: Num<T>>(m: &[T::Storage], stride: usize) -> R<M3<B>> {
+        let mut out = [[B::int(0)?; 3]; 3];
+        for i in 0..3 { for j in 0..3 { out[i][j] = w::<T, B>(m[i * stride + j])?; } }
+        Ok(out)
+    }
+
+    fn sq3<T: FixedNum, B: Num<T>>(v: &[B; 3]) -> R<B> { v[0].mul(v[0])?.add(v[1].mul(v[1])?)?.add(v[2].mul(v[2])?) }
+
+    fn hat<T: FixedNum, B: Num<T>>(v: &[B; 3]) -> R<M3<B>> {
+        let z = B::int(0)?;
+        Ok([[z, v[2].neg(), v[1]], [v[2], z, v[0].neg()], [v[1].neg(), v[0], z]])
+    }
+
+    fn matmul<T: FixedNum, B: Num<T>>(a: &M3<B>, b: &M3<B>) -> R<M3<B>> {
+        let mut out = [[B::int(0)?; 3]; 3];
+        for i in 0..3 { for j in 0..3 {
+            out[i][j] = a[i][0].mul(b[0][j])?.add(a[i][1].mul(b[1][j])?)?.add(a[i][2].mul(b[2][j])?)?;
+        } }
+        Ok(out)
+    }
+
+    fn transpose<B: Copy>(a: &M3<B>) -> M3<B> { [[a[0][0], a[1][0], a[2][0]], [a[0][1], a[1][1], a[2][1]], [a[0][2], a[1][2], a[2][2]]] }
+
+    fn mulvec<T: FixedNum, B: Num<T>>(a: &M3<B>, v: &[B; 3]) -> R<[B; 3]> {
+        let row = |i: usize| -> R<B> { a[i][0].mul(v[0])?.add(a[i][1].mul(v[1])?)?.add(a[i][2].mul(v[2])?) };
+        Ok([row(0)?, row(1)?, row(2)?])
+    }
+
+    /// `I + a K + b K^2`.
+    fn poly<T: FixedNum, B: Num<T>>(k: &M3<B>, a: B, b: B) -> R<M3<B>> {
+        let k2 = matmul::<T, B>(k, k)?;
+        let mut out = [[B::int(0)?; 3]; 3];
+        for i in 0..3 { for j in 0..3 {
+            let id = if i == j { B::int(1)? } else { B::int(0)? };
+            out[i][j] = id.add(a.mul(k[i][j])?)?.add(b.mul(k2[i][j])?)?;
+        } }
+        Ok(out)
+    }
+
+    /// `(theta, sin(theta)/theta, (1 - cos(theta))/theta^2)` from theta^2, the
+    /// last as `(sin(theta/2)/(theta/2))^2 / 2` (no cancellation).
+    fn coeffs<T: FixedNum, B: Num<T>>(t2: B) -> R<(B, B, B)> {
+        if t2.is_exact_zero() { return Ok((t2, B::int(1)?, B::int(1)?.half())); }
+        let th = t2.sqrt()?;
+        let h = th.half();
+        let sh = h.sin()?.div(h)?;
+        Ok((th, th.sin()?.div(th)?, sh.mul(sh)?.half()))
+    }
+
+    pub(super) fn rod_exp<T: FixedNum, B: Num<T>>(omega: &[B; 3]) -> R<M3<B>> {
+        let (_, sinc, hc) = coeffs::<T, B>(sq3::<T, B>(omega)?)?;
+        poly::<T, B>(&hat::<T, B>(omega)?, sinc, hc)
+    }
+
+    /// `(omega, theta)`: up to 90 degrees `theta d / |d|`, `d = vee(R - R^T)`,
+    /// `theta = atan2(|d|, tr R - 1)`; beyond, the axis from the symmetric
+    /// part (as `rodrigues_log_compute`).
+    pub(super) fn rod_log<T: FixedNum, B: Num<T>>(r: &M3<B>) -> R<([B; 3], B)> {
+        let one = B::int(1)?;
+        let zero = B::int(0)?;
+        let d = [r[2][1].sub(r[1][2])?, r[0][2].sub(r[2][0])?, r[1][0].sub(r[0][1])?];
+        let trm1 = r[0][0].add(r[1][1])?.add(r[2][2])?.sub(one)?;
+        if !trm1.sign_certain() { return Err(MpfErr::Undecided); }
+        let dn2 = sq3::<T, B>(&d)?;
+        let d_zero = dn2.is_exact_zero();
+        if !trm1.is_negative() {
+            if d_zero { return Ok(([zero, zero, zero], zero)); }
+            let dn = dn2.sqrt()?;
+            let theta = dn.atan2(trm1)?;
+            let s = theta.div(dn)?;
+            return Ok(([d[0].mul(s)?, d[1].mul(s)?, d[2].mul(s)?], theta));
+        }
+        let theta = if d_zero { zero.atan2(trm1)? } else { dn2.sqrt()?.atan2(trm1)? };
+        let cos_t = trm1.half();
+        let omc = one.sub(cos_t)?;
+        let mut i = 0;
+        for k in 1..3 { if r[i][i].sub(r[k][k])?.is_negative() { i = k; } }
+        let ui2 = r[i][i].sub(cos_t)?.div(omc)?;
+        if !ui2.sign_certain() { return Err(MpfErr::Undecided); }
+        if ui2.is_negative() || ui2.is_exact_zero() { return Err(MpfErr::Domain); }
+        let ui = ui2.sqrt()?;
+        let den = omc.add(omc)?.mul(ui)?;
+        let mut u = [zero; 3];
+        for k in 0..3 { u[k] = if k == i { ui } else { r[i][k].add(r[k][i])?.div(den)? }; }
+        let mut flip = false;
+        if !d_zero {
+            let dot = u[0].mul(d[0])?.add(u[1].mul(d[1])?)?.add(u[2].mul(d[2])?)?;
+            if !dot.sign_certain() { return Err(MpfErr::Undecided); }
+            flip = dot.is_negative();
+        }
+        let mut omega = [zero; 3];
+        for k in 0..3 { let v = theta.mul(u[k])?; omega[k] = if flip { v.neg() } else { v }; }
+        Ok((omega, theta))
+    }
+
+    /// SE(3) exp: `[[R, V v], [0, 1]]`, `V = I + c1 K + c2 K^2`,
+    /// `c1 = (1 - cos)/theta^2`, `c2 = (theta - sin)/theta^3`.
+    pub(super) fn se3_exp<T: FixedNum, B: Num<T>>(xi: &[B; 6]) -> R<(M3<B>, [B; 3])> {
+        let omega = [xi[0], xi[1], xi[2]];
+        let t2 = sq3::<T, B>(&omega)?;
+        let (th, sinc, c1) = coeffs::<T, B>(t2)?;
+        let c2 = if t2.is_exact_zero() { B::int(1)?.div(B::int(6)?)? } else { th.sub(th.sin()?)?.div(t2.mul(th)?)? };
+        let k = hat::<T, B>(&omega)?;
+        let r = poly::<T, B>(&k, sinc, c1)?;
+        let v = poly::<T, B>(&k, c1, c2)?;
+        Ok((r, mulvec::<T, B>(&v, &[xi[3], xi[4], xi[5]])?))
+    }
+
+    /// SE(3) log: `[omega, V^-1 t]`, `V^-1 = I - K/2 + c K^2`,
+    /// `c = (1 - alpha)/theta^2`, `alpha = (theta/2) / tan(theta/2)`.
+    pub(super) fn se3_log<T: FixedNum, B: Num<T>>(r: &M3<B>, t: &[B; 3]) -> R<[B; 6]> {
+        let (omega, theta) = rod_log::<T, B>(r)?;
+        let c = if theta.is_exact_zero() {
+            B::int(1)?.div(B::int(12)?)?
+        } else {
+            let h = theta.half();
+            let alpha = h.div(h.tan()?)?;
+            B::int(1)?.sub(alpha)?.div(theta.mul(theta)?)?
+        };
+        let k = hat::<T, B>(&omega)?;
+        let vinv = poly::<T, B>(&k, B::int(1)?.half().neg(), c)?;
+        let v = mulvec::<T, B>(&vinv, t)?;
+        Ok([omega[0], omega[1], omega[2], v[0], v[1], v[2]])
+    }
+
+    /// `g^-1 = [[R^T, -R^T t], [0, 1]]`.
+    fn se3_inverse<T: FixedNum, B: Num<T>>(r: &M3<B>, t: &[B; 3]) -> R<(M3<B>, [B; 3])> {
+        let rt = transpose(r);
+        let m = mulvec::<T, B>(&rt, t)?;
+        Ok((rt, [m[0].neg(), m[1].neg(), m[2].neg()]))
+    }
+
+    fn se3_compose<T: FixedNum, B: Num<T>>(a: &(M3<B>, [B; 3]), b: &(M3<B>, [B; 3])) -> R<(M3<B>, [B; 3])> {
+        let r = matmul::<T, B>(&a.0, &b.0)?;
+        let m = mulvec::<T, B>(&a.0, &b.1)?;
+        Ok((r, [m[0].add(a.1[0])?, m[1].add(a.1[1])?, m[2].add(a.1[2])?]))
+    }
+
+    fn vec6<T: FixedNum, B: Num<T>>(x: &[T::Storage]) -> R<[B; 6]> {
+        let mut out = [B::int(0)?; 6];
+        for i in 0..6 { out[i] = w::<T, B>(x[i])?; }
+        Ok(out)
+    }
+
+    fn norm<T: FixedNum, B: Num<T>>(v: &[B]) -> R<B> {
+        let mut acc = B::int(0)?;
+        for x in v { acc = acc.add(x.mul(*x)?)?; }
+        acc.sqrt()
+    }
+
+    /// Which map of SO(3) / SE(3).
+    #[derive(Clone, Copy)]
+    pub(crate) enum Op { So3Exp, So3Log, So3ExpMap, So3LogMap, So3Dist, So3Transport, Se3Exp, Se3Log, Se3ExpMap, Se3LogMap, Se3Dist }
+
+    pub(crate) struct Form<'a, W> { pub op: Op, pub a: &'a [W], pub b: &'a [W], pub c: &'a [W] }
+
+    impl<'a, T: FixedNum> Formula<T> for Form<'a, T::Storage> {
+        fn eval<B: Num<T>>(&self) -> R<Vec<B>> {
+            let flat = |m: &M3<B>| -> Vec<B> { m.iter().flat_map(|row| row.iter().copied()).collect() };
+            Ok(match self.op {
+                Op::So3Exp => flat(&rod_exp::<T, B>(&vec3::<T, B>(self.a)?)?),
+                Op::So3Log => rod_log::<T, B>(&mat3::<T, B>(self.a, 3)?)?.0.to_vec(),
+                Op::So3ExpMap | Op::So3LogMap | Op::So3Dist | Op::So3Transport => {
+                    let ga = rod_exp::<T, B>(&vec3::<T, B>(self.a)?)?;
+                    let gb = rod_exp::<T, B>(&vec3::<T, B>(self.b)?)?;
+                    let g = match self.op { Op::So3ExpMap => matmul::<T, B>(&ga, &gb)?, _ => matmul::<T, B>(&transpose(&ga), &gb)? };
+                    let omega = rod_log::<T, B>(&g)?.0;
+                    match self.op {
+                        Op::So3Dist => vec![norm::<T, B>(&omega)?],
+                        Op::So3Transport => {
+                            let half = [omega[0].half(), omega[1].half(), omega[2].half()];
+                            mulvec::<T, B>(&rod_exp::<T, B>(&half)?, &vec3::<T, B>(self.c)?)?.to_vec()
+                        }
+                        _ => omega.to_vec(),
+                    }
+                }
+                Op::Se3Exp => {
+                    let (r, t) = se3_exp::<T, B>(&vec6::<T, B>(self.a)?)?;
+                    let (z, o) = (B::int(0)?, B::int(1)?);
+                    vec![r[0][0], r[0][1], r[0][2], t[0], r[1][0], r[1][1], r[1][2], t[1], r[2][0], r[2][1], r[2][2], t[2], z, z, z, o]
+                }
+                Op::Se3Log => {
+                    let r = mat3::<T, B>(self.a, 4)?;
+                    let t = [w::<T, B>(self.a[3])?, w::<T, B>(self.a[7])?, w::<T, B>(self.a[11])?];
+                    se3_log::<T, B>(&r, &t)?.to_vec()
+                }
+                Op::Se3ExpMap | Op::Se3LogMap | Op::Se3Dist => {
+                    let ga = se3_exp::<T, B>(&vec6::<T, B>(self.a)?)?;
+                    let gb = se3_exp::<T, B>(&vec6::<T, B>(self.b)?)?;
+                    let g = match self.op { Op::Se3ExpMap => se3_compose::<T, B>(&ga, &gb)?, _ => se3_compose::<T, B>(&se3_inverse::<T, B>(&ga.0, &ga.1)?, &gb)? };
+                    let xi = se3_log::<T, B>(&g.0, &g.1)?;
+                    match self.op { Op::Se3Dist => vec![norm::<T, B>(&xi)?], _ => xi.to_vec() }
+                }
+            })
+        }
+    }
+
+    /// The settled outputs as raws, `None` where the exact stage did not
+    /// decide (the caller's compute-tier result stands); domain and range
+    /// errors as the library reports them.
+    pub(crate) fn settled<T: FixedNum>(op: Op, a: &[T::Storage], b: &[T::Storage], c: &[T::Storage]) -> Result<Option<Vec<T::Storage>>, OverflowDetected> {
+        match settle::<T, _>(&Form { op, a, b, c }) {
+            Ok(v) => Ok(Some(v)),
+            Err(MpfErr::Domain) => Err(OverflowDetected::DomainError),
+            Err(MpfErr::Overflow) => Err(OverflowDetected::TierOverflow),
+            Err(_) => Ok(None),
+        }
+    }
 }

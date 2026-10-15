@@ -340,6 +340,49 @@ where
     /// were rounded to storage, and 1/theta overflowed Q8.24 for |v| < 1/128.)
     fn exp_map(&self, base: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         let vr = raws(tangent);
+        if Fixed::<S, F>::compute_is_zero(&kernels::exact_dot::<Fixed<S, F>>(&vr, &vr)?) {
+            return Ok(base.clone());
+        }
+        let br = raws(base);
+        exact_forms::settled(&exact_forms::SphereExp { p: &br, v: &vr }, || Self::exp_map_compute(base, tangent))
+    }
+
+    /// The `log_map` of the exact formula, rounded once per component.
+    fn log_map(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        let (pr, qr) = (raws(base), raws(target));
+        let pp = kernels::exact_dot::<Fixed<S, F>>(&pr, &pr)?;
+        let qq = kernels::exact_dot::<Fixed<S, F>>(&qr, &qr)?;
+        if Fixed::<S, F>::compute_is_zero(&pp) || Fixed::<S, F>::compute_is_zero(&qq) { return Err(OverflowDetected::DomainError); }
+        let c = kernels::exact_dot::<Fixed<S, F>>(&pr, &qr)?;
+        // parallel or antipodal points: the direction is zero
+        if S::widen_product(pp, qq) == S::widen_product(c, c) { return Ok(FixedVector::<Fixed<S, F>>::new(base.len())); }
+        exact_forms::settled(&exact_forms::SphereLog { p: &pr, q: &qr }, || Self::log_map_compute(base, target))
+    }
+
+    /// `atan2(|p x q|, p.q)` of the exact values, rounded once.
+    fn distance(&self, p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected> {
+        let (pr, qr) = (raws(p), raws(q));
+        assert_eq!(pr.len(), qr.len(), "Sphere: dimension mismatch");
+        if Fixed::<S, F>::compute_is_zero(&kernels::exact_dot::<Fixed<S, F>>(&pr, &pr)?) || Fixed::<S, F>::compute_is_zero(&kernels::exact_dot::<Fixed<S, F>>(&qr, &qr)?) {
+            return Err(OverflowDetected::DomainError);
+        }
+        Ok(exact_forms::settled(&exact_forms::SphereDistance { p: &pr, q: &qr }, || Ok(FixedVector::from_slice(&[Self::distance_compute(p, q)?])))?[0])
+    }
+
+    /// The transport of the exact formula, rounded once per component.
+    fn parallel_transport(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        let (pr, qr, vr) = (raws(base), raws(target), raws(tangent));
+        let denom = c_add(Fixed::<S, F>::make_compute_int(1), kernels::exact_dot::<Fixed<S, F>>(&pr, &qr)?)?;
+        if Fixed::<S, F>::compute_is_zero(&denom) { return Err(OverflowDetected::DomainError); }
+        exact_forms::settled(&exact_forms::SphereTransport { p: &pr, q: &qr, v: &vr }, || Self::transport_compute(base, target, tangent))
+    }
+}
+
+impl Sphere {
+    fn exp_map_compute<S: Storage, const F: u32>(base: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
+        let vr = raws(tangent);
         let theta = sqrt_c(kernels::exact_dot::<Fixed<S, F>>(&vr, &vr)?);
         if Fixed::<S, F>::compute_is_zero(&theta) {
             return Ok(base.clone());
@@ -354,9 +397,11 @@ where
         down_vec(&out)
     }
 
-    /// `theta w / |w|` from [`Sphere::geodesic`]: angle, direction and
-    /// scaling at the compute tier, one rounding per component.
-    fn log_map(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+    /// `theta w / |w|` from [`Sphere::geodesic`] at the compute tier (the
+    /// fallback of the exact form).
+    fn log_map_compute<S: Storage, const F: u32>(base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         let (theta, w, w_len) = Self::geodesic(base, target)?;
         if Fixed::<S, F>::compute_is_zero(&theta) || Fixed::<S, F>::compute_is_zero(&w_len) {
             return Ok(FixedVector::<Fixed<S, F>>::new(base.len()));
@@ -366,16 +411,18 @@ where
         down_vec(&out)
     }
 
-    /// `atan2(|p x q|, p.q)` at the compute tier, one rounding.
-    fn distance(&self, p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected> {
+    /// `atan2(|p x q|, p.q)` at the compute tier (the fallback).
+    fn distance_compute<S: Storage, const F: u32>(p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         down(Self::geodesic(p, q)?.0)
     }
 
-    /// `v - <v, p+q> / (1 + <p,q>) (p + q)`: the products exact, the
-    /// coefficient and each component formed at the compute tier with one
-    /// rounding to storage. `Err(DomainError)` for antipodal points, and
-    /// `Err(TierOverflow)` when the coefficient near them leaves the range.
-    fn parallel_transport(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+    /// `v - <v, p+q> / (1 + <p,q>) (p + q)` at the compute tier (the
+    /// fallback). `Err(DomainError)` for antipodal points.
+    fn transport_compute<S: Storage, const F: u32>(base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         let (pr, qr, vr) = (raws(base), raws(target), raws(tangent));
         let denom = c_add(Fixed::<S, F>::make_compute_int(1), kernels::exact_dot::<Fixed<S, F>>(&pr, &qr)?)?;
         if Fixed::<S, F>::compute_is_zero(&denom) {
@@ -505,6 +552,53 @@ where
     /// tier, one rounding per component. (Before 0.6.4 theta, sinh, cosh,
     /// 1/theta and each product were rounded to storage.)
     fn exp_map(&self, base: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        let theta_sq = Self::minkowski_dot_compute(tangent, tangent);
+        if Fixed::<S, F>::compute_is_zero(&theta_sq) { return Ok(base.clone()); }
+        let (br, vr) = (raws(base), raws(tangent));
+        let timelike = Fixed::<S, F>::compute_is_negative(&theta_sq);
+        exact_forms::settled(&exact_forms::HypExp { p: &br, v: &vr, timelike }, || Self::exp_map_compute(base, tangent))
+    }
+
+    /// The `log_map` of the exact formula, rounded once per component.
+    fn log_map(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        match Self::degenerate(base, target)? {
+            true => Ok(FixedVector::<Fixed<S, F>>::new(base.len())),
+            false => exact_forms::settled(&exact_forms::HypLog { p: &raws(base), q: &raws(target) }, || Self::log_map_compute(base, target)),
+        }
+    }
+
+    /// `acosh(-<p,q> / sqrt(<p,p> <q,q>))` of the exact values, rounded once.
+    fn distance(&self, p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected> {
+        if Self::degenerate(p, q)? { return Ok(Fixed::ZERO); }
+        Ok(exact_forms::settled(&exact_forms::HypDistance { p: &raws(p), q: &raws(q) }, || Ok(FixedVector::from_slice(&[Self::distance_compute(p, q)?])))?[0])
+    }
+
+    /// The transport of the exact formula, rounded once per component.
+    fn parallel_transport(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+        if Self::degenerate(base, target)? { return Ok(tangent.clone()); }
+        exact_forms::settled(&exact_forms::HypTransport { p: &raws(base), q: &raws(target), v: &raws(tangent) }, || Self::transport_compute(base, target, tangent))
+    }
+}
+
+impl HyperbolicSpace {
+    /// `Err(DomainError)` unless p and q are timelike on the same sheet;
+    /// `true` when they are proportional (distance zero, direction zero),
+    /// decided exactly: `<p,q>^2 = <p,p><q,q>`.
+    fn degenerate<S: Storage, const F: u32>(p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<bool, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
+        assert_eq!(p.len(), q.len(), "HyperbolicSpace: dimension mismatch");
+        let alpha = Fixed::<S, F>::compute_negate(Self::minkowski_dot_compute(p, q));
+        let pp = Fixed::<S, F>::compute_negate(Self::minkowski_dot_compute(p, p));
+        let qq = Fixed::<S, F>::compute_negate(Self::minkowski_dot_compute(q, q));
+        let positive = |x: &C<S, F>| !Fixed::<S, F>::compute_is_negative(x) && !Fixed::<S, F>::compute_is_zero(x);
+        if !(positive(&pp) && positive(&qq) && positive(&alpha)) { return Err(OverflowDetected::DomainError); }
+        Ok(S::widen_product(alpha, alpha) == S::widen_product(pp, qq))
+    }
+
+    fn exp_map_compute<S: Storage, const F: u32>(base: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         let tc = up_vec(tangent);
         let theta_sq = Self::minkowski_dot_compute(tangent, tangent);
         // Timelike (negative) shouldn't happen for tangent vectors: handled
@@ -522,9 +616,11 @@ where
         down_vec(&out)
     }
 
-    /// `d w / |w|_L` from [`HyperbolicSpace::geodesic`]: distance, direction
-    /// and scaling at the compute tier, one rounding per component.
-    fn log_map(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+    /// `d w / |w|_L` from [`HyperbolicSpace::geodesic`] at the compute tier
+    /// (the fallback).
+    fn log_map_compute<S: Storage, const F: u32>(base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         let (d, w, w_len) = Self::geodesic(base, target)?;
         if Fixed::<S, F>::compute_is_zero(&d) || Fixed::<S, F>::compute_is_zero(&w_len) {
             return Ok(FixedVector::<Fixed<S, F>>::new(base.len()));
@@ -534,8 +630,10 @@ where
         down_vec(&out)
     }
 
-    /// `acosh(-<p,q> / sqrt(<p,p> <q,q>))` at the compute tier, one rounding.
-    fn distance(&self, p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected> {
+    /// `acosh(-<p,q> / sqrt(<p,p> <q,q>))` at the compute tier (the fallback).
+    fn distance_compute<S: Storage, const F: u32>(p: &FixedVector<Fixed<S, F>>, q: &FixedVector<Fixed<S, F>>) -> Result<Fixed<S, F>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         down(Self::geodesic(p, q)?.0)
     }
 
@@ -544,7 +642,9 @@ where
     /// everything at the compute tier, one rounding per component. (Before
     /// 0.6.4 it went through the rounded log map and its norm, 1/theta, and
     /// each rounded product: about twelve storage roundings.)
-    fn parallel_transport(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
+    fn transport_compute<S: Storage, const F: u32>(base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
+    {
         let (d, w, w_len) = Self::geodesic(base, target)?;
         if Fixed::<S, F>::compute_is_zero(&d) || Fixed::<S, F>::compute_is_zero(&w_len) {
             return Ok(tangent.clone());
@@ -1408,5 +1508,182 @@ where
         let pt1 = self.m1.parallel_transport(&b1, &t1, &v1)?;
         let pt2 = self.m2.parallel_transport(&b2, &t2, &v2)?;
         Ok(Self::join(&pt1, &pt2))
+    }
+}
+
+// ============================================================================
+// Correctly rounded closed forms (`docs/design/CORRECT_ROUNDING.md`)
+// ============================================================================
+//
+// Each closed-form map is written once over `exact::Num` and settled in two
+// stages: the compute tier with tracked bounds, then `Mpf` while any output
+// component is undecided. Every component is the exact value of the formula
+// on the stored inputs, rounded once. Degenerate inputs keep the decisions
+// the compute-tier code makes; if the exact stage cannot decide (it has not
+// on any measured input), the compute-tier result stands.
+
+mod exact_forms {
+    use super::*;
+    use crate::fixed_point::domains::binary_fixed::transcendental::mpf::MpfErr;
+    use crate::fixed_point::exact::{settle, Formula, Num};
+
+    type R<X> = Result<X, MpfErr>;
+
+    pub(super) fn words<S: Storage, const F: u32, B: Num<Fixed<S, F>>>(r: &[S]) -> R<Vec<B>>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        r.iter().map(|&x| B::from_word(x, F)).collect()
+    }
+
+    pub(super) fn dot<S: Storage, const F: u32, B: Num<Fixed<S, F>>>(a: &[B], b: &[B]) -> R<B>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        let mut acc = B::int(0)?;
+        for (x, y) in a.iter().zip(b) { acc = acc.add(x.mul(*y)?)?; }
+        Ok(acc)
+    }
+
+    /// `-a0 b0 + sum_{i>0} a_i b_i`.
+    pub(super) fn mdot<S: Storage, const F: u32, B: Num<Fixed<S, F>>>(a: &[B], b: &[B]) -> R<B>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        let rest = dot::<S, F, B>(&a[1..], &b[1..])?;
+        rest.sub(a[0].mul(b[0])?)
+    }
+
+    /// The settled outputs as a vector, or `fallback` where the exact stage
+    /// did not decide.
+    pub(super) fn settled<S: Storage, const F: u32, G: Formula<Fixed<S, F>>>(
+        g: &G,
+        fallback: impl FnOnce() -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>,
+    ) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        match settle::<Fixed<S, F>, G>(g) {
+            Ok(v) => Ok(FixedVector::from_slice(&v.into_iter().map(Fixed::<S, F>::from_raw).collect::<Vec<_>>())),
+            Err(MpfErr::Domain) => Err(OverflowDetected::DomainError),
+            Err(MpfErr::Overflow) => Err(OverflowDetected::TierOverflow),
+            Err(_) => fallback(),
+        }
+    }
+
+    /// Sphere: the angle `atan2(sqrt(pp qq - c^2), c)`.
+    fn sphere_angle<S: Storage, const F: u32, B: Num<Fixed<S, F>>>(p: &[B], q: &[B]) -> R<(B, B, B)>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        let pp = dot::<S, F, B>(p, p)?;
+        let qq = dot::<S, F, B>(q, q)?;
+        let c = dot::<S, F, B>(p, q)?;
+        let cross = pp.mul(qq)?.sub(c.mul(c)?)?.sqrt()?;
+        Ok((cross.atan2(c)?, c, pp))
+    }
+
+    pub(super) struct SphereDistance<'a, S> { pub p: &'a [S], pub q: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for SphereDistance<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, q) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.q)?);
+            Ok(vec![sphere_angle::<S, F, B>(&p, &q)?.0])
+        }
+    }
+
+    /// `theta w / |w|`, `w = q - (c / pp) p`.
+    pub(super) struct SphereLog<'a, S> { pub p: &'a [S], pub q: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for SphereLog<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, q) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.q)?);
+            let (theta, c, pp) = sphere_angle::<S, F, B>(&p, &q)?;
+            let k = c.div(pp)?;
+            let w: Vec<B> = p.iter().zip(&q).map(|(pi, qi)| qi.sub(k.mul(*pi)?)).collect::<R<_>>()?;
+            let wl = dot::<S, F, B>(&w, &w)?.sqrt()?;
+            let s = theta.div(wl)?;
+            w.iter().map(|wi| wi.mul(s)).collect()
+        }
+    }
+
+    /// `cos(theta) p + sin(theta) v / theta`, `theta = |v|`.
+    pub(super) struct SphereExp<'a, S> { pub p: &'a [S], pub v: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for SphereExp<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, v) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.v)?);
+            let theta = dot::<S, F, B>(&v, &v)?.sqrt()?;
+            let (s, c) = (theta.sin()?, theta.cos()?);
+            let k = s.div(theta)?;
+            p.iter().zip(&v).map(|(pi, vi)| c.mul(*pi)?.add(k.mul(*vi)?)).collect()
+        }
+    }
+
+    /// `v - (<v,p> + <v,q>) / (1 + <p,q>) (p + q)`.
+    pub(super) struct SphereTransport<'a, S> { pub p: &'a [S], pub q: &'a [S], pub v: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for SphereTransport<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, q, v) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.q)?, words::<S, F, B>(self.v)?);
+            let den = B::int(1)?.add(dot::<S, F, B>(&p, &q)?)?;
+            let k = dot::<S, F, B>(&v, &p)?.add(dot::<S, F, B>(&v, &q)?)?.div(den)?;
+            (0..v.len()).map(|i| v[i].sub(k.mul(p[i].add(q[i])?)?)).collect()
+        }
+    }
+
+    /// Hyperbolic: the distance `ln((a + sqrt(a^2 - PP QQ)) / sqrt(PP QQ))`,
+    /// `a = -<p,q>`, `PP = -<p,p>`, `QQ = -<q,q>`; also `a` and `PP`.
+    fn hyp_distance<S: Storage, const F: u32, B: Num<Fixed<S, F>>>(p: &[B], q: &[B]) -> R<(B, B, B)>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        let a = mdot::<S, F, B>(p, q)?.neg();
+        let pp = mdot::<S, F, B>(p, p)?.neg();
+        let qq = mdot::<S, F, B>(q, q)?.neg();
+        let ppqq = pp.mul(qq)?;
+        let sh = a.mul(a)?.sub(ppqq)?.sqrt()?;
+        let d = a.add(sh)?.div(ppqq.sqrt()?)?.ln()?;
+        Ok((d, a, pp))
+    }
+
+    pub(super) struct HypDistance<'a, S> { pub p: &'a [S], pub q: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for HypDistance<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, q) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.q)?);
+            Ok(vec![hyp_distance::<S, F, B>(&p, &q)?.0])
+        }
+    }
+
+    /// The direction `w = q - (a / PP) p` and its length `|w|_L`.
+    fn hyp_direction<S: Storage, const F: u32, B: Num<Fixed<S, F>>>(p: &[B], q: &[B], a: B, pp: B) -> R<(Vec<B>, B)>
+    where Fixed<S, F>: FixedNum<Storage = S> {
+        let k = a.div(pp)?;
+        let w: Vec<B> = p.iter().zip(q).map(|(pi, qi)| qi.sub(k.mul(*pi)?)).collect::<R<_>>()?;
+        let wl = mdot::<S, F, B>(&w, &w)?.sqrt()?;
+        Ok((w, wl))
+    }
+
+    /// `d w / |w|_L`.
+    pub(super) struct HypLog<'a, S> { pub p: &'a [S], pub q: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for HypLog<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, q) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.q)?);
+            let (d, a, pp) = hyp_distance::<S, F, B>(&p, &q)?;
+            let (w, wl) = hyp_direction::<S, F, B>(&p, &q, a, pp)?;
+            let s = d.div(wl)?;
+            w.iter().map(|wi| wi.mul(s)).collect()
+        }
+    }
+
+    /// `cosh(theta) p + sinh(theta) v / theta`, `theta = sqrt(|<v,v>_L|)`.
+    pub(super) struct HypExp<'a, S> { pub p: &'a [S], pub v: &'a [S], pub timelike: bool }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for HypExp<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, v) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.v)?);
+            let t2 = mdot::<S, F, B>(&v, &v)?;
+            let theta = (if self.timelike { t2.neg() } else { t2 }).sqrt()?;
+            let (sh, ch) = (theta.sinh()?, theta.cosh()?);
+            let k = sh.div(theta)?;
+            p.iter().zip(&v).map(|(pi, vi)| ch.mul(*pi)?.add(k.mul(*vi)?)).collect()
+        }
+    }
+
+    /// `v + <v,u>_L (sinh(d) p + (cosh(d) - 1) u)`, `u = w / |w|_L`.
+    pub(super) struct HypTransport<'a, S> { pub p: &'a [S], pub q: &'a [S], pub v: &'a [S] }
+    impl<'a, S: Storage, const F: u32> Formula<Fixed<S, F>> for HypTransport<'a, S> where Fixed<S, F>: FixedNum<Storage = S> {
+        fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+            let (p, q, v) = (words::<S, F, B>(self.p)?, words::<S, F, B>(self.q)?, words::<S, F, B>(self.v)?);
+            let (d, a, pp) = hyp_distance::<S, F, B>(&p, &q)?;
+            let (w, wl) = hyp_direction::<S, F, B>(&p, &q, a, pp)?;
+            let u: Vec<B> = w.iter().map(|wi| wi.div(wl)).collect::<R<_>>()?;
+            let coeff = mdot::<S, F, B>(&v, &u)?;
+            let (sh, chm1) = (d.sinh()?, d.cosh()?.sub(B::int(1)?)?);
+            (0..v.len()).map(|i| v[i].add(coeff.mul(sh.mul(p[i])?.add(chm1.mul(u[i])?)?)?)).collect()
+        }
     }
 }

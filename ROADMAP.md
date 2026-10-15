@@ -779,33 +779,32 @@ sits in the row reconstruction (the AVX2 block decode and its scalar
 tail). Worth pinning the fast state with an explicit kernel layout; until
 then the cost of the slow state is about 50 percent on this form only.
 
-### Open defect: `exp` on the compact profile is one unit off for large results
+### Fixed (0.7.0): the binary transcendentals were not correctly rounded near the top of each format's range
 
-**Found 2026-10-05, not fixed.** On the compact profile (Q32.32) `exp` and
-`try_exp` return a value one storage unit from the nearest on about 1 input
-in 100 when the result is large: 18 of 1,500 random arguments with `|x|` up
-to 21, against mpmath. For `|x| < 2` it is the nearest value on 1,500 of
-1,500. Realtime is not affected (Q22.10 and Q16.16: 1,500 of 1,500 nearest,
-large arguments included).
+**Found 2026-10-05 on compact `exp`, measured and fixed 2026-10-15 for every
+function and format.** A gate across the whole output range
+(`tests/exp_full_range_validation.rs`, 17 functions at seven formats, mpmath
+at 500 digits) found results off by one unit or more near the top of every
+format's range, on both the imperative and the canonical path, all present
+in the published 0.6.7: compact `exp`/`sinh`/`cosh` (the original report),
+`pow` on every format (up to 9,048 units at Q22.10), Q64.64 `exp` family up to
+1.5e10 units, `acos` on Q64.64 and Q128.128, Q256.256 `sin`/`cos`/`tan` at
+large arguments, and edge cases of `asinh`, `atanh` and `tan`. The earlier
+gates sampled arguments whose results are near 1, which is why they passed.
 
-Cause: the compact compute tier is Q64.64, 32 bits above storage, and the
-Q64.64 engine's error is relative to the result (about 5 units of `2^-64`
-times `e^x`). A result near `2^29` leaves no margin. The canonical evaluator
-calls the same engine through the same rounding, so it is expected to behave
-the same; that path was not measured. The existing gates use small
-arguments, which is why they pass.
+Causes: the compute tier has exactly twice the storage's fraction bits and
+the engines' error is relative to the result, so the guard bits run out at
+the top of the range; the Q128.128 `exp` engine cut its Taylor tail at
+`x^2/2`; the Q512.512 `exp` fraction tables were generated at about 311 bits;
+pi/2 at the compute tier of Q64.64 and Q128.128 was the storage constant.
 
-To do, as one change that moves results (so its own release, not folded into
-an additive one):
-
-- Measure every profile at the top of its range, and the functions built on
-  `exp` (`sinh`, `cosh`, `tanh`, `pow`), on both the imperative and the
-  canonical path.
-- Compute large results with enough headroom (the next wider engine, or a
-  split of the argument that keeps the error absolute).
-- Extend the reference gates so every transcendental is tested across its
-  whole output range on every profile and split, not only near zero.
-
+Fix: the engine and table defects corrected, and every transcendental now
+rounds through a ladder: the engine's result when its error cannot cross a
+rounding boundary, otherwise a sure path at about 1000 bits
+(`transcendental/sure.rs`). Gate: 19,040 cases plus three fresh seeds of
+71,400, every one correctly rounded, imperative and canonical. Open: trees of
+several functions in the canonical evaluator keep the compute-tier chain and
+its single rounding; they are not proven correctly rounded.
 
 ### Complete the imperative (non-routed) layer for every domain
 

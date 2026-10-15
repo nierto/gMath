@@ -35,6 +35,8 @@ pub(crate) mod width;
 
 /// `Fixed<S, F>` and the per-width kernels.
 pub(crate) mod fixed_num;
+// Correct rounding by two stages: the compute tier with bounds, then Mpf.
+pub(crate) mod exact;
 
 /// Build-time Q-format configuration (FRAC_BITS and derived constants).
 // SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.

@@ -108,6 +108,21 @@ reduction by the truncated π/2: 1390 below `2^12`, 8e-11 absolute below
   `DecimalFixed` transcendental has one, as on `FixedPoint`) and through the
   canonical layer, and a panic from the infallible method; `exp` far below
   zero is 0.
+- On the binary `Fixed<S, F>` formats, every function is correctly rounded
+  (nearest, ties toward +infinity) over its whole domain and output range,
+  gated by `tests/exp_full_range_validation.rs` against mpmath at every
+  format. The engine computes at twice the storage's fraction bits; where its
+  result lies too close to a rounding boundary for its error to decide (near
+  the top of a format's range, next to the singularities of `tan`, `asin`,
+  `atanh`, `acosh`, and for `pow` with a large exponent), a sure path at about
+  1000 bits decides it, and trigonometric arguments of 2^24 and above always
+  take that path. A canonical tree that is one function of stored values
+  rounds the same way; trees of several functions keep the compute-tier chain
+  with its single rounding at the end. Up to 0.6.7 results near the top of
+  the range could be off by one unit or more (compact `exp`; `pow` on every
+  format, up to 9,048 units at Q22.10; the Q64.64 `exp` family up to 1.5e10
+  units). The infallible `asin`, `acos`, `atanh` and `acosh` panic outside
+  their domain (they returned a plausible value up to 0.6.7).
 - Accuracy is defined by the test suite against mpmath references, not by slogans;
   see [the precision guide](README_PRECISION.md) and the validation methodology in
   **[CONTRACT.md](../CONTRACT.md)**. Inputs that are inexact in a *pinned*

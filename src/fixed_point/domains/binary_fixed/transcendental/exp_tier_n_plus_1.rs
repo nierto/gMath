@@ -206,13 +206,23 @@ pub fn exp_q128_128_native(x: I256) -> I256 {
     let t2 = t2_main + I256::from_i128(t2_comp >> 64);
     let t3 = t3_main + I256::from_i128(t3_comp >> 64);
 
-    // Taylor series for tiny remainder
+    // Taylor series for the tiny remainder, x < 2^-30: the terms up to x^4/24
+    // (x^5/120 < 2^-156). Stopping at x^2/2 left x^3/6 (up to 2^-92.6
+    // relative) out, which a result near 2^62 turned into 2^34 storage units
+    // of Q64.64.
     let exp_tiny = if tiny == 0 {
         I256::from_i128(1) << 128
     } else {
         let x_i256 = I256::from_u128(tiny);
         let x2 = multiply_i256_q128_128(x_i256, x_i256);
+        let x3 = multiply_i256_q128_128(x2, x_i256);
+        let x4 = multiply_i256_q128_128(x2, x2);
+        // 1/6 and 1/24 at Q0.128 (floor; 2^128 is not a multiple of either)
+        let inv6 = I256::from_u128(u128::MAX / 6);
+        let inv24 = I256::from_u128(u128::MAX / 24);
         (I256::from_i128(1) << 128) + x_i256 + (x2 >> 1)
+            + multiply_i256_q128_128(x3, inv6)
+            + multiply_i256_q128_128(x4, inv24)
     };
 
     // Multiply: exp_frac = t1 * t2 * t3 * exp_tiny

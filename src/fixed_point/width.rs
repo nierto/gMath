@@ -84,6 +84,9 @@ pub trait WideInt:
     fn divmod(self, d: Self) -> (Self, Self);
     /// The integer square root of a non-negative value (the largest k with k * k <= self).
     fn isqrt(self) -> Self;
+    /// Word `i` (bits `64i .. 64i + 64`) of the two's-complement value,
+    /// sign-extended beyond the word.
+    fn word(self, i: u32) -> u64;
 
     #[inline]
     fn mul_exact(self, rhs: Self) -> Self {
@@ -137,6 +140,10 @@ macro_rules! native_wide_int {
             #[inline] fn magnitude_bit_length(self) -> u32 { $bits - self.unsigned_abs().leading_zeros() }
             #[inline] fn divmod(self, d: Self) -> (Self, Self) { (self / d, self % d) }
             #[inline] fn isqrt(self) -> Self { debug_assert!(self >= 0); (self as $u).isqrt() as $t }
+            #[inline]
+            fn word(self, i: u32) -> u64 {
+                if 64 * i >= $bits { if self < 0 { u64::MAX } else { 0 } } else { (self >> (64 * i)) as u64 }
+            }
         }
     };
 }
@@ -175,6 +182,10 @@ macro_rules! word_wide_int {
                 words_bit_length(&m.words)
             }
             #[inline] fn divmod(self, d: Self) -> (Self, Self) { $divmod(self, d) }
+            #[inline]
+            fn word(self, i: u32) -> u64 {
+                match self.words.get(i as usize) { Some(w) => *w, None => if self.is_negative() { u64::MAX } else { 0 } }
+            }
             #[inline]
             fn isqrt(self) -> Self {
                 // Newton from 2^ceil(bits / 2), monotone until it stops decreasing

@@ -29,6 +29,12 @@ pub mod ln_tier_n_plus_1;
 pub mod sqrt_tier_n_plus_1;
 pub mod sin_cos_tier_n_plus_1;
 pub mod atan_tier_n_plus_1;
+#[doc(hidden)]
+pub mod sure;
+#[cfg(test)]
+pub(crate) mod big;
+#[doc(hidden)]
+pub mod mpf;
 // ln decomposition functions are internal to ln_tier_n_plus_1.rs (not public API)
 
 // traits.rs and exp.rs archived — FASC uses exp_tier_n_plus_1 directly
@@ -154,9 +160,12 @@ mod engine_identity_tests {
 
     const EXPECTED: &[(&str, u64)] = &[
         ("exp_q64_64", 0x69A6F886355E457B),
-        ("exp_q128_128", 0xCDFE13FF9074C858),
+        // exp_q128_128 and exp_q512_512 recorded again 2026-10-15: the Q128.128
+        // Taylor tail now reaches x^4/24 and the tier-6 fraction tables are
+        // generated at 600 terms (both were short of their format's precision)
+        ("exp_q128_128", 0x4ADE6C83B52E897C),
         ("exp_q256_256", 0x14AF8CB2AE9F805F),
-        ("exp_q512_512", 0x1AD95FEC73C76C72),
+        ("exp_q512_512", 0x54217C43412E66DE),
         ("ln_q64_64", 0xB8F7832C0117771B),
         ("ln_q128_128", 0x2DCA1D208B1C7C79),
         ("ln_q256_256", 0xBA05DE429E849712),
@@ -173,14 +182,16 @@ mod engine_identity_tests {
         ("atan_q128_128", 0x5C58E0A5CADA6049),
         ("atan_q256_256", 0x614CBB54C2F597BD),
         ("atan_q512_512", 0x51D6839FDD7372B1),
-        ("atan_q128_128_compute", 0x0514252DF596858A),
-        ("atan_q256_256_compute", 0x06594EDCA60B4B65),
+        // the compute atan series sum 55 and 105 terms since 0.7.0 (33 and 65
+        // left 2^-85 and 2^-165): atan2_*_compute now equal the native atan2
+        ("atan_q128_128_compute", 0x5C58E0A5CADA6049),
+        ("atan_q256_256_compute", 0x614CBB54C2F597BD),
         ("atan2_q64_64", 0xC34556B2EB03F90B),
         ("atan2_q128_128", 0x27216FAB6E2EAFAB),
         ("atan2_q256_256", 0x59FA9D4620DF5BAA),
         ("atan2_q512_512", 0x20B329BBEFA12959),
-        ("atan2_q128_128_compute", 0xB9D938EADE60EC5A),
-        ("atan2_q256_256_compute", 0x51A2B2D53AE83152),
+        ("atan2_q128_128_compute", 0x27216FAB6E2EAFAB),
+        ("atan2_q256_256_compute", 0x59FA9D4620DF5BAA),
     ];
 
     #[test]
