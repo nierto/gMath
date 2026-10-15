@@ -183,3 +183,23 @@ its extension shape.
 - Which licensing mechanism (section 6).
 - Whether the extension keeps the `inference` word in its name, given the
   engine's own naming.
+
+### 9a. Decisions (owner sign-off, 2026-10-15)
+
+| Question | Decision |
+|---|---|
+| How 0.7.0 ships | As g_math 0.7.0 (not a new crate name) |
+| Crate name | `g_math_inference` |
+| Keep the word "inference" | Keep it |
+| Where `compute_tier` lives | Stays in the open core, without a feature gate |
+| How licensees get the extension | crates.io with a proprietary licence file. Owner's reasoning: a company using it will do so for audit or legal reasons, so use becomes evident through audits and procedures; the protection is legal, by choice. |
+| When the move happens | After phase 7c, before the 0.7.0 release |
+
+Owner's note on timing: a 0.6.8 release may separate the module from the
+0.6 line before 0.7.0. To settle with the owner before it is cut: removing
+the `inference` feature in a patch release breaks every consumer that pins
+"0.6" with that feature (Cargo resolves them to 0.6.8 on their next update).
+A 0.6.8 that keeps the feature, marks it deprecated and points to
+`g_math_inference` avoids that; the removal itself then lands in 0.7.0.
+Either way the published 0.4.x to 0.6.7 releases keep the module under
+their open licences.
