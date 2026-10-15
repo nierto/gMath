@@ -370,6 +370,12 @@ where
         sure().ok_or(OverflowDetected::TierOverflow)
     }
 
+    /// Words whose compute word takes the integer square root faster than the
+    /// sqrt engine runs (release, 2026-10-15: Q22.10 3.6 us -> 17 ns, Q32.32
+    /// 3.6 us -> 51 ns, Q64.64 14.9 -> 7.2 us, Q128.128 86 -> 29 us; Q256.256
+    /// stays on its engine, 6.5 us against 147 us).
+    const EXACT_SQRT: bool = S::BITS <= 256;
+
     /// The engines' relative error bound in compute units, log2: the realtime
     /// engines run the Q64.64 engines and round once to 2F bits (measured
     /// within half a unit at F = 6..28, sin and cos up to 2^20 included); the
@@ -540,6 +546,14 @@ where
     /// Fallible sqrt(x): returns `Err(DomainError)` if x < 0.
     pub fn try_sqrt(self) -> Result<Self, OverflowDetected> {
         if self < Self::ZERO { return Err(OverflowDetected::DomainError); }
+        if Self::EXACT_SQRT && F + 2 <= S::BITS {
+            // exact: the nearest raw is floor(sqrt(raw 2^F) + 1/2) = (r + 1) / 2
+            // with r = isqrt(raw 2^(F+2)) (a tie would need an odd square to
+            // equal an even number), all on the compute word
+            let r = Self::upscale_to_compute(self.raw).shl_bits(2).isqrt();
+            let one = <Compute<Self> as WideInt>::one();
+            return Ok(Self { raw: Self::downscale_to_storage((r + one).shr_bits(1).shl_bits(F))? });
+        }
         let v = Self::direct_sqrt(Self::upscale_to_compute(self.raw));
         Ok(Self { raw: Self::settle(v, 2, || sure::sqrt_to_raw::<S>(self.raw, F))? })
     }
