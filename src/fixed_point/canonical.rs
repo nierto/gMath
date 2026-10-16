@@ -9,12 +9,13 @@
 //!
 //! ```rust
 //! use g_math::canonical::{gmath, evaluate, LazyExpr};
+//! use g_math::fixed_point::Q64_64;
 //!
 //! // Build expressions (zero allocation, deferred evaluation)
 //! let result = gmath("1.5") + gmath("2.5");
 //!
-//! // Evaluate via thread-local stack evaluator
-//! let value = evaluate(&result).unwrap();
+//! // Evaluate in a format (the thread-local evaluator for that format)
+//! let value = evaluate::<Q64_64>(&result).unwrap();
 //! println!("{}", value);  // "4.0000000000000000000"
 //! ```
 //!
@@ -22,9 +23,10 @@
 //!
 //! ```rust
 //! use g_math::canonical::{gmath, evaluate, LazyExpr};
+//! use g_math::fixed_point::Q64_64;
 //!
-//! let rate = gmath("1.05"); // 5% annual rate
-//! let mut balance = evaluate(&gmath("1000.00")).unwrap();
+//! let rate = gmath::<Q64_64>("1.05"); // 5% annual rate
+//! let mut balance = evaluate::<Q64_64>(&gmath("1000.00")).unwrap();
 //!
 //! for year in 1..=5 {
 //!     // Feed previous result back in: full precision + shadow preserved
@@ -37,10 +39,11 @@
 //!
 //! ```rust
 //! use g_math::canonical::{gmath, evaluate};
+//! use g_math::fixed_point::Q64_64;
 //!
-//! let e = evaluate(&gmath("1.0").exp()).unwrap();     // e^1 = 2.718...
-//! let ln2 = evaluate(&gmath("2.0").ln()).unwrap();    // ln(2) = 0.693...
-//! let root = evaluate(&gmath("2.0").sqrt()).unwrap();  // sqrt(2) = 1.414...
+//! let e = evaluate::<Q64_64>(&gmath("1.0").exp()).unwrap();     // e^1 = 2.718...
+//! let ln2 = evaluate::<Q64_64>(&gmath("2.0").ln()).unwrap();    // ln(2) = 0.693...
+//! let root = evaluate::<Q64_64>(&gmath("2.0").sqrt()).unwrap();  // sqrt(2) = 1.414...
 //! println!("{}", e);    // "2.7182818284590452353"
 //! ```
 //!
@@ -50,7 +53,7 @@
 //! use g_math::canonical::{gmath_parse, evaluate, LazyExpr};
 //!
 //! let user_input = String::from("3.14");
-//! let parsed = gmath_parse(&user_input).unwrap();
+//! let parsed = gmath_parse::<g_math::fixed_point::Q64_64>(&user_input).unwrap();
 //! let result = evaluate(&parsed.sin()).unwrap();
 //! ```
 //!
@@ -69,20 +72,14 @@ pub use super::universal::fasc::{
     LazyMatrixExpr,
     DomainMatrix,
     gmath,
-    gmath_in,
     gmath_parse,
-    gmath_parse_in,
     ConstantId,
     StackEvaluator,
     StackValue,
     evaluate,
-    evaluate_in,
     evaluate_matrix,
-    evaluate_matrix_in,
     evaluate_sincos,
-    evaluate_sincos_in,
     evaluate_sinhcosh,
-    evaluate_sinhcosh_in,
     with_evaluator,
     FascFormat,
     GmathMode,

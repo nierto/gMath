@@ -37,7 +37,6 @@
 //! Design and measurements: `docs/design/CERTIFIED_INTERVALS.md`.
 
 use super::{FixedMatrix, Interval};
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::width::{CircleStorage, Storage, WideInt};
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -211,7 +210,7 @@ where
 
 /// The outcome of a certified positive-definiteness test.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum PdVerdict<T = FixedPoint> {
+pub enum PdVerdict<T> {
     /// Every Cholesky pivot is certainly positive: proven positive definite.
     PositiveDefinite,
     /// Pivot `pivot` is certainly at or below zero, all earlier pivots being

@@ -1,18 +1,18 @@
 //! # Compute-Tier Transcendentals: Public Wide-Precision Surface
 //!
 //! Direct access to the tier-N+1 transcendental engines that back every
-//! other API in this crate, operating on raw [`ComputeStorage`] values at
-//! `2 × FRAC_BITS` fractional precision. Requires the `inference` feature.
+//! other API in this crate, operating on raw compute-tier values
+//! (`Compute<T>`) at `2F` fraction bits for the format `T = Fixed<S, F>`.
+//! Requires the `inference` feature.
 //!
 //! ## Format
 //!
-//! A [`ComputeStorage`] value represents `raw / 2^COMPUTE_FRAC_BITS`, where
-//! `COMPUTE_FRAC_BITS = 2 × FRAC_BITS` (see [`FRAC_BITS`] and
-//! [`COMPUTE_FRAC_BITS`]). This is exactly the format produced by the
-//! `tq19` wide-output `matvec_q2f` family, so those accumulators feed these
-//! functions with no conversion. Use [`from_fixed`]/[`to_fixed`] to cross
-//! between `FixedPoint` storage and the compute tier; a chain of calls at
-//! the compute tier rounds once at the final [`to_fixed`], not once per step.
+//! A `Compute<T>` value represents `raw / 2^(2F)`. This is exactly the
+//! format produced by the `tq19` wide-output `matvec_q2f` family, so those
+//! accumulators feed these functions with no conversion. Use
+//! [`from_fixed`]/[`to_fixed`] to cross between storage and the compute
+//! tier; a chain of calls at the compute tier rounds once at the final
+//! [`to_fixed`], not once per step.
 //!
 //! ## Contract
 //!
@@ -26,30 +26,22 @@
 //! - [`to_fixed`] **panics** if the value does not fit storage;
 //!   [`try_to_fixed`] returns `None` instead. Nothing here wraps silently.
 //!
-//! ## Example (any profile)
+//! ## Example (any format)
 //!
 //! ```
 //! # #[cfg(feature = "inference")] {
 //! use g_math::fixed_point::compute_tier as ct;
-//! use g_math::fixed_point::FixedPoint;
+//! use g_math::fixed_point::Fixed;
 //!
-//! let x = ct::from_fixed(FixedPoint::from_str("0.5"));
-//! let y = ct::sigmoid::<FixedPoint>(x);                 // stays at 2×FRAC_BITS precision
-//! let s = ct::to_fixed::<FixedPoint>(y);                // single rounding, back to storage
+//! type Q22_10 = Fixed<i32, 10>;
+//! let x = ct::from_fixed(Q22_10::from_str("0.5"));
+//! let y = ct::sigmoid::<Q22_10>(x);                     // stays at 2F fraction bits
+//! let s = ct::to_fixed::<Q22_10>(y);                    // single rounding, back to storage
 //! # let _ = s;
 //! # }
 //! ```
 
 use crate::fixed_point::fixed_num::{Compute, FixedNum};
-
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-pub use crate::fixed_point::universal::fasc::stack_evaluator::ComputeStorage;
-
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-pub use crate::fixed_point::frac_config::FRAC_BITS;
-
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-pub use crate::fixed_point::frac_config::COMPUTE_FRAC_BITS;
 
 /// 1.0 at the compute tier of the format `T`.
 #[inline]

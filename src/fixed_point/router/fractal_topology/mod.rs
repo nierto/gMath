@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn tree_walker_literal_add() {
         // gmath("0.1") + gmath("255")
-        let expr: LazyExpr = LazyExpr::Add(
+        let expr: LazyExpr<crate::fixed_point::Q64_64> = LazyExpr::Add(
             Box::new(LazyExpr::Literal("0.1")),
             Box::new(LazyExpr::Literal("255")),
         );
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn tree_walker_integer_add() {
-        let expr: LazyExpr = LazyExpr::Add(
+        let expr: LazyExpr<crate::fixed_point::Q64_64> = LazyExpr::Add(
             Box::new(LazyExpr::Literal("3")),
             Box::new(LazyExpr::Literal("6")),
         );
@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn tree_walker_transcendental() {
         // exp("0.1") → decimal engine → decimal-only class
-        let expr: LazyExpr = LazyExpr::Exp(Box::new(LazyExpr::Literal("0.1")));
+        let expr: LazyExpr<crate::fixed_point::Q64_64> = LazyExpr::Exp(Box::new(LazyExpr::Literal("0.1")));
         let class = route_expression(&expr);
         assert_ne!(class.exact_in & DECIMAL_BIT, 0);
         assert_eq!(class.exact_in & BINARY_BIT, 0);
@@ -811,11 +811,11 @@ mod tests {
     #[test]
     fn tree_walker_mixed_chain() {
         // (0.1 + 255).exp() → decimal add → decimal exp
-        let inner: LazyExpr = LazyExpr::Add(
+        let inner: LazyExpr<crate::fixed_point::Q64_64> = LazyExpr::Add(
             Box::new(LazyExpr::Literal("0.1")),
             Box::new(LazyExpr::Literal("255")),
         );
-        let expr: LazyExpr = LazyExpr::Exp(Box::new(inner));
+        let expr: LazyExpr<crate::fixed_point::Q64_64> = LazyExpr::Exp(Box::new(inner));
         let class = route_expression(&expr);
         assert_ne!(class.exact_in & DECIMAL_BIT, 0);
     }

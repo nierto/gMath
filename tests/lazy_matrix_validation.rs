@@ -18,7 +18,7 @@ macro_rules! suite {
             #[allow(dead_code)]
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::{Fixed};
-            use g_math::canonical::{evaluate_matrix_in};
+            use g_math::canonical::{evaluate_matrix};
             use g_math::fixed_point::imperative::matrix_functions::*;
 
             fn fp(s: &str) -> FixedPoint {
@@ -55,7 +55,7 @@ macro_rules! suite {
             fn test_lazy_matrix_identity_roundtrip() {
                 let id = FixedMatrix::<FixedPoint>::identity(3);
                 let expr = LazyMatrixExpr::<FixedPoint>::from(id.clone());
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 mat_near(&result, &id, tight(), "identity_roundtrip");
             }
 
@@ -64,7 +64,7 @@ macro_rules! suite {
                 let a = FixedMatrix::<FixedPoint>::identity(2);
                 let b = FixedMatrix::<FixedPoint>::identity(2);
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) + LazyMatrixExpr::<FixedPoint>::from(b.clone());
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 let expected = &a + &b;
                 mat_near(&result, &expected, tight(), "lazy_add");
             }
@@ -74,7 +74,7 @@ macro_rules! suite {
                 let a = FixedMatrix::<FixedPoint>::from_fn(2, 2, |r, c| fp(&format!("{}", (r * 2 + c + 1))));
                 let b = FixedMatrix::<FixedPoint>::identity(2);
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) - LazyMatrixExpr::<FixedPoint>::from(b.clone());
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 let expected = &a - &b;
                 mat_near(&result, &expected, tight(), "lazy_sub");
             }
@@ -84,7 +84,7 @@ macro_rules! suite {
                 let a = FixedMatrix::<FixedPoint>::from_fn(2, 2, |r, c| fp(&format!("{}", (r * 2 + c + 1))));
                 let b = FixedMatrix::<FixedPoint>::from_fn(2, 2, |r, c| fp(&format!("{}", (r * 2 + c + 5))));
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) * LazyMatrixExpr::<FixedPoint>::from(b.clone());
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 let expected = &a * &b;
                 mat_near(&result, &expected, tight(), "lazy_mul");
             }
@@ -93,7 +93,7 @@ macro_rules! suite {
             fn test_lazy_matrix_neg() {
                 let a = FixedMatrix::<FixedPoint>::from_fn(2, 2, |r, c| fp(&format!("{}", (r * 2 + c + 1))));
                 let expr = -LazyMatrixExpr::<FixedPoint>::from(a.clone());
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 let expected = -&a;
                 mat_near(&result, &expected, tight(), "lazy_neg");
             }
@@ -102,7 +102,7 @@ macro_rules! suite {
             fn test_lazy_matrix_transpose() {
                 let a = FixedMatrix::<FixedPoint>::from_fn(2, 3, |r, c| fp(&format!("{}", (r * 3 + c + 1))));
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()).transpose();
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 let expected = a.transpose();
                 mat_near(&result, &expected, tight(), "lazy_transpose");
             }
@@ -112,7 +112,7 @@ macro_rules! suite {
                 let a = FixedMatrix::<FixedPoint>::identity(2);
                 let s = fp("3");
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) * s;
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 // 3 * I should have 3 on diagonal
                 assert_fp(result.get(0, 0), fp("3"), tight(), "scalar_mul[0,0]");
                 assert_fp(result.get(1, 1), fp("3"), tight(), "scalar_mul[1,1]");
@@ -122,7 +122,7 @@ macro_rules! suite {
             #[test]
             fn test_lazy_matrix_identity_node() {
                 let expr = LazyMatrixExpr::<FixedPoint>::identity(4);
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 assert_eq!(result.rows(), 4);
                 assert_eq!(result.cols(), 4);
                 assert_fp(result.get(0, 0), fp("1"), tight(), "identity_node[0,0]");
@@ -145,7 +145,7 @@ macro_rules! suite {
                         _ => unreachable!(),
                     }
                 });
-                let lazy_result = evaluate_matrix_in(&LazyMatrixExpr::<FixedPoint>::from(a.clone()).exp()).unwrap();
+                let lazy_result = evaluate_matrix(&LazyMatrixExpr::<FixedPoint>::from(a.clone()).exp()).unwrap();
                 let eager_result = matrix_exp(&a).unwrap();
                 mat_near(&lazy_result, &eager_result, tight(), "lazy_exp_vs_eager");
             }
@@ -162,7 +162,7 @@ macro_rules! suite {
                         _ => unreachable!(),
                     }
                 });
-                let lazy_result = evaluate_matrix_in(&LazyMatrixExpr::<FixedPoint>::from(a.clone()).log()).unwrap();
+                let lazy_result = evaluate_matrix(&LazyMatrixExpr::<FixedPoint>::from(a.clone()).log()).unwrap();
                 let eager_result = matrix_log(&a).unwrap();
                 mat_near(&lazy_result, &eager_result, tight(), "lazy_log_vs_eager");
             }
@@ -178,7 +178,7 @@ macro_rules! suite {
                         _ => unreachable!(),
                     }
                 });
-                let lazy_result = evaluate_matrix_in(&LazyMatrixExpr::<FixedPoint>::from(a.clone()).sqrt()).unwrap();
+                let lazy_result = evaluate_matrix(&LazyMatrixExpr::<FixedPoint>::from(a.clone()).sqrt()).unwrap();
                 let eager_result = matrix_sqrt(&a).unwrap();
                 mat_near(&lazy_result, &eager_result, tol(), "lazy_sqrt_vs_eager");
             }
@@ -201,7 +201,7 @@ macro_rules! suite {
                 });
                 // Lazy chain: exp(log(A)) — all at compute tier, single downscale
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()).log().exp();
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 mat_near(&result, &a, tol(), "exp_log_chain_roundtrip");
             }
 
@@ -218,7 +218,7 @@ macro_rules! suite {
                     }
                 });
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()).exp().log();
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 mat_near(&result, &a, tol(), "log_exp_chain_roundtrip");
             }
 
@@ -245,7 +245,7 @@ macro_rules! suite {
                 });
                 // Lazy: exp(A) * exp(B) — zero intermediate materializations
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()).exp() * LazyMatrixExpr::<FixedPoint>::from(b.clone()).exp();
-                let lazy_result = evaluate_matrix_in(&expr).unwrap();
+                let lazy_result = evaluate_matrix(&expr).unwrap();
 
                 // Eager: two separate materializations
                 let exp_a = matrix_exp(&a).unwrap();
@@ -269,7 +269,7 @@ macro_rules! suite {
                 });
                 let half = fp("0.5");
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()).pow(half);
-                let lazy_result = evaluate_matrix_in(&expr).unwrap();
+                let lazy_result = evaluate_matrix(&expr).unwrap();
                 let eager_result = matrix_pow(&a, half).unwrap();
                 mat_near(&lazy_result, &eager_result, tol(), "pow_chain");
             }
@@ -287,7 +287,7 @@ macro_rules! suite {
                 });
                 // A * A^{-1} should ≈ I
                 let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) * LazyMatrixExpr::<FixedPoint>::from(a.clone()).inverse();
-                let result = evaluate_matrix_in(&expr).unwrap();
+                let result = evaluate_matrix(&expr).unwrap();
                 let id = FixedMatrix::<FixedPoint>::identity(2);
                 mat_near(&result, &id, tol(), "A_times_A_inv");
             }
@@ -316,7 +316,7 @@ macro_rules! suite {
 
                 let expr = (LazyMatrixExpr::<FixedPoint>::from(a.clone()) + LazyMatrixExpr::<FixedPoint>::from(b.clone())).transpose()
                     * LazyMatrixExpr::<FixedPoint>::from(a.clone()).exp();
-                let lazy_result = evaluate_matrix_in(&expr).unwrap();
+                let lazy_result = evaluate_matrix(&expr).unwrap();
 
                 // Eager equivalent
                 let sum = &a + &b;

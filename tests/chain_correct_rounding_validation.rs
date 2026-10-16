@@ -16,7 +16,7 @@ macro_rules! suite {
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::WideInt;
-            use g_math::canonical::{evaluate_in, gmath_parse_in, CompactShadow, ConstantId, LazyExpr, StackValue};
+            use g_math::canonical::{evaluate, gmath_parse, CompactShadow, ConstantId, LazyExpr, StackValue};
             use g_math::fixed_point::FixedNum;
 
             mod data {
@@ -83,7 +83,7 @@ macro_rules! suite {
                 } else if tok == "pi" {
                     LazyExpr::Constant(ConstantId::Pi)
                 } else if let Some(k) = tok.strip_prefix('i') {
-                    gmath_parse_in::<FixedPoint>(k).expect("integer literal")
+                    gmath_parse::<FixedPoint>(k).expect("integer literal")
                 } else if let Some(r) = tok.strip_prefix('#') {
                     E::from(StackValue::<FixedPoint>::Binary(<FixedPoint as FixedNum>::STORAGE_TIER, raw(r), CompactShadow::None))
                 } else {
@@ -99,7 +99,7 @@ macro_rules! suite {
                 for &(tree, want) in data::REFS {
                     let e = parse(tree);
                     let want = raw(want);
-                    let got = std::panic::catch_unwind(|| evaluate_in(&e).map(|v| (v.as_binary_storage(), matches!(v, StackValue::<FixedPoint>::Binary(..)))));
+                    let got = std::panic::catch_unwind(|| evaluate(&e).map(|v| (v.as_binary_storage(), matches!(v, StackValue::<FixedPoint>::Binary(..)))));
                     t.0 += 1;
                     match got {
                         Ok(Ok((Some(g), true))) => {

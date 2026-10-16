@@ -23,7 +23,7 @@
 //! embedded `exp(44)` at 19 decimals was 198 units low.
 //!
 //! ```bash
-//! GMATH_PROFILE=embedded cargo test --test decimal_exp_range_validation -- --nocapture
+//! cargo test --test decimal_exp_range_validation -- --nocapture
 //! ```
 
 #[macro_use]

@@ -21,7 +21,7 @@ macro_rules! suite {
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{gmath_in, evaluate_in};
+            use g_math::canonical::{gmath, evaluate};
             use g_math::fixed_point::core_types::OverflowDetected;
 
             // ============================================================================
@@ -36,9 +36,9 @@ macro_rules! suite {
                             input.len() - 1,
                         ))
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -48,104 +48,104 @@ macro_rules! suite {
 
             #[test]
             fn parse_empty_string() {
-                let result = evaluate_in(&gmath_in::<FixedPoint>(""));
+                let result = evaluate(&gmath::<FixedPoint>(""));
                 assert!(result.is_err(), "empty string should return Err, got {:?}", result);
             }
 
             #[test]
             fn parse_whitespace_only() {
-                let r1 = evaluate_in(&gmath_in::<FixedPoint>(" "));
+                let r1 = evaluate(&gmath::<FixedPoint>(" "));
                 assert!(r1.is_err(), "single space should return Err, got {:?}", r1);
             }
 
             #[test]
             fn parse_tab_only() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("\t"));
+                let r = evaluate(&gmath::<FixedPoint>("\t"));
                 assert!(r.is_err(), "tab should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_bare_dot() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("."));
+                let r = evaluate(&gmath::<FixedPoint>("."));
                 assert!(r.is_err(), "bare dot should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_bare_minus() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("-"));
+                let r = evaluate(&gmath::<FixedPoint>("-"));
                 assert!(r.is_err(), "bare minus should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_bare_slash() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("/"));
+                let r = evaluate(&gmath::<FixedPoint>("/"));
                 assert!(r.is_err(), "bare slash should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_fraction_missing_denominator() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1/"));
+                let r = evaluate(&gmath::<FixedPoint>("1/"));
                 assert!(r.is_err(), "'1/' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_fraction_missing_numerator() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("/3"));
+                let r = evaluate(&gmath::<FixedPoint>("/3"));
                 assert!(r.is_err(), "'/3' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_double_slash_fraction() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1/2/3"));
+                let r = evaluate(&gmath::<FixedPoint>("1/2/3"));
                 assert!(r.is_err(), "'1/2/3' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_double_dot_decimal() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1.2.3"));
+                let r = evaluate(&gmath::<FixedPoint>("1.2.3"));
                 assert!(r.is_err(), "'1.2.3' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_double_minus() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("--5"));
+                let r = evaluate(&gmath::<FixedPoint>("--5"));
                 assert!(r.is_err(), "'--5' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_scientific_notation_rejected() {
                 // The library uses fixed-point, not floating-point — "1e10" is not a valid format
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1e10"));
+                let r = evaluate(&gmath::<FixedPoint>("1e10"));
                 assert!(r.is_err(), "'1e10' should return Err (no scientific notation), got {:?}", r);
             }
 
             #[test]
             fn parse_nan_rejected() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("NaN"));
+                let r = evaluate(&gmath::<FixedPoint>("NaN"));
                 assert!(r.is_err(), "'NaN' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_inf_rejected() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("inf"));
+                let r = evaluate(&gmath::<FixedPoint>("inf"));
                 assert!(r.is_err(), "'inf' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_infinity_rejected() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("Infinity"));
+                let r = evaluate(&gmath::<FixedPoint>("Infinity"));
                 assert!(r.is_err(), "'Infinity' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_unknown_constant_foobar() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("foobar"));
+                let r = evaluate(&gmath::<FixedPoint>("foobar"));
                 assert!(r.is_err(), "'foobar' should return Err, got {:?}", r);
             }
 
             #[test]
             fn parse_unknown_constant_pi_squared() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("PI_SQUARED"));
+                let r = evaluate(&gmath::<FixedPoint>("PI_SQUARED"));
                 assert!(r.is_err(), "'PI_SQUARED' should return Err, got {:?}", r);
             }
 
@@ -156,7 +156,7 @@ macro_rules! suite {
             /// Leading/trailing whitespace: document behavior (may be trimmed or rejected)
             #[test]
             fn parse_leading_space_integer() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>(" 5"));
+                let r = evaluate(&gmath::<FixedPoint>(" 5"));
                 // Either successfully parses as 5 (with trimming) or returns ParseError
                 // Must NOT panic
                 match &r {
@@ -176,7 +176,7 @@ macro_rules! suite {
 
             #[test]
             fn parse_trailing_space_integer() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("5 "));
+                let r = evaluate(&gmath::<FixedPoint>("5 "));
                 match &r {
                     Ok(v) => {
                         let s = format!("{}", v);
@@ -194,7 +194,7 @@ macro_rules! suite {
 
             #[test]
             fn parse_surrounding_space_decimal() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>(" 1.5 "));
+                let r = evaluate(&gmath::<FixedPoint>(" 1.5 "));
                 match &r {
                     Ok(v) => {
                         let s = format!("{}", v);
@@ -216,7 +216,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_ln_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0").ln());
+                let r = evaluate(&gmath::<FixedPoint>("0").ln());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "ln(0) should return DomainError, got {:?}",
@@ -226,7 +226,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_ln_negative() {
-                let r = evaluate_in(&gmath_safe("-1").ln());
+                let r = evaluate(&gmath_safe("-1").ln());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "ln(-1) should return DomainError, got {:?}",
@@ -236,7 +236,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_sqrt_negative() {
-                let r = evaluate_in(&gmath_safe("-1").sqrt());
+                let r = evaluate(&gmath_safe("-1").sqrt());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "sqrt(-1) should return DomainError, got {:?}",
@@ -246,7 +246,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_sqrt_negative_large() {
-                let r = evaluate_in(&gmath_safe("-100").sqrt());
+                let r = evaluate(&gmath_safe("-100").sqrt());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "sqrt(-100) should return DomainError, got {:?}",
@@ -256,7 +256,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_asin_above_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("2").asin());
+                let r = evaluate(&gmath::<FixedPoint>("2").asin());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "asin(2) should return DomainError (|x| > 1), got {:?}",
@@ -266,7 +266,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_asin_below_neg_one() {
-                let r = evaluate_in(&gmath_safe("-2").asin());
+                let r = evaluate(&gmath_safe("-2").asin());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "asin(-2) should return DomainError, got {:?}",
@@ -276,7 +276,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_acos_above_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("2").acos());
+                let r = evaluate(&gmath::<FixedPoint>("2").acos());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "acos(2) should return DomainError (|x| > 1), got {:?}",
@@ -286,7 +286,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_acos_below_neg_one() {
-                let r = evaluate_in(&gmath_safe("-2").acos());
+                let r = evaluate(&gmath_safe("-2").acos());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "acos(-2) should return DomainError, got {:?}",
@@ -296,7 +296,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_atanh_at_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1").atanh());
+                let r = evaluate(&gmath::<FixedPoint>("1").atanh());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "atanh(1) should return DomainError (|x| >= 1), got {:?}",
@@ -306,7 +306,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_atanh_at_neg_one() {
-                let r = evaluate_in(&gmath_safe("-1").atanh());
+                let r = evaluate(&gmath_safe("-1").atanh());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "atanh(-1) should return DomainError, got {:?}",
@@ -316,7 +316,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_atanh_above_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("2").atanh());
+                let r = evaluate(&gmath::<FixedPoint>("2").atanh());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "atanh(2) should return DomainError, got {:?}",
@@ -326,7 +326,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_acosh_below_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0.5").acosh());
+                let r = evaluate(&gmath::<FixedPoint>("0.5").acosh());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "acosh(0.5) should return DomainError (x < 1), got {:?}",
@@ -336,7 +336,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_acosh_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0").acosh());
+                let r = evaluate(&gmath::<FixedPoint>("0").acosh());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "acosh(0) should return DomainError, got {:?}",
@@ -346,7 +346,7 @@ macro_rules! suite {
 
             #[test]
             fn domain_error_acosh_negative() {
-                let r = evaluate_in(&gmath_safe("-1").acosh());
+                let r = evaluate(&gmath_safe("-1").acosh());
                 assert!(
                     matches!(r, Err(OverflowDetected::DomainError)),
                     "acosh(-1) should return DomainError, got {:?}",
@@ -360,7 +360,7 @@ macro_rules! suite {
 
             #[test]
             fn division_by_zero_integer() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("5") / gmath_in::<FixedPoint>("0")));
+                let r = evaluate(&(gmath::<FixedPoint>("5") / gmath::<FixedPoint>("0")));
                 assert!(
                     matches!(r, Err(OverflowDetected::DivisionByZero)),
                     "5 / 0 should return DivisionByZero, got {:?}",
@@ -370,7 +370,7 @@ macro_rules! suite {
 
             #[test]
             fn division_by_zero_zero_over_zero() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("0") / gmath_in::<FixedPoint>("0")));
+                let r = evaluate(&(gmath::<FixedPoint>("0") / gmath::<FixedPoint>("0")));
                 assert!(
                     matches!(r, Err(OverflowDetected::DivisionByZero)),
                     "0 / 0 should return DivisionByZero, got {:?}",
@@ -380,7 +380,7 @@ macro_rules! suite {
 
             #[test]
             fn division_by_zero_decimal() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("1.5") / gmath_in::<FixedPoint>("0.0")));
+                let r = evaluate(&(gmath::<FixedPoint>("1.5") / gmath::<FixedPoint>("0.0")));
                 // Decimal domain may return PrecisionLoss (via rational path) instead of DivisionByZero
                 assert!(
                     matches!(
@@ -394,7 +394,7 @@ macro_rules! suite {
 
             #[test]
             fn division_by_zero_fraction() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("1/3") / gmath_in::<FixedPoint>("0")));
+                let r = evaluate(&(gmath::<FixedPoint>("1/3") / gmath::<FixedPoint>("0")));
                 assert!(
                     r.is_err(),
                     "1/3 / 0 should return error, got {:?}",
@@ -404,7 +404,7 @@ macro_rules! suite {
 
             #[test]
             fn division_by_zero_negative_numerator() {
-                let r = evaluate_in(&(gmath_safe("-5") / gmath_in::<FixedPoint>("0")));
+                let r = evaluate(&(gmath_safe("-5") / gmath::<FixedPoint>("0")));
                 assert!(
                     matches!(r, Err(OverflowDetected::DivisionByZero)),
                     "-5 / 0 should return DivisionByZero, got {:?}",
@@ -418,8 +418,8 @@ macro_rules! suite {
 
             #[test]
             fn negative_zero_integer() {
-                let pos = evaluate_in(&gmath_in::<FixedPoint>("0")).unwrap();
-                let neg = evaluate_in(&gmath_safe("-0")).unwrap();
+                let pos = evaluate(&gmath::<FixedPoint>("0")).unwrap();
+                let neg = evaluate(&gmath_safe("-0")).unwrap();
                 let neg_str = format!("{}", neg);
                 // Both should display as zero (no negative sign)
                 assert!(
@@ -435,8 +435,8 @@ macro_rules! suite {
 
             #[test]
             fn negative_zero_decimal() {
-                let pos = evaluate_in(&gmath_in::<FixedPoint>("0.0")).unwrap();
-                let neg = evaluate_in(&gmath_safe("-0.0")).unwrap();
+                let pos = evaluate(&gmath::<FixedPoint>("0.0")).unwrap();
+                let neg = evaluate(&gmath_safe("-0.0")).unwrap();
                 let pos_str = format!("{}", pos);
                 let neg_str = format!("{}", neg);
                 assert!(
@@ -461,10 +461,10 @@ macro_rules! suite {
                 ($test_name:ident, $input:expr, $label:expr) => {
                     #[test]
                     fn $test_name() {
-                        let result = evaluate_in(&gmath_in::<FixedPoint>($input));
+                        let result = evaluate(&gmath::<FixedPoint>($input));
                         assert!(
                             result.is_ok(),
-                            "{}: gmath_in::<FixedPoint>('{}') should succeed, got {:?}",
+                            "{}: gmath::<FixedPoint>('{}') should succeed, got {:?}",
                             $label, $input, result
                         );
                         let val = result.unwrap();
@@ -493,9 +493,9 @@ macro_rules! suite {
             /// All case variants of pi should produce the same value
             #[test]
             fn named_constant_pi_case_invariant() {
-                let pi1 = format!("{}", evaluate_in(&gmath_in::<FixedPoint>("pi")).unwrap());
-                let pi2 = format!("{}", evaluate_in(&gmath_in::<FixedPoint>("PI")).unwrap());
-                let pi3 = format!("{}", evaluate_in(&gmath_in::<FixedPoint>("Pi")).unwrap());
+                let pi1 = format!("{}", evaluate(&gmath::<FixedPoint>("pi")).unwrap());
+                let pi2 = format!("{}", evaluate(&gmath::<FixedPoint>("PI")).unwrap());
+                let pi3 = format!("{}", evaluate(&gmath::<FixedPoint>("Pi")).unwrap());
                 assert_eq!(pi1, pi2, "pi and PI should be equal");
                 assert_eq!(pi2, pi3, "PI and Pi should be equal");
             }
@@ -504,7 +504,7 @@ macro_rules! suite {
             #[test]
             fn named_constant_in_symbolic_arithmetic() {
                 // Adding a symbolic constant to zero should succeed
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("pi") + gmath_in::<FixedPoint>("0")));
+                let result = evaluate(&(gmath::<FixedPoint>("pi") + gmath::<FixedPoint>("0")));
                 // This may produce PrecisionLimit if the rational is too large for tier ops.
                 // Document the behavior.
                 match &result {
@@ -518,8 +518,8 @@ macro_rules! suite {
             /// during conversion to binary for transcendental evaluation.
             #[test]
             fn named_constant_transcendental_limitation() {
-                let sin_pi = evaluate_in(&gmath_in::<FixedPoint>("pi").sin());
-                let exp_ln2 = evaluate_in(&gmath_in::<FixedPoint>("ln2").exp());
+                let sin_pi = evaluate(&gmath::<FixedPoint>("pi").sin());
+                let exp_ln2 = evaluate(&gmath::<FixedPoint>("ln2").exp());
 
                 // Document current behavior: TierOverflow on high-precision Symbolic → Binary conversion
                 match &sin_pi {
@@ -538,7 +538,7 @@ macro_rules! suite {
             #[test]
             fn constant_decimal_approx_sin_pi() {
                 // Use decimal approximation rather than named constant
-                let result = evaluate_in(&gmath_in::<FixedPoint>("3.14159265358979323846").sin());
+                let result = evaluate(&gmath::<FixedPoint>("3.14159265358979323846").sin());
                 assert!(result.is_ok(), "sin(3.14159...) should succeed, got {:?}", result);
                 let s = format!("{}", result.unwrap());
                 let trimmed = s.trim_start_matches('-');
@@ -553,7 +553,7 @@ macro_rules! suite {
             /// Use decimal approximation: exp(0.693147...) ≈ 2
             #[test]
             fn constant_decimal_approx_exp_ln2() {
-                let result = evaluate_in(&gmath_in::<FixedPoint>("0.69314718055994530941").exp());
+                let result = evaluate(&gmath::<FixedPoint>("0.69314718055994530941").exp());
                 assert!(result.is_ok(), "exp(ln2_approx) should succeed, got {:?}", result);
                 let s = format!("{}", result.unwrap());
                 assert!(

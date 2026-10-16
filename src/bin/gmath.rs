@@ -13,6 +13,10 @@ use std::env;
 use std::process;
 
 use g_math::canonical::{evaluate, gmath_parse, LazyExpr};
+use g_math::fixed_point::Q64_64;
+
+/// The format the calculator computes in (the 0.6.x default profile).
+type Format = Q64_64;
 
 const USAGE: &str = "\
 gmath — deterministic fixed-point calculator (g_math FASC engine)
@@ -50,11 +54,11 @@ fn die(msg: String) -> ! {
     process::exit(2);
 }
 
-fn parse(s: &str) -> LazyExpr {
+fn parse(s: &str) -> LazyExpr<Format> {
     gmath_parse(s).unwrap_or_else(|e| die(format!("cannot parse '{s}': {e:?}")))
 }
 
-fn emit(expr: LazyExpr) -> ! {
+fn emit(expr: LazyExpr<Format>) -> ! {
     match evaluate(&expr) {
         Ok(v) => {
             println!("{v}");

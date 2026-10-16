@@ -13,7 +13,7 @@ from mpmath import mp, mpf, sqrt, atan2, sin, cos, sinh, cosh, log, floor
 mp.dps = 400
 SEED = int(os.environ.get("SEED", "20261016"))
 PER_OP = int(os.environ.get("PER_OP", "60"))
-FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256)]
+FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256), (32, 8), (32, 12), (32, 20)]
 DIM = 3   # ambient dimension
 EDGE = mpf(10) ** -300
 

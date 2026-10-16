@@ -20,7 +20,7 @@ macro_rules! suite {
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             #[allow(dead_code)]
             const FRAC_BITS: u32 = $F;
-            use g_math::canonical::{gmath_in, evaluate_in};
+            use g_math::canonical::{gmath, evaluate};
             use g_math::fixed_point::{Fixed};
             use g_math::fixed_point::universal::ugod::DomainType;
 
@@ -214,7 +214,7 @@ macro_rules! suite {
             #[test]
             fn test_domain_matrix_scalar_mul() {
                 let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-                let s = evaluate_in(&gmath_in::<FixedPoint>("3")).unwrap();
+                let s = evaluate(&gmath::<FixedPoint>("3")).unwrap();
                 let scaled = m.scalar_mul(&s).unwrap();
                 let r = scaled.to_fixed_matrix().unwrap();
                 assert_fp(r.get(0, 0), fp("3"), tight(), "scalar_mul[0,0]");

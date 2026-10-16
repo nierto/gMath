@@ -32,7 +32,7 @@ macro_rules! suite {
             type FixedPoint = g_math::fixed_point::Fixed<$S, $F>;
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             const FRAC_BITS: u32 = $F;
-            use g_math::canonical::{evaluate_in, gmath_parse_in, LazyExpr, StackValue};
+            use g_math::canonical::{evaluate, gmath_parse, LazyExpr, StackValue};
 
             mod data {
                 #[allow(unused_imports)]
@@ -47,7 +47,7 @@ macro_rules! suite {
                 *i += 1;
                 if tok != "(" {
                     let lit = tok.strip_prefix('d').expect("decimal leaf");
-                    return gmath_parse_in::<FixedPoint>(lit).expect("literal");
+                    return gmath_parse::<FixedPoint>(lit).expect("literal");
                 }
                 let op = t[*i].clone();
                 *i += 1;
@@ -72,7 +72,7 @@ macro_rules! suite {
                     let mut i = 0;
                     let e = node(&toks, &mut i);
                     cases += 1;
-                    let got = std::panic::catch_unwind(|| evaluate_in(&e).ok().map(|v| (matches!(v, StackValue::<FixedPoint>::Decimal(..) | StackValue::<FixedPoint>::DecimalCompute(..)), v.to_rational().ok().map(|r| format!("{}", r)))));
+                    let got = std::panic::catch_unwind(|| evaluate(&e).ok().map(|v| (matches!(v, StackValue::<FixedPoint>::Decimal(..) | StackValue::<FixedPoint>::DecimalCompute(..)), v.to_rational().ok().map(|r| format!("{}", r)))));
                     match got {
                         Ok(Some((true, Some(r)))) => {
                             if super::fraction(&r) != super::fraction(want) {

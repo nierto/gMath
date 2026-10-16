@@ -669,190 +669,198 @@ fn transpose<T: Copy>(results_by_row: Vec<Vec<T>>, batch_len: usize) -> Vec<Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[allow(unused_imports)]
-    use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
-    #[allow(unused_imports)]
-    use crate::fixed_point::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
+                #[allow(unused_imports)]
+                #[allow(unused_imports)]
 
-    /// Deterministic LCG so tests are reproducible without RNG deps.
-    struct Lcg(u64);
-    impl Lcg {
-        fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            self.0
-        }
-        /// Raw TQ1.9 value across the full ±29,524 range.
-        fn raw(&mut self) -> i16 {
-            ((self.next() % (2 * MAX_RAW as u64 + 1)) as i64 - MAX_RAW as i64) as i16
-        }
-        /// Bell-ish small raw value (sum of two smaller uniforms).
-        fn raw_small(&mut self) -> i16 {
-            let a = (self.next() % 2001) as i64 - 1000;
-            let b = (self.next() % 2001) as i64 - 1000;
-            (a + b) as i16
-        }
-        /// Profile-portable activation: integer FixedPoint in ±1000. On the
-        /// realtime profile the value is n/4096 instead (|x| < 0.25), so a
-        /// 128-column row of full-range weights (|w| <= 1.5) stays inside the
-        /// storage range at every split up to Q8.24. With integers the dot
-        /// left the range from 20 fractional bits up and, until 0.6.5, both
-        /// sides of the comparison wrapped to the same wrong value.
-        fn activation(&mut self) -> FixedPoint {
-            FixedPoint::from_raw(self.activation_raw())
-        }
-        fn activation_raw(&mut self) -> BinaryStorage {
-            let n = (self.next() % 2001) as i32 - 1000;
-            #[cfg(table_format = "q16_16")]
-            { ((n as i64) << crate::fixed_point::frac_config::FRAC_BITS >> 12) as i32 }
-            #[cfg(not(table_format = "q16_16"))]
-            { FixedPoint::from_int(n).raw() }
-        }
-    }
+                /// Deterministic LCG so tests are reproducible without RNG deps.
+                struct Lcg(u64);
+                impl Lcg {
+                    fn next(&mut self) -> u64 {
+                        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                        self.0
+                    }
+                    /// Raw TQ1.9 value across the full ±29,524 range.
+                    fn raw(&mut self) -> i16 {
+                        ((self.next() % (2 * MAX_RAW as u64 + 1)) as i64 - MAX_RAW as i64) as i16
+                    }
+                    /// Bell-ish small raw value (sum of two smaller uniforms).
+                    fn raw_small(&mut self) -> i16 {
+                        let a = (self.next() % 2001) as i64 - 1000;
+                        let b = (self.next() % 2001) as i64 - 1000;
+                        (a + b) as i16
+                    }
+                    /// Profile-portable activation: integer FixedPoint in ±1000. On the
+                    /// realtime profile the value is n/4096 instead (|x| < 0.25), so a
+                    /// 128-column row of full-range weights (|w| <= 1.5) stays inside the
+                    /// storage range at every split up to Q8.24. With integers the dot
+                    /// left the range from 20 fractional bits up and, until 0.6.5, both
+                    /// sides of the comparison wrapped to the same wrong value.
+                    fn activation(&mut self) -> FixedPoint {
+                        FixedPoint::from_raw(self.activation_raw())
+                    }
+                    fn activation_raw(&mut self) -> BinaryStorage {
+                        let n = (self.next() % 2001) as i32 - 1000;
+                        on_words!($W in [w32] { return ((n as i64) << FRAC_BITS >> 12) as BinaryStorage; });
+                        FixedPoint::from_int(n).raw()
+                    }
+                }
 
-    /// Wide-output contract: narrow(q2f) == matvec bit-for-bit, and the
-    /// planar wide path is bit-identical to the dense wide path.
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    #[test]
-    fn q2f_narrow_reproduces_matvec_and_matches_dense() {
-        fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
-            #[cfg(table_format = "q16_16")]
-            { (v / (1i64 << crate::fixed_point::frac_config::FRAC_BITS)) as i32 }
-            #[cfg(table_format = "q32_32")]
-            { (v / (1i128 << 32)) as i64 }
-        }
-        let mut rng = Lcg(5678);
-        let (rows, cols) = (11, 97);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let p = PlanarTQ19::from_tq19(&m);
-        let x: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        let narrow = p.matvec(&x);
-        let wide = p.matvec_q2f(&x);
-        for r in 0..rows {
-            assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}");
-        }
-        assert_eq!(wide, m.matvec_q2f(&x), "planar wide != dense wide");
-        assert_eq!(wide, p.matvec_q2f_par(&x));
-        let batch: Vec<&[FixedPoint]> = vec![&x];
-        assert_eq!(p.matvec_q2f_batch_par(&batch)[0], wide);
-    }
+                on_words!($W in [w32 w64] {
+                /// Wide-output contract: narrow(q2f) == matvec bit-for-bit, and the
+                /// planar wide path is bit-identical to the dense wide path.
+                #[test]
+                fn q2f_narrow_reproduces_matvec_and_matches_dense() {
+                    fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
+                        (v / (1 << FRAC_BITS)) as BinaryStorage
+                    }
+                    let mut rng = Lcg(5678);
+                    let (rows, cols) = (11, 97);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let p = PlanarTQ19::from_tq19(&m);
+                    let x: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    let narrow = p.matvec(&x);
+                    let wide = p.matvec_q2f(&x);
+                    for r in 0..rows {
+                        assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}");
+                    }
+                    assert_eq!(wide, m.matvec_q2f(&x), "planar wide != dense wide");
+                    assert_eq!(wide, p.matvec_q2f_par(&x));
+                    let batch: Vec<&[FixedPoint]> = vec![&x];
+                    assert_eq!(p.matvec_q2f_batch_par(&batch)[0], wide);
+                }
+                });
 
-    #[test]
-    fn bt_digits_reconstruct() {
-        // Every raw value in the full TQ1.9 range decomposes exactly.
-        for raw in MIN_RAW..=MAX_RAW {
-            let digits = bt_digits(raw);
-            let mut v: i32 = 0;
-            for k in (0..NUM_PLANES).rev() {
-                v = v * 3 + digits[k] as i32;
+                #[test]
+                fn bt_digits_reconstruct() {
+                    // Every raw value in the full TQ1.9 range decomposes exactly.
+                    for raw in MIN_RAW..=MAX_RAW {
+                        let digits = bt_digits(raw);
+                        let mut v: i32 = 0;
+                        for k in (0..NUM_PLANES).rev() {
+                            v = v * 3 + digits[k] as i32;
+                        }
+                        assert_eq!(v, raw as i32, "raw {raw} did not reconstruct");
+                    }
+                }
+
+                #[test]
+                fn roundtrip_full_range() {
+                    let mut rng = Lcg(42);
+                    let (rows, cols) = (17, 23); // cols not a multiple of 5
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data.clone());
+                    let planar = PlanarTQ19::from_tq19(&m);
+                    assert_eq!(planar.to_tq19().data(), m.data());
+                }
+
+                #[test]
+                #[should_panic(expected = "valid TQ1.9 range")]
+                fn from_tq19_rejects_out_of_range_weight() {
+                    // TQ19Matrix::new does not validate |raw| <= MAX_RAW, so an 11-digit
+                    // weight would make bt_digits write past the 10 planes. from_tq19 must
+                    // reject it with a clear precondition error, not a cryptic OOB index.
+                    let m = TQ19Matrix::new(1, 1, vec![MAX_RAW + 1]);
+                    let _ = PlanarTQ19::from_tq19(&m);
+                }
+
+                #[test]
+                fn roundtrip_bell_distribution() {
+                    let mut rng = Lcg(7);
+                    let (rows, cols) = (32, 64);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data.clone());
+                    let planar = PlanarTQ19::from_tq19(&m);
+                    assert_eq!(planar.to_tq19().data(), m.data());
+                    // Bell-shaped data must engage the sparse/empty paths for high planes
+                    // and compress below dense i16.
+                    assert!(matches!(planar.planes()[9], PlaneData::Empty | PlaneData::Sparse { .. }));
+                    assert!(planar.size_bytes() < rows * cols * 2, "no compression on bell data");
+                }
+
+                #[test]
+                fn matvec_bit_identical_full_range() {
+                    let mut rng = Lcg(1234);
+                    for &(rows, cols) in &[(3usize, 5usize), (8, 17), (16, 128), (5, 3)] {
+                        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
+                        let m = TQ19Matrix::new(rows, cols, data);
+                        let planar = PlanarTQ19::from_tq19(&m);
+                        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                        assert_eq!(planar.matvec(&acts), m.matvec(&acts), "{rows}x{cols} mismatch");
+                    }
+                }
+
+                #[test]
+                fn matvec_bit_identical_bell_distribution() {
+                    // Bell data exercises Empty + Sparse + Dense plane mix.
+                    let mut rng = Lcg(99);
+                    let (rows, cols) = (24, 96);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let planar = PlanarTQ19::from_tq19(&m);
+                    let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    assert_eq!(planar.matvec(&acts), m.matvec(&acts));
+                }
+
+                #[test]
+                fn matvec_bit_identical_sparse_only() {
+                    // A few large weights → only high planes populated, all sparse.
+                    let (rows, cols) = (6, 40);
+                    let mut data = vec![0i16; rows * cols];
+                    data[3] = 19683; // +3^9
+                    data[45] = -6561; // -3^8
+                    data[200] = 2187 + 729; // 3^7 + 3^6
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let planar = PlanarTQ19::from_tq19(&m);
+                    let mut rng = Lcg(5);
+                    let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    assert_eq!(planar.matvec(&acts), m.matvec(&acts));
+                    assert_eq!(planar.planes()[0], PlaneData::Empty);
+                }
+
+                #[test]
+                fn parallel_and_batch_match_sequential() {
+                    let mut rng = Lcg(2026);
+                    let (rows, cols) = (19, 37);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let planar = PlanarTQ19::from_tq19(&m);
+
+                    let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    assert_eq!(planar.matvec_par(&acts), planar.matvec(&acts));
+
+                    let batch_data: Vec<Vec<FixedPoint>> = (0..4)
+                        .map(|_| (0..cols).map(|_| rng.activation()).collect())
+                        .collect();
+                    let batch: Vec<&[FixedPoint]> = batch_data.iter().map(|v| v.as_slice()).collect();
+                    let expected: Vec<Vec<FixedPoint>> = batch.iter().map(|v| m.matvec(v)).collect();
+                    assert_eq!(planar.matvec_batch(&batch), expected);
+                    assert_eq!(planar.matvec_batch_par(&batch), expected);
+                }
+
+                #[test]
+                fn from_parts_roundtrip() {
+                    let mut rng = Lcg(11);
+                    let (rows, cols) = (9, 14);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let planar = PlanarTQ19::from_tq19(&m);
+                    let rebuilt = PlanarTQ19::from_parts(rows, cols, planar.planes().clone());
+                    assert_eq!(rebuilt.to_tq19().data(), m.data());
+                }
             }
-            assert_eq!(v, raw as i32, "raw {raw} did not reconstruct");
-        }
+        };
     }
-
-    #[test]
-    fn roundtrip_full_range() {
-        let mut rng = Lcg(42);
-        let (rows, cols) = (17, 23); // cols not a multiple of 5
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
-        let m = TQ19Matrix::new(rows, cols, data.clone());
-        let planar = PlanarTQ19::from_tq19(&m);
-        assert_eq!(planar.to_tq19().data(), m.data());
-    }
-
-    #[test]
-    #[should_panic(expected = "valid TQ1.9 range")]
-    fn from_tq19_rejects_out_of_range_weight() {
-        // TQ19Matrix::new does not validate |raw| <= MAX_RAW, so an 11-digit
-        // weight would make bt_digits write past the 10 planes. from_tq19 must
-        // reject it with a clear precondition error, not a cryptic OOB index.
-        let m = TQ19Matrix::new(1, 1, vec![MAX_RAW + 1]);
-        let _ = PlanarTQ19::from_tq19(&m);
-    }
-
-    #[test]
-    fn roundtrip_bell_distribution() {
-        let mut rng = Lcg(7);
-        let (rows, cols) = (32, 64);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data.clone());
-        let planar = PlanarTQ19::from_tq19(&m);
-        assert_eq!(planar.to_tq19().data(), m.data());
-        // Bell-shaped data must engage the sparse/empty paths for high planes
-        // and compress below dense i16.
-        assert!(matches!(planar.planes()[9], PlaneData::Empty | PlaneData::Sparse { .. }));
-        assert!(planar.size_bytes() < rows * cols * 2, "no compression on bell data");
-    }
-
-    #[test]
-    fn matvec_bit_identical_full_range() {
-        let mut rng = Lcg(1234);
-        for &(rows, cols) in &[(3usize, 5usize), (8, 17), (16, 128), (5, 3)] {
-            let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
-            let m = TQ19Matrix::new(rows, cols, data);
-            let planar = PlanarTQ19::from_tq19(&m);
-            let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-            assert_eq!(planar.matvec(&acts), m.matvec(&acts), "{rows}x{cols} mismatch");
-        }
-    }
-
-    #[test]
-    fn matvec_bit_identical_bell_distribution() {
-        // Bell data exercises Empty + Sparse + Dense plane mix.
-        let mut rng = Lcg(99);
-        let (rows, cols) = (24, 96);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let planar = PlanarTQ19::from_tq19(&m);
-        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        assert_eq!(planar.matvec(&acts), m.matvec(&acts));
-    }
-
-    #[test]
-    fn matvec_bit_identical_sparse_only() {
-        // A few large weights → only high planes populated, all sparse.
-        let (rows, cols) = (6, 40);
-        let mut data = vec![0i16; rows * cols];
-        data[3] = 19683; // +3^9
-        data[45] = -6561; // -3^8
-        data[200] = 2187 + 729; // 3^7 + 3^6
-        let m = TQ19Matrix::new(rows, cols, data);
-        let planar = PlanarTQ19::from_tq19(&m);
-        let mut rng = Lcg(5);
-        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        assert_eq!(planar.matvec(&acts), m.matvec(&acts));
-        assert_eq!(planar.planes()[0], PlaneData::Empty);
-    }
-
-    #[test]
-    fn parallel_and_batch_match_sequential() {
-        let mut rng = Lcg(2026);
-        let (rows, cols) = (19, 37);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let planar = PlanarTQ19::from_tq19(&m);
-
-        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        assert_eq!(planar.matvec_par(&acts), planar.matvec(&acts));
-
-        let batch_data: Vec<Vec<FixedPoint>> = (0..4)
-            .map(|_| (0..cols).map(|_| rng.activation()).collect())
-            .collect();
-        let batch: Vec<&[FixedPoint]> = batch_data.iter().map(|v| v.as_slice()).collect();
-        let expected: Vec<Vec<FixedPoint>> = batch.iter().map(|v| m.matvec(v)).collect();
-        assert_eq!(planar.matvec_batch(&batch), expected);
-        assert_eq!(planar.matvec_batch_par(&batch), expected);
-    }
-
-    #[test]
-    fn from_parts_roundtrip() {
-        let mut rng = Lcg(11);
-        let (rows, cols) = (9, 14);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let planar = PlanarTQ19::from_tq19(&m);
-        let rebuilt = PlanarTQ19::from_parts(rows, cols, planar.planes().clone());
-        assert_eq!(rebuilt.to_tq19().data(), m.data());
-    }
+    for_each_format!(suite);
 }

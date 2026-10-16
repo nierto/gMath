@@ -952,574 +952,582 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
-    use crate::fixed_point::frac_config::FRAC_BITS;
-    use crate::fixed_point::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
 
-    fn fp(s: &str) -> FixedPoint {
-        if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
-        else { FixedPoint::from_str(s) }
-    }
+                fn fp(s: &str) -> FixedPoint {
+                    if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
+                    else { FixedPoint::from_str(s) }
+                }
 
-    /// `t`, raised to one storage unit where the build's split cannot
-    /// represent it (0.001 is 0 raw at GMATH_FRAC_BITS=8, so `diff < t`
-    /// could never hold). Unchanged wherever `t` is already >= 1 unit.
-    fn at_least_one_unit(t: FixedPoint) -> FixedPoint {
-        let mut u = FixedPoint::one();
-        for _ in 0..crate::fixed_point::frac_config::FRAC_BITS { u = u / FixedPoint::from_int(2); }
-        if u > t { u } else { t }
-    }
+                /// `t`, raised to one storage unit where the build's split cannot
+                /// represent it (0.001 is 0 raw at GMATH_FRAC_BITS=8, so `diff < t`
+                /// could never hold). Unchanged wherever `t` is already >= 1 unit.
+                fn at_least_one_unit(t: FixedPoint) -> FixedPoint {
+                    let mut u = FixedPoint::one();
+                    for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
+                    if u > t { u } else { t }
+                }
 
-    /// The 0.001 tolerance of the approximate checks, at least 1 unit.
-    fn loose() -> FixedPoint { at_least_one_unit(fp("0.001")) }
+                /// The 0.001 tolerance of the approximate checks, at least 1 unit.
+                fn loose() -> FixedPoint { at_least_one_unit(fp("0.001")) }
 
-    /// Profile-appropriate tight tolerance: at least 1 ULP representable.
-    fn tight() -> FixedPoint {
-        #[cfg(table_format = "q16_16")]
-        { at_least_one_unit(fp("0.001")) }
-        #[cfg(table_format = "q32_32")]
-        { fp("0.000000001") }
-        #[cfg(any(table_format = "q64_64", table_format = "q128_128", table_format = "q256_256"))]
-        { fp("0.000000001") }
-    }
+                /// Profile-appropriate tight tolerance: at least 1 ULP representable.
+                fn tight() -> FixedPoint {
+                    if BITS == 32 { at_least_one_unit(fp("0.001")) } else { fp("0.000000001") }
+                }
 
-    #[test]
-    fn test_sqrt_sum_sq_basic() {
-        // sqrt(3² + 4²) = sqrt(25) = 5
-        let vals = [fp("3"), fp("4")];
-        let result = sqrt_sum_sq(&vals);
-        let diff = (result - fp("5")).abs();
-        assert!(diff < tight(), "sqrt(3²+4²) = {}, expected 5", result);
-    }
+                #[test]
+                fn test_sqrt_sum_sq_basic() {
+                    // sqrt(3² + 4²) = sqrt(25) = 5
+                    let vals = [fp("3"), fp("4")];
+                    let result = sqrt_sum_sq(&vals);
+                    let diff = (result - fp("5")).abs();
+                    assert!(diff < tight(), "sqrt(3²+4²) = {}, expected 5", result);
+                }
 
-    #[test]
-    fn test_sqrt_sum_sq_single() {
-        // sqrt(7²) = 7
-        let vals = [fp("7")];
-        let result = sqrt_sum_sq(&vals);
-        let diff = (result - fp("7")).abs();
-        assert!(diff < tight(), "sqrt(7²) = {}, expected 7", result);
-    }
+                #[test]
+                fn test_sqrt_sum_sq_single() {
+                    // sqrt(7²) = 7
+                    let vals = [fp("7")];
+                    let result = sqrt_sum_sq(&vals);
+                    let diff = (result - fp("7")).abs();
+                    assert!(diff < tight(), "sqrt(7²) = {}, expected 7", result);
+                }
 
-    #[test]
-    fn test_euclidean_distance_basic() {
-        // distance([0,0], [3,4]) = 5
-        let a = [FixedPoint::ZERO, FixedPoint::ZERO];
-        let b = [fp("3"), fp("4")];
-        let dist = euclidean_distance(&a, &b);
-        let diff = (dist - fp("5")).abs();
-        assert!(diff < tight(), "dist([0,0],[3,4]) = {}, expected 5", dist);
-    }
+                #[test]
+                fn test_euclidean_distance_basic() {
+                    // distance([0,0], [3,4]) = 5
+                    let a = [FixedPoint::ZERO, FixedPoint::ZERO];
+                    let b = [fp("3"), fp("4")];
+                    let dist = euclidean_distance(&a, &b);
+                    let diff = (dist - fp("5")).abs();
+                    assert!(diff < tight(), "dist([0,0],[3,4]) = {}, expected 5", dist);
+                }
 
-    #[test]
-    fn test_euclidean_distance_same_point() {
-        let a = [fp("1"), fp("2"), fp("3")];
-        let dist = euclidean_distance(&a, &a);
-        assert!(dist.is_zero() || dist.abs() < tight(),
-            "distance to self should be 0, got {}", dist);
-    }
+                #[test]
+                fn test_euclidean_distance_same_point() {
+                    let a = [fp("1"), fp("2"), fp("3")];
+                    let dist = euclidean_distance(&a, &a);
+                    assert!(dist.is_zero() || dist.abs() < tight(),
+                        "distance to self should be 0, got {}", dist);
+                }
 
-    #[test]
-    fn test_euclidean_distance_squared_matches_distance() {
-        // dist²([0,0],[3,4]) = 25, and must equal euclidean_distance²
-        // within tolerance across varied vectors.
-        // Values kept small so dist² fits the narrowest profile (Q8.24
-        // integer range is ±127); tolerance scales with d because the
-        // d*d side re-quantizes d at storage tier (error ~ d·LSB).
-        let cases: [(&[FixedPoint; 2], &[FixedPoint; 2]); 3] = [
-            (&[FixedPoint::ZERO, FixedPoint::ZERO], &[fp("3"), fp("4")]),
-            (&[fp("0.25"), fp("-0.5")], &[fp("-0.125"), fp("0.75")]),
-            (&[fp("3"), fp("-4")], &[fp("-3"), fp("4")]),
-        ];
-        for (a, b) in cases {
-            let sq = euclidean_distance_squared(a, b);
-            let d = euclidean_distance(a, b);
-            let diff = (sq - d * d).abs();
-            let tol = (d.abs() + fp("1")) * tight();
-            assert!(diff < tol,
-                "dist_sq {} vs dist² {} diverged", sq, d * d);
-        }
-        let same = [fp("1"), fp("2")];
-        assert!(euclidean_distance_squared(&same, &same).abs() < tight());
-    }
+                #[test]
+                fn test_euclidean_distance_squared_matches_distance() {
+                    // dist²([0,0],[3,4]) = 25, and must equal euclidean_distance²
+                    // within tolerance across varied vectors.
+                    // Values kept small so dist² fits the narrowest profile (Q8.24
+                    // integer range is ±127); tolerance scales with d because the
+                    // d*d side re-quantizes d at storage tier (error ~ d·LSB).
+                    let cases: [(&[FixedPoint; 2], &[FixedPoint; 2]); 3] = [
+                        (&[FixedPoint::ZERO, FixedPoint::ZERO], &[fp("3"), fp("4")]),
+                        (&[fp("0.25"), fp("-0.5")], &[fp("-0.125"), fp("0.75")]),
+                        (&[fp("3"), fp("-4")], &[fp("-3"), fp("4")]),
+                    ];
+                    for (a, b) in cases {
+                        let sq = euclidean_distance_squared(a, b);
+                        let d = euclidean_distance(a, b);
+                        let diff = (sq - d * d).abs();
+                        let tol = (d.abs() + fp("1")) * tight();
+                        assert!(diff < tol,
+                            "dist_sq {} vs dist² {} diverged", sq, d * d);
+                    }
+                    let same = [fp("1"), fp("2")];
+                    assert!(euclidean_distance_squared(&same, &same).abs() < tight());
+                }
 
-    /// Oversized fused results must panic loudly, never wrap silently.
-    /// Before the round_to_storage fix, this returned a NEGATIVE squared
-    /// distance on realtime profiles. from_raw(i32::MAX) keeps the input
-    /// constructible and the square out of range at every GMATH_FRAC_BITS.
-    #[test]
-    #[cfg(table_format = "q16_16")]
-    #[should_panic(expected = "exceeds storage tier")]
-    fn test_euclidean_distance_squared_overflow_panics() {
-        let a = [FixedPoint::from_raw(i32::MAX)];
-        let b = [FixedPoint::ZERO];
-        let _ = euclidean_distance_squared(&a, &b);
-    }
+                on_words!($W in [w32] {
+                /// Oversized fused results must panic loudly, never wrap silently.
+                /// Before the round_to_storage fix, this returned a NEGATIVE squared
+                /// distance on realtime profiles. from_raw(i32::MAX) keeps the input
+                /// constructible and the square out of range at every GMATH_FRAC_BITS.
+                #[test]
+                #[should_panic(expected = "exceeds storage tier")]
+                fn test_euclidean_distance_squared_overflow_panics() {
+                    let a = [FixedPoint::from_raw(i32::MAX)];
+                    let b = [FixedPoint::ZERO];
+                    let _ = euclidean_distance_squared(&a, &b);
+                }
+                });
 
-    #[test]
-    fn test_dot_basic() {
-        // ⟨(1,2,3),(4,5,6)⟩ = 32; orthogonal → 0; sign handling.
-        let a = [fp("1"), fp("2"), fp("3")];
-        let b = [fp("4"), fp("5"), fp("6")];
-        assert!((dot(&a, &b) - fp("32")).abs() < tight());
-        let e1 = [fp("1"), FixedPoint::ZERO];
-        let e2 = [FixedPoint::ZERO, fp("1")];
-        assert!(dot(&e1, &e2).abs() < tight());
-        let c = [fp("-0.5"), fp("0.25")];
-        let d = [fp("0.5"), fp("0.25")];
-        // -0.25 + 0.0625 = -0.1875
-        assert!((dot(&c, &d) - fp("-0.1875")).abs() < tight());
-    }
+                #[test]
+                fn test_dot_basic() {
+                    // ⟨(1,2,3),(4,5,6)⟩ = 32; orthogonal → 0; sign handling.
+                    let a = [fp("1"), fp("2"), fp("3")];
+                    let b = [fp("4"), fp("5"), fp("6")];
+                    assert!((dot(&a, &b) - fp("32")).abs() < tight());
+                    let e1 = [fp("1"), FixedPoint::ZERO];
+                    let e2 = [FixedPoint::ZERO, fp("1")];
+                    assert!(dot(&e1, &e2).abs() < tight());
+                    let c = [fp("-0.5"), fp("0.25")];
+                    let d = [fp("0.5"), fp("0.25")];
+                    // -0.25 + 0.0625 = -0.1875
+                    assert!((dot(&c, &d) - fp("-0.1875")).abs() < tight());
+                }
 
-    #[test]
-    fn test_mobius_denominator_sq() {
-        // Against the definition computed at storage tier for small inputs:
-        // p=(0.3,0.4), q=(-0.2,0.5): dot=0.14, |p|²=0.25, |q|²=0.29
-        // → 1 − 0.28 + 0.0725 = 0.7925
-        // 0.3/0.4/0.2 are not exactly representable in binary: the inputs
-        // quantize to the storage grid, so the correctly rounded result can
-        // legitimately sit 1 LSB away from the rounded decimal literal at
-        // coarse FRAC_BITS (seen at Q22.10). Allow 2 LSB.
-        let p = [fp("0.3"), fp("0.4")];
-        let q = [fp("-0.2"), fp("0.5")];
-        let quant_tol = tight() + tight();
-        let den = mobius_denominator_sq(&p, &q);
-        assert!((den - fp("0.7925")).abs() < quant_tol,
-            "mobius_denominator_sq = {}, expected 0.7925", den);
-        // p = q = origin → exactly 1.
-        let o = [FixedPoint::ZERO, FixedPoint::ZERO];
-        assert!((mobius_denominator_sq(&o, &o) - fp("1")).abs() < tight());
-        // Identical interior points: 1 − 2|p|² + |p|⁴ = (1 − |p|²)².
-        let den_pp = mobius_denominator_sq(&p, &p);
-        let w = fp("1") - fp("0.25");
-        assert!((den_pp - w * w).abs() < quant_tol);
-    }
+                #[test]
+                fn test_mobius_denominator_sq() {
+                    // Against the definition computed at storage tier for small inputs:
+                    // p=(0.3,0.4), q=(-0.2,0.5): dot=0.14, |p|²=0.25, |q|²=0.29
+                    // → 1 − 0.28 + 0.0725 = 0.7925
+                    // 0.3/0.4/0.2 are not exactly representable in binary: the inputs
+                    // quantize to the storage grid, so the correctly rounded result can
+                    // legitimately sit 1 LSB away from the rounded decimal literal at
+                    // coarse FRAC_BITS (seen at Q22.10). Allow 2 LSB.
+                    let p = [fp("0.3"), fp("0.4")];
+                    let q = [fp("-0.2"), fp("0.5")];
+                    let quant_tol = tight() + tight();
+                    let den = mobius_denominator_sq(&p, &q);
+                    assert!((den - fp("0.7925")).abs() < quant_tol,
+                        "mobius_denominator_sq = {}, expected 0.7925", den);
+                    // p = q = origin → exactly 1.
+                    let o = [FixedPoint::ZERO, FixedPoint::ZERO];
+                    assert!((mobius_denominator_sq(&o, &o) - fp("1")).abs() < tight());
+                    // Identical interior points: 1 − 2|p|² + |p|⁴ = (1 − |p|²)².
+                    let den_pp = mobius_denominator_sq(&p, &p);
+                    let w = fp("1") - fp("0.25");
+                    assert!((den_pp - w * w).abs() < quant_tol);
+                }
 
-    #[test]
-    fn test_softmax_uniform() {
-        // Softmax of equal values should give uniform distribution
-        let scores = vec![fp("1"); 4];
-        let result = softmax(&scores).unwrap();
-        let expected = fp("0.25");
-        for (i, w) in result.iter().enumerate() {
-            let diff = (*w - expected).abs();
-            assert!(diff < loose(), "softmax[{}] = {}, expected 0.25", i, w);
-        }
-    }
+                #[test]
+                fn test_softmax_uniform() {
+                    // Softmax of equal values should give uniform distribution
+                    let scores = vec![fp("1"); 4];
+                    let result = softmax(&scores).unwrap();
+                    let expected = fp("0.25");
+                    for (i, w) in result.iter().enumerate() {
+                        let diff = (*w - expected).abs();
+                        assert!(diff < loose(), "softmax[{}] = {}, expected 0.25", i, w);
+                    }
+                }
 
-    #[test]
-    fn test_softmax_sums_to_one() {
-        let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
-        let result = softmax(&scores).unwrap();
-        let sum: FixedPoint = result.iter().copied().fold(FixedPoint::ZERO, |a, b| a + b);
-        let diff = (sum - fp("1")).abs();
-        assert!(diff < tight(), "softmax sum = {}, expected 1.0", sum);
-    }
+                #[test]
+                fn test_softmax_sums_to_one() {
+                    let scores = vec![fp("1"), fp("2"), fp("3"), fp("4")];
+                    let result = softmax(&scores).unwrap();
+                    let sum: FixedPoint = result.iter().copied().fold(FixedPoint::ZERO, |a, b| a + b);
+                    let diff = (sum - fp("1")).abs();
+                    assert!(diff < tight(), "softmax sum = {}, expected 1.0", sum);
+                }
 
-    #[test]
-    fn test_softmax_monotone() {
-        // Larger input → larger output
-        let scores = vec![fp("1"), fp("2"), fp("3")];
-        let result = softmax(&scores).unwrap();
-        assert!(result[0] < result[1], "softmax not monotone: {} >= {}", result[0], result[1]);
-        assert!(result[1] < result[2], "softmax not monotone: {} >= {}", result[1], result[2]);
-    }
+                #[test]
+                fn test_softmax_monotone() {
+                    // Larger input → larger output
+                    let scores = vec![fp("1"), fp("2"), fp("3")];
+                    let result = softmax(&scores).unwrap();
+                    assert!(result[0] < result[1], "softmax not monotone: {} >= {}", result[0], result[1]);
+                    assert!(result[1] < result[2], "softmax not monotone: {} >= {}", result[1], result[2]);
+                }
 
-    #[test]
-    fn test_rms_norm_factor_constant() {
-        // RMSNorm of constant vector [c, c, c]: 1/sqrt(c² + eps)
-        let c = fp("2");
-        let eps = fp("0.000001");
-        let vals = vec![c; 4];
-        let factor = rms_norm_factor(&vals, eps).unwrap();
-        // Expected: 1/sqrt(4 + 0.000001) ≈ 1/2 = 0.5
-        let diff = (factor - fp("0.5")).abs();
-        assert!(diff < loose(), "rms_norm_factor = {}, expected ~0.5", factor);
-    }
+                #[test]
+                fn test_rms_norm_factor_constant() {
+                    // RMSNorm of constant vector [c, c, c]: 1/sqrt(c² + eps)
+                    let c = fp("2");
+                    let eps = fp("0.000001");
+                    let vals = vec![c; 4];
+                    let factor = rms_norm_factor(&vals, eps).unwrap();
+                    // Expected: 1/sqrt(4 + 0.000001) ≈ 1/2 = 0.5
+                    let diff = (factor - fp("0.5")).abs();
+                    assert!(diff < loose(), "rms_norm_factor = {}, expected ~0.5", factor);
+                }
 
-    #[test]
-    fn test_silu_deep_negative_is_zero() {
-        // silu(x) = x/(1+exp(−x)) → 0 super-exponentially as x → −∞: for
-        // every x past the exp saturation threshold |silu(x)| is below half
-        // an LSB at all storage widths. Pre-fix, the wrapping exp downscale
-        // returned huge garbage for x ≲ −30 on realtime profiles
-        // (MoE expert gate values can reach ±70).
-        for s in ["-30", "-40", "-70", "-100"] {
-            let v = silu(fp(s));
-            assert!(v.abs() < tight(), "silu({}) = {}, expected ~0", s, v);
-        }
-    }
+                #[test]
+                fn test_silu_deep_negative_is_zero() {
+                    // silu(x) = x/(1+exp(−x)) → 0 super-exponentially as x → −∞: for
+                    // every x past the exp saturation threshold |silu(x)| is below half
+                    // an LSB at all storage widths. Pre-fix, the wrapping exp downscale
+                    // returned huge garbage for x ≲ −30 on realtime profiles
+                    // (MoE expert gate values can reach ±70).
+                    for s in ["-30", "-40", "-70", "-100"] {
+                        let v = silu(fp(s));
+                        assert!(v.abs() < tight(), "silu({}) = {}, expected ~0", s, v);
+                    }
+                }
 
-    #[test]
-    fn test_silu_zero() {
-        // SiLU(0) = 0 / (1 + exp(0)) = 0 / 2 = 0
-        let result = silu(FixedPoint::ZERO);
-        assert!(result.abs() < tight(), "silu(0) = {}, expected 0", result);
-    }
+                #[test]
+                fn test_silu_zero() {
+                    // SiLU(0) = 0 / (1 + exp(0)) = 0 / 2 = 0
+                    let result = silu(FixedPoint::ZERO);
+                    assert!(result.abs() < tight(), "silu(0) = {}, expected 0", result);
+                }
 
-    #[test]
-    fn test_silu_positive() {
-        // SiLU(x) ≈ x for large positive x (sigmoid ≈ 1)
-        let x = fp("10");
-        let result = silu(x);
-        let diff = (result - x).abs();
-        assert!(diff < loose(), "silu(10) = {}, expected ~10", result);
-    }
+                #[test]
+                fn test_silu_positive() {
+                    // SiLU(x) ≈ x for large positive x (sigmoid ≈ 1)
+                    let x = fp("10");
+                    let result = silu(x);
+                    let diff = (result - x).abs();
+                    assert!(diff < loose(), "silu(10) = {}, expected ~10", result);
+                }
 
-    #[test]
-    fn test_silu_negative() {
-        // SiLU(x) ≈ 0 for large negative x (sigmoid ≈ 0)
-        let result = silu(fp("-10"));
-        assert!(result.abs() < loose(), "silu(-10) = {}, expected ~0", result);
-    }
+                #[test]
+                fn test_silu_negative() {
+                    // SiLU(x) ≈ 0 for large negative x (sigmoid ≈ 0)
+                    let result = silu(fp("-10"));
+                    assert!(result.abs() < loose(), "silu(-10) = {}, expected ~0", result);
+                }
 
-    #[test]
-    fn test_softmax_mix_one_hot() {
-        // One dominant score → output ≈ that value row.
-        let scores = vec![fp("20"), fp("0"), fp("0")];
-        let rows = [
-            vec![fp("1"), fp("2")],
-            vec![fp("-5"), fp("7")],
-            vec![fp("3"), fp("-3")],
-        ];
-        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
-        let (out, w) = softmax_mix(&scores, &refs).unwrap();
-        assert!((out[0] - fp("1")).abs() < fp("0.01"), "out[0] = {}", out[0]);
-        assert!((out[1] - fp("2")).abs() < fp("0.01"), "out[1] = {}", out[1]);
-        assert!((w[0] - fp("1")).abs() < fp("0.01"), "w[0] = {}", w[0]);
-    }
+                #[test]
+                fn test_softmax_mix_one_hot() {
+                    // One dominant score → output ≈ that value row.
+                    let scores = vec![fp("20"), fp("0"), fp("0")];
+                    let rows = [
+                        vec![fp("1"), fp("2")],
+                        vec![fp("-5"), fp("7")],
+                        vec![fp("3"), fp("-3")],
+                    ];
+                    let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+                    let (out, w) = softmax_mix(&scores, &refs).unwrap();
+                    assert!((out[0] - fp("1")).abs() < fp("0.01"), "out[0] = {}", out[0]);
+                    assert!((out[1] - fp("2")).abs() < fp("0.01"), "out[1] = {}", out[1]);
+                    assert!((w[0] - fp("1")).abs() < fp("0.01"), "w[0] = {}", w[0]);
+                }
 
-    #[test]
-    fn test_softmax_mix_uniform_matches_mean() {
-        // Equal scores → output = mean of value rows.
-        let scores = vec![FixedPoint::ZERO; 4];
-        let rows = [
-            vec![fp("4")],
-            vec![fp("8")],
-            vec![fp("-4")],
-            vec![fp("0")],
-        ];
-        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
-        let (out, _) = softmax_mix(&scores, &refs).unwrap();
-        assert!((out[0] - fp("2")).abs() < fp("0.01"), "out[0] = {}", out[0]);
-    }
+                #[test]
+                fn test_softmax_mix_uniform_matches_mean() {
+                    // Equal scores → output = mean of value rows.
+                    let scores = vec![FixedPoint::ZERO; 4];
+                    let rows = [
+                        vec![fp("4")],
+                        vec![fp("8")],
+                        vec![fp("-4")],
+                        vec![fp("0")],
+                    ];
+                    let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+                    let (out, _) = softmax_mix(&scores, &refs).unwrap();
+                    assert!((out[0] - fp("2")).abs() < fp("0.01"), "out[0] = {}", out[0]);
+                }
 
-    #[test]
-    fn test_softmax_mix_agrees_with_materialized_at_short_length() {
-        // At short lengths (weights well above 2^-FRAC_BITS) the fused mix
-        // must closely match softmax-then-materialized-mix.
-        let scores = vec![fp("1.5"), fp("0.5"), fp("-0.25"), fp("2")];
-        let rows = [
-            vec![fp("1"), fp("-2")],
-            vec![fp("0.5"), fp("3")],
-            vec![fp("-1.5"), fp("0.25")],
-            vec![fp("2"), fp("1")],
-        ];
-        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
-        let (fused_out, _) = softmax_mix(&scores, &refs).unwrap();
+                #[test]
+                fn test_softmax_mix_agrees_with_materialized_at_short_length() {
+                    // At short lengths (weights well above 2^-FRAC_BITS) the fused mix
+                    // must closely match softmax-then-materialized-mix.
+                    let scores = vec![fp("1.5"), fp("0.5"), fp("-0.25"), fp("2")];
+                    let rows = [
+                        vec![fp("1"), fp("-2")],
+                        vec![fp("0.5"), fp("3")],
+                        vec![fp("-1.5"), fp("0.25")],
+                        vec![fp("2"), fp("1")],
+                    ];
+                    let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+                    let (fused_out, _) = softmax_mix(&scores, &refs).unwrap();
 
-        let w = softmax(&scores).unwrap();
-        for d in 0..2 {
-            let mut acc = FixedPoint::ZERO;
-            for j in 0..4 {
-                acc = acc + w[j] * rows[j][d];
-            }
-            let diff = (fused_out[d] - acc).abs();
-            assert!(
-                diff < fp("0.01"),
-                "fused vs materialized dim {}: {} vs {}",
-                d, fused_out[d], acc
-            );
-        }
-    }
+                    let w = softmax(&scores).unwrap();
+                    for d in 0..2 {
+                        let mut acc = FixedPoint::ZERO;
+                        for j in 0..4 {
+                            acc = acc + w[j] * rows[j][d];
+                        }
+                        let diff = (fused_out[d] - acc).abs();
+                        assert!(
+                            diff < fp("0.01"),
+                            "fused vs materialized dim {}: {} vs {}",
+                            d, fused_out[d], acc
+                        );
+                    }
+                }
 
-    #[test]
-    fn test_softmax_mix_survives_below_storage_floor() {
-        // THE regression test for the long-context attention floor.
-        // n = 3000 uniform scores → each weight = 0.000333, below HALF the
-        // Q22.10 quantum (2^-11 ≈ 0.00049), so round-to-nearest storage
-        // materialization sends every weight to zero → mix collapses.
-        // Fused path: must recover the true mean of the value rows.
-        let n = 3000;
-        let scores = vec![FixedPoint::ZERO; n];
-        let rows: Vec<Vec<FixedPoint>> = (0..n)
-            .map(|j| vec![if j % 2 == 0 { fp("2") } else { fp("4") }])
-            .collect();
-        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+                #[test]
+                fn test_softmax_mix_survives_below_storage_floor() {
+                    // THE regression test for the long-context attention floor.
+                    // n = 3000 uniform scores → each weight = 0.000333, below HALF the
+                    // Q22.10 quantum (2^-11 ≈ 0.00049), so round-to-nearest storage
+                    // materialization sends every weight to zero → mix collapses.
+                    // Fused path: must recover the true mean of the value rows.
+                    let n = 3000;
+                    let scores = vec![FixedPoint::ZERO; n];
+                    let rows: Vec<Vec<FixedPoint>> = (0..n)
+                        .map(|j| vec![if j % 2 == 0 { fp("2") } else { fp("4") }])
+                        .collect();
+                    let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
 
-        // Fused path recovers the true mean (= 3.0) on EVERY profile — this is
-        // the guarantee, and it is asserted unconditionally.
-        let (out, _) = softmax_mix(&scores, &refs).unwrap();
-        assert!(
-            (out[0] - fp("3")).abs() < fp("0.05"),
-            "fused mix should recover mean 3.0, got {}",
-            out[0]
-        );
+                    // Fused path recovers the true mean (= 3.0) on EVERY profile — this is
+                    // the guarantee, and it is asserted unconditionally.
+                    let (out, _) = softmax_mix(&scores, &refs).unwrap();
+                    assert!(
+                        (out[0] - fp("3")).abs() < fp("0.05"),
+                        "fused mix should recover mean 3.0, got {}",
+                        out[0]
+                    );
 
-        // The floor only bites when the storage quantum is coarser than ~1/n
-        // (realtime at small FRAC_BITS, e.g. Q22.10): there the *materialized*
-        // mix collapses toward zero and the fused path must strictly beat it.
-        // On high-precision profiles there is no floor to survive, so this half
-        // is conditional on the collapse actually occurring.
-        let w = softmax(&scores).unwrap();
-        let mut materialized = FixedPoint::ZERO;
-        for j in 0..n {
-            materialized = materialized + w[j] * rows[j][0];
-        }
-        if materialized.abs() < fp("0.5") {
-            assert!(
-                (out[0] - fp("3")).abs() < (out[0] - materialized).abs(),
-                "fused mix ({}) should beat the collapsed materialized mix ({})",
-                out[0],
-                materialized
-            );
-        }
-    }
+                    // The floor only bites when the storage quantum is coarser than ~1/n
+                    // (realtime at small FRAC_BITS, e.g. Q22.10): there the *materialized*
+                    // mix collapses toward zero and the fused path must strictly beat it.
+                    // On high-precision profiles there is no floor to survive, so this half
+                    // is conditional on the collapse actually occurring.
+                    let w = softmax(&scores).unwrap();
+                    let mut materialized = FixedPoint::ZERO;
+                    for j in 0..n {
+                        materialized = materialized + w[j] * rows[j][0];
+                    }
+                    if materialized.abs() < fp("0.5") {
+                        assert!(
+                            (out[0] - fp("3")).abs() < (out[0] - materialized).abs(),
+                            "fused mix ({}) should beat the collapsed materialized mix ({})",
+                            out[0],
+                            materialized
+                        );
+                    }
+                }
 
-    // ------------------------------------------------------------------
-    // 0.6.5: softmax_mix variants, dot_many, rms_norm
-    // ------------------------------------------------------------------
+                // ------------------------------------------------------------------
+                // 0.6.5: softmax_mix variants, dot_many, rms_norm
+                // ------------------------------------------------------------------
 
-    /// The 0.6.4 body of `softmax_mix` (checked compute-tier accumulation),
-    /// kept verbatim as the reference for the realtime i64 numerator path.
-    fn softmax_mix_reference(
-        scores: &[FixedPoint],
-        values: &[&[FixedPoint]],
-    ) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
-        assert_eq!(
-            scores.len(),
-            values.len(),
-            "softmax_mix: scores/values length mismatch"
-        );
-        if scores.is_empty() {
-            return Ok((vec![], vec![]));
-        }
-        let dim = values[0].len();
+                /// The 0.6.4 body of `softmax_mix` (checked compute-tier accumulation),
+                /// kept verbatim as the reference for the realtime i64 numerator path.
+                fn softmax_mix_reference(
+                    scores: &[FixedPoint],
+                    values: &[&[FixedPoint]],
+                ) -> Result<(Vec<FixedPoint>, Vec<FixedPoint>), OverflowDetected> {
+                    assert_eq!(
+                        scores.len(),
+                        values.len(),
+                        "softmax_mix: scores/values length mismatch"
+                    );
+                    if scores.is_empty() {
+                        return Ok((vec![], vec![]));
+                    }
+                    let dim = values[0].len();
 
-        // Phase 1: find max at storage tier
-        let mut max_raw = scores[0].raw();
-        for s in &scores[1..] {
-            if s.raw() > max_raw {
-                max_raw = s.raw();
-            }
-        }
-        let max_compute = FixedPoint::upscale_to_compute(max_raw);
+                    // Phase 1: find max at storage tier
+                    let mut max_raw = scores[0].raw();
+                    for s in &scores[1..] {
+                        if s.raw() > max_raw {
+                            max_raw = s.raw();
+                        }
+                    }
+                    let max_compute = FixedPoint::upscale_to_compute(max_raw);
 
-        // Phase 2: exp(s_i - max) at compute tier, accumulate sum. The sum is
-        // Σ eⱼ (each eⱼ ≤ 1.0 at compute tier), so it only overflows for
-        // astronomically large n — but check it anyway so a wrapped denominator
-        // can never masquerade as a valid divisor.
-        let mut exp_values: Vec<ComputeStorage> = Vec::with_capacity(scores.len());
-        let mut sum = compute_zero::<BinaryStorage, FRAC_BITS>();
-        for s in scores {
-            let shifted = FixedPoint::compute_subtract(FixedPoint::upscale_to_compute(s.raw()), max_compute);
-            let e = FixedPoint::exp_at_compute_tier(shifted);
-            sum = FixedPoint::compute_checked_add(sum, e)?;
-            exp_values.push(e);
-        }
-        if FixedPoint::compute_is_zero(&sum) {
-            return Err(OverflowDetected::DivisionByZero);
-        }
+                    // Phase 2: exp(s_i - max) at compute tier, accumulate sum. The sum is
+                    // Σ eⱼ (each eⱼ ≤ 1.0 at compute tier), so it only overflows for
+                    // astronomically large n — but check it anyway so a wrapped denominator
+                    // can never masquerade as a valid divisor.
+                    let mut exp_values: Vec<ComputeStorage> = Vec::with_capacity(scores.len());
+                    let mut sum = compute_zero::<BinaryStorage, FRAC_BITS>();
+                    for s in scores {
+                        let shifted = FixedPoint::compute_subtract(FixedPoint::upscale_to_compute(s.raw()), max_compute);
+                        let e = FixedPoint::exp_at_compute_tier(shifted);
+                        sum = FixedPoint::compute_checked_add(sum, e)?;
+                        exp_values.push(e);
+                    }
+                    if FixedPoint::compute_is_zero(&sum) {
+                        return Err(OverflowDetected::DivisionByZero);
+                    }
 
-        // Phase 3: accumulate numerators at compute tier, value-row-major for
-        // cache locality: num[d] = Σⱼ eⱼ · v[j][d]. This is the module's largest
-        // accumulation (scaled by |v|, not bounded by 1.0 like the denominator),
-        // so a long context × large activations can exceed the compute envelope —
-        // use checked adds and surface TierOverflow rather than wrap silently.
-        let mut num: Vec<ComputeStorage> = vec![compute_zero::<BinaryStorage, FRAC_BITS>(); dim];
-        for (j, v) in values.iter().enumerate() {
-            assert_eq!(
-                v.len(),
-                dim,
-                "softmax_mix: value row {j} has length {}, expected {dim}",
-                v.len()
-            );
-            let e = exp_values[j];
-            for d in 0..dim {
-                num[d] = FixedPoint::compute_checked_add(num[d], FixedPoint::compute_multiply(e, FixedPoint::upscale_to_compute(v[d].raw())))?;
-            }
-        }
+                    // Phase 3: accumulate numerators at compute tier, value-row-major for
+                    // cache locality: num[d] = Σⱼ eⱼ · v[j][d]. This is the module's largest
+                    // accumulation (scaled by |v|, not bounded by 1.0 like the denominator),
+                    // so a long context × large activations can exceed the compute envelope —
+                    // use checked adds and surface TierOverflow rather than wrap silently.
+                    let mut num: Vec<ComputeStorage> = vec![compute_zero::<BinaryStorage, FRAC_BITS>(); dim];
+                    for (j, v) in values.iter().enumerate() {
+                        assert_eq!(
+                            v.len(),
+                            dim,
+                            "softmax_mix: value row {j} has length {}, expected {dim}",
+                            v.len()
+                        );
+                        let e = exp_values[j];
+                        for d in 0..dim {
+                            num[d] = FixedPoint::compute_checked_add(num[d], FixedPoint::compute_multiply(e, FixedPoint::upscale_to_compute(v[d].raw())))?;
+                        }
+                    }
 
-        // Phase 4: single downscale per output element
-        let mut out = Vec::with_capacity(dim);
-        for n in &num {
-            out.push(FixedPoint::from_raw(FixedPoint::downscale_to_storage(FixedPoint::compute_divide(*n, sum)?)?));
-        }
+                    // Phase 4: single downscale per output element
+                    let mut out = Vec::with_capacity(dim);
+                    for n in &num {
+                        out.push(FixedPoint::from_raw(FixedPoint::downscale_to_storage(FixedPoint::compute_divide(*n, sum)?)?));
+                    }
 
-        // Phase 5: observer weights (storage-quantized, NOT used by the mix)
-        let mut weights = Vec::with_capacity(scores.len());
-        for e in &exp_values {
-            weights.push(FixedPoint::from_raw(FixedPoint::downscale_to_storage(FixedPoint::compute_divide(*e, sum)?)?));
-        }
+                    // Phase 5: observer weights (storage-quantized, NOT used by the mix)
+                    let mut weights = Vec::with_capacity(scores.len());
+                    for e in &exp_values {
+                        weights.push(FixedPoint::from_raw(FixedPoint::downscale_to_storage(FixedPoint::compute_divide(*e, sum)?)?));
+                    }
 
-        Ok((out, weights))
-    }
+                    Ok((out, weights))
+                }
 
-    struct Lcg(u64);
-    impl Lcg {
-        fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            self.0 >> 33
-        }
-        /// k / 64 with |k| <= amp, built from an integer part below 127 so it
-        /// fits every profile and every realtime split the suite gates
-        /// (Q8.24 holds +-128).
-        fn value(&mut self, amp: i32) -> FixedPoint {
-            assert!(amp <= 8000);
-            let k = (self.next() % (2 * amp as u64 + 1)) as i32 - amp;
-            FixedPoint::from_int(k / 64) + FixedPoint::from_int(k % 64) / FixedPoint::from_int(64)
-        }
-    }
+                struct Lcg(u64);
+                impl Lcg {
+                    fn next(&mut self) -> u64 {
+                        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                        self.0 >> 33
+                    }
+                    /// k / 64 with |k| <= amp, built from an integer part below 127 so it
+                    /// fits every profile and every realtime split the suite gates
+                    /// (Q8.24 holds +-128).
+                    fn value(&mut self, amp: i32) -> FixedPoint {
+                        assert!(amp <= 8000);
+                        let k = (self.next() % (2 * amp as u64 + 1)) as i32 - amp;
+                        FixedPoint::from_int(k / 64) + FixedPoint::from_int(k % 64) / FixedPoint::from_int(64)
+                    }
+                }
 
-    fn assert_mix_variants_equal_reference(scores: &[FixedPoint], rows: &[Vec<FixedPoint>], dim: usize) {
-        let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
-        let flat: Vec<FixedPoint> = rows.iter().flat_map(|r| r.iter().copied()).collect();
-        let want = softmax_mix_reference(scores, &refs);
-        assert_eq!(softmax_mix(scores, &refs), want);
-        assert_eq!(softmax_mix_flat(scores, &flat, dim), want);
-        let want_out = want.map(|(out, _)| out);
-        assert_eq!(softmax_mix_values(scores, &refs), want_out);
-        assert_eq!(softmax_mix_flat_values(scores, &flat, dim), want_out);
-    }
+                fn assert_mix_variants_equal_reference(scores: &[FixedPoint], rows: &[Vec<FixedPoint>], dim: usize) {
+                    let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
+                    let flat: Vec<FixedPoint> = rows.iter().flat_map(|r| r.iter().copied()).collect();
+                    let want = softmax_mix_reference(scores, &refs);
+                    assert_eq!(softmax_mix(scores, &refs), want);
+                    assert_eq!(softmax_mix_flat(scores, &flat, dim), want);
+                    let want_out = want.map(|(out, _)| out);
+                    assert_eq!(softmax_mix_values(scores, &refs), want_out);
+                    assert_eq!(softmax_mix_flat_values(scores, &flat, dim), want_out);
+                }
 
-    #[test]
-    fn test_softmax_mix_variants_equal_the_checked_reference() {
-        let mut rng = Lcg(17);
-        for &dim in &[1usize, 3, 8, 64] {
-            for &n in &[1usize, 2, 3, 15, 16, 17, 100, 600] {
-                // score spread: ties, moderate, exps flushed to zero
-                for &amp in &[2i32, 200, 6000] {
-                    let scores: Vec<FixedPoint> = (0..n).map(|_| rng.value(amp)).collect();
-                    let rows: Vec<Vec<FixedPoint>> = (0..n).map(|_| (0..dim).map(|_| rng.value(6000)).collect()).collect();
-                    assert_mix_variants_equal_reference(&scores, &rows, dim);
+                #[test]
+                fn test_softmax_mix_variants_equal_the_checked_reference() {
+                    let mut rng = Lcg(17);
+                    for &dim in &[1usize, 3, 8, 64] {
+                        for &n in &[1usize, 2, 3, 15, 16, 17, 100, 600] {
+                            // score spread: ties, moderate, exps flushed to zero
+                            for &amp in &[2i32, 200, 6000] {
+                                let scores: Vec<FixedPoint> = (0..n).map(|_| rng.value(amp)).collect();
+                                let rows: Vec<Vec<FixedPoint>> = (0..n).map(|_| (0..dim).map(|_| rng.value(6000)).collect()).collect();
+                                assert_mix_variants_equal_reference(&scores, &rows, dim);
+                            }
+                        }
+                    }
+                    // empty
+                    assert_eq!(softmax_mix_values::<BinaryStorage, FRAC_BITS>(&[], &[]), Ok(vec![]));
+                    assert_eq!(softmax_mix_flat::<BinaryStorage, FRAC_BITS>(&[], &[], 4), Ok((vec![], vec![])));
+                }
+
+                on_words!($W in [w32] {
+                /// Realtime: raw-level extremes, including full-range values, lengths
+                /// around the fast path's position bound, and inputs where the reference
+                /// reports `TierOverflow` (both must agree on the error too).
+                #[test]
+                fn test_softmax_mix_i64_path_equals_reference_at_extremes() {
+                    let mut rng = Lcg(99);
+                    let mut raw = |amp: i64| FixedPoint::from_raw(((rng.next() as i64) % (2 * amp + 1) - amp) as i32);
+                    for &(n, dim, score_amp, value_amp) in &[
+                        (1usize, 1usize, 1i64 << 30, i32::MAX as i64),
+                        (2, 1, 3, i32::MAX as i64),
+                        (17, 5, 1 << 12, i32::MAX as i64),
+                        (2049, 1, 1 << 6, i32::MAX as i64 / 4),
+                        (2049, 8, 1 << 16, 1 << 20),
+                        (4097, 2, 2, i32::MAX as i64),
+                        (70_000, 1, 1, 1 << 30),
+                    ] {
+                        let scores: Vec<FixedPoint> = (0..n).map(|_| raw(score_amp)).collect();
+                        let rows: Vec<Vec<FixedPoint>> = (0..n).map(|_| (0..dim).map(|_| raw(value_amp)).collect()).collect();
+                        assert_mix_variants_equal_reference(&scores, &rows, dim);
+                    }
+                    // every value at the storage minimum and every exp at one
+                    let n = 300;
+                    let scores = vec![FixedPoint::ZERO; n];
+                    let rows = vec![vec![FixedPoint::from_raw(i32::MIN); 3]; n];
+                    assert_mix_variants_equal_reference(&scores, &rows, 3);
+                }
+                });
+
+                #[test]
+                fn test_dot_many_equals_dot_per_key() {
+                    let mut rng = Lcg(5);
+                    for &dim in &[1usize, 3, 15, 16, 17, 64, 128] {
+                        for &keys in &[0usize, 1, 2, 9] {
+                            // |v| <= 1: a 128-term dot stays inside the narrowest range
+                            let query: Vec<FixedPoint> = (0..dim).map(|_| rng.value(64)).collect();
+                            let flat: Vec<FixedPoint> = (0..dim * keys).map(|_| rng.value(64)).collect();
+                            let got = dot_many(&query, &flat, dim);
+                            assert_eq!(got.len(), keys);
+                            for k in 0..keys {
+                                assert_eq!(got[k], dot(&query, &flat[k * dim..(k + 1) * dim]), "dim {dim} key {k}");
+                            }
+                        }
+                    }
+                }
+
+                on_words!($W in [w32] {
+                /// Realtime: the bounded sum equals the checked sum on raw extremes
+                /// (rounding ties in both signs, large operands), and an overflowing
+                /// input panics on both paths.
+                #[test]
+                fn test_bounded_dot_equals_checked_dot_on_raws() {
+                    let mut rng = Lcg(42);
+                    let mut raws = |n: usize, amp: i64| -> Vec<FixedPoint> {
+                        (0..n).map(|_| FixedPoint::from_raw(((rng.next() as i64) % (2 * amp + 1) - amp) as i32)).collect()
+                    };
+                    let exact = |a: &[FixedPoint], b: &[FixedPoint]| -> Option<i32> {
+                        let acc: i128 = a.iter().zip(b).map(|(x, y)| x.raw() as i128 * y.raw() as i128).sum();
+                        let r = (acc >> FRAC_BITS) + ((acc >> (FRAC_BITS - 1)) & 1);
+                        i32::try_from(r).ok()
+                    };
+                    for case in 0..3000usize {
+                        let n = [1usize, 7, 16, 17, 64, 128, 256, 1000][case % 8];
+                        let (qa, ka) = (if case % 7 == 0 { 1i64 << 25 } else { 1 << 14 }, if case % 11 == 0 { 1i64 << 20 } else { 1 << 12 });
+                        let (q, k) = (raws(n, qa), raws(n, ka));
+                        let want = exact(&q, &k);
+                        let got = std::panic::catch_unwind(|| dot(&q, &k).raw()).ok();
+                        assert_eq!(got, want, "case {case} n {n}");
+                        let many = std::panic::catch_unwind(|| dot_many(&q, &k, n)[0].raw()).ok();
+                        assert_eq!(many, want, "dot_many case {case} n {n}");
+                    }
+                    // exact ties at the rounding bit, both signs, long enough for the bounded path
+                    let half = 1i32 << (FRAC_BITS - 1);
+                    for target in [half, -half, 3 * half, -3 * half, half - 1, -half - 1] {
+                        let mut q = vec![FixedPoint::ZERO; 32];
+                        let mut k = vec![FixedPoint::ZERO; 32];
+                        q[5] = FixedPoint::from_raw(target);
+                        k[5] = FixedPoint::from_raw(1);
+                        assert_eq!(Some(dot(&q, &k).raw()), exact(&q, &k), "tie {target}");
+                    }
+                    // full-range operands: the bound fails, the checked loop decides
+                    let big = vec![FixedPoint::from_raw(i32::MIN); 64];
+                    assert!(std::panic::catch_unwind(|| dot(&big, &big)).is_err());
+                    assert!(std::panic::catch_unwind(|| dot_many(&big, &big, 64)).is_err());
+                }
+                });
+
+                #[test]
+                fn test_rms_norm_one_rounding() {
+                    let one = FixedPoint::one();
+                    let half = one / FixedPoint::from_int(2);
+                    let two = FixedPoint::from_int(2);
+                    // rms 2: the outputs are the weights (exact)
+                    let w = [half, -(one + half), two, -one];
+                    assert_eq!(rms_norm(&[two, two, -two, two], &w, 0), Ok(vec![half, -(one + half), -two, -one]));
+                    // one storage unit among zeros: mean = unit^2 / 4 is a quarter of a
+                    // compute unit, yet the output is exactly 2
+                    let mut unit = one;
+                    for _ in 0..FRAC_BITS { unit = unit / two; }
+                    let tiny = [unit, FixedPoint::ZERO, FixedPoint::ZERO, FixedPoint::ZERO];
+                    assert_eq!(rms_norm(&tiny, &[one; 4], 0), Ok(vec![two, FixedPoint::ZERO, FixedPoint::ZERO, FixedPoint::ZERO]));
+                    // in place gives the same values; an all-zero input is zero when eps > 0
+                    let mut rng = Lcg(8);
+                    let eps = 1i128 << 44; // about 9.5e-7 in Q64.64
+                    for &n in &[1usize, 2, 7, 64, 300] {
+                        let x: Vec<FixedPoint> = (0..n).map(|_| rng.value(200)).collect();
+                        let w: Vec<FixedPoint> = (0..n).map(|_| rng.value(128)).collect();
+                        let want = rms_norm(&x, &w, eps).unwrap();
+                        let mut y = x.clone();
+                        assert_eq!(rms_norm_in_place(&mut y, &w, eps), Ok(()));
+                        assert_eq!(y, want);
+                    }
+                    assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], eps), Ok(vec![FixedPoint::ZERO; 4]));
+                    // errors
+                    assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], 0), Err(OverflowDetected::DivisionByZero));
+                    assert_eq!(rms_norm::<BinaryStorage, FRAC_BITS>(&[], &[], eps), Err(OverflowDetected::DivisionByZero));
+                    assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], -eps), Err(OverflowDetected::DomainError));
+                    // an output beyond storage: 2 times the largest power of two
+                    let mut big = one;
+                    while let Ok(next) = big.try_add(big) { big = next; }
+                    assert_eq!(rms_norm(&tiny, &[big, one, one, one], 0), Err(OverflowDetected::TierOverflow));
                 }
             }
-        }
-        // empty
-        assert_eq!(softmax_mix_values::<BinaryStorage, FRAC_BITS>(&[], &[]), Ok(vec![]));
-        assert_eq!(softmax_mix_flat::<BinaryStorage, FRAC_BITS>(&[], &[], 4), Ok((vec![], vec![])));
-    }
-
-    /// Realtime: raw-level extremes, including full-range values, lengths
-    /// around the fast path's position bound, and inputs where the reference
-    /// reports `TierOverflow` (both must agree on the error too).
-    #[cfg(table_format = "q16_16")]
-    #[test]
-    fn test_softmax_mix_i64_path_equals_reference_at_extremes() {
-        let mut rng = Lcg(99);
-        let mut raw = |amp: i64| FixedPoint::from_raw(((rng.next() as i64) % (2 * amp + 1) - amp) as i32);
-        for &(n, dim, score_amp, value_amp) in &[
-            (1usize, 1usize, 1i64 << 30, i32::MAX as i64),
-            (2, 1, 3, i32::MAX as i64),
-            (17, 5, 1 << 12, i32::MAX as i64),
-            (2049, 1, 1 << 6, i32::MAX as i64 / 4),
-            (2049, 8, 1 << 16, 1 << 20),
-            (4097, 2, 2, i32::MAX as i64),
-            (70_000, 1, 1, 1 << 30),
-        ] {
-            let scores: Vec<FixedPoint> = (0..n).map(|_| raw(score_amp)).collect();
-            let rows: Vec<Vec<FixedPoint>> = (0..n).map(|_| (0..dim).map(|_| raw(value_amp)).collect()).collect();
-            assert_mix_variants_equal_reference(&scores, &rows, dim);
-        }
-        // every value at the storage minimum and every exp at one
-        let n = 300;
-        let scores = vec![FixedPoint::ZERO; n];
-        let rows = vec![vec![FixedPoint::from_raw(i32::MIN); 3]; n];
-        assert_mix_variants_equal_reference(&scores, &rows, 3);
-    }
-
-    #[test]
-    fn test_dot_many_equals_dot_per_key() {
-        let mut rng = Lcg(5);
-        for &dim in &[1usize, 3, 15, 16, 17, 64, 128] {
-            for &keys in &[0usize, 1, 2, 9] {
-                // |v| <= 1: a 128-term dot stays inside the narrowest range
-                let query: Vec<FixedPoint> = (0..dim).map(|_| rng.value(64)).collect();
-                let flat: Vec<FixedPoint> = (0..dim * keys).map(|_| rng.value(64)).collect();
-                let got = dot_many(&query, &flat, dim);
-                assert_eq!(got.len(), keys);
-                for k in 0..keys {
-                    assert_eq!(got[k], dot(&query, &flat[k * dim..(k + 1) * dim]), "dim {dim} key {k}");
-                }
-            }
-        }
-    }
-
-    /// Realtime: the bounded sum equals the checked sum on raw extremes
-    /// (rounding ties in both signs, large operands), and an overflowing
-    /// input panics on both paths.
-    #[cfg(table_format = "q16_16")]
-    #[test]
-    fn test_bounded_dot_equals_checked_dot_on_raws() {
-        use crate::fixed_point::frac_config::FRAC_BITS;
-        let mut rng = Lcg(42);
-        let mut raws = |n: usize, amp: i64| -> Vec<FixedPoint> {
-            (0..n).map(|_| FixedPoint::from_raw(((rng.next() as i64) % (2 * amp + 1) - amp) as i32)).collect()
         };
-        let exact = |a: &[FixedPoint], b: &[FixedPoint]| -> Option<i32> {
-            let acc: i128 = a.iter().zip(b).map(|(x, y)| x.raw() as i128 * y.raw() as i128).sum();
-            let r = (acc >> FRAC_BITS) + ((acc >> (FRAC_BITS - 1)) & 1);
-            i32::try_from(r).ok()
-        };
-        for case in 0..3000usize {
-            let n = [1usize, 7, 16, 17, 64, 128, 256, 1000][case % 8];
-            let (qa, ka) = (if case % 7 == 0 { 1i64 << 25 } else { 1 << 14 }, if case % 11 == 0 { 1i64 << 20 } else { 1 << 12 });
-            let (q, k) = (raws(n, qa), raws(n, ka));
-            let want = exact(&q, &k);
-            let got = std::panic::catch_unwind(|| dot(&q, &k).raw()).ok();
-            assert_eq!(got, want, "case {case} n {n}");
-            let many = std::panic::catch_unwind(|| dot_many(&q, &k, n)[0].raw()).ok();
-            assert_eq!(many, want, "dot_many case {case} n {n}");
-        }
-        // exact ties at the rounding bit, both signs, long enough for the bounded path
-        let half = 1i32 << (FRAC_BITS - 1);
-        for target in [half, -half, 3 * half, -3 * half, half - 1, -half - 1] {
-            let mut q = vec![FixedPoint::ZERO; 32];
-            let mut k = vec![FixedPoint::ZERO; 32];
-            q[5] = FixedPoint::from_raw(target);
-            k[5] = FixedPoint::from_raw(1);
-            assert_eq!(Some(dot(&q, &k).raw()), exact(&q, &k), "tie {target}");
-        }
-        // full-range operands: the bound fails, the checked loop decides
-        let big = vec![FixedPoint::from_raw(i32::MIN); 64];
-        assert!(std::panic::catch_unwind(|| dot(&big, &big)).is_err());
-        assert!(std::panic::catch_unwind(|| dot_many(&big, &big, 64)).is_err());
     }
-
-    #[test]
-    fn test_rms_norm_one_rounding() {
-        let one = FixedPoint::one();
-        let half = one / FixedPoint::from_int(2);
-        let two = FixedPoint::from_int(2);
-        // rms 2: the outputs are the weights (exact)
-        let w = [half, -(one + half), two, -one];
-        assert_eq!(rms_norm(&[two, two, -two, two], &w, 0), Ok(vec![half, -(one + half), -two, -one]));
-        // one storage unit among zeros: mean = unit^2 / 4 is a quarter of a
-        // compute unit, yet the output is exactly 2
-        let mut unit = one;
-        for _ in 0..crate::fixed_point::frac_config::FRAC_BITS { unit = unit / two; }
-        let tiny = [unit, FixedPoint::ZERO, FixedPoint::ZERO, FixedPoint::ZERO];
-        assert_eq!(rms_norm(&tiny, &[one; 4], 0), Ok(vec![two, FixedPoint::ZERO, FixedPoint::ZERO, FixedPoint::ZERO]));
-        // in place gives the same values; an all-zero input is zero when eps > 0
-        let mut rng = Lcg(8);
-        let eps = 1i128 << 44; // about 9.5e-7 in Q64.64
-        for &n in &[1usize, 2, 7, 64, 300] {
-            let x: Vec<FixedPoint> = (0..n).map(|_| rng.value(200)).collect();
-            let w: Vec<FixedPoint> = (0..n).map(|_| rng.value(128)).collect();
-            let want = rms_norm(&x, &w, eps).unwrap();
-            let mut y = x.clone();
-            assert_eq!(rms_norm_in_place(&mut y, &w, eps), Ok(()));
-            assert_eq!(y, want);
-        }
-        assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], eps), Ok(vec![FixedPoint::ZERO; 4]));
-        // errors
-        assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], 0), Err(OverflowDetected::DivisionByZero));
-        assert_eq!(rms_norm::<BinaryStorage, FRAC_BITS>(&[], &[], eps), Err(OverflowDetected::DivisionByZero));
-        assert_eq!(rms_norm(&[FixedPoint::ZERO; 4], &[one; 4], -eps), Err(OverflowDetected::DomainError));
-        // an output beyond storage: 2 times the largest power of two
-        let mut big = one;
-        while let Ok(next) = big.try_add(big) { big = next; }
-        assert_eq!(rms_norm(&tiny, &[big, one, one, one], 0), Err(OverflowDetected::TierOverflow));
-    }
+    for_each_format!(suite);
 }

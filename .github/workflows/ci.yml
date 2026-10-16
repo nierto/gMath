@@ -1,0 +1,81 @@
+# One build runs every test at every format: since 0.7.0 the format is a
+# type (Fixed<S, F>), so the suites instantiate themselves at Q22.10,
+# Q16.16, Q32.32, Q64.64, Q128.128 and Q256.256 in one binary. This
+# replaces the per-profile matrices of 0.6.x (certified-geometry,
+# compute-tier-state, float-boundary, fused-tq19-precision,
+# linalg-decompositions, realtime-splits, ternary-domain, wide-tier),
+# which ran subsets of the same suites once per GMATH_PROFILE.
+#
+# full-suite: lib, integration and doc tests, release, inference + serde.
+# no-features: the crate and its lib tests without optional features.
+# splits: the full suite with the realtime splits F = 8, 12, 20, 24 added
+#   (the range the suite gates, owner decision 2026-09-24).
+# edge-splits: the split-generic correctness gates at F = 2, 4, 6, 26, 28,
+#   30, where most tests cannot be meaningful (one unit is 1/16 at F = 4).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Full suite, every format
+        run: cargo test --release --features inference,serde --no-fail-fast
+
+  no-features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Build and lib tests without optional features
+        run: |
+          cargo build --release
+          cargo test --release --lib
+
+  splits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Full suite with the realtime splits 8, 12, 20, 24
+        env:
+          RUSTFLAGS: "--cfg gmath_all_splits"
+        run: cargo test --release --features inference,serde --no-fail-fast
+
+  edge-splits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Correctness gates at the edge splits
+        env:
+          RUSTFLAGS: "--cfg gmath_edge_splits"
+        run: >
+          cargo test --release --no-fail-fast
+          --test wide_q64_validation --test ugod_promotion_validation
+          --test float_boundary_validation --test operator_overflow_validation

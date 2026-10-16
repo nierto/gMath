@@ -17,7 +17,7 @@ from mpmath import mp, mpf, exp, log, sqrt, sin, cos, tan, atan, atan2, asin, ac
 mp.dps = 600
 SEED = int(os.environ.get("SEED", "20261015"))
 PER_FORMAT = int(os.environ.get("PER_FORMAT", "300"))
-FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256)]
+FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256), (32, 8), (32, 12), (32, 20)]
 
 UNARY = {
     "exp": exp, "ln": log, "sqrt": sqrt, "sin": sin, "cos": cos, "tan": tan, "atan": atan,

@@ -1,7 +1,7 @@
 //! Q16.16 Realtime Profile ULP Validation
 //!
 //! Validates all transcendental functions against mpmath 50-digit reference values.
-//! Run with: GMATH_PROFILE=realtime cargo test --test realtime_profile_validation -- --nocapture
+//! Run with: cargo test --test realtime_profile_validation -- --nocapture
 
 #[macro_use]
 mod common;
@@ -18,7 +18,7 @@ macro_rules! suite {
             mod realtime_tests {
                 #[allow(unused_imports)]
                 use super::{BITS, FRAC_BITS, FixedPoint};
-                use g_math::fixed_point::canonical::{gmath_in, evaluate_in};
+                use g_math::fixed_point::canonical::{gmath, evaluate};
 
                 include!("data/fasc_ulp_refs_q16.rs");
 
@@ -29,9 +29,9 @@ macro_rules! suite {
                                 std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1)
                             )
                         };
-                        -gmath_in::<FixedPoint>(positive)
+                        -gmath::<FixedPoint>(positive)
                     } else {
-                        gmath_in::<FixedPoint>(input)
+                        gmath::<FixedPoint>(input)
                     }
                 }
 
@@ -63,7 +63,7 @@ macro_rules! suite {
                             _ => panic!("unknown function: {}", func_name),
                         };
 
-                        match evaluate_in(&expr) {
+                        match evaluate(&expr) {
                             Ok(result) => {
                                 match result.as_binary_storage() {
                                     Some(got_raw) => {

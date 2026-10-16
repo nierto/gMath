@@ -21,7 +21,7 @@
 //! Balanced profile only: `DecimalFixed<28>` needs a compute dp wider than 28
 //! for guard digits (balanced = 77). Run with:
 //!   rm -rf target/debug/incremental/
-//!   GMATH_PROFILE=balanced cargo test --test decimal_contract_validation -- --nocapture
+//!   cargo test --test decimal_contract_validation -- --nocapture
 
 #[macro_use]
 mod common;
@@ -260,7 +260,7 @@ macro_rules! suite {
             // inputs — a panic there is a bug, not a tolerance question.
             //
             // Run (single-threaded so the panic-hook swap doesn't race):
-            //   GMATH_DECIMAL_SCALED_GOLDEN=~/gh/decimal-scaled GMATH_PROFILE=balanced \
+            //   GMATH_DECIMAL_SCALED_GOLDEN=~/gh/decimal-scaled \
             //     cargo test --test decimal_contract_validation oracle2 -- --nocapture --test-threads=1
             // ============================================================================
 
@@ -518,7 +518,7 @@ macro_rules! suite {
             /// (compute-tier chain persistence + UGOD) where the imperative Arm A dies?
             #[test]
             fn arm_b_fasc_probe() {
-                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                use g_math::canonical::{evaluate, gmath_parse};
                 // (label, decimal-string input, mpmath true value)
                 let cases: &[(&str, &str, &str)] = &[
                     ("asinh", "-1.4661736815306297448", "-1.17585209122032172461"),
@@ -532,7 +532,7 @@ macro_rules! suite {
                 std::panic::set_hook(Box::new(|_| {}));
                 for &(func, input, truth) in cases {
                     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let base = gmath_parse_in::<FixedPoint>(input).expect("parse");
+                        let base = gmath_parse::<FixedPoint>(input).expect("parse");
                         let expr = match func {
                             "asinh" => base.asinh(),
                             "atanh" => base.atanh(),
@@ -542,7 +542,7 @@ macro_rules! suite {
                             "tanh" => base.tanh(),
                             _ => unreachable!(),
                         };
-                        evaluate_in(&expr).map(|v| format!("{v}"))
+                        evaluate(&expr).map(|v| format!("{v}"))
                     }));
                     match out {
                         Ok(Ok(s)) => eprintln!("[armB/{func}] FASC = {s}   (true {truth})"),
@@ -558,19 +558,19 @@ macro_rules! suite {
             /// `integer_part < 0`, which is false for `-0`, silently flipping -0.x to +0.x.
             #[test]
             fn parse_negative_subunit_sign() {
-                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                use g_math::canonical::{evaluate, gmath_parse};
                 for s in ["-0.5", "-0.999", "-0.0001", "-1.5", "-2.0"] {
-                    let out = format!("{}", evaluate_in(&gmath_parse_in::<FixedPoint>(s).unwrap()).unwrap());
+                    let out = format!("{}", evaluate(&gmath_parse::<FixedPoint>(s).unwrap()).unwrap());
                     assert!(out.starts_with('-'), "parse({s}) lost its sign: got {out}");
                 }
-                let p = format!("{}", evaluate_in(&gmath_parse_in::<FixedPoint>("0.5").unwrap()).unwrap());
+                let p = format!("{}", evaluate(&gmath_parse::<FixedPoint>("0.5").unwrap()).unwrap());
                 assert!(!p.starts_with('-'), "parse(0.5) wrongly negative: {p}");
             }
 
             // ============================================================================
-            // Arm B — the FASC / canonical gmath_in::<FixedPoint>() surface (the path most users hit).
+            // Arm B — the FASC / canonical gmath::<FixedPoint>() surface (the path most users hit).
             //
-            // Routes Jack's inputs through gmath_parse_in::<FixedPoint>(...).f() -> evaluate. The fractal
+            // Routes Jack's inputs through gmath_parse::<FixedPoint>(...).f() -> evaluate. The fractal
             // router picks the domain per input (integers -> binary, decimals -> decimal),
             // so this exercises the real canonical experience, not just the decimal engine.
             // FASC materializes decimal output at DECIMAL_STORAGE_MAX_DP-2 (=36 on balanced);
@@ -616,8 +616,8 @@ macro_rules! suite {
 
             /// Compute func via the FASC canonical path at runtime scale; raw result at scale.
             fn fasc_compute(func: &str, input: i128, scale: u8) -> Option<i128> {
-                use g_math::canonical::{evaluate_in, gmath_parse_in};
-                let base = gmath_parse_in::<FixedPoint>(&raw_to_decimal_string(input, scale)).ok()?;
+                use g_math::canonical::{evaluate, gmath_parse};
+                let base = gmath_parse::<FixedPoint>(&raw_to_decimal_string(input, scale)).ok()?;
                 let expr = match func {
                     "exp" => base.exp(),
                     "ln" => base.ln(),
@@ -636,11 +636,11 @@ macro_rules! suite {
                     "atanh" => base.atanh(),
                     _ => return None,
                 };
-                let v = evaluate_in(&expr).ok()?;
+                let v = evaluate(&expr).ok()?;
                 Some(decimal_string_to_scaled(&format!("{v}"), scale))
             }
 
-            /// Arm B sweep: the same corpus, routed through the canonical `gmath_in::<FixedPoint>()`/FASC
+            /// Arm B sweep: the same corpus, routed through the canonical `gmath::<FixedPoint>()`/FASC
             /// path. Gated at 0 LSB — asserts zero panics on valid-domain inputs and
             /// `max_delta == 0` (correctly rounded), matching Arm A's gate.
             #[test]
@@ -887,13 +887,13 @@ macro_rules! suite {
             /// guard offers ~0 accuracy gain.
             #[test]
             fn symbolic_transcendental_accuracy_probe() {
-                use g_math::canonical::{evaluate_in, gmath_parse_in};
+                use g_math::canonical::{evaluate, gmath_parse};
                 let cases = [
                     ("atanh", "1/3"), ("atanh", "1/10"), ("atanh", "1/4"),
                     ("asinh", "1/7"), ("tanh", "2/3"), ("acosh", "7/3"),
                 ];
                 for (f, x) in cases {
-                    let base = gmath_parse_in::<FixedPoint>(x).unwrap();
+                    let base = gmath_parse::<FixedPoint>(x).unwrap();
                     let expr = match f {
                         "atanh" => base.atanh(),
                         "asinh" => base.asinh(),
@@ -901,7 +901,7 @@ macro_rules! suite {
                         "acosh" => base.acosh(),
                         _ => unreachable!(),
                     };
-                    eprintln!("SYMB {f}({x}) = {}", evaluate_in(&expr).unwrap());
+                    eprintln!("SYMB {f}({x}) = {}", evaluate(&expr).unwrap());
                 }
             }
 

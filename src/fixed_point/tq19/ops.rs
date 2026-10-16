@@ -789,211 +789,224 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[allow(unused_imports)]
-    use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
-    #[allow(unused_imports)]
-    use crate::fixed_point::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
+                #[allow(unused_imports)]
+                #[allow(unused_imports)]
 
-    /// Helper: create BinaryStorage for a known value via FixedPoint.
-    fn fp_raw(s: &str) -> BinaryStorage {
-        if s.starts_with('-') {
-            (-FixedPoint::from_str(&s[1..])).raw()
-        } else {
-            FixedPoint::from_str(s).raw()
-        }
-    }
+                /// Helper: create BinaryStorage for a known value via FixedPoint.
+                fn fp_raw(s: &str) -> BinaryStorage {
+                    if s.starts_with('-') {
+                        (-FixedPoint::from_str(&s[1..])).raw()
+                    } else {
+                        FixedPoint::from_str(s).raw()
+                    }
+                }
 
-    /// Profile-aware BinaryStorage constants for assertions.
-    fn bs_zero() -> BinaryStorage { <BinaryStorage as crate::fixed_point::width::WideInt>::ZERO }
-    fn bs_one() -> BinaryStorage { <BinaryStorage as crate::fixed_point::width::WideInt>::one() }
+                /// Profile-aware BinaryStorage constants for assertions.
+                fn bs_zero() -> BinaryStorage { <BinaryStorage as crate::fixed_point::width::WideInt>::ZERO }
+                fn bs_one() -> BinaryStorage { <BinaryStorage as crate::fixed_point::width::WideInt>::one() }
 
-    #[test]
-    fn tq19_dot_identity_weight() {
-        // Weight = SCALE means TQ1.9 value = 1.0
-        // So dot([SCALE], [activation]) / SCALE = activation
-        let act = fp_raw("1.5");
-        let result = tq19_dot(&[SCALE as i16], &[FixedPoint::from_raw(act)]);
-        // Should be very close to activation (within 1 ULP from SCALE rounding)
-        let diff = if result > FixedPoint::from_raw(act) { result - FixedPoint::from_raw(act) } else { FixedPoint::from_raw(act) - result };
-        // Allow 1 ULP tolerance
-        assert!(diff <= FixedPoint::from_raw(bs_one()), "identity weight: diff = {diff:?}");
-    }
+                #[test]
+                fn tq19_dot_identity_weight() {
+                    // Weight = SCALE means TQ1.9 value = 1.0
+                    // So dot([SCALE], [activation]) / SCALE = activation
+                    let act = fp_raw("1.5");
+                    let result = tq19_dot(&[SCALE as i16], &[FixedPoint::from_raw(act)]);
+                    // Should be very close to activation (within 1 ULP from SCALE rounding)
+                    let diff = if result > FixedPoint::from_raw(act) { result - FixedPoint::from_raw(act) } else { FixedPoint::from_raw(act) - result };
+                    // Allow 1 ULP tolerance
+                    assert!(diff <= FixedPoint::from_raw(bs_one()), "identity weight: diff = {diff:?}");
+                }
 
-    /// Contract pin for the wide epilogue:
-    /// `q2f / (1 << FRAC_BITS)` (truncating division) must reproduce the
-    /// narrow matvec BIT-FOR-BIT: a theorem for nested truncation toward
-    /// zero, pinned here on random full-range signed data.
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    #[test]
-    fn q2f_narrow_reproduces_matvec_bit_for_bit() {
-        fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
-            #[cfg(table_format = "q16_16")]
-            { (v / (1i64 << crate::fixed_point::frac_config::FRAC_BITS)) as i32 }
-            #[cfg(table_format = "q32_32")]
-            { (v / (1i128 << 32)) as i64 }
-        }
-        let rows = 9;
-        let cols = 131; // not divisible by SIMD lane widths
-        let data: Vec<i16> = (0..rows * cols)
-            .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
-            .collect();
-        let x: Vec<BinaryStorage> = (0..cols)
-            .map(|i| ((i as i64 * 40503 % 8191) - 4095) as BinaryStorage)
-            .collect();
-        let narrow = tq19_matvec(&data, rows, cols, FixedPoint::from_raw_slice(&x));
-        let wide = tq19_matvec_q2f(&data, rows, cols, FixedPoint::from_raw_slice(&x));
-        for r in 0..rows {
-            assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}: narrow(q2f) != matvec");
-        }
-        // Parallel and batch variants must agree with sequential exactly.
-        assert_eq!(wide, tq19_matvec_q2f_par(&data, rows, cols, FixedPoint::from_raw_slice(&x)));
-        let batch: Vec<&[BinaryStorage]> = vec![&x, &x];
-        let wb = tq19_matvec_q2f_batch_par(&data, rows, cols, &(&batch).iter().map(|v| FixedPoint::from_raw_slice(v)).collect::<Vec<_>>());
-        assert_eq!(wb[0], wide);
-        assert_eq!(wb[1], wide);
-    }
+                on_words!($W in [w32 w64] {
+                /// Contract pin for the wide epilogue:
+                /// `q2f / (1 << FRAC_BITS)` (truncating division) must reproduce the
+                /// narrow matvec BIT-FOR-BIT: a theorem for nested truncation toward
+                /// zero, pinned here on random full-range signed data.
+                #[test]
+                fn q2f_narrow_reproduces_matvec_bit_for_bit() {
+                    fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
+                        (v / (1 << FRAC_BITS)) as BinaryStorage
+                    }
+                    let rows = 9;
+                    let cols = 131; // not divisible by SIMD lane widths
+                    let data: Vec<i16> = (0..rows * cols)
+                        .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
+                        .collect();
+                    let x: Vec<BinaryStorage> = (0..cols)
+                        .map(|i| ((i as i64 * 40503 % 8191) - 4095) as BinaryStorage)
+                        .collect();
+                    let narrow = tq19_matvec(&data, rows, cols, FixedPoint::from_raw_slice(&x));
+                    let wide = tq19_matvec_q2f(&data, rows, cols, FixedPoint::from_raw_slice(&x));
+                    for r in 0..rows {
+                        assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}: narrow(q2f) != matvec");
+                    }
+                    // Parallel and batch variants must agree with sequential exactly.
+                    assert_eq!(wide, tq19_matvec_q2f_par(&data, rows, cols, FixedPoint::from_raw_slice(&x)));
+                    let batch: Vec<&[BinaryStorage]> = vec![&x, &x];
+                    let wb = tq19_matvec_q2f_batch_par(&data, rows, cols, &(&batch).iter().map(|v| FixedPoint::from_raw_slice(v)).collect::<Vec<_>>());
+                    assert_eq!(wb[0], wide);
+                    assert_eq!(wb[1], wide);
+                }
+                });
 
-    /// wide_output against a direct i128 reference, including the
-    /// fail-loud guard at the compute-range boundary.
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    #[test]
-    fn wide_output_matches_reference_and_guards_overflow() {
-        #[cfg(table_format = "q16_16")]
-        {
-            let f = crate::fixed_point::frac_config::FRAC_BITS;
-            for acc in [0i64, 1, -1, 12345, -987654321, 1 << 40, -(1i64 << 40)] {
-                let reference = ((acc as i128) << f) / (SCALE as i128);
-                assert_eq!(wide_output::<BinaryStorage, { crate::fixed_point::frac_config::FRAC_BITS }>(acc) as i128, reference, "acc = {acc}");
+                on_words!($W in [w32 w64] {
+                /// wide_output against a direct i128 reference, including the
+                /// fail-loud guard at the compute-range boundary.
+                #[test]
+                fn wide_output_matches_reference_and_guards_overflow() {
+                    on_words!($W in [w32] {
+                    {
+                        let f = FRAC_BITS;
+                        for acc in [0i64, 1, -1, 12345, -987654321, 1 << 40, -(1i64 << 40)] {
+                            let reference = ((acc as i128) << f) / (SCALE as i128);
+                            assert_eq!(wide_output::<BinaryStorage, FRAC_BITS>(acc) as i128, reference, "acc = {acc}");
+                        }
+                        // i64::MAX: in range for FRAC_BITS ≤ 14 (SCALE > 2^14), must
+                        // panic above — branch on the actual FRAC configuration.
+                        let exact = ((i64::MAX as i128) << f) / (SCALE as i128);
+                        if exact <= i64::MAX as i128 {
+                            assert_eq!(wide_output::<BinaryStorage, FRAC_BITS>(i64::MAX) as i128, exact);
+                        } else {
+                            assert!(std::panic::catch_unwind(|| wide_output::<BinaryStorage, FRAC_BITS>(i64::MAX)).is_err(),
+                                "wide_output must fail loud past the compute range");
+                        }
+                    }
+                    });
+                    on_words!($W in [w64] {
+                    {
+                        // Staged division must equal the single division wherever the
+                        // single division is directly computable in i128.
+                        for acc in [0i128, 1, -1, 12345, -987654321, (i64::MAX as i128) * 1000, -(i64::MAX as i128) * 1000] {
+                            let reference = (acc << 32) / (SCALE as i128);
+                            assert_eq!(wide_output::<BinaryStorage, 32>(acc), reference, "acc = {acc}");
+                        }
+                        assert!(std::panic::catch_unwind(|| wide_output::<BinaryStorage, 32>(i128::MAX)).is_err(),
+                            "wide_output must fail loud past the compute range");
+                    }
+                    });
+                }
+                });
+
+                #[test]
+                fn tq19_dot_zero_weights() {
+                    let activations: Vec<BinaryStorage> = (0..4).map(|i| fp_raw(&format!("{}.0", i + 1))).collect();
+                    let weights = vec![0i16; 4];
+                    let result = tq19_dot(&weights, FixedPoint::from_raw_slice(&activations));
+                    assert_eq!(result, FixedPoint::from_raw(bs_zero()), "zero weights should produce zero");
+                }
+
+                #[test]
+                fn trit_dot_all_positive() {
+                    // All trits = +1: result = sum of activations
+                    let a1 = fp_raw("1.0");
+                    let a2 = fp_raw("2.0");
+                    let a3 = fp_raw("3.0");
+                    let activations = vec![a1, a2, a3];
+                    let trits = vec![1i8, 1, 1];
+                    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
+                    let expected = fp_raw("6.0");
+                    let diff = if result > FixedPoint::from_raw(expected) { result - FixedPoint::from_raw(expected) } else { FixedPoint::from_raw(expected) - result };
+                    assert!(diff <= FixedPoint::from_raw(bs_one()), "all-positive trits: diff = {diff:?}");
+                }
+
+                #[test]
+                fn trit_dot_mixed() {
+                    // [+1, 0, -1] · [1.0, 2.0, 3.0] = 1.0 + 0 - 3.0 = -2.0
+                    let activations = vec![fp_raw("1.0"), fp_raw("2.0"), fp_raw("3.0")];
+                    let trits = vec![1i8, 0, -1];
+                    let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
+                    let expected = fp_raw("-2.0");
+                    let diff = if result > FixedPoint::from_raw(expected) { result - FixedPoint::from_raw(expected) } else { FixedPoint::from_raw(expected) - result };
+                    assert!(diff <= FixedPoint::from_raw(bs_one()), "mixed trits: diff = {diff:?}");
+                }
+
+                #[test]
+                fn tq19_matvec_identity_matrix() {
+                    // Identity-like: diagonal = SCALE, off-diagonal = 0
+                    let n = 3;
+                    let mut data = vec![0i16; n * n];
+                    for i in 0..n {
+                        data[i * n + i] = SCALE as i16;
+                    }
+                    let activations: Vec<BinaryStorage> = vec![fp_raw("1.0"), fp_raw("2.0"), fp_raw("3.0")];
+                    let result = tq19_matvec(&data, n, n, FixedPoint::from_raw_slice(&activations));
+                    for i in 0..n {
+                        let diff = if result[i] > FixedPoint::from_raw(activations[i]) { result[i] - FixedPoint::from_raw(activations[i]) }
+                            else { FixedPoint::from_raw(activations[i]) - result[i] };
+                        assert!(diff <= FixedPoint::from_raw(bs_one()), "identity matvec row {i}: diff = {diff:?}");
+                    }
+                }
+
+                #[test]
+                fn tq19_matvec_batch_matches_sequential() {
+                    let n = 4;
+                    let data: Vec<i16> = (0..n * n).map(|i| ((i as i16) * 137) % (SCALE as i16)).collect();
+                    let v1: Vec<BinaryStorage> = (0..n).map(|i| fp_raw(&format!("{}.5", i))).collect();
+                    let v2: Vec<BinaryStorage> = (0..n).map(|i| fp_raw(&format!("{}.25", i + 1))).collect();
+
+                    let seq1 = tq19_matvec(&data, n, n, FixedPoint::from_raw_slice(&v1));
+                    let seq2 = tq19_matvec(&data, n, n, FixedPoint::from_raw_slice(&v2));
+                    let batch = tq19_matvec_batch(&data, n, n, &[FixedPoint::from_raw_slice(&v1), FixedPoint::from_raw_slice(&v2)]);
+
+                    assert_eq!(batch[0], seq1, "batch[0] must match sequential");
+                    assert_eq!(batch[1], seq2, "batch[1] must match sequential");
+                }
+
+                #[test]
+                fn packed_trit_dot_matches_trit_dot() {
+                    // Encode 7 trits: [+1, -1, 0, +1, +1, -1, 0]
+                    // Pack: first 5 in byte 0, last 2 in byte 1
+                    let trits_i8: Vec<i8> = vec![1, -1, 0, 1, 1, -1, 0];
+                    let packed = encode_trits_for_test(&trits_i8);
+
+                    let activations: Vec<BinaryStorage> = (0..7)
+                        .map(|i| fp_raw(&format!("{}.0", i + 1)))
+                        .collect();
+
+                    // Identity scale (1.0 in Q-format)
+                    let one_raw = fp_raw("1.0");
+
+                    let trit_result = trit_dot(&trits_i8, FixedPoint::from_raw_slice(&activations));
+                    let packed_result = packed_trit_dot(&packed, 7, FixedPoint::from_raw_slice(&activations), FixedPoint::from_raw(one_raw));
+
+                    // packed_trit_dot applies scale via mul_fixed which introduces rounding
+                    // Allow 2 ULP tolerance
+                    let diff = if packed_result > trit_result { packed_result - trit_result }
+                        else { trit_result - packed_result };
+                    let tolerance = bs_one() + bs_one();
+                    assert!(diff <= FixedPoint::from_raw(tolerance), "packed vs trit dot: diff = {diff:?}");
+                }
+
+                /// Test helper: encode i8 trits to packed bytes.
+                fn encode_trits_for_test(trits: &[i8]) -> Vec<u8> {
+                    let mut packed = Vec::new();
+                    for chunk in trits.chunks(5) {
+                        let mut byte = 0u8;
+                        for (j, &t) in chunk.iter().enumerate() {
+                            let d = (t + 1) as u8; // {-1,0,1} → {0,1,2}
+                            byte += d * [81, 27, 9, 3, 1][j];
+                        }
+                        // Pad remaining positions with Zero (1)
+                        for j in chunk.len()..5 {
+                            byte += [81, 27, 9, 3, 1][j]; // Zero = 1
+                        }
+                        packed.push(byte);
+                    }
+                    packed
+                }
             }
-            // i64::MAX: in range for FRAC_BITS ≤ 14 (SCALE > 2^14), must
-            // panic above — branch on the actual FRAC configuration.
-            let exact = ((i64::MAX as i128) << f) / (SCALE as i128);
-            if exact <= i64::MAX as i128 {
-                assert_eq!(wide_output::<BinaryStorage, { crate::fixed_point::frac_config::FRAC_BITS }>(i64::MAX) as i128, exact);
-            } else {
-                assert!(std::panic::catch_unwind(|| wide_output::<BinaryStorage, { crate::fixed_point::frac_config::FRAC_BITS }>(i64::MAX)).is_err(),
-                    "wide_output must fail loud past the compute range");
-            }
-        }
-        #[cfg(table_format = "q32_32")]
-        {
-            // Staged division must equal the single division wherever the
-            // single division is directly computable in i128.
-            for acc in [0i128, 1, -1, 12345, -987654321, (i64::MAX as i128) * 1000, -(i64::MAX as i128) * 1000] {
-                let reference = (acc << 32) / (SCALE as i128);
-                assert_eq!(wide_output::<BinaryStorage, 32>(acc), reference, "acc = {acc}");
-            }
-            assert!(std::panic::catch_unwind(|| wide_output::<BinaryStorage, 32>(i128::MAX)).is_err(),
-                "wide_output must fail loud past the compute range");
-        }
+        };
     }
-
-    #[test]
-    fn tq19_dot_zero_weights() {
-        let activations: Vec<BinaryStorage> = (0..4).map(|i| fp_raw(&format!("{}.0", i + 1))).collect();
-        let weights = vec![0i16; 4];
-        let result = tq19_dot(&weights, FixedPoint::from_raw_slice(&activations));
-        assert_eq!(result, FixedPoint::from_raw(bs_zero()), "zero weights should produce zero");
-    }
-
-    #[test]
-    fn trit_dot_all_positive() {
-        // All trits = +1: result = sum of activations
-        let a1 = fp_raw("1.0");
-        let a2 = fp_raw("2.0");
-        let a3 = fp_raw("3.0");
-        let activations = vec![a1, a2, a3];
-        let trits = vec![1i8, 1, 1];
-        let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
-        let expected = fp_raw("6.0");
-        let diff = if result > FixedPoint::from_raw(expected) { result - FixedPoint::from_raw(expected) } else { FixedPoint::from_raw(expected) - result };
-        assert!(diff <= FixedPoint::from_raw(bs_one()), "all-positive trits: diff = {diff:?}");
-    }
-
-    #[test]
-    fn trit_dot_mixed() {
-        // [+1, 0, -1] · [1.0, 2.0, 3.0] = 1.0 + 0 - 3.0 = -2.0
-        let activations = vec![fp_raw("1.0"), fp_raw("2.0"), fp_raw("3.0")];
-        let trits = vec![1i8, 0, -1];
-        let result = trit_dot(&trits, FixedPoint::from_raw_slice(&activations));
-        let expected = fp_raw("-2.0");
-        let diff = if result > FixedPoint::from_raw(expected) { result - FixedPoint::from_raw(expected) } else { FixedPoint::from_raw(expected) - result };
-        assert!(diff <= FixedPoint::from_raw(bs_one()), "mixed trits: diff = {diff:?}");
-    }
-
-    #[test]
-    fn tq19_matvec_identity_matrix() {
-        // Identity-like: diagonal = SCALE, off-diagonal = 0
-        let n = 3;
-        let mut data = vec![0i16; n * n];
-        for i in 0..n {
-            data[i * n + i] = SCALE as i16;
-        }
-        let activations: Vec<BinaryStorage> = vec![fp_raw("1.0"), fp_raw("2.0"), fp_raw("3.0")];
-        let result = tq19_matvec(&data, n, n, FixedPoint::from_raw_slice(&activations));
-        for i in 0..n {
-            let diff = if result[i] > FixedPoint::from_raw(activations[i]) { result[i] - FixedPoint::from_raw(activations[i]) }
-                else { FixedPoint::from_raw(activations[i]) - result[i] };
-            assert!(diff <= FixedPoint::from_raw(bs_one()), "identity matvec row {i}: diff = {diff:?}");
-        }
-    }
-
-    #[test]
-    fn tq19_matvec_batch_matches_sequential() {
-        let n = 4;
-        let data: Vec<i16> = (0..n * n).map(|i| ((i as i16) * 137) % (SCALE as i16)).collect();
-        let v1: Vec<BinaryStorage> = (0..n).map(|i| fp_raw(&format!("{}.5", i))).collect();
-        let v2: Vec<BinaryStorage> = (0..n).map(|i| fp_raw(&format!("{}.25", i + 1))).collect();
-
-        let seq1 = tq19_matvec(&data, n, n, FixedPoint::from_raw_slice(&v1));
-        let seq2 = tq19_matvec(&data, n, n, FixedPoint::from_raw_slice(&v2));
-        let batch = tq19_matvec_batch(&data, n, n, &[FixedPoint::from_raw_slice(&v1), FixedPoint::from_raw_slice(&v2)]);
-
-        assert_eq!(batch[0], seq1, "batch[0] must match sequential");
-        assert_eq!(batch[1], seq2, "batch[1] must match sequential");
-    }
-
-    #[test]
-    fn packed_trit_dot_matches_trit_dot() {
-        // Encode 7 trits: [+1, -1, 0, +1, +1, -1, 0]
-        // Pack: first 5 in byte 0, last 2 in byte 1
-        let trits_i8: Vec<i8> = vec![1, -1, 0, 1, 1, -1, 0];
-        let packed = encode_trits_for_test(&trits_i8);
-
-        let activations: Vec<BinaryStorage> = (0..7)
-            .map(|i| fp_raw(&format!("{}.0", i + 1)))
-            .collect();
-
-        // Identity scale (1.0 in Q-format)
-        let one_raw = fp_raw("1.0");
-
-        let trit_result = trit_dot(&trits_i8, FixedPoint::from_raw_slice(&activations));
-        let packed_result = packed_trit_dot(&packed, 7, FixedPoint::from_raw_slice(&activations), FixedPoint::from_raw(one_raw));
-
-        // packed_trit_dot applies scale via mul_fixed which introduces rounding
-        // Allow 2 ULP tolerance
-        let diff = if packed_result > trit_result { packed_result - trit_result }
-            else { trit_result - packed_result };
-        let tolerance = bs_one() + bs_one();
-        assert!(diff <= FixedPoint::from_raw(tolerance), "packed vs trit dot: diff = {diff:?}");
-    }
-
-    /// Test helper: encode i8 trits to packed bytes.
-    fn encode_trits_for_test(trits: &[i8]) -> Vec<u8> {
-        let mut packed = Vec::new();
-        for chunk in trits.chunks(5) {
-            let mut byte = 0u8;
-            for (j, &t) in chunk.iter().enumerate() {
-                let d = (t + 1) as u8; // {-1,0,1} → {0,1,2}
-                byte += d * [81, 27, 9, 3, 1][j];
-            }
-            // Pad remaining positions with Zero (1)
-            for j in chunk.len()..5 {
-                byte += [81, 27, 9, 3, 1][j]; // Zero = 1
-            }
-            packed.push(byte);
-        }
-        packed
-    }
+    for_each_format!(suite);
 }

@@ -1,6 +1,6 @@
 //! TQ1.9 throughput measurement.
 //!
-//! Run: GMATH_PROFILE=compact cargo test --features inference --test tq19_bench --release -- --nocapture
+//! Run: cargo test --features inference --test tq19_bench --release -- --nocapture
 #![cfg(feature = "inference")]
 
 #[macro_use]

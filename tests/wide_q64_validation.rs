@@ -395,7 +395,7 @@ macro_rules! suite {
                 // references (constructed ties, ties +- 10^-(F+10), range edges). Before
                 // 0.6.4 it truncated literals past 38 digits and wrapped value * 10^dp
                 // into i32 decimal storage on realtime.
-                use g_math::canonical::{evaluate_in, gmath_parse_in, reset_gmath_mode, set_gmath_mode};
+                use g_math::canonical::{evaluate, gmath_parse, reset_gmath_mode, set_gmath_mode};
                 let Some(cases) = storage_literals() else { return };
                 set_gmath_mode("binary:binary").unwrap();
                 let mut mismatches = Vec::new();
@@ -403,7 +403,7 @@ macro_rules! suite {
                     // the canonical grammar has no exponent notation or leading '+'/'.'
                     let t = s.trim();
                     if t.contains(['e', 'E', '+']) || t.starts_with('.') || t.starts_with("-.") || t.ends_with('.') { continue; }
-                    let got = gmath_parse_in::<FixedPoint>(t).and_then(|e| evaluate_in(&e)).map(|v| v.as_binary_storage());
+                    let got = gmath_parse::<FixedPoint>(t).and_then(|e| evaluate(&e)).map(|v| v.as_binary_storage());
                     let ok = match (want, &got) {
                         (Some((negative, hex)), Ok(Some(raw))) => FixedPoint::from_raw(*raw) == raw_from(negative, hex),
                         (None, Err(_)) => true,

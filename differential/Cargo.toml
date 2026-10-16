@@ -1,0 +1,24 @@
+# Differential gate: every result of this tree against the published 0.6.7
+# crate, which still selects its format at build time (GMATH_PROFILE,
+# GMATH_FRAC_BITS). Not published; run once per profile and split:
+#   cd differential && GMATH_PROFILE=realtime GMATH_FRAC_BITS=10 cargo test --release
+[package]
+name = "g_math_differential"
+version = "0.0.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[dependencies]
+g_math = { path = "..", features = ["inference"] }
+g_math_065 = { package = "g_math", version = "=0.6.7", features = ["inference"] }
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(published_profile, values("q16_16", "q32_32", "q64_64", "q128_128", "q256_256"))']
+
+[profile.release]
+debug = false
+lto = true
+codegen-units = 1
+opt-level = 3

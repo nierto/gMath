@@ -6,7 +6,6 @@
 
 use std::ops::{Add, Sub, Neg, Mul};
 use super::kernels;
-use super::FixedPoint;
 use super::FixedVector;
 use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::width::Storage;
@@ -16,7 +15,7 @@ use crate::fixed_point::width::Storage;
 /// Backed by a flat `Vec<T>`. Not `Copy` due to heap allocation. The element
 /// type defaults to `FixedPoint`, the build profile's format.
 #[derive(Clone, Debug)]
-pub struct FixedMatrix<T = FixedPoint> {
+pub struct FixedMatrix<T> {
     rows: usize,
     cols: usize,
     data: Vec<T>,

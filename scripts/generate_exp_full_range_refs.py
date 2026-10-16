@@ -14,7 +14,7 @@ from mpmath import mp, mpf, exp, sinh, cosh, tanh, log, floor, sqrt, sin, cos, t
 
 mp.dps = 500
 SEED = int(os.environ.get("SEED", "20261014"))
-FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256)]
+FORMATS = [(32, 10), (32, 16), (32, 24), (64, 32), (128, 64), (256, 128), (512, 256), (32, 8), (32, 12), (32, 20)]
 PER_FN = int(os.environ.get("PER_FN", "160"))
 
 

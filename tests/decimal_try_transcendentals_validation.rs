@@ -28,7 +28,7 @@
 //! against mpmath pi (`mp.dps = 80`, digits embedded below).
 //!
 //! ```bash
-//! GMATH_PROFILE=embedded cargo test --test decimal_try_transcendentals_validation
+//! cargo test --test decimal_try_transcendentals_validation
 //! ```
 
 #[macro_use]

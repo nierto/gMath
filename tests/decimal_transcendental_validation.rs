@@ -14,11 +14,7 @@
 //! # Running
 //!
 //! ```bash
-//! GMATH_PROFILE=realtime   cargo test --test decimal_transcendental_validation -- --nocapture
-//! GMATH_PROFILE=compact    cargo test --test decimal_transcendental_validation -- --nocapture
-//! GMATH_PROFILE=embedded   cargo test --test decimal_transcendental_validation -- --nocapture
-//! GMATH_PROFILE=balanced   cargo test --test decimal_transcendental_validation -- --nocapture
-//! GMATH_PROFILE=scientific cargo test --test decimal_transcendental_validation -- --nocapture
+//! cargo test --test decimal_transcendental_validation -- --nocapture
 //! ```
 //!
 //! # ULP semantics

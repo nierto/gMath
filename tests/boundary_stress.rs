@@ -21,7 +21,7 @@ macro_rules! suite {
             type StackValue<T = FixedPoint> = g_math::canonical::StackValue<T>;
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{gmath_in, gmath_parse_in, evaluate_in};
+            use g_math::canonical::{gmath, gmath_parse, evaluate};
 
             // ============================================================================
             // Helper
@@ -35,9 +35,9 @@ macro_rules! suite {
                             input.len() - 1,
                         ))
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -84,7 +84,7 @@ macro_rules! suite {
             /// i8::MAX = 127 — fits in tier 1 (Tiny)
             #[test]
             fn tier_boundary_i8_max() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("127"));
+                let r = evaluate(&gmath::<FixedPoint>("127"));
                 assert!(r.is_ok(), "127 should parse and evaluate, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(s.starts_with("127."), "127 should display as 127.xxx, got '{}'", s);
@@ -93,7 +93,7 @@ macro_rules! suite {
             /// i8::MAX + 1 = 128 — requires tier 2 (Small)
             #[test]
             fn tier_boundary_i8_overflow_to_small() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("127") + gmath_in::<FixedPoint>("1")));
+                let r = evaluate(&(gmath::<FixedPoint>("127") + gmath::<FixedPoint>("1")));
                 assert!(r.is_ok(), "127 + 1 should succeed (promote to tier 2), got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 // 128 exceeds the binary range at GMATH_FRAC_BITS=24 (+-128): the exact
@@ -104,7 +104,7 @@ macro_rules! suite {
             /// i16::MAX = 32767
             #[test]
             fn tier_boundary_i16_max() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("32767"));
+                let r = evaluate(&gmath::<FixedPoint>("32767"));
                 assert!(r.is_ok(), "32767 should parse, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 // 32767 exceeds the binary range at GMATH_FRAC_BITS >= 17: the literal
@@ -116,7 +116,7 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_multiply_requires_promotion_beyond_q16_word() {
                 if !(!(BITS == 32)) { return; }
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("200") * gmath_in::<FixedPoint>("200")));
+                let r = evaluate(&(gmath::<FixedPoint>("200") * gmath::<FixedPoint>("200")));
                 assert!(r.is_ok(), "200 * 200 should succeed with tier promotion, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(s.starts_with("40000."), "200 * 200 = 40000, got '{}'", s);
@@ -125,7 +125,7 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_multiply_requires_promotion_q16_word() {
                 if !(BITS == 32) { return; }
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("15") * gmath_in::<FixedPoint>("15")));
+                let r = evaluate(&(gmath::<FixedPoint>("15") * gmath::<FixedPoint>("15")));
                 assert!(r.is_ok(), "15 * 15 should succeed with tier promotion, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 // 225 exceeds the binary range at GMATH_FRAC_BITS=24 (+-128): the exact
@@ -137,7 +137,7 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_large_multiply_wide() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("50000") * gmath_in::<FixedPoint>("50000")));
+                let r = evaluate(&(gmath::<FixedPoint>("50000") * gmath::<FixedPoint>("50000")));
                 assert!(r.is_ok(), "50000 * 50000 should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(s.starts_with("2500000000."), "50000 * 50000 = 2500000000, got '{}'", s);
@@ -146,7 +146,7 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_large_multiply_q32_word() {
                 if !(BITS == 64) { return; }
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("46340") * gmath_in::<FixedPoint>("46340")));
+                let r = evaluate(&(gmath::<FixedPoint>("46340") * gmath::<FixedPoint>("46340")));
                 assert!(r.is_ok(), "46340² should succeed in Q32.32, got {:?}", r);
                 let raw = r.unwrap().as_binary_storage().unwrap();
                 let expected = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::from_i64(9222993873574297600));
@@ -164,7 +164,7 @@ macro_rules! suite {
                 let mut n: i32 = 180;
                 while FixedPoint::try_from_int(n * n).is_err() { n -= 1; }
                 let lit = n.to_string();
-                let r = evaluate_in(&(gmath_parse_in::<FixedPoint>(&lit).unwrap() * gmath_parse_in::<FixedPoint>(&lit).unwrap()));
+                let r = evaluate(&(gmath_parse::<FixedPoint>(&lit).unwrap() * gmath_parse::<FixedPoint>(&lit).unwrap()));
                 assert!(r.is_ok(), "{n}² should succeed on realtime, got {:?}", r);
                 let raw = r.unwrap().as_binary_storage().unwrap();
                 let unit = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::one());
@@ -176,7 +176,7 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_i32_max() {
                 if !(!(BITS == 32)) { return; }
-                let r = evaluate_in(&gmath_in::<FixedPoint>("2147483647"));
+                let r = evaluate(&gmath::<FixedPoint>("2147483647"));
                 assert!(r.is_ok(), "i32::MAX should parse, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(
@@ -190,7 +190,7 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_i64_max() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
-                let r = evaluate_in(&gmath_in::<FixedPoint>("9223372036854775807"));
+                let r = evaluate(&gmath::<FixedPoint>("9223372036854775807"));
                 assert!(r.is_ok(), "i64::MAX should parse, got {:?}", r);
                 let val = r.unwrap();
                 let s = format!("{}", val);
@@ -204,7 +204,7 @@ macro_rules! suite {
             /// Subtraction crossing zero: 1 - 2 = -1
             #[test]
             fn tier_boundary_subtract_across_zero() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("1") - gmath_in::<FixedPoint>("2")));
+                let r = evaluate(&(gmath::<FixedPoint>("1") - gmath::<FixedPoint>("2")));
                 assert!(r.is_ok(), "1 - 2 should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(s.starts_with("-1."), "1 - 2 = -1, got '{}'", s);
@@ -213,7 +213,7 @@ macro_rules! suite {
             /// Multiply that exactly fits: 127 * 1 = 127 (no promotion needed)
             #[test]
             fn tier_boundary_multiply_exact_fit() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("127") * gmath_in::<FixedPoint>("1")));
+                let r = evaluate(&(gmath::<FixedPoint>("127") * gmath::<FixedPoint>("1")));
                 assert!(r.is_ok(), "127 * 1 should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(s.starts_with("127."), "127 * 1 = 127, got '{}'", s);
@@ -223,11 +223,11 @@ macro_rules! suite {
             #[test]
             fn tier_boundary_chain_additions() {
                 // 10 + 10 + 10 + 10 + 10 = 50 (stays in tier 1)
-                let mut expr = gmath_in::<FixedPoint>("10");
+                let mut expr = gmath::<FixedPoint>("10");
                 for _ in 0..4 {
-                    expr = expr + gmath_in::<FixedPoint>("10");
+                    expr = expr + gmath::<FixedPoint>("10");
                 }
-                let r = evaluate_in(&expr);
+                let r = evaluate(&expr);
                 assert!(r.is_ok(), "chain of 5 × 10 additions should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(s.starts_with("50."), "10+10+10+10+10 = 50, got '{}'", s);
@@ -243,7 +243,7 @@ macro_rules! suite {
             /// On Q64.64+: fits in the I256/I512 compute tier.
             #[test]
             fn transcendental_exp_large_argument() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("44").exp());
+                let r = evaluate(&gmath::<FixedPoint>("44").exp());
                 // May succeed or overflow depending on profile — must not panic
                 match &r {
                     Ok(val) => {
@@ -269,7 +269,7 @@ macro_rules! suite {
             /// exp(-44) — near underflow (result < 1 ULP for Q64.64)
             #[test]
             fn transcendental_exp_large_negative() {
-                let r = evaluate_in(&gmath_safe("-44").exp());
+                let r = evaluate(&gmath_safe("-44").exp());
                 match &r {
                     Ok(val) => {
                         println!("exp(-44) = {}", val);
@@ -288,7 +288,7 @@ macro_rules! suite {
             /// exp(0) = 1 exactly
             #[test]
             fn transcendental_exp_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0").exp());
+                let r = evaluate(&gmath::<FixedPoint>("0").exp());
                 assert!(r.is_ok(), "exp(0) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "exp(0) should be exactly 1.0");
             }
@@ -296,7 +296,7 @@ macro_rules! suite {
             /// exp(1) = e ≈ 2.71828...
             #[test]
             fn transcendental_exp_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1").exp());
+                let r = evaluate(&gmath::<FixedPoint>("1").exp());
                 assert!(r.is_ok(), "exp(1) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["2.718"], "2.718281828459045235360287471352662", 0, "exp(1) should be ~2.718...");
             }
@@ -304,7 +304,7 @@ macro_rules! suite {
             /// ln(tiny value) — very negative result
             #[test]
             fn transcendental_ln_tiny() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0.0000000000000001").ln());
+                let r = evaluate(&gmath::<FixedPoint>("0.0000000000000001").ln());
                 match &r {
                     Ok(val) => {
                         let s = format!("{}", val);
@@ -325,7 +325,7 @@ macro_rules! suite {
             /// ln(1) = 0 exactly
             #[test]
             fn transcendental_ln_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1").ln());
+                let r = evaluate(&gmath::<FixedPoint>("1").ln());
                 assert!(r.is_ok(), "ln(1) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["0.000", "0"], "0", 0, "ln(1) should be exactly 0");
             }
@@ -333,7 +333,7 @@ macro_rules! suite {
             /// sin(1000000) — tests range reduction over many periods
             #[test]
             fn transcendental_sin_large_argument() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1000000").sin());
+                let r = evaluate(&gmath::<FixedPoint>("1000000").sin());
                 match &r {
                     Ok(val) => {
                         let s = format!("{}", val);
@@ -357,7 +357,7 @@ macro_rules! suite {
             /// atan(very large) should approach pi/2
             #[test]
             fn transcendental_atan_large() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("999999999").atan());
+                let r = evaluate(&gmath::<FixedPoint>("999999999").atan());
                 match &r {
                     Ok(val) => {
                         // atan(999999999) = pi/2 - 1.000000001e-9 (mpmath)
@@ -373,7 +373,7 @@ macro_rules! suite {
             /// sqrt(0) = 0 exactly
             #[test]
             fn transcendental_sqrt_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0").sqrt());
+                let r = evaluate(&gmath::<FixedPoint>("0").sqrt());
                 assert!(r.is_ok(), "sqrt(0) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["0.000", "0"], "0", 0, "sqrt(0) should be 0");
             }
@@ -381,7 +381,7 @@ macro_rules! suite {
             /// sqrt(1) = 1 exactly
             #[test]
             fn transcendental_sqrt_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1").sqrt());
+                let r = evaluate(&gmath::<FixedPoint>("1").sqrt());
                 assert!(r.is_ok(), "sqrt(1) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "sqrt(1) should be 1");
             }
@@ -390,7 +390,7 @@ macro_rules! suite {
             #[test]
             fn transcendental_sqrt_large() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
-                let r = evaluate_in(&gmath_in::<FixedPoint>("1000000000000").sqrt());
+                let r = evaluate(&gmath::<FixedPoint>("1000000000000").sqrt());
                 assert!(r.is_ok(), "sqrt(1e12) should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(
@@ -403,7 +403,7 @@ macro_rules! suite {
             /// cos(0) = 1 exactly
             #[test]
             fn transcendental_cos_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0").cos());
+                let r = evaluate(&gmath::<FixedPoint>("0").cos());
                 assert!(r.is_ok(), "cos(0) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "cos(0) should be exactly 1");
             }
@@ -411,7 +411,7 @@ macro_rules! suite {
             /// sin(0) = 0 exactly
             #[test]
             fn transcendental_sin_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0").sin());
+                let r = evaluate(&gmath::<FixedPoint>("0").sin());
                 assert!(r.is_ok(), "sin(0) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["0.000", "0"], "0", 0, "sin(0) should be exactly 0");
             }
@@ -423,7 +423,7 @@ macro_rules! suite {
             /// 18 decimal places — Q64.64 max meaningful precision
             #[test]
             fn decimal_extreme_18_places() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("0.000000000000000001"));
+                let r = evaluate(&gmath::<FixedPoint>("0.000000000000000001"));
                 // Very small value — may be at or below 1 ULP for Q64.64
                 match &r {
                     Ok(val) => {
@@ -448,7 +448,7 @@ macro_rules! suite {
             /// Large integer + decimal — near integer limit
             #[test]
             fn decimal_extreme_large_integer() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("999999999999999999"));
+                let r = evaluate(&gmath::<FixedPoint>("999999999999999999"));
                 match &r {
                     Ok(val) => {
                         let s = format!("{}", val);
@@ -469,7 +469,7 @@ macro_rules! suite {
             /// Two large decimals that nearly overflow when added
             #[test]
             fn decimal_extreme_large_addition() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("4000000000000000000") + gmath_in::<FixedPoint>("4000000000000000000")));
+                let r = evaluate(&(gmath::<FixedPoint>("4000000000000000000") + gmath::<FixedPoint>("4000000000000000000")));
                 match &r {
                     Ok(val) => {
                         let s = format!("{}", val);
@@ -489,7 +489,7 @@ macro_rules! suite {
             /// Multiply decimals: 99.99 * 99.99 = 9998.0001
             #[test]
             fn decimal_extreme_multiply() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("99.99") * gmath_in::<FixedPoint>("99.99")));
+                let r = evaluate(&(gmath::<FixedPoint>("99.99") * gmath::<FixedPoint>("99.99")));
                 assert!(r.is_ok(), "99.99 * 99.99 should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(
@@ -503,7 +503,7 @@ macro_rules! suite {
             #[test]
             fn decimal_extreme_tiny_multiply_beyond_q16_word() {
                 if !(!(BITS == 32)) { return; }
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("0.001") * gmath_in::<FixedPoint>("0.001")));
+                let r = evaluate(&(gmath::<FixedPoint>("0.001") * gmath::<FixedPoint>("0.001")));
                 assert!(r.is_ok(), "0.001 * 0.001 should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(
@@ -516,7 +516,7 @@ macro_rules! suite {
             #[test]
             fn decimal_extreme_tiny_multiply_q16_word() {
                 if !(BITS == 32) { return; }
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("0.1") * gmath_in::<FixedPoint>("0.1")));
+                let r = evaluate(&(gmath::<FixedPoint>("0.1") * gmath::<FixedPoint>("0.1")));
                 assert!(r.is_ok(), "0.1 * 0.1 should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(
@@ -529,7 +529,7 @@ macro_rules! suite {
             /// Subtraction of nearly equal values — catastrophic cancellation test
             #[test]
             fn decimal_extreme_catastrophic_cancellation() {
-                let r = evaluate_in(&(gmath_in::<FixedPoint>("1.0000000000001") - gmath_in::<FixedPoint>("1.0")));
+                let r = evaluate(&(gmath::<FixedPoint>("1.0000000000001") - gmath::<FixedPoint>("1.0")));
                 match &r {
                     Ok(val) => {
                         let s = format!("{}", val);
@@ -568,7 +568,7 @@ macro_rules! suite {
                     if !(super::BITS == 128) { return; }
                     // Q64.64: integer part limited to i64 range (~9.2e18)
                     // Value just under the limit
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("9000000000000000000"));
+                    let r = evaluate(&gmath::<FixedPoint>("9000000000000000000"));
                     assert!(r.is_ok(), "9e18 should fit in Q64.64, got {:?}", r);
                     let s = format!("{}", r.unwrap());
                     assert!(
@@ -583,7 +583,7 @@ macro_rules! suite {
                     if !(super::BITS == 128) { return; }
                     // Two values whose product requires I256 intermediate
                     // 3e9 * 3e9 = 9e18 — within range but needs promotion
-                    let r = evaluate_in(&(gmath_in::<FixedPoint>("3000000000") * gmath_in::<FixedPoint>("3000000000")));
+                    let r = evaluate(&(gmath::<FixedPoint>("3000000000") * gmath::<FixedPoint>("3000000000")));
                     assert!(r.is_ok(), "3e9 * 3e9 should succeed with I256 intermediate, got {:?}", r);
                     let s = format!("{}", r.unwrap());
                     assert!(
@@ -598,7 +598,7 @@ macro_rules! suite {
                     if !(super::BITS == 128) { return; }
                     // 1 ULP in Q64.64 = 2^(-64) ≈ 5.42e-20
                     // 0.00000000000000001 (1e-17) is well above 1 ULP
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("0.00000000000000001"));
+                    let r = evaluate(&gmath::<FixedPoint>("0.00000000000000001"));
                     assert!(r.is_ok(), "1e-17 should be representable in Q64.64, got {:?}", r);
                 }
 
@@ -606,7 +606,7 @@ macro_rules! suite {
                 fn q64_64_exp_near_overflow() {
                     if !(super::BITS == 128) { return; }
                     // exp(43) ≈ 4.7e18, within Q64.64 range
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("43").exp());
+                    let r = evaluate(&gmath::<FixedPoint>("43").exp());
                     assert!(r.is_ok(), "exp(43) should fit in Q64.64, got {:?}", r);
                     let s = format!("{}", r.unwrap());
                     println!("exp(43) = {}", s);
@@ -624,7 +624,7 @@ macro_rules! suite {
                     if !(super::BITS == 256) { return; }
                     // Values that overflow i128 but fit in I256
                     // 10^30 is well within I256 integer range
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("1000000000000000000000000000000"));
+                    let r = evaluate(&gmath::<FixedPoint>("1000000000000000000000000000000"));
                     assert!(r.is_ok(), "10^30 should fit in Q128.128, got {:?}", r);
                 }
 
@@ -632,7 +632,7 @@ macro_rules! suite {
                 fn q128_128_high_precision_decimal() {
                     if !(super::BITS == 256) { return; }
                     // Q128.128 supports 38 decimal digits of precision
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("0.00000000000000000000000000000000000001"));
+                    let r = evaluate(&gmath::<FixedPoint>("0.00000000000000000000000000000000000001"));
                     assert!(r.is_ok(), "38-digit decimal should work in Q128.128, got {:?}", r);
                 }
 
@@ -640,7 +640,7 @@ macro_rules! suite {
                 fn q128_128_exp_wider_range() {
                     if !(super::BITS == 256) { return; }
                     // exp(80) ≈ 5.5e34, fits in Q128.128 but not Q64.64
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("80").exp());
+                    let r = evaluate(&gmath::<FixedPoint>("80").exp());
                     assert!(r.is_ok(), "exp(80) should fit in Q128.128, got {:?}", r);
                 }
             }
@@ -655,7 +655,7 @@ macro_rules! suite {
                 fn q256_256_extreme_precision() {
                     if !(super::BITS == 512) { return; }
                     // Q256.256 supports 77 decimal digits of precision
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("3.14159265358979323846264338327950288419716939937510"));
+                    let r = evaluate(&gmath::<FixedPoint>("3.14159265358979323846264338327950288419716939937510"));
                     assert!(r.is_ok(), "50-digit pi should work in Q256.256, got {:?}", r);
                 }
 
@@ -663,7 +663,7 @@ macro_rules! suite {
                 fn q256_256_exp_extreme_range() {
                     if !(super::BITS == 512) { return; }
                     // exp(170) ≈ 7.6e73, well within Q256.256 range
-                    let r = evaluate_in(&gmath_in::<FixedPoint>("170").exp());
+                    let r = evaluate(&gmath::<FixedPoint>("170").exp());
                     assert!(r.is_ok(), "exp(170) should fit in Q256.256, got {:?}", r);
                 }
             }
@@ -681,7 +681,7 @@ macro_rules! suite {
             #[test]
             fn arithmetic_additive_identity() {
                 for &x in ARITH_CASES {
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>(x) + gmath_in::<FixedPoint>("0")));
+                    let result = evaluate(&(gmath::<FixedPoint>(x) + gmath::<FixedPoint>("0")));
                     assert!(result.is_ok(), "{} + 0 should succeed, got {:?}", x, result);
                 }
             }
@@ -690,7 +690,7 @@ macro_rules! suite {
             #[test]
             fn arithmetic_multiplicative_identity() {
                 for &x in ARITH_CASES {
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>(x) * gmath_in::<FixedPoint>("1")));
+                    let result = evaluate(&(gmath::<FixedPoint>(x) * gmath::<FixedPoint>("1")));
                     assert!(result.is_ok(), "{} * 1 should succeed, got {:?}", x, result);
                 }
             }
@@ -699,7 +699,7 @@ macro_rules! suite {
             #[test]
             fn arithmetic_multiply_by_zero() {
                 for &x in ARITH_CASES_NONZERO {
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>(x) * gmath_in::<FixedPoint>("0")));
+                    let result = evaluate(&(gmath::<FixedPoint>(x) * gmath::<FixedPoint>("0")));
                     assert!(result.is_ok(), "{} * 0 should succeed, got {:?}", x, result);
                     let s = format!("{}", result.unwrap());
                     let trimmed = s.trim_start_matches('-');
@@ -715,7 +715,7 @@ macro_rules! suite {
             #[test]
             fn arithmetic_self_subtraction() {
                 for &x in ARITH_CASES {
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>(x) - gmath_in::<FixedPoint>(x)));
+                    let result = evaluate(&(gmath::<FixedPoint>(x) - gmath::<FixedPoint>(x)));
                     assert!(result.is_ok(), "{} - {} should succeed, got {:?}", x, x, result);
                     let s = format!("{}", result.unwrap());
                     let trimmed = s.trim_start_matches('-');
@@ -731,7 +731,7 @@ macro_rules! suite {
             #[test]
             fn arithmetic_self_division() {
                 for &x in ARITH_CASES {
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>(x) / gmath_in::<FixedPoint>(x)));
+                    let result = evaluate(&(gmath::<FixedPoint>(x) / gmath::<FixedPoint>(x)));
                     assert!(result.is_ok(), "{} / {} should succeed, got {:?}", x, x, result);
                     let s = format!("{}", result.unwrap());
                     assert!(
@@ -752,8 +752,8 @@ macro_rules! suite {
                     ("1/3", "1/7"),
                 ];
                 for &(a, b) in pairs {
-                    let ab = evaluate_in(&(gmath_in::<FixedPoint>(a) + gmath_in::<FixedPoint>(b)));
-                    let ba = evaluate_in(&(gmath_in::<FixedPoint>(b) + gmath_in::<FixedPoint>(a)));
+                    let ab = evaluate(&(gmath::<FixedPoint>(a) + gmath::<FixedPoint>(b)));
+                    let ba = evaluate(&(gmath::<FixedPoint>(b) + gmath::<FixedPoint>(a)));
                     match (ab, ba) {
                         (Ok(v1), Ok(v2)) => {
                             let s1 = format!("{:.10}", v1);
@@ -779,8 +779,8 @@ macro_rules! suite {
                     ("100", "0.01"),
                 ];
                 for &(a, b) in pairs {
-                    let ab = evaluate_in(&(gmath_in::<FixedPoint>(a) * gmath_in::<FixedPoint>(b)));
-                    let ba = evaluate_in(&(gmath_in::<FixedPoint>(b) * gmath_in::<FixedPoint>(a)));
+                    let ab = evaluate(&(gmath::<FixedPoint>(a) * gmath::<FixedPoint>(b)));
+                    let ba = evaluate(&(gmath::<FixedPoint>(b) * gmath::<FixedPoint>(a)));
                     match (ab, ba) {
                         (Ok(v1), Ok(v2)) => {
                             let s1 = format!("{:.10}", v1);
@@ -804,7 +804,7 @@ macro_rules! suite {
             /// exp(ln(2)) = 2 — hardcoded mpmath reference
             #[test]
             fn transcendental_exp_ln_2_exact() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("2").ln().exp());
+                let r = evaluate(&gmath::<FixedPoint>("2").ln().exp());
                 assert!(r.is_ok(), "exp(ln(2)) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["2.000", "1.999"], "2", 0, "exp(ln(2)) should be exactly 2.0");
             }
@@ -812,7 +812,7 @@ macro_rules! suite {
             /// ln(e) = 1 — using named constant
             #[test]
             fn transcendental_ln_e_is_one() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("e").ln());
+                let r = evaluate(&gmath::<FixedPoint>("e").ln());
                 assert!(r.is_ok(), "ln(e) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["1.000", "0.999"], "1", 0, "ln(e) should be ~1.0");
             }
@@ -824,7 +824,7 @@ macro_rules! suite {
                 // largest power of two in range there (2^6 = 64 at Q8.24)
                 let mut e: u32 = 10;
                 while FixedPoint::try_from_int(1 << e).is_err() { e -= 1; }
-                let r = evaluate_in(&gmath_in::<FixedPoint>("2").pow(gmath_parse_in::<FixedPoint>(&e.to_string()).unwrap()));
+                let r = evaluate(&gmath::<FixedPoint>("2").pow(gmath_parse::<FixedPoint>(&e.to_string()).unwrap()));
                 assert!(r.is_ok(), "pow(2, {e}) should succeed, got {:?}", r);
                 let s = format!("{}", r.unwrap());
                 assert!(
@@ -838,7 +838,7 @@ macro_rules! suite {
             /// pow(10, 0) = 1
             #[test]
             fn transcendental_pow_x_zero() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("10").pow(gmath_in::<FixedPoint>("0")));
+                let r = evaluate(&gmath::<FixedPoint>("10").pow(gmath::<FixedPoint>("0")));
                 assert!(r.is_ok(), "pow(10, 0) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["1.000"], "1", 0, "10^0 should be 1");
             }
@@ -846,7 +846,7 @@ macro_rules! suite {
             /// sqrt(4) = 2 exactly
             #[test]
             fn transcendental_sqrt_4_exact() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("4").sqrt());
+                let r = evaluate(&gmath::<FixedPoint>("4").sqrt());
                 assert!(r.is_ok(), "sqrt(4) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["2.000"], "2", 0, "sqrt(4) should be exactly 2.0");
             }
@@ -854,7 +854,7 @@ macro_rules! suite {
             /// sqrt(9) = 3 exactly
             #[test]
             fn transcendental_sqrt_9_exact() {
-                let r = evaluate_in(&gmath_in::<FixedPoint>("9").sqrt());
+                let r = evaluate(&gmath::<FixedPoint>("9").sqrt());
                 assert!(r.is_ok(), "sqrt(9) should succeed, got {:?}", r);
                 assert_display_or_stored(&r.unwrap(), &["3.000"], "3", 0, "sqrt(9) should be exactly 3.0");
             }

@@ -336,9 +336,9 @@ mod tests {
     /// exact: covered by decimal_transcendental_validation).
     #[test]
     fn exp_neg_one() {
-        use crate::canonical::{evaluate_in, gmath_in};
+        use crate::canonical::{evaluate, gmath};
         use crate::fixed_point::Q64_64;
-        let result = evaluate_in(&gmath_in::<Q64_64>("-1.0").exp()).unwrap();
+        let result = evaluate(&gmath::<Q64_64>("-1.0").exp()).unwrap();
         let s = format!("{}", result);
         // exp(-1) ≈ 0.36787944117144232...
         assert!(s.starts_with("0.3678794411714"),

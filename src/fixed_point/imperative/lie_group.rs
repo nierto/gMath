@@ -17,7 +17,6 @@ use super::matrix_functions::{matrix_exp, matrix_log, matrix_exp_compute, matrix
 use super::compute_matrix::{ComputeMatrix, compute_lu_decompose};
 use super::kernels;
 use super::kernels::Orient;
-use super::FixedPoint;
 use super::Scalar;
 use super::matrix_functions::MatrixFunctions;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
@@ -197,7 +196,7 @@ where
 ///
 /// Group elements are `FixedMatrix<Fixed<S, F>>`. Algebra elements are `FixedVector<Fixed<S, F>>`
 /// (coordinate parameterization) with `hat`/`vee` for matrix form.
-pub trait LieGroup<T: Scalar = FixedPoint>: Manifold<T> {
+pub trait LieGroup<T: Scalar>: Manifold<T> {
     /// Dimension of the Lie algebra.
     fn algebra_dim(&self) -> usize;
     /// Dimension of the matrix representation (n for n×n).

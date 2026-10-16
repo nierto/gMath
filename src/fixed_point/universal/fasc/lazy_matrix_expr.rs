@@ -12,9 +12,9 @@
 //! **USAGE**:
 //! ```rust,no_run
 //! use g_math::canonical::{evaluate_matrix, LazyMatrixExpr};
-//! use g_math::fixed_point::FixedMatrix;
+//! use g_math::fixed_point::{FixedMatrix, Q64_64};
 //!
-//! let a = FixedMatrix::identity(2);
+//! let a = FixedMatrix::<Q64_64>::identity(2);
 //! let b = FixedMatrix::identity(2);
 //! let expr = LazyMatrixExpr::from(a).exp() * LazyMatrixExpr::from(b);
 //! let result = evaluate_matrix(&expr).unwrap(); // Single downscale at end
@@ -23,7 +23,6 @@
 use core::ops::{Add, Sub, Mul, Neg};
 
 use crate::fixed_point::imperative::FixedMatrix;
-use crate::fixed_point::imperative::FixedPoint;
 use crate::fixed_point::imperative::compute_matrix::{ComputeMatrix, compute_lu_decompose};
 use crate::fixed_point::imperative::matrix_functions::{
     matrix_exp_compute, matrix_log_compute, matrix_sqrt_compute,
@@ -42,7 +41,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// All intermediates stay at compute tier (ComputeMatrix) during evaluation.
 /// Single downscale to FixedMatrix via `evaluate_matrix()` at the top level.
 #[derive(Debug, Clone)]
-pub enum LazyMatrixExpr<T = FixedPoint> {
+pub enum LazyMatrixExpr<T> {
     /// A concrete matrix (leaf node).
     Literal(FixedMatrix<T>),
 
@@ -335,25 +334,21 @@ where
 /// **Chain persistence example**:
 /// ```rust,no_run
 /// use g_math::canonical::{evaluate_matrix, LazyMatrixExpr};
-/// use g_math::fixed_point::FixedMatrix;
+/// use g_math::fixed_point::{FixedMatrix, Q64_64};
 ///
-/// let a = LazyMatrixExpr::from(FixedMatrix::identity(2));
+/// let a = LazyMatrixExpr::from(FixedMatrix::<Q64_64>::identity(2));
 /// let b = LazyMatrixExpr::from(FixedMatrix::identity(2));
 /// // Entire chain at compute tier, no intermediate materializations
 /// let result = evaluate_matrix(&(a.exp() * b.exp())).unwrap();
 /// ```
 /// Evaluate a matrix tree of one format: the whole tree at the compute
 /// tier, one rounding to storage at the end.
-pub fn evaluate_matrix_in<S: Storage, const F: u32>(expr: &LazyMatrixExpr<Fixed<S, F>>) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected>
+pub fn evaluate_matrix<S: Storage, const F: u32>(expr: &LazyMatrixExpr<Fixed<S, F>>) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected>
 where
     Fixed<S, F>: MatrixFunctions + FixedNum<Storage = S>,
 {
     let compute_result = eval_compute(expr)?;
     Ok(compute_result.to_fixed_matrix())
-}
-
-pub fn evaluate_matrix(expr: &LazyMatrixExpr) -> Result<FixedMatrix, OverflowDetected> {
-    evaluate_matrix_in(expr)
 }
 
 // ============================================================================
@@ -362,59 +357,73 @@ pub fn evaluate_matrix(expr: &LazyMatrixExpr) -> Result<FixedMatrix, OverflowDet
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
 
-    #[test]
-    fn test_lazy_matrix_expr_building() {
-        let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
-        let b = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
-        let expr = a * b;
-        assert_eq!(expr.depth(), 2);
-        assert_eq!(expr.operation_count(), 1);
-    }
+                #[test]
+                fn test_lazy_matrix_expr_building() {
+                    let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
+                    let b = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
+                    let expr = a * b;
+                    assert_eq!(expr.depth(), 2);
+                    assert_eq!(expr.operation_count(), 1);
+                }
 
-    #[test]
-    fn test_lazy_matrix_identity_eval() {
-        let expr = LazyMatrixExpr::<FixedPoint>::Identity(3);
-        let result = evaluate_matrix(&expr).unwrap();
-        assert_eq!(result.rows(), 3);
-        assert_eq!(result.cols(), 3);
-        for i in 0..3 {
-            for j in 0..3 {
-                if i == j {
-                    assert_eq!(result.get(i, j), FixedPoint::one());
-                } else {
-                    assert!(result.get(i, j).is_zero());
+                #[test]
+                fn test_lazy_matrix_identity_eval() {
+                    let expr = LazyMatrixExpr::<FixedPoint>::Identity(3);
+                    let result = evaluate_matrix(&expr).unwrap();
+                    assert_eq!(result.rows(), 3);
+                    assert_eq!(result.cols(), 3);
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            if i == j {
+                                assert_eq!(result.get(i, j), FixedPoint::one());
+                            } else {
+                                assert!(result.get(i, j).is_zero());
+                            }
+                        }
+                    }
+                }
+
+                #[test]
+                fn test_lazy_matrix_add() {
+                    let a = FixedMatrix::<FixedPoint>::identity(2);
+                    let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) + LazyMatrixExpr::<FixedPoint>::from(a);
+                    let result = evaluate_matrix(&expr).unwrap();
+                    // I + I = 2I
+                    let two = FixedPoint::from_int(2);
+                    assert_eq!(result.get(0, 0), two);
+                    assert_eq!(result.get(1, 1), two);
+                    assert!(result.get(0, 1).is_zero());
+                }
+
+                #[test]
+                fn test_lazy_matrix_chain_depth() {
+                    let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
+                    let expr = a.exp().log(); // exp then log — should roundtrip to ~identity
+                    assert_eq!(expr.depth(), 3);
+                    assert_eq!(expr.operation_count(), 2);
+                }
+
+                #[test]
+                fn test_lazy_matrix_display() {
+                    let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
+                    let expr = a.exp();
+                    let s = format!("{}", expr);
+                    assert!(s.contains("exp"));
                 }
             }
-        }
+        };
     }
-
-    #[test]
-    fn test_lazy_matrix_add() {
-        let a = FixedMatrix::<FixedPoint>::identity(2);
-        let expr = LazyMatrixExpr::<FixedPoint>::from(a.clone()) + LazyMatrixExpr::<FixedPoint>::from(a);
-        let result = evaluate_matrix(&expr).unwrap();
-        // I + I = 2I
-        let two = FixedPoint::from_int(2);
-        assert_eq!(result.get(0, 0), two);
-        assert_eq!(result.get(1, 1), two);
-        assert!(result.get(0, 1).is_zero());
-    }
-
-    #[test]
-    fn test_lazy_matrix_chain_depth() {
-        let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
-        let expr = a.exp().log(); // exp then log — should roundtrip to ~identity
-        assert_eq!(expr.depth(), 3);
-        assert_eq!(expr.operation_count(), 2);
-    }
-
-    #[test]
-    fn test_lazy_matrix_display() {
-        let a = LazyMatrixExpr::<FixedPoint>::from(FixedMatrix::<FixedPoint>::identity(2));
-        let expr = a.exp();
-        let s = format!("{}", expr);
-        assert!(s.contains("exp"));
-    }
+    for_each_format!(suite);
 }

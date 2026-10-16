@@ -412,7 +412,7 @@ macro_rules! suite {
                 assert_eq!(<TrivialBundle as FiberBundle<FixedPoint>>::fiber_dim(&trivial), 2);
                 assert_eq!(<TrivialBundle as FiberBundle<FixedPoint>>::total_dim(&trivial), 5);
 
-                let vb: VectorBundle = VectorBundle::flat(4, 3);
+                let vb: VectorBundle<FixedPoint> = VectorBundle::flat(4, 3);
                 assert_eq!(vb.base_dim(), 4);
                 assert_eq!(vb.fiber_dim(), 3);
                 assert_eq!(vb.total_dim(), 7);

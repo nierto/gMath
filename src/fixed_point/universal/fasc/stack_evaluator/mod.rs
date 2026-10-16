@@ -34,72 +34,12 @@ use core::marker::PhantomData;
 use std::any::{Any, TypeId};
 use std::rc::Rc;
 use crate::fixed_point::fixed_num::Compute;
-use crate::fixed_point::imperative::FixedPoint;
 pub use format::FascFormat;
 use core::fmt::{self, Display};
 
 // Re-export sub-module functions used by sibling modules and tests
 #[allow(unused_imports)]
 #[allow(unused_imports)]
-
-// ============================================================================
-// PROFILE-SPECIFIC STORAGE TYPES (TIER N+1 PRECISION PRESERVATION)
-// ============================================================================
-
-/// Profile-specific binary storage type for zero precision loss
-///
-/// **ARCHITECTURE**: Each profile gets native storage that matches its precision tier
-/// **MEMORY COST**:
-/// - Embedded: 16 bytes (i128) - Q64.64 storage
-/// - Balanced: 32 bytes (I256) - Q128.128 storage
-/// - Scientific: 64 bytes (I512) - Q256.256 storage
-///
-/// **PRECISION GUARANTEE**: Tier N+1 computation results stored without downconversion
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-#[cfg(table_format = "q256_256")]
-pub type BinaryStorage = I512;  // Q256.256: 77 decimals
-
-#[cfg(table_format = "q128_128")]
-pub type BinaryStorage = I256;  // Q128.128: 38 decimals
-
-#[cfg(table_format = "q64_64")]
-pub type BinaryStorage = i128;  // Q64.64: 19 decimals
-
-#[cfg(table_format = "q32_32")]
-pub type BinaryStorage = i64;   // Q32.32: 9 decimals
-
-#[cfg(table_format = "q16_16")]
-pub type BinaryStorage = i32;   // Q16.16: 4 decimals
-
-// ============================================================================
-// COMPUTE-TIER STORAGE TYPE (TIER N+1 CHAIN PERSISTENCE)
-// ============================================================================
-
-/// Compute-tier storage for transcendental chain persistence
-///
-/// **PURPOSE**: Keep intermediate results at tier N+1 between consecutive
-/// transcendentals (e.g., sin(ln(exp(x)))) to avoid precision loss from
-/// repeated upscale/downscale cycles.
-///
-/// **PROFILE MAPPING**:
-/// - Embedded: I256 (Q128.128 compute for Q64.64 storage)
-/// - Balanced: I512 (Q256.256 compute for Q128.128 storage)
-/// - Scientific: I1024 (Q512.512 compute for Q256.256 storage)
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-#[cfg(table_format = "q256_256")]
-pub type ComputeStorage = I1024;  // Q512.512
-
-#[cfg(table_format = "q128_128")]
-pub type ComputeStorage = I512;   // Q256.256
-
-#[cfg(table_format = "q64_64")]
-pub type ComputeStorage = I256;   // Q128.128
-
-#[cfg(table_format = "q32_32")]
-pub type ComputeStorage = i128;   // Q64.64 (tier N+1 for Q32.32)
-
-#[cfg(table_format = "q16_16")]
-pub type ComputeStorage = i64;    // Q32.32 (tier N+1 for Q16.16)
 
 /// Maximum decimal places before promoting Decimal to BinaryCompute.
 /// Matches each profile's meaningful decimal precision.
@@ -121,7 +61,7 @@ pub type ComputeStorage = i64;    // Q32.32 (tier N+1 for Q16.16)
 /// **CONVERSION**: Lazy conversion between domains as needed
 /// **PRECISION**: Profile-specific storage eliminates downconversion loss
 #[derive(Debug, Clone)]
-pub enum StackValue<T: FascFormat = FixedPoint> {
+pub enum StackValue<T: FascFormat> {
     /// Binary fixed-point value (tier, mantissa, shadow)
     /// **STORAGE**: Profile-specific (i128 | I256 | I512) - zero precision loss
     /// **SHADOW**: Exact rational representation for precision preservation
@@ -422,7 +362,7 @@ impl<T: FascFormat> Display for StackValue<T> {
 /// **ARCHITECTURE**: Fixed-size stack with domain-aware evaluation
 /// **THREAD-SAFETY**: Each thread gets its own evaluator instance
 /// **MEMORY**: Zero heap allocation during computation
-pub struct StackEvaluator<T: FascFormat = FixedPoint> {
+pub struct StackEvaluator<T: FascFormat> {
     /// Current workspace offset
     offset: usize,
 
@@ -672,7 +612,7 @@ pub fn with_evaluator<T: FascFormat, R>(f: impl FnOnce(&mut StackEvaluator<T>) -
 /// Evaluate `expr` in the format `T`: the tree is parsed, routed and
 /// computed by this thread's evaluator for `T`, the result materialized
 /// to its storage tier, then converted per the output mode.
-pub fn evaluate_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<StackValue<T>, OverflowDetected> {
+pub fn evaluate<T: FascFormat>(expr: &LazyExpr<T>) -> Result<StackValue<T>, OverflowDetected> {
     with_evaluator(|evaluator| {
         evaluator.reset();
         let materialized = evaluator.evaluate(expr).and_then(|r| evaluator.materialize_compute(r));
@@ -791,17 +731,9 @@ fn settle_single_function<T: FascFormat>(
     }
 }
 
-/// Evaluate expression using thread-local evaluator
-///
-/// **ARCHITECTURE**: Thread-local StackEvaluator instance, one per thread
-/// **BENEFIT**: Zero mutex contention, no heap allocation per call
-/// **COMPUTE**: BinaryCompute results are materialized to storage tier at the top level
-pub fn evaluate(expr: &LazyExpr) -> Result<StackValue, OverflowDetected> {
-    evaluate_in(expr)
-}
 
 /// `sin` and `cos` of `expr` from one range reduction, in the format `T`.
-pub fn evaluate_sincos_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackValue<T>, StackValue<T>), OverflowDetected> {
+pub fn evaluate_sincos<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackValue<T>, StackValue<T>), OverflowDetected> {
     with_evaluator(|evaluator| {
         evaluator.reset();
         let inner_val = evaluator.evaluate(expr)?;
@@ -814,16 +746,9 @@ pub fn evaluate_sincos_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackVal
     })
 }
 
-/// Evaluate sin and cos of an expression simultaneously (shared range reduction).
-///
-/// Returns `(sin, cos)` as materialized StackValues. The inner expression is
-/// evaluated once; both results come from the same compute-tier computation.
-pub fn evaluate_sincos(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
-    evaluate_sincos_in(expr)
-}
 
 /// `sinh` and `cosh` of `expr` from one exponential, in the format `T`.
-pub fn evaluate_sinhcosh_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackValue<T>, StackValue<T>), OverflowDetected> {
+pub fn evaluate_sinhcosh<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackValue<T>, StackValue<T>), OverflowDetected> {
     with_evaluator(|evaluator| {
         evaluator.reset();
         let inner_val = evaluator.evaluate(expr)?;
@@ -836,24 +761,10 @@ pub fn evaluate_sinhcosh_in<T: FascFormat>(expr: &LazyExpr<T>) -> Result<(StackV
     })
 }
 
-/// Evaluate sinh and cosh of an expression simultaneously (shared exp computation).
-///
-/// Returns `(sinh, cosh)` as materialized StackValues. The inner expression is
-/// evaluated once; both results come from the same compute-tier exp evaluation.
-pub fn evaluate_sinhcosh(expr: &LazyExpr) -> Result<(StackValue, StackValue), OverflowDetected> {
-    evaluate_sinhcosh_in(expr)
-}
 
 /// Parse a runtime string into a pre-evaluated expression in the format `T`.
-pub fn gmath_parse_in<T: FascFormat>(s: &str) -> Result<LazyExpr<T>, OverflowDetected> {
+pub fn gmath_parse<T: FascFormat>(s: &str) -> Result<LazyExpr<T>, OverflowDetected> {
     let value = with_evaluator(|evaluator: &mut StackEvaluator<T>| evaluator.parse_literal_with_mode(s))?;
     Ok(LazyExpr::Value(Box::new(value)))
 }
 
-/// Parse a runtime string into a LazyExpr (for non-'static strings).
-///
-/// Unlike `gmath()` which requires `&'static str`, this parses immediately
-/// and returns a `LazyExpr::Value` holding the parsed StackValue.
-pub fn gmath_parse(s: &str) -> Result<LazyExpr, OverflowDetected> {
-    gmath_parse_in(s)
-}

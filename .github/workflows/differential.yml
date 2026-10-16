@@ -1,0 +1,39 @@
+# Differential gate against the published g_math 0.6.7, which still selects
+# its format at build time. The gate crate (differential/, not published)
+# mirrors that build's format as a type, so it runs once per profile and
+# split of the published crate.
+name: differential
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  differential:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { profile: realtime, frac_bits: "10" }
+          - { profile: realtime, frac_bits: "16" }
+          - { profile: compact, frac_bits: "" }
+          - { profile: embedded, frac_bits: "" }
+          - { profile: balanced, frac_bits: "" }
+          - { profile: scientific, frac_bits: "" }
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Differential gate (${{ matrix.profile }} ${{ matrix.frac_bits }})
+        env:
+          GMATH_PROFILE: ${{ matrix.profile }}
+          FRAC_BITS: ${{ matrix.frac_bits }}
+        run: |
+          if [ -n "$FRAC_BITS" ]; then export GMATH_FRAC_BITS="$FRAC_BITS"; fi
+          cd differential
+          cargo test --release --no-fail-fast

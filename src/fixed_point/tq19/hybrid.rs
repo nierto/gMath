@@ -471,183 +471,191 @@ fn transpose<T: Copy>(by_row: Vec<Vec<T>>, batch_len: usize) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[allow(unused_imports)]
-    use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
-    #[allow(unused_imports)]
-    use crate::fixed_point::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
+                #[allow(unused_imports)]
+                #[allow(unused_imports)]
 
-    struct Lcg(u64);
-    impl Lcg {
-        fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            self.0
-        }
-        fn raw(&mut self) -> i16 {
-            ((self.next() % (2 * MAX_RAW as u64 + 1)) as i64 - MAX_RAW as i64) as i16
-        }
-        fn raw_small(&mut self) -> i16 {
-            let a = (self.next() % 2001) as i64 - 1000;
-            let b = (self.next() % 2001) as i64 - 1000;
-            (a + b) as i16
-        }
-        /// Profile-portable activation: integer FixedPoint in ±1000. On the
-        /// realtime profile the value is n/4096 instead (|x| < 0.25), so a
-        /// 128-column row of full-range weights (|w| <= 1.5) stays inside the
-        /// storage range at every split up to Q8.24. With integers the dot
-        /// left the range from 20 fractional bits up and, until 0.6.5, both
-        /// sides of the comparison wrapped to the same wrong value.
-        fn activation(&mut self) -> FixedPoint {
-            FixedPoint::from_raw(self.activation_raw())
-        }
-        fn activation_raw(&mut self) -> BinaryStorage {
-            let n = (self.next() % 2001) as i32 - 1000;
-            #[cfg(table_format = "q16_16")]
-            { ((n as i64) << crate::fixed_point::frac_config::FRAC_BITS >> 12) as i32 }
-            #[cfg(not(table_format = "q16_16"))]
-            { FixedPoint::from_int(n).raw() }
-        }
+                struct Lcg(u64);
+                impl Lcg {
+                    fn next(&mut self) -> u64 {
+                        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                        self.0
+                    }
+                    fn raw(&mut self) -> i16 {
+                        ((self.next() % (2 * MAX_RAW as u64 + 1)) as i64 - MAX_RAW as i64) as i16
+                    }
+                    fn raw_small(&mut self) -> i16 {
+                        let a = (self.next() % 2001) as i64 - 1000;
+                        let b = (self.next() % 2001) as i64 - 1000;
+                        (a + b) as i16
+                    }
+                    /// Profile-portable activation: integer FixedPoint in ±1000. On the
+                    /// realtime profile the value is n/4096 instead (|x| < 0.25), so a
+                    /// 128-column row of full-range weights (|w| <= 1.5) stays inside the
+                    /// storage range at every split up to Q8.24. With integers the dot
+                    /// left the range from 20 fractional bits up and, until 0.6.5, both
+                    /// sides of the comparison wrapped to the same wrong value.
+                    fn activation(&mut self) -> FixedPoint {
+                        FixedPoint::from_raw(self.activation_raw())
+                    }
+                    fn activation_raw(&mut self) -> BinaryStorage {
+                        let n = (self.next() % 2001) as i32 - 1000;
+                        on_words!($W in [w32] { return ((n as i64) << FRAC_BITS >> 12) as BinaryStorage; });
+                        FixedPoint::from_int(n).raw()
+                    }
+                }
+
+                #[test]
+                fn split_raw_reconstructs_exhaustively() {
+                    for raw in MIN_RAW..=MAX_RAW {
+                        let (hi, biased) = split_raw(raw);
+                        assert!(biased <= 2186, "biased out of 12-bit range for {raw}");
+                        assert!((-13..=13).contains(&(hi as i32)), "hi out of range for {raw}");
+                        let lo = biased as i32 - LOW_BIAS as i32;
+                        assert_eq!(hi as i32 * LOW_MOD + lo, raw as i32, "raw {raw} split mismatch");
+                    }
+                }
+
+                on_words!($W in [w32 w64] {
+                /// Wide-output contract: narrow(q2f) == matvec bit-for-bit, and the
+                /// hybrid wide path is bit-identical to the dense wide path.
+                #[test]
+                fn q2f_narrow_reproduces_matvec_and_matches_dense() {
+                    fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
+                        (v / (1 << FRAC_BITS)) as BinaryStorage
+                    }
+                    let mut rng = Lcg(1234);
+                    let (rows, cols) = (11, 97);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let h = HybridTQ19::from_tq19(&m);
+                    let x: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    let narrow = h.matvec(&x);
+                    let wide = h.matvec_q2f(&x);
+                    for r in 0..rows {
+                        assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}");
+                    }
+                    assert_eq!(wide, m.matvec_q2f(&x), "hybrid wide != dense wide");
+                    assert_eq!(wide, h.matvec_q2f_par(&x));
+                    let batch: Vec<&[FixedPoint]> = vec![&x];
+                    assert_eq!(h.matvec_q2f_batch_par(&batch)[0], wide);
+                }
+                });
+
+                #[test]
+                fn roundtrip_full_range() {
+                    let mut rng = Lcg(42);
+                    for &(rows, cols) in &[(7usize, 33usize), (16, 16), (5, 3), (3, 100)] {
+                        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
+                        let m = TQ19Matrix::new(rows, cols, data);
+                        let h = HybridTQ19::from_tq19(&m);
+                        assert_eq!(h.to_tq19().data(), m.data(), "{rows}x{cols} roundtrip");
+                    }
+                }
+
+                #[test]
+                fn roundtrip_bell_and_compresses() {
+                    let mut rng = Lcg(7);
+                    let (rows, cols) = (32, 64);
+                    // Wide bell (±2000): exercises the high-correction path heavily.
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data.clone());
+                    let h = HybridTQ19::from_tq19(&m);
+                    assert_eq!(h.to_tq19().data(), m.data());
+
+                    // Realistic bell (σ≈400, like measured LLM tensors: ~1-4% corrections):
+                    // must compress below dense i16.
+                    let narrow: Vec<i16> = (0..rows * cols)
+                        .map(|_| {
+                            let a = (rng.next() % 1001) as i64 - 500;
+                            let b = (rng.next() % 1001) as i64 - 500;
+                            (a + b) as i16
+                        })
+                        .collect();
+                    let m2 = TQ19Matrix::new(rows, cols, narrow.clone());
+                    let h2 = HybridTQ19::from_tq19(&m2);
+                    assert_eq!(h2.to_tq19().data(), m2.data());
+                    assert!(
+                        h2.size_bytes() < rows * cols * 2,
+                        "no compression on realistic bell data: {} vs {}",
+                        h2.size_bytes(),
+                        rows * cols * 2
+                    );
+                }
+
+                #[test]
+                fn matvec_bit_identical() {
+                    let mut rng = Lcg(1234);
+                    for &(rows, cols) in &[(3usize, 5usize), (8, 17), (16, 128), (9, 48), (5, 3)] {
+                        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
+                        let m = TQ19Matrix::new(rows, cols, data);
+                        let h = HybridTQ19::from_tq19(&m);
+                        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                        assert_eq!(h.matvec(&acts), m.matvec(&acts), "{rows}x{cols} mismatch");
+                    }
+                }
+
+                #[test]
+                fn matvec_bit_identical_bell() {
+                    let mut rng = Lcg(99);
+                    let (rows, cols) = (24, 96);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let h = HybridTQ19::from_tq19(&m);
+                    let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    assert_eq!(h.matvec(&acts), m.matvec(&acts));
+                }
+
+                #[test]
+                fn parallel_and_batch_match_sequential() {
+                    let mut rng = Lcg(2026);
+                    let (rows, cols) = (19, 37);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let h = HybridTQ19::from_tq19(&m);
+
+                    let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
+                    assert_eq!(h.matvec_par(&acts), h.matvec(&acts));
+
+                    let batch_data: Vec<Vec<FixedPoint>> = (0..4)
+                        .map(|_| (0..cols).map(|_| rng.activation()).collect())
+                        .collect();
+                    let batch: Vec<&[FixedPoint]> = batch_data.iter().map(|v| v.as_slice()).collect();
+                    let expected: Vec<Vec<FixedPoint>> = batch.iter().map(|v| m.matvec(v)).collect();
+                    assert_eq!(h.matvec_batch(&batch), expected);
+                    assert_eq!(h.matvec_batch_par(&batch), expected);
+                }
+
+                #[test]
+                fn from_parts_roundtrip() {
+                    let mut rng = Lcg(11);
+                    let (rows, cols) = (9, 30);
+                    let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
+                    let m = TQ19Matrix::new(rows, cols, data);
+                    let h = HybridTQ19::from_tq19(&m);
+                    let (packed, rp, hc, hv) = h.parts();
+                    let rebuilt = HybridTQ19::from_parts(
+                        rows,
+                        cols,
+                        packed.to_vec(),
+                        rp.to_vec(),
+                        hc.to_vec(),
+                        hv.to_vec(),
+                    );
+                    assert_eq!(rebuilt.to_tq19().data(), m.data());
+                }
+            }
+        };
     }
-
-    #[test]
-    fn split_raw_reconstructs_exhaustively() {
-        for raw in MIN_RAW..=MAX_RAW {
-            let (hi, biased) = split_raw(raw);
-            assert!(biased <= 2186, "biased out of 12-bit range for {raw}");
-            assert!((-13..=13).contains(&(hi as i32)), "hi out of range for {raw}");
-            let lo = biased as i32 - LOW_BIAS as i32;
-            assert_eq!(hi as i32 * LOW_MOD + lo, raw as i32, "raw {raw} split mismatch");
-        }
-    }
-
-    /// Wide-output contract: narrow(q2f) == matvec bit-for-bit, and the
-    /// hybrid wide path is bit-identical to the dense wide path.
-    #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
-    #[test]
-    fn q2f_narrow_reproduces_matvec_and_matches_dense() {
-        fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
-            #[cfg(table_format = "q16_16")]
-            { (v / (1i64 << crate::fixed_point::frac_config::FRAC_BITS)) as i32 }
-            #[cfg(table_format = "q32_32")]
-            { (v / (1i128 << 32)) as i64 }
-        }
-        let mut rng = Lcg(1234);
-        let (rows, cols) = (11, 97);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let h = HybridTQ19::from_tq19(&m);
-        let x: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        let narrow = h.matvec(&x);
-        let wide = h.matvec_q2f(&x);
-        for r in 0..rows {
-            assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "row {r}");
-        }
-        assert_eq!(wide, m.matvec_q2f(&x), "hybrid wide != dense wide");
-        assert_eq!(wide, h.matvec_q2f_par(&x));
-        let batch: Vec<&[FixedPoint]> = vec![&x];
-        assert_eq!(h.matvec_q2f_batch_par(&batch)[0], wide);
-    }
-
-    #[test]
-    fn roundtrip_full_range() {
-        let mut rng = Lcg(42);
-        for &(rows, cols) in &[(7usize, 33usize), (16, 16), (5, 3), (3, 100)] {
-            let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
-            let m = TQ19Matrix::new(rows, cols, data);
-            let h = HybridTQ19::from_tq19(&m);
-            assert_eq!(h.to_tq19().data(), m.data(), "{rows}x{cols} roundtrip");
-        }
-    }
-
-    #[test]
-    fn roundtrip_bell_and_compresses() {
-        let mut rng = Lcg(7);
-        let (rows, cols) = (32, 64);
-        // Wide bell (±2000): exercises the high-correction path heavily.
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data.clone());
-        let h = HybridTQ19::from_tq19(&m);
-        assert_eq!(h.to_tq19().data(), m.data());
-
-        // Realistic bell (σ≈400, like measured LLM tensors: ~1-4% corrections):
-        // must compress below dense i16.
-        let narrow: Vec<i16> = (0..rows * cols)
-            .map(|_| {
-                let a = (rng.next() % 1001) as i64 - 500;
-                let b = (rng.next() % 1001) as i64 - 500;
-                (a + b) as i16
-            })
-            .collect();
-        let m2 = TQ19Matrix::new(rows, cols, narrow.clone());
-        let h2 = HybridTQ19::from_tq19(&m2);
-        assert_eq!(h2.to_tq19().data(), m2.data());
-        assert!(
-            h2.size_bytes() < rows * cols * 2,
-            "no compression on realistic bell data: {} vs {}",
-            h2.size_bytes(),
-            rows * cols * 2
-        );
-    }
-
-    #[test]
-    fn matvec_bit_identical() {
-        let mut rng = Lcg(1234);
-        for &(rows, cols) in &[(3usize, 5usize), (8, 17), (16, 128), (9, 48), (5, 3)] {
-            let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw()).collect();
-            let m = TQ19Matrix::new(rows, cols, data);
-            let h = HybridTQ19::from_tq19(&m);
-            let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-            assert_eq!(h.matvec(&acts), m.matvec(&acts), "{rows}x{cols} mismatch");
-        }
-    }
-
-    #[test]
-    fn matvec_bit_identical_bell() {
-        let mut rng = Lcg(99);
-        let (rows, cols) = (24, 96);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let h = HybridTQ19::from_tq19(&m);
-        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        assert_eq!(h.matvec(&acts), m.matvec(&acts));
-    }
-
-    #[test]
-    fn parallel_and_batch_match_sequential() {
-        let mut rng = Lcg(2026);
-        let (rows, cols) = (19, 37);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let h = HybridTQ19::from_tq19(&m);
-
-        let acts: Vec<FixedPoint> = (0..cols).map(|_| rng.activation()).collect();
-        assert_eq!(h.matvec_par(&acts), h.matvec(&acts));
-
-        let batch_data: Vec<Vec<FixedPoint>> = (0..4)
-            .map(|_| (0..cols).map(|_| rng.activation()).collect())
-            .collect();
-        let batch: Vec<&[FixedPoint]> = batch_data.iter().map(|v| v.as_slice()).collect();
-        let expected: Vec<Vec<FixedPoint>> = batch.iter().map(|v| m.matvec(v)).collect();
-        assert_eq!(h.matvec_batch(&batch), expected);
-        assert_eq!(h.matvec_batch_par(&batch), expected);
-    }
-
-    #[test]
-    fn from_parts_roundtrip() {
-        let mut rng = Lcg(11);
-        let (rows, cols) = (9, 30);
-        let data: Vec<i16> = (0..rows * cols).map(|_| rng.raw_small()).collect();
-        let m = TQ19Matrix::new(rows, cols, data);
-        let h = HybridTQ19::from_tq19(&m);
-        let (packed, rp, hc, hv) = h.parts();
-        let rebuilt = HybridTQ19::from_parts(
-            rows,
-            cols,
-            packed.to_vec(),
-            rp.to_vec(),
-            hc.to_vec(),
-            hv.to_vec(),
-        );
-        assert_eq!(rebuilt.to_tq19().data(), m.data());
-    }
+    for_each_format!(suite);
 }

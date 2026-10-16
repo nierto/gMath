@@ -18,7 +18,6 @@ use super::FixedMatrix;
 use super::compute_matrix::{ComputeMatrix, compute_lu_decompose};
 use super::kernels;
 use super::kernels::Orient;
-use super::FixedPoint;
 use super::Scalar;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage, WideInt};
@@ -32,7 +31,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 ///
 /// Total space E, base space B, fiber F. The projection π maps each point
 /// in E to a point in B, and each fiber π⁻¹(b) is diffeomorphic to F.
-pub trait FiberBundle<T: Scalar = FixedPoint> {
+pub trait FiberBundle<T: Scalar> {
     /// Project from total space to base space: π(e) → b.
     fn project(&self, total_point: &FixedVector<T>) -> FixedVector<T>;
 
@@ -62,7 +61,7 @@ pub trait FiberBundle<T: Scalar = FixedPoint> {
 ///
 /// A connection provides a notion of "horizontal" in the tangent bundle of E,
 /// enabling parallel transport along curves in the base.
-pub trait BundleConnection<T: Scalar = FixedPoint>: FiberBundle<T> {
+pub trait BundleConnection<T: Scalar>: FiberBundle<T> {
     /// Horizontal lift: given a tangent vector v at base point b,
     /// produce the horizontal tangent vector at total point e above b.
     ///
@@ -213,7 +212,7 @@ where
 /// **Connection coefficients:** A^a_{bi} where a,b are fiber indices (0..k)
 /// and i is a base index (0..n). The parallel transport equation is:
 ///   ∇_i ξ^a = ∂_i ξ^a + A^a_{bi} ξ^b
-pub struct VectorBundle<T = FixedPoint> {
+pub struct VectorBundle<T> {
     pub base_dim_val: usize,
     pub fiber_dim_val: usize,
     /// Connection coefficients A^a_{bi} as a rank-3 tensor [k, k, n].
@@ -414,7 +413,7 @@ where
 ///
 /// This implementation uses a discrete representation with N open sets (charts)
 /// and transition functions stored as matrices (Lie group elements).
-pub struct PrincipalBundle<T = FixedPoint> {
+pub struct PrincipalBundle<T> {
     pub base_dim_val: usize,
     pub group_dim: usize,   // dimension of the Lie algebra (= fiber_dim)
     pub matrix_dim: usize,  // dimension of the matrix representation

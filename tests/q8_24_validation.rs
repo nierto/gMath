@@ -1,6 +1,6 @@
 //! Q8.24 realtime profile validation — mpmath 50-digit references.
 //!
-//! Run: GMATH_PROFILE=realtime GMATH_FRAC_BITS=24 cargo test --test q8_24_validation -- --nocapture
+//! Run: cargo test --test q8_24_validation -- --nocapture
 //!
 //! Validates:
 //! 1. Core transcendentals at Q8.24 precision (exact-match target)
@@ -77,7 +77,7 @@ macro_rules! suite {
                 let one_raw = one.raw();
                 if one_raw != 1i32 << 24 {
                     println!("SKIP: FRAC_BITS is not 24 (one.raw() = {}, expected {})", one_raw, 1i32 << 24);
-                    println!("Run with: GMATH_PROFILE=realtime GMATH_FRAC_BITS=24 cargo test --test q8_24_validation");
+                    println!("Run with: cargo test --test q8_24_validation");
                     return; // Skip gracefully — don't fail, just not the right config
                 }
 

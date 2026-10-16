@@ -11,7 +11,6 @@ use super::FixedMatrix;
 use super::compute_matrix::{compute_lu_decompose, ComputeLU, ComputeMatrix};
 use super::kernels::{self, Rotation};
 use super::linalg::STAGNATION_SWEEPS;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::Storage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -31,7 +30,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// inspection. `solve`, `inverse`, `refine` and `determinant` use the
 /// compute-tier factors themselves, kept alongside.
 #[derive(Clone, Debug)]
-pub struct LUDecomposition<T: FixedNum = FixedPoint> {
+pub struct LUDecomposition<T: FixedNum> {
     pub l: FixedMatrix<T>,
     pub u: FixedMatrix<T>,
     pub perm: Vec<usize>,
@@ -142,7 +141,7 @@ where
 /// `q` and `r` are the compute-tier factors rounded once to storage;
 /// `solve` uses the compute-tier factors, kept alongside.
 #[derive(Clone, Debug)]
-pub struct QRDecomposition<T: FixedNum = FixedPoint> {
+pub struct QRDecomposition<T: FixedNum> {
     pub q: FixedMatrix<T>,
     pub r: FixedMatrix<T>,
     compute_q: ComputeMatrix<T>,
@@ -245,7 +244,7 @@ where
 /// factor rounded once to storage. `solve` and `determinant` use the
 /// compute-tier factor, kept alongside.
 #[derive(Clone, Debug)]
-pub struct CholeskyDecomposition<T: FixedNum = FixedPoint> {
+pub struct CholeskyDecomposition<T: FixedNum> {
     pub l: FixedMatrix<T>,
     compute: ComputeMatrix<T>,
 }
@@ -428,7 +427,7 @@ where
 /// - `values` contains eigenvalues (diagonal of Λ), sorted descending by absolute value
 /// - `vectors` is orthogonal (Qᵀ Q = I), columns are eigenvectors
 #[derive(Clone, Debug)]
-pub struct EigenDecomposition<T: FixedNum = FixedPoint> {
+pub struct EigenDecomposition<T: FixedNum> {
     pub values: FixedVector<T>,
     pub vectors: FixedMatrix<T>,
 }
@@ -664,7 +663,7 @@ where
 /// - `sigma` contains singular values (non-negative, sorted descending)
 /// - `vt` is n×n orthogonal (Vᵀ, not V)
 #[derive(Clone, Debug)]
-pub struct SVDDecomposition<T: FixedNum = FixedPoint> {
+pub struct SVDDecomposition<T: FixedNum> {
     pub u: FixedMatrix<T>,
     pub sigma: FixedVector<T>,
     pub vt: FixedMatrix<T>,
@@ -1055,7 +1054,7 @@ where
 /// - `t` is quasi-upper-triangular (upper triangular with possible 2×2 diagonal
 ///   blocks for complex eigenvalue pairs)
 #[derive(Clone, Debug)]
-pub struct SchurDecomposition<T: FixedNum = FixedPoint> {
+pub struct SchurDecomposition<T: FixedNum> {
     pub q: FixedMatrix<T>,
     pub t: FixedMatrix<T>,
 }
@@ -1414,21 +1413,35 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
 
-    fn int_matrix(rows: &[&[i32]]) -> FixedMatrix {
-        FixedMatrix::from_fn(rows.len(), rows[0].len(), |i, j| Fixed::from_int(rows[i][j]))
-    }
+                fn int_matrix(rows: &[&[i32]]) -> FixedMatrix<FixedPoint> {
+                    FixedMatrix::from_fn(rows.len(), rows[0].len(), |i, j| Fixed::from_int(rows[i][j]))
+                }
 
-    /// Running out of iterations is an error, never a partially converged Ok.
-    #[test]
-    fn iteration_budget_exhaustion_is_an_error() {
-        let a = int_matrix(&[&[4, 1, 2], &[1, 3, 1], &[2, 1, 5]]);
-        assert_eq!(eigen_symmetric_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
-        assert_eq!(svd_decompose_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
-        assert_eq!(schur_decompose_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
-        assert!(eigen_symmetric(&a).is_ok());
-        assert!(svd_decompose(&a).is_ok());
-        assert!(schur_decompose(&a).is_ok());
+                /// Running out of iterations is an error, never a partially converged Ok.
+                #[test]
+                fn iteration_budget_exhaustion_is_an_error() {
+                    let a = int_matrix(&[&[4, 1, 2], &[1, 3, 1], &[2, 1, 5]]);
+                    assert_eq!(eigen_symmetric_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
+                    assert_eq!(svd_decompose_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
+                    assert_eq!(schur_decompose_within(&a, 0).unwrap_err(), OverflowDetected::PrecisionLimit);
+                    assert!(eigen_symmetric(&a).is_ok());
+                    assert!(svd_decompose(&a).is_ok());
+                    assert!(schur_decompose(&a).is_ok());
+                }
+            }
+        };
     }
+    for_each_format!(suite);
 }

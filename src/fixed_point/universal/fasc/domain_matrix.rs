@@ -16,18 +16,19 @@
 //! **USAGE**:
 //! ```rust
 //! use g_math::canonical::{gmath, evaluate, DomainMatrix};
+//! use g_math::fixed_point::Q64_64;
 //!
 //! // Create a 2x2 decimal matrix
 //! let m = DomainMatrix::from_values(2, 2, vec![
-//!     evaluate(&gmath("0.10")).unwrap(),
+//!     evaluate::<Q64_64>(&gmath("0.10")).unwrap(),
 //!     evaluate(&gmath("0.20")).unwrap(),
 //!     evaluate(&gmath("0.30")).unwrap(),
 //!     evaluate(&gmath("0.40")).unwrap(),
 //! ]);
 //! ```
 
-use crate::fixed_point::imperative::{FixedPoint, FixedMatrix};
-use crate::fixed_point::universal::fasc::stack_evaluator::{evaluate_in, with_evaluator as registry_evaluator, FascFormat, StackEvaluator, StackValue};
+use crate::fixed_point::imperative::FixedMatrix;
+use crate::fixed_point::universal::fasc::stack_evaluator::{evaluate, with_evaluator as registry_evaluator, FascFormat, StackEvaluator, StackValue};
 use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::width::Storage;
 use crate::fixed_point::universal::fasc::lazy_expr::LazyExpr;
@@ -45,7 +46,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// Operations preserve domain when possible, falling back through rational
 /// for cross-domain arithmetic.
 #[derive(Debug, Clone)]
-pub struct DomainMatrix<T: FascFormat = FixedPoint> {
+pub struct DomainMatrix<T: FascFormat> {
     rows: usize,
     cols: usize,
     data: Vec<StackValue<T>>,
@@ -70,7 +71,7 @@ where
     pub fn from_strings(rows: usize, cols: usize, values: &[&'static str]) -> Result<Self, OverflowDetected> {
         assert_eq!(values.len(), rows * cols, "DomainMatrix<Fixed<S, F>>: values length mismatch");
         let data: Result<Vec<StackValue<Fixed<S, F>>>, OverflowDetected> = values.iter()
-            .map(|s| evaluate_in(&LazyExpr::<Fixed<S, F>>::Literal(s)))
+            .map(|s| evaluate(&LazyExpr::<Fixed<S, F>>::Literal(s)))
             .collect();
         Ok(Self { rows, cols, data: data? })
     }
@@ -295,58 +296,71 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[allow(unused_imports)]
-    use crate::fixed_point::imperative::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
+                #[allow(unused_imports)]
 
-    #[test]
-    fn test_domain_matrix_from_strings_binary() {
-        let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-        assert_eq!(m.rows(), 2);
-        assert_eq!(m.cols(), 2);
-        assert!(m.is_uniform_domain());
-    }
+                #[test]
+                fn test_domain_matrix_from_strings_binary() {
+                    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+                    assert_eq!(m.rows(), 2);
+                    assert_eq!(m.cols(), 2);
+                    assert!(m.is_uniform_domain());
+                }
 
-    #[test]
-    fn test_domain_matrix_from_strings_decimal() {
-        let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
-        assert_eq!(m.rows(), 2);
-        assert!(m.is_uniform_domain());
-        assert_eq!(m.dominant_domain(), Some(DomainType::Decimal));
-    }
+                #[test]
+                fn test_domain_matrix_from_strings_decimal() {
+                    let m = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["0.10", "0.20", "0.30", "0.40"]).unwrap();
+                    assert_eq!(m.rows(), 2);
+                    assert!(m.is_uniform_domain());
+                    assert_eq!(m.dominant_domain(), Some(DomainType::Decimal));
+                }
 
-    #[test]
-    fn test_domain_matrix_transpose() {
-        let m = DomainMatrix::<FixedPoint>::from_strings(2, 3, &["1", "2", "3", "4", "5", "6"]).unwrap();
-        let mt = m.transpose();
-        assert_eq!(mt.rows(), 3);
-        assert_eq!(mt.cols(), 2);
-    }
+                #[test]
+                fn test_domain_matrix_transpose() {
+                    let m = DomainMatrix::<FixedPoint>::from_strings(2, 3, &["1", "2", "3", "4", "5", "6"]).unwrap();
+                    let mt = m.transpose();
+                    assert_eq!(mt.rows(), 3);
+                    assert_eq!(mt.cols(), 2);
+                }
 
-    #[test]
-    fn test_domain_matrix_identity() {
-        let id = DomainMatrix::<FixedPoint>::identity_binary(3);
-        assert_eq!(id.rows(), 3);
-        assert_eq!(id.cols(), 3);
-        assert!(id.is_uniform_domain());
-    }
+                #[test]
+                fn test_domain_matrix_identity() {
+                    let id = DomainMatrix::<FixedPoint>::identity_binary(3);
+                    assert_eq!(id.rows(), 3);
+                    assert_eq!(id.cols(), 3);
+                    assert!(id.is_uniform_domain());
+                }
 
-    #[test]
-    fn test_domain_matrix_add() {
-        let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
-        let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["10", "20", "30", "40"]).unwrap();
-        let c = a.add(&b).unwrap();
-        assert_eq!(c.rows(), 2);
-        assert_eq!(c.cols(), 2);
-    }
+                #[test]
+                fn test_domain_matrix_add() {
+                    let a = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1", "2", "3", "4"]).unwrap();
+                    let b = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["10", "20", "30", "40"]).unwrap();
+                    let c = a.add(&b).unwrap();
+                    assert_eq!(c.rows(), 2);
+                    assert_eq!(c.cols(), 2);
+                }
 
-    #[test]
-    fn test_domain_matrix_decimal_matmul() {
-        // Decimal 2x2 identity * decimal vector-like
-        let id = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1.00", "0.00", "0.00", "1.00"]).unwrap();
-        let v = DomainMatrix::<FixedPoint>::from_strings(2, 1, &["0.10", "0.20"]).unwrap();
-        let result = id.mat_mul(&v).unwrap();
-        assert_eq!(result.rows(), 2);
-        assert_eq!(result.cols(), 1);
+                #[test]
+                fn test_domain_matrix_decimal_matmul() {
+                    // Decimal 2x2 identity * decimal vector-like
+                    let id = DomainMatrix::<FixedPoint>::from_strings(2, 2, &["1.00", "0.00", "0.00", "1.00"]).unwrap();
+                    let v = DomainMatrix::<FixedPoint>::from_strings(2, 1, &["0.10", "0.20"]).unwrap();
+                    let result = id.mat_mul(&v).unwrap();
+                    assert_eq!(result.rows(), 2);
+                    assert_eq!(result.cols(), 1);
+                }
+            }
+        };
     }
+    for_each_format!(suite);
 }

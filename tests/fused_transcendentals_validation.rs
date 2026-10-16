@@ -19,7 +19,7 @@ macro_rules! suite {
             #[allow(dead_code)]
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{gmath_in, evaluate_in, evaluate_sincos_in};
+            use g_math::canonical::{gmath, evaluate, evaluate_sincos};
 
             fn fp(s: &str) -> FixedPoint {
                 if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
@@ -69,7 +69,7 @@ macro_rules! suite {
 
             #[test]
             fn test_sincos_zero() {
-                let (sin_val, cos_val) = evaluate_sincos_in(&gmath_in::<FixedPoint>("0")).unwrap();
+                let (sin_val, cos_val) = evaluate_sincos(&gmath::<FixedPoint>("0")).unwrap();
                 let sin_fp = sv_to_fp(&sin_val);
                 let cos_fp = sv_to_fp(&cos_val);
                 assert_fp(sin_fp, fp("0"), tight(), "sin(0)");
@@ -80,7 +80,7 @@ macro_rules! suite {
             fn test_sincos_half() {
                 // mpmath: sin(0.5) = 0.47942553860420300027328793521557138808...
                 // mpmath: cos(0.5) = 0.87758256189037271611726095893830865404...
-                let (sin_val, cos_val) = evaluate_sincos_in(&gmath_in::<FixedPoint>("0.5")).unwrap();
+                let (sin_val, cos_val) = evaluate_sincos(&gmath::<FixedPoint>("0.5")).unwrap();
                 let sin_fp = sv_to_fp(&sin_val);
                 let cos_fp = sv_to_fp(&cos_val);
                 assert_fp(sin_fp, fp("0.479425538604203"), tight(), "sin(0.5)");
@@ -91,7 +91,7 @@ macro_rules! suite {
             fn test_sincos_one() {
                 // mpmath: sin(1) = 0.84147098480789650665250232163029899962...
                 // mpmath: cos(1) = 0.54030230586813971740093660744297660373...
-                let (sin_val, cos_val) = evaluate_sincos_in(&gmath_in::<FixedPoint>("1")).unwrap();
+                let (sin_val, cos_val) = evaluate_sincos(&gmath::<FixedPoint>("1")).unwrap();
                 let sin_fp = sv_to_fp(&sin_val);
                 let cos_fp = sv_to_fp(&cos_val);
                 assert_fp(sin_fp, fp("0.841470984807896"), tight(), "sin(1)");
@@ -101,8 +101,8 @@ macro_rules! suite {
             #[test]
             fn test_sincos_negative() {
                 // sin(-x) = -sin(x), cos(-x) = cos(x)
-                let (sin_pos, cos_pos) = evaluate_sincos_in(&gmath_in::<FixedPoint>("1")).unwrap();
-                let (sin_neg, cos_neg) = evaluate_sincos_in(&(-gmath_in::<FixedPoint>("1"))).unwrap();
+                let (sin_pos, cos_pos) = evaluate_sincos(&gmath::<FixedPoint>("1")).unwrap();
+                let (sin_neg, cos_neg) = evaluate_sincos(&(-gmath::<FixedPoint>("1"))).unwrap();
                 let sin_pos_fp = sv_to_fp(&sin_pos);
                 let cos_pos_fp = sv_to_fp(&cos_pos);
                 let sin_neg_fp = sv_to_fp(&sin_neg);
@@ -115,7 +115,7 @@ macro_rules! suite {
             fn test_sincos_pythagorean_identity() {
                 // sin²(x) + cos²(x) = 1 for various x values
                 for x_str in &["0.5", "1", "1.5", "2", "3", "0.1", "0.01"] {
-                    let (sin_val, cos_val) = evaluate_sincos_in(&gmath_in::<FixedPoint>(x_str)).unwrap();
+                    let (sin_val, cos_val) = evaluate_sincos(&gmath::<FixedPoint>(x_str)).unwrap();
                     let sin_fp = sv_to_fp(&sin_val);
                     let cos_fp = sv_to_fp(&cos_val);
                     let sum_sq = sin_fp * sin_fp + cos_fp * cos_fp;
@@ -127,9 +127,9 @@ macro_rules! suite {
             fn test_sincos_matches_separate_sin_cos() {
                 // Fused sincos should produce identical results to separate sin() and cos()
                 for x_str in &["0.5", "1.5", "2.718", "0.001"] {
-                    let (sin_fused, cos_fused) = evaluate_sincos_in(&gmath_in::<FixedPoint>(x_str)).unwrap();
-                    let sin_separate = evaluate_in(&gmath_in::<FixedPoint>(x_str).sin()).unwrap();
-                    let cos_separate = evaluate_in(&gmath_in::<FixedPoint>(x_str).cos()).unwrap();
+                    let (sin_fused, cos_fused) = evaluate_sincos(&gmath::<FixedPoint>(x_str)).unwrap();
+                    let sin_separate = evaluate(&gmath::<FixedPoint>(x_str).sin()).unwrap();
+                    let cos_separate = evaluate(&gmath::<FixedPoint>(x_str).cos()).unwrap();
 
                     let sf = sv_to_fp(&sin_fused);
                     let cf = sv_to_fp(&cos_fused);
@@ -144,7 +144,7 @@ macro_rules! suite {
             #[test]
             fn test_sincos_large_angle() {
                 // Large angle: range reduction should handle this
-                let (sin_val, cos_val) = evaluate_sincos_in(&gmath_in::<FixedPoint>("100")).unwrap();
+                let (sin_val, cos_val) = evaluate_sincos(&gmath::<FixedPoint>("100")).unwrap();
                 let sin_fp = sv_to_fp(&sin_val);
                 let cos_fp = sv_to_fp(&cos_val);
                 // Pythagorean identity should still hold
@@ -155,10 +155,10 @@ macro_rules! suite {
             #[test]
             fn test_sincos_with_expression() {
                 // evaluate_sincos of a compound expression: sin(1+2), cos(1+2)
-                let expr = gmath_in::<FixedPoint>("1") + gmath_in::<FixedPoint>("2");
-                let (sin_val, cos_val) = evaluate_sincos_in(&expr).unwrap();
-                let sin3 = evaluate_in(&gmath_in::<FixedPoint>("3").sin()).unwrap();
-                let cos3 = evaluate_in(&gmath_in::<FixedPoint>("3").cos()).unwrap();
+                let expr = gmath::<FixedPoint>("1") + gmath::<FixedPoint>("2");
+                let (sin_val, cos_val) = evaluate_sincos(&expr).unwrap();
+                let sin3 = evaluate(&gmath::<FixedPoint>("3").sin()).unwrap();
+                let cos3 = evaluate(&gmath::<FixedPoint>("3").cos()).unwrap();
                 assert_fp(sv_to_fp(&sin_val), sv_to_fp(&sin3), tight(), "sincos(1+2) vs sin(3)");
                 assert_fp(sv_to_fp(&cos_val), sv_to_fp(&cos3), tight(), "sincos(1+2) vs cos(3)");
             }
@@ -171,9 +171,9 @@ macro_rules! suite {
             fn test_exp_ln_identity() {
                 // exp(ln(x)) = x for positive x
                 for x_str in &["0.5", "1", "2", "3", "10", "0.1", "0.01", "100"] {
-                    let expr = gmath_in::<FixedPoint>(x_str).ln().exp();
-                    let result = evaluate_in(&expr).unwrap();
-                    let expected = evaluate_in(&gmath_in::<FixedPoint>(x_str)).unwrap();
+                    let expr = gmath::<FixedPoint>(x_str).ln().exp();
+                    let result = evaluate(&expr).unwrap();
+                    let expected = evaluate(&gmath::<FixedPoint>(x_str)).unwrap();
                     let r = sv_to_fp(&result);
                     let e = sv_to_fp(&expected);
                     assert_fp(r, e, tight(), &format!("exp(ln({x_str})) = {x_str}"));
@@ -184,9 +184,9 @@ macro_rules! suite {
             fn test_ln_exp_identity() {
                 // ln(exp(x)) = x
                 for x_str in &["0.5", "1", "2", "3", "0.1", "0.01", "-1", "-2"] {
-                    let expr = gmath_in::<FixedPoint>(x_str).exp().ln();
-                    let result = evaluate_in(&expr).unwrap();
-                    let expected = evaluate_in(&gmath_in::<FixedPoint>(x_str)).unwrap();
+                    let expr = gmath::<FixedPoint>(x_str).exp().ln();
+                    let result = evaluate(&expr).unwrap();
+                    let expected = evaluate(&gmath::<FixedPoint>(x_str)).unwrap();
                     let r = sv_to_fp(&result);
                     let e = sv_to_fp(&expected);
                     assert_fp(r, e, tight(), &format!("ln(exp({x_str})) = {x_str}"));
@@ -196,9 +196,9 @@ macro_rules! suite {
             #[test]
             fn test_exp_ln_preserves_chain() {
                 // exp(ln(x)) + 1 — the short-circuit should work inside larger expressions
-                let expr = gmath_in::<FixedPoint>("2").ln().exp() + gmath_in::<FixedPoint>("1");
-                let result = evaluate_in(&expr).unwrap();
-                let expected = evaluate_in(&(gmath_in::<FixedPoint>("2") + gmath_in::<FixedPoint>("1"))).unwrap();
+                let expr = gmath::<FixedPoint>("2").ln().exp() + gmath::<FixedPoint>("1");
+                let result = evaluate(&expr).unwrap();
+                let expected = evaluate(&(gmath::<FixedPoint>("2") + gmath::<FixedPoint>("1"))).unwrap();
                 let r = sv_to_fp(&result);
                 let e = sv_to_fp(&expected);
                 assert_fp(r, e, tight(), "exp(ln(2)) + 1 = 3");
@@ -208,8 +208,8 @@ macro_rules! suite {
             fn test_identity_does_not_fire_on_different_inner() {
                 // exp(ln(x) + y) should NOT short-circuit to x
                 // This should compute normally: exp(ln(2) + ln(3)) = exp(ln(6)) = 6
-                let expr = (gmath_in::<FixedPoint>("2").ln() + gmath_in::<FixedPoint>("3").ln()).exp();
-                let result = evaluate_in(&expr).unwrap();
+                let expr = (gmath::<FixedPoint>("2").ln() + gmath::<FixedPoint>("3").ln()).exp();
+                let result = evaluate(&expr).unwrap();
                 let r = sv_to_fp(&result);
                 // exp(ln(2) + ln(3)) = exp(ln(6)) = 6
                 // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there

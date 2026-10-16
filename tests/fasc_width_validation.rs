@@ -1,11 +1,11 @@
-//! The canonical layer on every width in one build: `evaluate_in::<T>` on a
+//! The canonical layer on every width in one build: `evaluate::<T>` on a
 //! corpus of expressions for six formats. Exact-domain results (decimal and
 //! rational literals under `+ - * /`) are the same rational on every width;
 //! transcendental results agree with the widest format within the narrower
 //! format's own resolution. The per-format evaluators live in one thread-local
 //! registry, so the formats are interleaved on purpose.
 
-use g_math::canonical::{evaluate_in, gmath_in, FascFormat, LazyExpr, StackValue};
+use g_math::canonical::{evaluate, gmath, FascFormat, LazyExpr, StackValue};
 use g_math::fixed_point::domains::symbolic::rational::rational_number::RationalNumber;
 use g_math::fixed_point::{Fixed, I256, I512, WideInt};
 
@@ -15,24 +15,24 @@ type Ref = Fixed<I512, 256>;
 fn corpus<T: FascFormat>() -> Vec<(&'static str, LazyExpr<T>, bool)> {
     // (label, tree, exact: the result is a rational the decimal/symbolic domains hold exactly)
     vec![
-        ("0.1 + 0.2", gmath_in::<T>("0.1") + gmath_in::<T>("0.2"), true),
-        ("1.5 * 2.5 + 0.1", gmath_in::<T>("1.5") * gmath_in::<T>("2.5") + gmath_in::<T>("0.1"), true),
-        ("3 * 7 - 2", gmath_in::<T>("3") * gmath_in::<T>("7") - gmath_in::<T>("2"), true),
-        ("1 / 3", gmath_in::<T>("1") / gmath_in::<T>("3"), true),
-        ("(0.1 + 0.2) * 3", (gmath_in::<T>("0.1") + gmath_in::<T>("0.2")) * gmath_in::<T>("3"), true),
-        ("-(2.75) / 4", -gmath_in::<T>("2.75") / gmath_in::<T>("4"), true),
-        ("2.sqrt()", gmath_in::<T>("2").sqrt(), false),
-        ("1.exp()", gmath_in::<T>("1").exp(), false),
-        ("10.ln()", gmath_in::<T>("10").ln(), false),
-        ("0.5.sin()", gmath_in::<T>("0.5").sin(), false),
-        ("0.5.cos()", gmath_in::<T>("0.5").cos(), false),
-        ("0.3.atan()", gmath_in::<T>("0.3").atan(), false),
-        ("1.5.sinh()", gmath_in::<T>("1.5").sinh(), false),
-        ("-0.5.tanh()", gmath_in::<T>("-0.5").tanh(), false),
-        ("0.25.asin()", gmath_in::<T>("0.25").asin(), false),
-        ("2.pow(0.5)", gmath_in::<T>("2").pow(gmath_in::<T>("0.5")), false),
-        ("1.5.exp().ln()", gmath_in::<T>("1.5").exp().ln(), false),
-        ("0.7.exp() * 0.7.exp()", gmath_in::<T>("0.7").exp() * gmath_in::<T>("0.7").exp(), false),
+        ("0.1 + 0.2", gmath::<T>("0.1") + gmath::<T>("0.2"), true),
+        ("1.5 * 2.5 + 0.1", gmath::<T>("1.5") * gmath::<T>("2.5") + gmath::<T>("0.1"), true),
+        ("3 * 7 - 2", gmath::<T>("3") * gmath::<T>("7") - gmath::<T>("2"), true),
+        ("1 / 3", gmath::<T>("1") / gmath::<T>("3"), true),
+        ("(0.1 + 0.2) * 3", (gmath::<T>("0.1") + gmath::<T>("0.2")) * gmath::<T>("3"), true),
+        ("-(2.75) / 4", -gmath::<T>("2.75") / gmath::<T>("4"), true),
+        ("2.sqrt()", gmath::<T>("2").sqrt(), false),
+        ("1.exp()", gmath::<T>("1").exp(), false),
+        ("10.ln()", gmath::<T>("10").ln(), false),
+        ("0.5.sin()", gmath::<T>("0.5").sin(), false),
+        ("0.5.cos()", gmath::<T>("0.5").cos(), false),
+        ("0.3.atan()", gmath::<T>("0.3").atan(), false),
+        ("1.5.sinh()", gmath::<T>("1.5").sinh(), false),
+        ("-0.5.tanh()", gmath::<T>("-0.5").tanh(), false),
+        ("0.25.asin()", gmath::<T>("0.25").asin(), false),
+        ("2.pow(0.5)", gmath::<T>("2").pow(gmath::<T>("0.5")), false),
+        ("1.5.exp().ln()", gmath::<T>("1.5").exp().ln(), false),
+        ("0.7.exp() * 0.7.exp()", gmath::<T>("0.7").exp() * gmath::<T>("0.7").exp(), false),
     ]
 }
 
@@ -80,7 +80,7 @@ fn check<T: FascFormat>(label: &str, frac_bits: u32, refs: &[(&'static str, Stac
     }
     let tol = tol + pow10(DIGITS - T::DECIMAL_STORAGE_MAX_DP.min(DIGITS as u8) as u32);
     for (case, tree, exact) in corpus::<T>() {
-        let got = evaluate_in::<T>(&tree).unwrap_or_else(|e| panic!("{label} {case}: {e:?}"));
+        let got = evaluate::<T>(&tree).unwrap_or_else(|e| panic!("{label} {case}: {e:?}"));
         let want = &refs.iter().find(|(c, _, _)| *c == case).unwrap().1;
         if exact {
             assert_eq!(rational(&got), rational(want), "{label} {case}: exact-domain result differs from the reference");
@@ -96,7 +96,7 @@ fn check<T: FascFormat>(label: &str, frac_bits: u32, refs: &[(&'static str, Stac
 fn every_width_agrees_with_the_widest() {
     let refs: Vec<(&'static str, StackValue<Ref>, bool)> = corpus::<Ref>()
         .into_iter()
-        .map(|(c, t, exact)| (c, evaluate_in::<Ref>(&t).unwrap_or_else(|e| panic!("reference {c}: {e:?}")), exact))
+        .map(|(c, t, exact)| (c, evaluate::<Ref>(&t).unwrap_or_else(|e| panic!("reference {c}: {e:?}")), exact))
         .collect();
     // interleaved on purpose: six evaluators share one thread's registry
     for _ in 0..2 {
@@ -112,17 +112,17 @@ fn every_width_agrees_with_the_widest() {
 #[test]
 fn a_value_of_one_format_stays_in_its_tree() {
     // feeding a result back keeps its format: the types do not admit a mix
-    let v = evaluate_in::<Fixed<i64, 32>>(&(gmath_in("0.1") + gmath_in("0.2"))).unwrap();
-    let again = evaluate_in::<Fixed<i64, 32>>(&(LazyExpr::from(v) * gmath_in("10"))).unwrap();
+    let v = evaluate::<Fixed<i64, 32>>(&(gmath("0.1") + gmath("0.2"))).unwrap();
+    let again = evaluate::<Fixed<i64, 32>>(&(LazyExpr::from(v) * gmath("10"))).unwrap();
     assert_eq!(rational(&again), RationalNumber::new(3, 1));
     assert!(format!("{again}").starts_with("3.0"), "{again}");
 }
 
 #[test]
 fn display_follows_the_format_digits() {
-    let narrow = format!("{}", evaluate_in::<Fixed<i32, 10>>(&(gmath_in("1") / gmath_in("4"))).unwrap());
+    let narrow = format!("{}", evaluate::<Fixed<i32, 10>>(&(gmath("1") / gmath("4"))).unwrap());
     assert!(narrow.starts_with("0.25"), "{narrow}");
-    let wide = format!("{}", evaluate_in::<Fixed<I256, 128>>(&(gmath_in("1") / gmath_in("4"))).unwrap());
+    let wide = format!("{}", evaluate::<Fixed<I256, 128>>(&(gmath("1") / gmath("4"))).unwrap());
     assert!(wide.starts_with("0.25"), "{wide}");
 }
 
@@ -130,7 +130,7 @@ fn display_follows_the_format_digits() {
 // Phase 5c: the matrix layer and the last scalar methods on every format
 // ---------------------------------------------------------------------------
 
-use g_math::canonical::{evaluate_matrix_in, DomainMatrix, LazyMatrixExpr};
+use g_math::canonical::{evaluate_matrix, DomainMatrix, LazyMatrixExpr};
 use g_math::fixed_point::FixedMatrix;
 
 #[test]
@@ -141,7 +141,7 @@ fn matrix_trees_evaluate_in_every_format() {
     {
         let a = FixedMatrix::<Fixed<S, F>>::from_fn(2, 2, |r, c| if r == c { Fixed::<S, F>::from_int(2) } else { Fixed::<S, F>::from_int(1) });
         let tree = (LazyMatrixExpr::from(a.clone()) * LazyMatrixExpr::from(a)).scale(Fixed::<S, F>::from_int(3)) + LazyMatrixExpr::identity(2);
-        let m = evaluate_matrix_in(&tree).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        let m = evaluate_matrix(&tree).unwrap_or_else(|e| panic!("{label}: {e:?}"));
         // [[2,1],[1,2]]^2 = [[5,4],[4,5]]; x3 + I = [[16,12],[12,16]]
         assert_eq!(m.get(0, 0), Fixed::<S, F>::from_int(16), "{label}");
         assert_eq!(m.get(0, 1), Fixed::<S, F>::from_int(12), "{label}");

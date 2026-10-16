@@ -22,7 +22,7 @@ macro_rules! suite {
             #[allow(dead_code)]
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{gmath_in, evaluate_in};
+            use g_math::canonical::{gmath, evaluate};
             use g_math::fixed_point::imperative::OverflowDetected;
             use g_math::fixed_point::prime_table::{is_prime, nth_prime, prime_count_up_to, PRIME_COUNT, MAX_PRIME};
 
@@ -38,9 +38,9 @@ macro_rules! suite {
                             input.len() - 1,
                         ))
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -56,11 +56,11 @@ macro_rules! suite {
             /// Either way, 1.05 has a finite decimal expansion, so result is exact.
             #[test]
             fn value_chaining_compound_interest_10_years() {
-                let mut balance = evaluate_in(&gmath_in::<FixedPoint>("1000.00")).unwrap();
+                let mut balance = evaluate(&gmath::<FixedPoint>("1000.00")).unwrap();
 
                 for _year in 1..=10 {
-                    let expr = LazyExpr::from(balance) * gmath_in::<FixedPoint>("1.05");
-                    balance = evaluate_in(&expr).expect("compound interest step should not fail");
+                    let expr = LazyExpr::from(balance) * gmath::<FixedPoint>("1.05");
+                    balance = evaluate(&expr).expect("compound interest step should not fail");
                 }
 
                 let s = format!("{}", balance);
@@ -82,7 +82,7 @@ macro_rules! suite {
             /// All 20 checked years should match exactly.
             #[test]
             fn value_chaining_compound_interest_30_years() {
-                let mut balance = evaluate_in(&gmath_in::<FixedPoint>("1000.00")).unwrap();
+                let mut balance = evaluate(&gmath::<FixedPoint>("1000.00")).unwrap();
                 let mut last_correct_year = 0;
 
                 // mpmath reference values: 1000 * 1.05^n (80-digit precision)
@@ -114,8 +114,8 @@ macro_rules! suite {
                 ];
 
                 for year in 1..=30 {
-                    let expr = LazyExpr::from(balance) * gmath_in::<FixedPoint>("1.05");
-                    balance = match evaluate_in(&expr) {
+                    let expr = LazyExpr::from(balance) * gmath::<FixedPoint>("1.05");
+                    balance = match evaluate(&expr) {
                         Ok(b) => b,
                         // Without `infinite-precision` the exact rational outgrows its
                         // widest tier at year 29 and multiply_via_rational falls back to
@@ -167,11 +167,11 @@ macro_rules! suite {
             #[test]
             fn value_chaining_compound_interest_100_years() {
                 if !(!((BITS == 32 || BITS == 512))) { return; }
-                let mut balance = evaluate_in(&gmath_in::<FixedPoint>("1000.00")).unwrap();
+                let mut balance = evaluate(&gmath::<FixedPoint>("1000.00")).unwrap();
 
                 for _year in 1..=100 {
-                    let expr = LazyExpr::from(balance) * gmath_in::<FixedPoint>("1.05");
-                    balance = evaluate_in(&expr).expect("compound interest step should not fail");
+                    let expr = LazyExpr::from(balance) * gmath::<FixedPoint>("1.05");
+                    balance = evaluate(&expr).expect("compound interest step should not fail");
                 }
 
                 let s = format!("{}", balance);
@@ -195,11 +195,11 @@ macro_rules! suite {
             #[test]
             fn value_chaining_compound_interest_500_years() {
                 if !(!((BITS == 32 || BITS == 64 || BITS == 512))) { return; }
-                let mut balance = evaluate_in(&gmath_in::<FixedPoint>("1000.00")).unwrap();
+                let mut balance = evaluate(&gmath::<FixedPoint>("1000.00")).unwrap();
 
                 for _year in 1..=500 {
-                    let expr = LazyExpr::from(balance) * gmath_in::<FixedPoint>("1.05");
-                    balance = evaluate_in(&expr).expect("compound interest step should not fail");
+                    let expr = LazyExpr::from(balance) * gmath::<FixedPoint>("1.05");
+                    balance = evaluate(&expr).expect("compound interest step should not fail");
                 }
 
                 let s = format!("{}", balance);
@@ -215,8 +215,8 @@ macro_rules! suite {
             /// Value chaining preserves domain: decimal * decimal stays decimal-like
             #[test]
             fn value_chaining_preserves_computation() {
-                let a = evaluate_in(&gmath_in::<FixedPoint>("2.5")).unwrap();
-                let b = evaluate_in(&(LazyExpr::from(a) + gmath_in::<FixedPoint>("3.5"))).unwrap();
+                let a = evaluate(&gmath::<FixedPoint>("2.5")).unwrap();
+                let b = evaluate(&(LazyExpr::from(a) + gmath::<FixedPoint>("3.5"))).unwrap();
                 let s = format!("{}", b);
                 assert!(
                     s.starts_with("6.0") || s.starts_with("6/1"),
@@ -228,9 +228,9 @@ macro_rules! suite {
             /// Chain transcendental results: compute exp(1), then use result
             #[test]
             fn value_chaining_transcendental_result() {
-                let e = evaluate_in(&gmath_in::<FixedPoint>("1").exp()).unwrap();
+                let e = evaluate(&gmath::<FixedPoint>("1").exp()).unwrap();
                 // e * e should be e^2 ≈ 7.389056...
-                let e_squared = evaluate_in(&(LazyExpr::from(e.clone()) * LazyExpr::from(e))).unwrap();
+                let e_squared = evaluate(&(LazyExpr::from(e.clone()) * LazyExpr::from(e))).unwrap();
                 // e was materialized to storage (error up to half a unit), so e * e
                 // carries 2e * 0.5 + 0.5 < 3.2 units: 7.391 at Q22.10, where one unit is
                 // 0.001 and a three-digit string check cannot hold.
@@ -249,7 +249,7 @@ macro_rules! suite {
             /// Binary domain values display as decimal, not "Binary[T3]:..."
             #[test]
             fn display_binary_is_decimal() {
-                let val = evaluate_in(&gmath_in::<FixedPoint>("42")).unwrap();
+                let val = evaluate(&gmath::<FixedPoint>("42")).unwrap();
                 let s = format!("{}", val);
                 assert!(
                     s.starts_with("42."),
@@ -266,7 +266,7 @@ macro_rules! suite {
             /// Precision specifier: {:.2} gives 2 decimal places
             #[test]
             fn display_precision_2() {
-                let val = evaluate_in(&gmath_in::<FixedPoint>("3.14159")).unwrap();
+                let val = evaluate(&gmath::<FixedPoint>("3.14159")).unwrap();
                 let s = format!("{:.2}", val);
                 // Should show ~2 decimal digits worth
                 assert!(
@@ -279,7 +279,7 @@ macro_rules! suite {
             /// Precision specifier: {:.6} gives 6 decimal places (profile-dependent)
             #[test]
             fn display_precision_6() {
-                let val = evaluate_in(&gmath_in::<FixedPoint>("3.14159")).unwrap();
+                let val = evaluate(&gmath::<FixedPoint>("3.14159")).unwrap();
                 let s = format!("{:.6}", val);
                 // Q16.16 has only 4 decimal digits — accept shorter match
                 assert!(
@@ -292,7 +292,7 @@ macro_rules! suite {
             /// Decimal domain should Display as decimal
             #[test]
             fn display_decimal_domain() {
-                let val = evaluate_in(&gmath_in::<FixedPoint>("0.25")).unwrap();
+                let val = evaluate(&gmath::<FixedPoint>("0.25")).unwrap();
                 let s = format!("{}", val);
                 // Decimal domain: should display as 0.25 or equivalent
                 assert!(
@@ -305,7 +305,7 @@ macro_rules! suite {
             /// Symbolic domain should Display as fraction
             #[test]
             fn display_symbolic_domain() {
-                let val = evaluate_in(&gmath_in::<FixedPoint>("1/3")).unwrap();
+                let val = evaluate(&gmath::<FixedPoint>("1/3")).unwrap();
                 let s = format!("{}", val);
                 // Symbolic: should show as fraction
                 assert!(
@@ -318,7 +318,7 @@ macro_rules! suite {
             /// Zero displays cleanly
             #[test]
             fn display_zero() {
-                let val = evaluate_in(&gmath_in::<FixedPoint>("0")).unwrap();
+                let val = evaluate(&gmath::<FixedPoint>("0")).unwrap();
                 let s = format!("{}", val);
                 assert!(
                     s.starts_with("0"),
@@ -330,7 +330,7 @@ macro_rules! suite {
             /// Negative value displays with minus sign
             #[test]
             fn display_negative() {
-                let val = evaluate_in(&gmath_safe("-5")).unwrap();
+                let val = evaluate(&gmath_safe("-5")).unwrap();
                 let s = format!("{}", val);
                 assert!(
                     s.starts_with("-5.") || s.starts_with("-5/") || s == "-5",
@@ -351,13 +351,13 @@ macro_rules! suite {
                 ];
 
                 for &x in test_values {
-                    let sin_val = evaluate_in(&gmath_in::<FixedPoint>(x).sin()).unwrap();
-                    let cos_val = evaluate_in(&gmath_in::<FixedPoint>(x).cos()).unwrap();
+                    let sin_val = evaluate(&gmath::<FixedPoint>(x).sin()).unwrap();
+                    let cos_val = evaluate(&gmath::<FixedPoint>(x).cos()).unwrap();
 
                     // sin^2 + cos^2
-                    let sin_sq = evaluate_in(&(LazyExpr::from(sin_val.clone()) * LazyExpr::from(sin_val))).unwrap();
-                    let cos_sq = evaluate_in(&(LazyExpr::from(cos_val.clone()) * LazyExpr::from(cos_val))).unwrap();
-                    let sum = evaluate_in(&(LazyExpr::from(sin_sq) + LazyExpr::from(cos_sq))).unwrap();
+                    let sin_sq = evaluate(&(LazyExpr::from(sin_val.clone()) * LazyExpr::from(sin_val))).unwrap();
+                    let cos_sq = evaluate(&(LazyExpr::from(cos_val.clone()) * LazyExpr::from(cos_val))).unwrap();
+                    let sum = evaluate(&(LazyExpr::from(sin_sq) + LazyExpr::from(cos_sq))).unwrap();
 
                     let s = format!("{}", sum);
                     assert!(
@@ -380,7 +380,7 @@ macro_rules! suite {
                 ];
 
                 for &x in test_values {
-                    let result = evaluate_in(&gmath_in::<FixedPoint>(x).ln().exp());
+                    let result = evaluate(&gmath::<FixedPoint>(x).ln().exp());
                     assert!(result.is_ok(), "exp(ln({})) should succeed, got {:?}", x, result);
 
                     let s = format!("{}", result.unwrap());
@@ -402,7 +402,7 @@ macro_rules! suite {
                 ];
 
                 for &x in test_values {
-                    let result = evaluate_in(&gmath_in::<FixedPoint>(x).exp().ln());
+                    let result = evaluate(&gmath::<FixedPoint>(x).exp().ln());
                     assert!(result.is_ok(), "ln(exp({})) should succeed, got {:?}", x, result);
 
                     let s = format!("{}", result.unwrap());
@@ -422,13 +422,13 @@ macro_rules! suite {
 
                 for &x in test_values {
                     // Direct sinh
-                    let sinh_direct = evaluate_in(&gmath_in::<FixedPoint>(x).sinh()).unwrap();
+                    let sinh_direct = evaluate(&gmath::<FixedPoint>(x).sinh()).unwrap();
 
                     // Manual: (exp(x) - exp(-x)) / 2
-                    let exp_pos = evaluate_in(&gmath_in::<FixedPoint>(x).exp()).unwrap();
-                    let exp_neg = evaluate_in(&gmath_safe(&leak_neg(x)).exp()).unwrap();
-                    let diff = evaluate_in(&(LazyExpr::from(exp_pos) - LazyExpr::from(exp_neg))).unwrap();
-                    let half = evaluate_in(&(LazyExpr::from(diff) / gmath_in::<FixedPoint>("2"))).unwrap();
+                    let exp_pos = evaluate(&gmath::<FixedPoint>(x).exp()).unwrap();
+                    let exp_neg = evaluate(&gmath_safe(&leak_neg(x)).exp()).unwrap();
+                    let diff = evaluate(&(LazyExpr::from(exp_pos) - LazyExpr::from(exp_neg))).unwrap();
+                    let half = evaluate(&(LazyExpr::from(diff) / gmath::<FixedPoint>("2"))).unwrap();
 
                     let s_direct = format!("{:.10}", sinh_direct);
                     let s_manual = format!("{:.10}", half);
@@ -460,7 +460,7 @@ macro_rules! suite {
                 let test_values: &[&str] = &["1.0", "2.0", "5.0", "0.5", "10.0"];
 
                 for &x in test_values {
-                    let result = evaluate_in(&gmath_in::<FixedPoint>(x).ln().exp().ln().exp());
+                    let result = evaluate(&gmath::<FixedPoint>(x).ln().exp().ln().exp());
                     assert!(
                         result.is_ok(),
                         "exp(ln(exp(ln({})))) should succeed, got {:?}",
@@ -483,7 +483,7 @@ macro_rules! suite {
                 let test_values: &[&str] = &["0.1", "0.5", "0.9", "0.01", "0.99"];
 
                 for &x in test_values {
-                    let result = evaluate_in(&gmath_in::<FixedPoint>(x).asin().sin());
+                    let result = evaluate(&gmath::<FixedPoint>(x).asin().sin());
                     assert!(
                         result.is_ok(),
                         "sin(asin({})) should succeed, got {:?}",
@@ -519,8 +519,8 @@ macro_rules! suite {
                 ];
 
                 for &(x, prefixes) in test_values {
-                    let sqrt_val = evaluate_in(&gmath_in::<FixedPoint>(x).sqrt()).unwrap();
-                    let squared = evaluate_in(&(
+                    let sqrt_val = evaluate(&gmath::<FixedPoint>(x).sqrt()).unwrap();
+                    let squared = evaluate(&(
                         LazyExpr::from(sqrt_val.clone()) * LazyExpr::from(sqrt_val)
                     )).unwrap();
 
@@ -540,7 +540,7 @@ macro_rules! suite {
                 let test_values: &[&str] = &["0.1", "0.5", "0.9", "0.01", "0.99"];
 
                 for &x in test_values {
-                    let result = evaluate_in(&gmath_in::<FixedPoint>(x).acos().cos());
+                    let result = evaluate(&gmath::<FixedPoint>(x).acos().cos());
                     assert!(
                         result.is_ok(),
                         "cos(acos({})) should succeed, got {:?}",
@@ -562,7 +562,7 @@ macro_rules! suite {
                 let test_values: &[&str] = &["0.1", "0.5", "1.0", "2.0", "10.0"];
 
                 for &x in test_values {
-                    let result = evaluate_in(&gmath_in::<FixedPoint>(x).atan().tan());
+                    let result = evaluate(&gmath::<FixedPoint>(x).atan().tan());
                     assert!(
                         result.is_ok(),
                         "tan(atan({})) should succeed, got {:?}",

@@ -24,146 +24,23 @@ use num_rational::BigRational;
 use num_traits::{One, ToPrimitive, Signed, Zero};
 
 // ============================================================================
-// DEPLOYMENT PROFILE DETECTION
+// TABLE PRECISION
 // ============================================================================
 
-/// Deployment profiles with precision tiers
-///
-/// 3 core profiles aligned to UGOD tiers
-/// - Embedded: Tier 4 (i64/u64) → Q64.64 (i128), scalar-only
-/// - Balanced: Tier 5 (i128/u128) → Q128.128 (I256), general purpose
-/// - Scientific: Tier 6 (I256/I256) → Q256.256 (I512), maximum precision
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum DeploymentProfile {
-    Realtime,    //  4 decimals, Q16.16,   i32 storage, i64 compute
-    Compact,     //  9 decimals, Q32.32,   i64 storage, i128 compute
-    Embedded,    // 19 decimals, Q64.64,   i128 arithmetic
-    Balanced,    // 38 decimals, Q128.128, I256 arithmetic
-    Scientific,  // 77 decimals, Q256.256, I512 arithmetic
-    Custom,
-}
-
-/// Precision configuration for each profile
+/// Precision of the generated tables: one set for every format (the formats
+/// are types since 0.7.0; no build-time profile).
 #[derive(Debug, Clone)]
 struct PrecisionConfig {
     target_decimal_places: u8,
     profile_name: &'static str,
-    table_format: &'static str, // "Q64.64", "Q128.128", "Q256.256"
+    table_format: &'static str,
 }
 
-impl PrecisionConfig {
-    fn for_profile(profile: DeploymentProfile) -> Self {
-        match profile {
-            DeploymentProfile::Realtime => PrecisionConfig {
-                target_decimal_places: 4,
-                profile_name: "realtime",
-                table_format: "Q16.16",
-            },
-            DeploymentProfile::Compact => PrecisionConfig {
-                target_decimal_places: 9,
-                profile_name: "compact",
-                table_format: "Q32.32",
-            },
-            DeploymentProfile::Embedded => PrecisionConfig {
-                target_decimal_places: 19,
-                profile_name: "embedded",
-                table_format: "Q64.64",
-            },
-            DeploymentProfile::Balanced => PrecisionConfig {
-                target_decimal_places: 38,
-                profile_name: "balanced",
-                table_format: "Q128.128",
-            },
-            DeploymentProfile::Scientific => PrecisionConfig {
-                target_decimal_places: 77,
-                profile_name: "scientific",
-                table_format: "Q256.256",
-            },
-            DeploymentProfile::Custom => {
-                let custom_precision = env::var("GMATH_MAX_DECIMAL_PRECISION")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(38);
-
-                let table_format = if custom_precision <= 19 {
-                    "Q64.64"
-                } else if custom_precision <= 38 {
-                    "Q128.128"
-                } else {
-                    "Q256.256"
-                };
-
-                PrecisionConfig {
-                    target_decimal_places: custom_precision,
-                    profile_name: "custom",
-                    table_format,
-                }
-            }
-        }
-    }
-}
-
-/// Detect deployment profile from environment and features
-///
-/// The profile is one choice for the whole build, so every way of asking for
-/// two different profiles at once is a build error, never a silent pick.
-fn detect_deployment_profile() -> DeploymentProfile {
-    // Cargo sets CARGO_FEATURE_<NAME> for enabled features (cfg!() in build.rs
-    // would test the build script's own features, not the crate's).
-    let requested: Vec<(&str, DeploymentProfile)> = [
-        ("realtime", "CARGO_FEATURE_REALTIME", DeploymentProfile::Realtime),
-        ("compact", "CARGO_FEATURE_COMPACT", DeploymentProfile::Compact),
-        ("embedded", "CARGO_FEATURE_EMBEDDED", DeploymentProfile::Embedded),
-        ("balanced", "CARGO_FEATURE_BALANCED", DeploymentProfile::Balanced),
-        ("scientific", "CARGO_FEATURE_SCIENTIFIC", DeploymentProfile::Scientific),
-    ]
-    .into_iter()
-    .filter(|(_, var, _)| env::var(var).is_ok())
-    .map(|(name, _, profile)| (name, profile))
-    .collect();
-
-    if requested.len() > 1 {
-        let names: Vec<&str> = requested.iter().map(|(n, _)| *n).collect();
-        panic!(
-            "g_math: conflicting profile features enabled: {}. The profile is one choice per build \
-             (Cargo unifies features across every crate that depends on g_math), so two crates \
-             asking for different profiles cannot share a build. Enable exactly one, or none and \
-             set GMATH_PROFILE.",
-            names.join(", ")
-        );
-    }
-
-    // Environment variable: highest priority
-    if let Ok(profile_str) = env::var("GMATH_PROFILE") {
-        let from_env = match profile_str.to_lowercase().as_str() {
-            "realtime" => DeploymentProfile::Realtime,
-            "compact" | "fast" => DeploymentProfile::Compact,
-            "embedded" => DeploymentProfile::Embedded,
-            "balanced" => DeploymentProfile::Balanced,
-            "scientific" => DeploymentProfile::Scientific,
-            other => panic!(
-                "g_math: unknown GMATH_PROFILE '{}'. Expected realtime, compact, embedded, balanced or scientific.",
-                other
-            ),
-        };
-        if let Some((name, _)) = requested.first() {
-            if !profile_str.eq_ignore_ascii_case(name) {
-                println!(
-                    "cargo:warning=g_math: GMATH_PROFILE={} overrides the enabled '{}' profile feature",
-                    profile_str, name
-                );
-            }
-        }
-        return from_env;
-    }
-
-    match requested.into_iter().next() {
-        Some((_, profile)) => profile,
-        // Default to embedded profile (Q64.64, 19 decimals, fastest)
-        None => DeploymentProfile::Embedded,
-    }
-}
+const TABLE_CONFIG: PrecisionConfig = PrecisionConfig {
+    target_decimal_places: 77,
+    profile_name: "universal",
+    table_format: "all formats",
+};
 
 // ============================================================================
 // HARDCODED MATHEMATICAL CONSTANTS (Continued Fraction Convergents)
@@ -2018,135 +1895,15 @@ fn generate_trig_constants(out_dir: &str, _config: &PrecisionConfig) {
 }
 
 // ============================================================================
-// FRAC_BITS CONFIGURATION GENERATION
-// ============================================================================
-
-/// Generate compile-time Q-format constants based on FRAC_BITS.
-///
-/// These constants drive all shift amounts, masks, and derived values
-/// for the current profile's arithmetic. Emitted to OUT_DIR/frac_config.rs.
-fn generate_frac_config(out_dir: &str, frac_bits: u32, storage_bits: u32, config: &PrecisionConfig) {
-    let path = Path::new(out_dir).join("frac_config.rs");
-    let mut f = File::create(&path).unwrap();
-
-    let compute_frac_bits = frac_bits * 2;
-    let int_bits = storage_bits - frac_bits - 1; // exclude sign bit
-    // floor(frac_bits × log₁₀(2)) via integer arithmetic (no floats)
-    let max_decimal_digits = ((frac_bits as u64 * 30103) / 100000) as u32;
-
-    writeln!(f, "// Auto-generated by build.rs — do not edit manually").unwrap();
-    writeln!(f, "// Profile: {}, Storage: {} bits, Q-format: Q{}.{}",
-        config.profile_name, storage_bits, int_bits + 1, frac_bits).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Number of fractional bits in the storage Q-format.").unwrap();
-    writeln!(f, "pub const FRAC_BITS: u32 = {};", frac_bits).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Number of fractional bits in the compute tier (= 2 × FRAC_BITS).").unwrap();
-    writeln!(f, "pub const COMPUTE_FRAC_BITS: u32 = {};", compute_frac_bits).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Bit position for round-to-nearest in storage downscale (= FRAC_BITS - 1).").unwrap();
-    writeln!(f, "pub const FRAC_ROUND_BIT: u32 = {};", frac_bits - 1).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Bit position for round-to-nearest in compute-tier downscale (= COMPUTE_FRAC_BITS - 1).").unwrap();
-    writeln!(f, "pub const COMPUTE_ROUND_BIT: u32 = {};", compute_frac_bits - 1).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Maximum faithfully representable decimal digits.").unwrap();
-    writeln!(f, "pub const MAX_DECIMAL_DIGITS: usize = {};", max_decimal_digits).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Total bits in storage type (including sign bit).").unwrap();
-    writeln!(f, "pub const STORAGE_BITS: u32 = {};", storage_bits).unwrap();
-    writeln!(f).unwrap();
-    writeln!(f, "/// Integer bits in storage Q-format (excluding sign bit).").unwrap();
-    writeln!(f, "pub const INTEGER_BITS: u32 = {};", int_bits).unwrap();
-
-    // For i32/i64 tiers: shift to upscale from compute tier to Q64.64 native transcendentals.
-    // Only meaningful when COMPUTE_FRAC_BITS < 64 (i.e., storage fits in i64).
-    if compute_frac_bits < 64 {
-        writeln!(f).unwrap();
-        writeln!(f, "/// Shift to upscale from compute tier to Q64.64 native transcendentals").unwrap();
-        writeln!(f, "/// = 64 - COMPUTE_FRAC_BITS. Always positive for i32/i64 storage tiers.").unwrap();
-        writeln!(f, "pub const NATIVE_UPSHIFT: u32 = {};", 64 - compute_frac_bits).unwrap();
-    }
-}
-
-// ============================================================================
 // MAIN BUILD SCRIPT
 // ============================================================================
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=GMATH_PROFILE");
-    println!("cargo:rerun-if-env-changed=GMATH_FRAC_BITS");
-    println!("cargo:rerun-if-env-changed=GMATH_MAX_DECIMAL_PRECISION");
-    // Rerun if feature flags change
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBEDDED");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBEDDED_MINIMAL");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BALANCED");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_SCIENTIFIC");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MULTI_PRECISION");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FAST");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_COMPACT");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REALTIME");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REBUILD_TABLES");
 
-    // Declare custom cfg values for Rust compiler
-    println!("cargo::rustc-check-cfg=cfg(table_format, values(\"q16_16\", \"q32_32\", \"q64_64\", \"q128_128\", \"q256_256\"))");
-
     let out_dir = env::var("OUT_DIR").unwrap();
-
-    // SCAFFOLDING (width-types phase 7): the profile selects nothing in the
-    // library any more (every layer is generic over `Fixed<S, F>`); the
-    // `table_format` cfg and `frac_config.rs` emitted below exist for the
-    // profile-bound tests only and go in 7c, together with the env reads.
-    // Detect profile and configure precision
-    let profile = detect_deployment_profile();
-    let config = PrecisionConfig::for_profile(profile);
-
-    // Emit cfg directives for conditional compilation based on table format
-    match config.table_format {
-        "Q16.16" => println!("cargo:rustc-cfg=table_format=\"q16_16\""),
-        "Q32.32" => println!("cargo:rustc-cfg=table_format=\"q32_32\""),
-        "Q64.64" => println!("cargo:rustc-cfg=table_format=\"q64_64\""),
-        "Q128.128" => println!("cargo:rustc-cfg=table_format=\"q128_128\""),
-        "Q256.256" => println!("cargo:rustc-cfg=table_format=\"q256_256\""),
-        _ => println!("cargo:rustc-cfg=table_format=\"q64_64\""), // fallback
-    }
-
-    // =========================================================================
-    // FRAC_BITS CONFIGURATION: Generated for every build
-    // =========================================================================
-    // Custom FRAC_BITS: currently supported for realtime profile (i32 tier) only.
-    // Set GMATH_FRAC_BITS=24 for Q8.24 instead of default Q16.16.
-    // Other profiles use their standard partition (half storage width).
-
-    let storage_bits: u32 = match config.table_format {
-        "Q16.16" => 32,
-        "Q32.32" => 64,
-        "Q64.64" => 128,
-        "Q128.128" => 256,
-        "Q256.256" => 512,
-        _ => 128,
-    };
-    let default_frac_bits = storage_bits / 2;
-
-    // Custom FRAC_BITS: only for realtime profile (i32 tier) for now
-    let frac_bits: u32 = if matches!(profile, DeploymentProfile::Realtime) {
-        env::var("GMATH_FRAC_BITS")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(default_frac_bits)
-    } else {
-        default_frac_bits
-    };
-
-    // Validate: at least 1 integer bit + 1 sign bit
-    assert!(
-        frac_bits >= 2 && frac_bits <= storage_bits - 2,
-        "GMATH_FRAC_BITS={} out of range [2, {}] for {} ({}-bit storage)",
-        frac_bits, storage_bits - 2, config.table_format, storage_bits
-    );
-
-    generate_frac_config(&out_dir, frac_bits, storage_bits, &config);
+    let config = TABLE_CONFIG;
 
     // =========================================================================
     // TABLE GENERATION: Only when rebuild-tables feature is enabled
@@ -2155,8 +1912,8 @@ fn main() {
     // To regenerate: cargo build --features rebuild-tables
     if std::env::var("CARGO_FEATURE_REBUILD_TABLES").is_ok() {
         println!("cargo:warning=🚀 gMath Build System - Regenerating Tables");
-        println!("cargo:warning=📊 Profile: {:?} | Precision: {} decimals | Format: {}",
-                 profile, config.target_decimal_places, config.table_format);
+        println!("cargo:warning=📊 Precision: {} decimals | Format: {}",
+                 config.target_decimal_places, config.table_format);
 
         // Generate mathematical constants
         generate_mathematical_constants(&out_dir, &config);

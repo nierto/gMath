@@ -16,7 +16,6 @@ use super::decompose::svd_decompose;
 use super::compute_matrix::{compute_lu_decompose, ComputeMatrix};
 use super::kernels;
 use super::kernels::Orient;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage, WideInt};
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -29,7 +28,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 ///
 /// Keeps only the top-k singular values and their corresponding vectors.
 /// Memory: O(mk + k + nk) instead of O(m² + n + n²) for full SVD.
-pub struct TruncatedSVD<T = FixedPoint> {
+pub struct TruncatedSVD<T> {
     /// Left singular vectors: m × k matrix.
     pub u: FixedMatrix<T>,
     /// Top-k singular values (descending).
@@ -151,7 +150,7 @@ where
 ///
 /// G is a small core tensor, U_n are orthogonal factor matrices per mode.
 /// HOSVD (Higher-Order SVD) computes the factors via SVD of mode unfoldings.
-pub struct TuckerDecomposition<T = FixedPoint> {
+pub struct TuckerDecomposition<T> {
     /// Core tensor of shape (r₁, r₂, ..., r_N) where r_n ≤ d_n.
     pub core: Tensor<T>,
     /// Factor matrices: factors[n] is d_n × r_n.
@@ -233,7 +232,7 @@ where
 ///
 /// Decomposes a tensor into a sum of R rank-1 terms. Each term is an outer
 /// product of vectors, weighted by λ_r.
-pub struct CPDecomposition<T = FixedPoint> {
+pub struct CPDecomposition<T> {
     /// Component weights (R values).
     pub weights: FixedVector<T>,
     /// Factor matrices: factors[n] is d_n × R (columns are the rank-1 vectors).

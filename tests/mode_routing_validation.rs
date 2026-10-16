@@ -14,9 +14,7 @@
 //! Only Q64.64 (embedded) and Q256.256 (scientific) pass all mode routing tests.
 //!
 //! Run:
-//!   GMATH_PROFILE=embedded   cargo test --test mode_routing_validation -- --nocapture
-//!   GMATH_PROFILE=balanced   cargo test --test mode_routing_validation -- --nocapture
-//!   GMATH_PROFILE=scientific cargo test --test mode_routing_validation -- --nocapture
+//!   cargo test --test mode_routing_validation -- --nocapture
 
 #[macro_use]
 mod common;
@@ -31,7 +29,7 @@ macro_rules! suite {
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::Fixed;
-            use g_math::fixed_point::canonical::{gmath_in, evaluate_in, set_gmath_mode, reset_gmath_mode};
+            use g_math::fixed_point::canonical::{gmath, evaluate, set_gmath_mode, reset_gmath_mode};
             #[allow(unused_imports)]
             use g_math::fixed_point::domains::binary_fixed::i512::I512;
 
@@ -56,9 +54,9 @@ macro_rules! suite {
                             std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1)
                         )
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -300,7 +298,7 @@ macro_rules! suite {
                     // Test with decimal input
                     reset_gmath_mode();
                     set_gmath_mode(mode).expect("valid mode");
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5")));
+                    let result = evaluate(&(gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5")));
                     reset_gmath_mode();
 
                     match result {
@@ -324,7 +322,7 @@ macro_rules! suite {
                     // Test with integer input
                     reset_gmath_mode();
                     set_gmath_mode(mode).expect("valid mode");
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>("3") + gmath_in::<FixedPoint>("7")));
+                    let result = evaluate(&(gmath::<FixedPoint>("3") + gmath::<FixedPoint>("7")));
                     reset_gmath_mode();
 
                     match result {
@@ -348,7 +346,7 @@ macro_rules! suite {
                     // Test with fraction input
                     reset_gmath_mode();
                     set_gmath_mode(mode).expect("valid mode");
-                    let result = evaluate_in(&(gmath_in::<FixedPoint>("1/4") + gmath_in::<FixedPoint>("3/4")));
+                    let result = evaluate(&(gmath::<FixedPoint>("1/4") + gmath::<FixedPoint>("3/4")));
                     reset_gmath_mode();
 
                     match result {
@@ -417,7 +415,7 @@ macro_rules! suite {
                             // Evaluate with mode
                             reset_gmath_mode();
                             set_gmath_mode(mode).expect("valid mode");
-                            let result = evaluate_in(&expr);
+                            let result = evaluate(&expr);
                             reset_gmath_mode();
 
                             match result {
@@ -498,10 +496,10 @@ macro_rules! suite {
                 }
 
                 let transcendentals = &[
-                    TransTest { name: "exp(1.0)", build: || gmath_in::<FixedPoint>("1.0").exp() },
-                    TransTest { name: "ln(2.0)", build: || gmath_in::<FixedPoint>("2.0").ln() },
-                    TransTest { name: "sqrt(2.0)", build: || gmath_in::<FixedPoint>("2.0").sqrt() },
-                    TransTest { name: "sin(1.0)", build: || gmath_in::<FixedPoint>("1.0").sin() },
+                    TransTest { name: "exp(1.0)", build: || gmath::<FixedPoint>("1.0").exp() },
+                    TransTest { name: "ln(2.0)", build: || gmath::<FixedPoint>("2.0").ln() },
+                    TransTest { name: "sqrt(2.0)", build: || gmath::<FixedPoint>("2.0").sqrt() },
+                    TransTest { name: "sin(1.0)", build: || gmath::<FixedPoint>("1.0").sin() },
                 ];
 
                 let mut pass = 0u32;
@@ -512,7 +510,7 @@ macro_rules! suite {
                 let mut reference_values: Vec<String> = Vec::new();
                 for t in transcendentals {
                     let expr = (t.build)();
-                    let result = evaluate_in(&expr).unwrap();
+                    let result = evaluate(&expr).unwrap();
                     reference_values.push(result.to_decimal_string(15));
                 }
 
@@ -524,7 +522,7 @@ macro_rules! suite {
                         reset_gmath_mode();
                         set_gmath_mode(mode).expect("valid mode");
                         let expr = (t.build)();
-                        let result = evaluate_in(&expr);
+                        let result = evaluate(&expr);
                         reset_gmath_mode();
 
                         match result {
@@ -588,7 +586,7 @@ macro_rules! suite {
 
                 // Test 1: Default mode is auto:auto
                 reset_gmath_mode();
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5"))).unwrap();
+                let result = evaluate(&(gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5"))).unwrap();
                 assert!(
                     matches!(result, StackValue::Decimal(..)),
                     "Default mode should auto-route decimal input to Decimal domain, got {}",
@@ -598,7 +596,7 @@ macro_rules! suite {
 
                 // Test 2: Set mode, verify it takes effect
                 set_gmath_mode("binary:symbolic").unwrap();
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5"))).unwrap();
+                let result = evaluate(&(gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5"))).unwrap();
                 assert!(
                     matches!(result, StackValue::Symbolic(..)),
                     "binary:symbolic should output Symbolic, got {}",
@@ -608,7 +606,7 @@ macro_rules! suite {
 
                 // Test 3: Reset mode, verify auto:auto is restored
                 reset_gmath_mode();
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5"))).unwrap();
+                let result = evaluate(&(gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5"))).unwrap();
                 assert!(
                     matches!(result, StackValue::Decimal(..)),
                     "After reset, should be back to auto:auto (Decimal), got {}",
@@ -618,7 +616,7 @@ macro_rules! suite {
 
                 // Test 4: Setting one mode doesn't affect subsequent tests after reset
                 set_gmath_mode("ternary:ternary").unwrap();
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("3") + gmath_in::<FixedPoint>("7"))).unwrap();
+                let result = evaluate(&(gmath::<FixedPoint>("3") + gmath::<FixedPoint>("7"))).unwrap();
                 assert!(
                     matches!(result, StackValue::Ternary(..)),
                     "ternary:ternary should output Ternary, got {}",
@@ -626,7 +624,7 @@ macro_rules! suite {
                 );
                 reset_gmath_mode();
 
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("3") + gmath_in::<FixedPoint>("7"))).unwrap();
+                let result = evaluate(&(gmath::<FixedPoint>("3") + gmath::<FixedPoint>("7"))).unwrap();
                 assert!(
                     matches!(result, StackValue::Binary(..)),
                     "After reset, integers should auto-route to Binary, got {}",
@@ -637,10 +635,10 @@ macro_rules! suite {
                 // Test 5: Multiple mode switches in sequence
                 for mode in &["binary:decimal", "decimal:binary", "symbolic:ternary", "auto:auto"] {
                     set_gmath_mode(mode).unwrap();
-                    let _ = evaluate_in(&(gmath_in::<FixedPoint>("2") + gmath_in::<FixedPoint>("3"))).unwrap();
+                    let _ = evaluate(&(gmath::<FixedPoint>("2") + gmath::<FixedPoint>("3"))).unwrap();
                     reset_gmath_mode();
                 }
-                let result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5"))).unwrap();
+                let result = evaluate(&(gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5"))).unwrap();
                 assert!(
                     matches!(result, StackValue::Decimal(..)),
                     "After many switches + reset, should be auto:auto, got {}",
@@ -676,8 +674,8 @@ macro_rules! suite {
                     set_gmath_mode(mode).expect("valid mode");
 
                     // Quick smoke test: add and multiply with decimals
-                    let add_result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5")));
-                    let mul_result = evaluate_in(&(gmath_in::<FixedPoint>("1.5") * gmath_in::<FixedPoint>("2.5")));
+                    let add_result = evaluate(&(gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5")));
+                    let mul_result = evaluate(&(gmath::<FixedPoint>("1.5") * gmath::<FixedPoint>("2.5")));
 
                     reset_gmath_mode();
 

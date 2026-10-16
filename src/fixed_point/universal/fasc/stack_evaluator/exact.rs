@@ -34,7 +34,6 @@ fn rational<T: FascFormat, B: Num<T>>(r: &RationalNumber) -> R<B> {
         RationalParts::Medium(n, d) => B::int(n as i128)?.div(B::int(d as i128)?),
         RationalParts::Large(n, d) => B::int(n as i128)?.div(B::int(d as i128)?),
         RationalParts::Huge(n, d) => B::int(n)?.div(from_u128::<T, B>(d)?),
-        #[cfg(not(feature = "embedded"))]
         RationalParts::Massive(n, d) => B::from_word(n, 0)?.div(B::from_word(d, 0)?),
         RationalParts::Ultra(n, d) => B::from_word(n, 0)?.div(B::from_word(d, 0)?),
         #[cfg(feature = "infinite-precision")]

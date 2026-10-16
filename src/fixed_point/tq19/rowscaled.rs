@@ -222,147 +222,154 @@ impl RowScaledTQ19 {
     }
 }
 
-// the row-scaled forms exist on the 32- and 64-bit words only
 #[cfg(test)]
-#[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
 mod tests {
-    use super::*;
-    use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
-    #[allow(unused_imports)]
-    use crate::fixed_point::FixedPoint;
-    use crate::tq19::{TQ19Matrix, SCALE};
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
+                #[allow(unused_imports)]
+                use crate::tq19::{TQ19Matrix, SCALE};
 
-    /// A row-scaled matrix whose every scale equals the global step must
-    /// reproduce plain TQ19 matvec bit-for-bit (s_rel = 1.0 in Q32.32).
-    #[test]
-    fn unit_scale_matches_plain_tq19() {
-        let rows = 7;
-        let cols = 64;
-        let data: Vec<i16> = (0..rows * cols)
-            .map(|i| ((i as i64 * 2654435761 % 59049) - 29524) as i16)
-            .collect();
-        let tq = TQ19Matrix::new(rows, cols, data.clone());
-        let rs = RowScaledTQ19::from_parts(rows, cols, data, vec![1u64 << 32; rows]);
-        let x: Vec<FixedPoint> = (0..cols)
-            .map(|i| FixedPoint::from_raw(((i as i64 * 40503 % 2049) - 1024) as BinaryStorage))
-            .collect();
-        assert_eq!(tq.matvec(&x), rs.matvec(&x));
-    }
+                /// A row-scaled matrix whose every scale equals the global step must
+                /// reproduce plain TQ19 matvec bit-for-bit (s_rel = 1.0 in Q32.32).
+                #[test]
+                fn unit_scale_matches_plain_tq19() {
+                    let rows = 7;
+                    let cols = 64;
+                    let data: Vec<i16> = (0..rows * cols)
+                        .map(|i| ((i as i64 * 2654435761 % 59049) - 29524) as i16)
+                        .collect();
+                    let tq = TQ19Matrix::new(rows, cols, data.clone());
+                    let rs = RowScaledTQ19::from_parts(rows, cols, data, vec![1u64 << 32; rows]);
+                    let x: Vec<FixedPoint> = (0..cols)
+                        .map(|i| FixedPoint::from_raw(((i as i64 * 40503 % 2049) - 1024) as BinaryStorage))
+                        .collect();
+                    assert_eq!(tq.matvec(&x), rs.matvec(&x));
+                }
 
-    fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
-        #[cfg(table_format = "q16_16")]
-        { (v / (1i64 << crate::fixed_point::frac_config::FRAC_BITS)) as i32 }
-        #[cfg(table_format = "q32_32")]
-        { (v / (1i128 << 32)) as i64 }
-    }
+                fn narrow_q2f(v: ComputeStorage) -> BinaryStorage {
+                    (v / (1 << FRAC_BITS)) as BinaryStorage
+                }
 
-    /// Wide-output contract for the row-scaled form: with unit scales the
-    /// narrow relationship is exact; with general scales the wide path keeps
-    /// FRAC_BITS extra bits through the scale multiply, so narrow(q2f) may
-    /// differ from matvec by at most 1 storage LSB (documented behavior).
-    /// The wide value itself is pinned against an independent i128 oracle.
-    #[test]
-    fn q2f_unit_scale_exact_general_within_one_lsb_and_oracle() {
-        let rows = 5;
-        let cols = 97;
-        let data: Vec<i16> = (0..rows * cols)
-            .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
-            .collect();
-        let x: Vec<FixedPoint> = (0..cols)
-            .map(|i| FixedPoint::from_raw(((i as i64 * 69621 % 4001) - 2000) as BinaryStorage))
-            .collect();
+                /// Wide-output contract for the row-scaled form: with unit scales the
+                /// narrow relationship is exact; with general scales the wide path keeps
+                /// FRAC_BITS extra bits through the scale multiply, so narrow(q2f) may
+                /// differ from matvec by at most 1 storage LSB (documented behavior).
+                /// The wide value itself is pinned against an independent i128 oracle.
+                #[test]
+                fn q2f_unit_scale_exact_general_within_one_lsb_and_oracle() {
+                    let rows = 5;
+                    let cols = 97;
+                    let data: Vec<i16> = (0..rows * cols)
+                        .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
+                        .collect();
+                    let x: Vec<FixedPoint> = (0..cols)
+                        .map(|i| FixedPoint::from_raw(((i as i64 * 69621 % 4001) - 2000) as BinaryStorage))
+                        .collect();
 
-        // Unit scales: narrow(q2f) == matvec bit-for-bit.
-        let unit = RowScaledTQ19::from_parts(rows, cols, data.clone(), vec![1u64 << 32; rows]);
-        let narrow = unit.matvec(&x);
-        let wide = unit.matvec_q2f(&x);
-        for r in 0..rows {
-            assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "unit-scale row {r}");
-        }
+                    // Unit scales: narrow(q2f) == matvec bit-for-bit.
+                    let unit = RowScaledTQ19::from_parts(rows, cols, data.clone(), vec![1u64 << 32; rows]);
+                    let narrow = unit.matvec(&x);
+                    let wide = unit.matvec_q2f(&x);
+                    for r in 0..rows {
+                        assert_eq!(narrow_q2f(wide[r]), narrow[r].raw(), "unit-scale row {r}");
+                    }
 
-        // General scales: oracle equality + ≤1 LSB narrow relationship.
-        let scales: Vec<u64> = vec![
-            1u64 << 31,
-            1u64 << 32,
-            (1u64 << 32) + (1u64 << 30) + 12345,
-            1u64 << 20,
-            (1u64 << 32) + 1,
-        ];
-        let rs = RowScaledTQ19::from_parts(rows, cols, data.clone(), scales.clone());
-        let narrow = rs.matvec(&x);
-        let wide = rs.matvec_q2f(&x);
-        #[cfg(table_format = "q16_16")]
-        let f = crate::fixed_point::frac_config::FRAC_BITS;
-        #[cfg(table_format = "q32_32")]
-        let f = 32u32;
-        for r in 0..rows {
-            // Independent oracle: exact accumulator → one truncating /SCALE
-            // at 2F precision → floor scale multiply, all in plain i128.
-            let mut acc: i128 = 0;
-            for c in 0..cols {
-                acc += data[r * cols + c] as i128 * x[c].raw() as i128;
+                    // General scales: oracle equality + ≤1 LSB narrow relationship.
+                    let scales: Vec<u64> = vec![
+                        1u64 << 31,
+                        1u64 << 32,
+                        (1u64 << 32) + (1u64 << 30) + 12345,
+                        1u64 << 20,
+                        (1u64 << 32) + 1,
+                    ];
+                    let rs = RowScaledTQ19::from_parts(rows, cols, data.clone(), scales.clone());
+                    let narrow = rs.matvec(&x);
+                    let wide = rs.matvec_q2f(&x);
+                    let f = FRAC_BITS;
+                    for r in 0..rows {
+                        // Independent oracle: exact accumulator → one truncating /SCALE
+                        // at 2F precision → floor scale multiply, all in plain i128.
+                        let mut acc: i128 = 0;
+                        for c in 0..cols {
+                            acc += data[r * cols + c] as i128 * x[c].raw() as i128;
+                        }
+                        let wide_dot = (acc << f) / SCALE as i128;
+                        let expected = (wide_dot * scales[r] as i128) >> 32;
+                        assert_eq!(wide[r] as i128, expected, "row {r} diverged from i128 oracle");
+                        // Narrow relationship: within 1 storage LSB of the narrow path.
+                        let diff = (narrow_q2f(wide[r]) as i128 - narrow[r].raw() as i128).abs();
+                        assert!(diff <= 1, "row {r}: narrow(q2f) off by {diff} LSB");
+                    }
+                    assert_eq!(wide, rs.matvec_q2f_par(&x));
+                    let batch: Vec<&[FixedPoint]> = vec![&x];
+                    assert_eq!(rs.matvec_q2f_batch_par(&batch)[0], wide);
+                }
+
+                /// Independent oracle: recompute the matvec with plain i128 arithmetic
+                /// (no tq19_dot, no SIMD): Σ raw·x accumulated at i128, then the same
+                /// Q32.32 multiply-shift. Pins both the tq19_dot reuse and the scale
+                /// application against a path that shares no code with the kernel.
+                #[test]
+                fn rowscaled_matvec_matches_i128_oracle() {
+                    let rows = 5;
+                    let cols = 97; // not divisible by SIMD lane widths
+                    let data: Vec<i16> = (0..rows * cols)
+                        .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
+                        .collect();
+                    // Scales around 1.0: 0.5×, 1×, ~1.3×, tiny, and exactly 1 LSB above 1.
+                    let scales: Vec<u64> = vec![
+                        1u64 << 31,
+                        1u64 << 32,
+                        (1u64 << 32) + (1u64 << 30) + 12345,
+                        1u64 << 20,
+                        (1u64 << 32) + 1,
+                    ];
+                    let x: Vec<FixedPoint> = (0..cols)
+                        .map(|i| FixedPoint::from_raw(((i as i64 * 69621 % 4001) - 2000) as BinaryStorage))
+                        .collect();
+                    let rs = RowScaledTQ19::from_parts(rows, cols, data.clone(), scales.clone());
+                    let got = rs.matvec(&x);
+                    for r in 0..rows {
+                        let mut acc: i128 = 0;
+                        for c in 0..cols {
+                            acc += data[r * cols + c] as i128 * x[c].raw() as i128;
+                        }
+                        // tq19_dot spec: truncate-toward-zero division by the global
+                        // SCALE, narrow, THEN the Q32.32 row-scale multiply-shift.
+                        let dot = acc / SCALE as i128;
+                        let expected = ((dot * scales[r] as i128) >> 32) as BinaryStorage;
+                        assert_eq!(got[r], FixedPoint::from_raw(expected), "row {} diverged from i128 oracle", r);
+                    }
+                    // matvec_par must agree with sequential.
+                    assert_eq!(got, rs.matvec_par(&x));
+                }
+
+                /// Scaling all weights up and the row scale down must approximate the
+                /// same values with far finer granularity (small-weight fidelity).
+                #[test]
+                fn halved_scale_doubles_resolution() {
+                    let cols = 32;
+                    // value 3 raw units at global step, stored at s_rel = 0.5 with raw ×2
+                    let data: Vec<i16> = vec![6; cols];
+                    let rs = RowScaledTQ19::from_parts(1, cols, data, vec![1u64 << 31]);
+                    let x: Vec<FixedPoint> = vec![FixedPoint::from_raw(SCALE as BinaryStorage); cols];
+                    // per element: raw 6 × x SCALE / SCALE × 0.5 = 3 → sum = 96
+                    assert_eq!(rs.matvec(&x)[0].raw(), 3 * cols as BinaryStorage);
+                }
             }
-            let wide_dot = (acc << f) / SCALE as i128;
-            let expected = (wide_dot * scales[r] as i128) >> 32;
-            assert_eq!(wide[r] as i128, expected, "row {r} diverged from i128 oracle");
-            // Narrow relationship: within 1 storage LSB of the narrow path.
-            let diff = (narrow_q2f(wide[r]) as i128 - narrow[r].raw() as i128).abs();
-            assert!(diff <= 1, "row {r}: narrow(q2f) off by {diff} LSB");
-        }
-        assert_eq!(wide, rs.matvec_q2f_par(&x));
-        let batch: Vec<&[FixedPoint]> = vec![&x];
-        assert_eq!(rs.matvec_q2f_batch_par(&batch)[0], wide);
+        };
     }
-
-    /// Independent oracle: recompute the matvec with plain i128 arithmetic
-    /// (no tq19_dot, no SIMD): Σ raw·x accumulated at i128, then the same
-    /// Q32.32 multiply-shift. Pins both the tq19_dot reuse and the scale
-    /// application against a path that shares no code with the kernel.
-    #[test]
-    fn rowscaled_matvec_matches_i128_oracle() {
-        let rows = 5;
-        let cols = 97; // not divisible by SIMD lane widths
-        let data: Vec<i16> = (0..rows * cols)
-            .map(|i| ((i as i64 * 48271 % 59049) - 29524) as i16)
-            .collect();
-        // Scales around 1.0: 0.5×, 1×, ~1.3×, tiny, and exactly 1 LSB above 1.
-        let scales: Vec<u64> = vec![
-            1u64 << 31,
-            1u64 << 32,
-            (1u64 << 32) + (1u64 << 30) + 12345,
-            1u64 << 20,
-            (1u64 << 32) + 1,
-        ];
-        let x: Vec<FixedPoint> = (0..cols)
-            .map(|i| FixedPoint::from_raw(((i as i64 * 69621 % 4001) - 2000) as BinaryStorage))
-            .collect();
-        let rs = RowScaledTQ19::from_parts(rows, cols, data.clone(), scales.clone());
-        let got = rs.matvec(&x);
-        for r in 0..rows {
-            let mut acc: i128 = 0;
-            for c in 0..cols {
-                acc += data[r * cols + c] as i128 * x[c].raw() as i128;
-            }
-            // tq19_dot spec: truncate-toward-zero division by the global
-            // SCALE, narrow, THEN the Q32.32 row-scale multiply-shift.
-            let dot = acc / SCALE as i128;
-            let expected = ((dot * scales[r] as i128) >> 32) as BinaryStorage;
-            assert_eq!(got[r], FixedPoint::from_raw(expected), "row {} diverged from i128 oracle", r);
-        }
-        // matvec_par must agree with sequential.
-        assert_eq!(got, rs.matvec_par(&x));
-    }
-
-    /// Scaling all weights up and the row scale down must approximate the
-    /// same values with far finer granularity (small-weight fidelity).
-    #[test]
-    fn halved_scale_doubles_resolution() {
-        let cols = 32;
-        // value 3 raw units at global step, stored at s_rel = 0.5 with raw ×2
-        let data: Vec<i16> = vec![6; cols];
-        let rs = RowScaledTQ19::from_parts(1, cols, data, vec![1u64 << 31]);
-        let x: Vec<FixedPoint> = vec![FixedPoint::from_raw(SCALE as BinaryStorage); cols];
-        // per element: raw 6 × x SCALE / SCALE × 0.5 = 3 → sum = 96
-        assert_eq!(rs.matvec(&x)[0].raw(), 3 * cols as BinaryStorage);
-    }
+    // the row-scaled forms exist on the 32- and 64-bit words only
+    suite!(q22_10, i32, 10, w32);
+    suite!(q16_16, i32, 16, w32);
+    suite!(q32_32, i64, 32, w64);
 }

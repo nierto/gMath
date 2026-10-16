@@ -5,7 +5,6 @@
 
 use std::ops::{Add, Sub, Neg, Mul, Index, IndexMut};
 use super::kernels;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::width::Storage;
 
@@ -25,7 +24,7 @@ where
 ///
 /// Backed by `Vec<T>`. Not `Copy` due to heap allocation.
 #[derive(Clone, Debug, PartialEq)]
-pub struct FixedVector<T = FixedPoint> {
+pub struct FixedVector<T> {
     data: Vec<T>,
 }
 

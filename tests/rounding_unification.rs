@@ -71,9 +71,9 @@ macro_rules! narrow_suite {
         mod $m {
             #![allow(unused_imports, dead_code)]
             shared_items!($S, $F);
-            use g_math::canonical::{evaluate_in, CompactShadow};
+            use g_math::canonical::{evaluate, CompactShadow};
             fn binary_tier() -> u8 {
-                match evaluate_in(&g_math::canonical::gmath_in::<FixedPoint>("1")).unwrap() {
+                match evaluate(&g_math::canonical::gmath::<FixedPoint>("1")).unwrap() {
                     StackValue::Binary(t, _, _) => t,
                     v => panic!("expected binary literal, got {v:?}"),
                 }
@@ -81,7 +81,7 @@ macro_rules! narrow_suite {
             fn fasc_mul_raw(a: i128, b: i128, tier: u8) -> i128 {
                 let sa = StackValue::<FixedPoint>::Binary(tier, <$S as g_math::fixed_point::WideInt>::from_i128(a), CompactShadow::None);
                 let sb = StackValue::<FixedPoint>::Binary(tier, <$S as g_math::fixed_point::WideInt>::from_i128(b), CompactShadow::None);
-                match evaluate_in(&(LazyExpr::from(sa) * LazyExpr::from(sb))).unwrap() {
+                match evaluate(&(LazyExpr::from(sa) * LazyExpr::from(sb))).unwrap() {
                     StackValue::Binary(_, r, _) => i128::from(r),
                     v => panic!("mul left binary domain: {v:?}"),
                 }
@@ -89,7 +89,7 @@ macro_rules! narrow_suite {
             fn fasc_div_raw(a: i128, b: i128, tier: u8) -> i128 {
                 let sa = StackValue::<FixedPoint>::Binary(tier, <$S as g_math::fixed_point::WideInt>::from_i128(a), CompactShadow::None);
                 let sb = StackValue::<FixedPoint>::Binary(tier, <$S as g_math::fixed_point::WideInt>::from_i128(b), CompactShadow::None);
-                match evaluate_in(&(LazyExpr::from(sa) / LazyExpr::from(sb))).unwrap() {
+                match evaluate(&(LazyExpr::from(sa) / LazyExpr::from(sb))).unwrap() {
                     StackValue::Binary(_, r, _) => i128::from(r),
                     v => panic!("div left binary domain: {v:?}"),
                 }

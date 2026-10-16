@@ -31,7 +31,7 @@ macro_rules! suite {
             #[allow(dead_code)]
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{gmath_in, evaluate_in};
+            use g_math::canonical::{gmath, evaluate};
 
             fn fp(s: &str) -> FixedPoint {
                 if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
@@ -58,8 +58,8 @@ macro_rules! suite {
                 // Build the LazyExpr tree: Sin(Exp(44))
                 // This should NOT materialize exp(44) to storage — it should stay at
                 // BinaryCompute tier through the chain.
-                let expr = gmath_in::<FixedPoint>("44").exp().sin();
-                let result = evaluate_in(&expr);
+                let expr = gmath::<FixedPoint>("44").exp().sin();
+                let result = evaluate(&expr);
 
                 match result {
                     Ok(sv) => {
@@ -80,7 +80,7 @@ macro_rules! suite {
                         println!("should have kept it at BinaryCompute tier.");
                         println!("");
                         println!("ARCHITECTURAL GAP: the stack evaluator's evaluate_sin()");
-                        println!("calls evaluate_in(inner) which materializes, THEN computes sin.");
+                        println!("calls evaluate(inner) which materializes, THEN computes sin.");
                         println!("For true chain persistence, sin should detect BinaryCompute");
                         println!("input and compute sin at compute tier without materializing.");
                     }
@@ -100,8 +100,8 @@ macro_rules! suite {
                 // sin(exp(0.5)) — both exp(0.5) and sin(exp(0.5)) fit in storage tier.
                 // But the chain at compute tier should give better precision than
                 // materializing between operations.
-                let expr = gmath_in::<FixedPoint>("0.5").exp().sin();
-                let result = evaluate_in(&expr);
+                let expr = gmath::<FixedPoint>("0.5").exp().sin();
+                let result = evaluate(&expr);
                 assert!(result.is_ok(), "sin(exp(0.5)) should always succeed");
 
                 let sv = result.unwrap();
@@ -118,8 +118,8 @@ macro_rules! suite {
             fn test_chain_cos_of_exp_overflow() {
                 // cos(exp(44)) — same pattern, different outer function
                 // mpmath: cos(exp(44)) = 0.49451075960498576649...
-                let expr = gmath_in::<FixedPoint>("44").exp().cos();
-                let _result = evaluate_in(&expr);
+                let expr = gmath::<FixedPoint>("44").exp().cos();
+                let _result = evaluate(&expr);
 
                 if BITS == 128 {
                     // exp(44) overflows storage but cos brings it back to [-1,1]
@@ -140,8 +140,8 @@ macro_rules! suite {
             fn test_chain_atan_of_exp() {
                 // atan(exp(30)) — exp(30) ≈ 1.07e13, but atan maps R → (-π/2, π/2)
                 // mpmath: atan(exp(30)) = 1.5707963267948966192... (≈ π/2)
-                let expr = gmath_in::<FixedPoint>("30").exp().atan();
-                let result = evaluate_in(&expr);
+                let expr = gmath::<FixedPoint>("30").exp().atan();
+                let result = evaluate(&expr);
                 assert!(result.is_ok(), "atan(exp(30)) should succeed");
                 if let Ok(sv) = result {
                     let s = format!("{}", sv);
@@ -161,8 +161,8 @@ macro_rules! suite {
                 //   exp(1) = 2.71828182845904523536...
                 //   cos(exp(1)) = -0.91173391478696508282...
                 //   sin(cos(exp(1))) = -0.79056673518158675425...
-                let expr = gmath_in::<FixedPoint>("1").exp().cos().sin();
-                let result = evaluate_in(&expr);
+                let expr = gmath::<FixedPoint>("1").exp().cos().sin();
+                let result = evaluate(&expr);
                 assert!(result.is_ok(), "sin(cos(exp(1))) should succeed");
                 if let Ok(sv) = result {
                     let s = format!("{}", sv);
@@ -186,7 +186,7 @@ macro_rules! suite {
                 let _imp_exp = fp("44").try_exp();
 
                 // FASC path: sin(exp(44)) stays at compute tier through chain
-                let _fasc_result = evaluate_in(&gmath_in::<FixedPoint>("44").exp().sin());
+                let _fasc_result = evaluate(&gmath::<FixedPoint>("44").exp().sin());
 
                 if BITS == 128 {
                     assert!(_imp_exp.is_err(),

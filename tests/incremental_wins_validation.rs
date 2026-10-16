@@ -363,9 +363,9 @@ macro_rules! suite {
                 // The FASC LazyExpr path keeps the entire chain at BinaryCompute tier (1 downscale).
                 //
                 // mpmath 50 digits: sin(exp(0.5)) = 0.99696538761396753472308809609...
-                use g_math::canonical::{gmath_in, evaluate_in};
-                let expr = gmath_in::<FixedPoint>("0.5").exp().sin(); // builds LazyExpr::Sin(LazyExpr::Exp(Literal))
-                let result_sv = evaluate_in(&expr).unwrap();
+                use g_math::canonical::{gmath, evaluate};
+                let expr = gmath::<FixedPoint>("0.5").exp().sin(); // builds LazyExpr::Sin(LazyExpr::Exp(Literal))
+                let result_sv = evaluate(&expr).unwrap();
 
                 // The FASC path evaluates the entire tree at BinaryCompute tier.
                 // Single downscale at materialization → best possible precision.
@@ -456,14 +456,14 @@ macro_rules! suite {
                 // Imperative: sin(0.7) → downscale → add 0.3 → cos → downscale (2+ downscales)
                 //
                 // mpmath 50 digits: cos(sin(0.7) + 0.3) = 0.67613458688498145865...
-                use g_math::canonical::{gmath_in, evaluate_in};
+                use g_math::canonical::{gmath, evaluate};
 
                 // FASC path: single expression tree, force binary domain
                 // Use binary-parseable literals to avoid decimal domain routing
                 use g_math::canonical::set_gmath_mode;
                 set_gmath_mode("binary:binary").ok();
-                let expr = (gmath_in::<FixedPoint>("0.7").sin() + gmath_in::<FixedPoint>("0.3")).cos();
-                let fasc_result = evaluate_in(&expr).unwrap();
+                let expr = (gmath::<FixedPoint>("0.7").sin() + gmath::<FixedPoint>("0.3")).cos();
+                let fasc_result = evaluate(&expr).unwrap();
                 use g_math::canonical::reset_gmath_mode;
                 reset_gmath_mode();
 

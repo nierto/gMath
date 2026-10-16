@@ -356,8 +356,8 @@ Refined for the build (2026-10-06, after phase 4), in three sub-phases:
   (+6 percent on the cheapest trees). `LazyExpr<T>`, `StackValue<T>` and
   `StackEvaluator<T>` default to the profile's format, so every existing
   call compiles unchanged; a result of one format cannot enter a tree of
-  another. New entry points `evaluate_in`, `evaluate_sincos_in`,
-  `evaluate_sinhcosh_in`, `gmath_parse_in`, `gmath_in`, `with_evaluator`;
+  another. New entry points `evaluate`, `evaluate_sincos`,
+  `evaluate_sinhcosh`, `gmath_parse`, `gmath`, `with_evaluator`;
   `FascFormat` is public and sealed (its items hidden). Prerequisites done
   in the same step: the decimal compute tier is generic over its compute
   word (`DecimalWord: WideInt` with `Narrow`, `Wide`, `Hp` and the digit
@@ -382,10 +382,10 @@ Refined for the build (2026-10-06, after phase 4), in three sub-phases:
 - **5c, the matrix layer and the last scalar methods.** IMPLEMENTED
   (2026-10-10): `LazyMatrixExpr<T = FixedPoint>` and `DomainMatrix<T:
   FascFormat = FixedPoint>` on the container pattern of phase 3 (the impls
-  on `Fixed<S, F>`), `evaluate_matrix_in`; `from_str`, `try_from_str`,
+  on `Fixed<S, F>`), `evaluate_matrix`; `from_str`, `try_from_str`,
   `Display`, `try_pow`, `try_atan2` on every `Fixed<S, F>` that is a
   `FascFormat` (the literal path through `literal_to_storage`, the
-  canonical fallback through `gmath_parse_in` + `evaluate_in`); the
+  canonical fallback through `gmath_parse` + `evaluate`); the
   profile-bound `decimal_literal::to_storage` gone. As in phase 3, the
   default type does not drive inference on a generic constructor, so a
   bare `DomainMatrix::from_strings(..)` names its format
@@ -604,7 +604,7 @@ Refined for the build (2026-10-10, after phase 5), in two sub-phases:
     the module's alias, not the crate's. Defaulted containers get module
     aliases (`type FixedVector<T = FixedPoint> = ...`), defaulted traits are
     named (`Manifold<FixedPoint>`), the canonical entry points become their
-    `_in` forms (`gmath_in::<FixedPoint>`, `evaluate_in`). A profile cfg arm
+    `_in` forms (`gmath::<FixedPoint>`, `evaluate`). A profile cfg arm
     becomes a `BITS` / `FRAC_BITS` condition (a `let` or `const` if-chain, an
     early return in a test, a panic carrying the expected text in a
     should-panic test); a part written for some words only (32-bit raws, the
@@ -642,6 +642,36 @@ Refined for the build (2026-10-10, after phase 5), in two sub-phases:
     width features of section 9 are DEFERRED: the full lib's compile time
     is measured first and recorded; if one build is short the features are
     not worth their cfg surface.
+    IMPLEMENTED (2026-10-16). As built: `FixedPoint`, `BinaryStorage`,
+    `ComputeStorage`, `frac_config` and the `compute_tier` re-exports
+    deleted; the `T = FixedPoint` defaults removed; the canonical entry
+    points are the generic forms under the plain names (`gmath`,
+    `evaluate`, `gmath_parse`, `evaluate_sincos`, `evaluate_sinhcosh`,
+    `evaluate_matrix`; the `_in` names gone), so a tree names its format
+    once (`evaluate::<Q64_64>(&e)`); `profile_tag` removed (`legacy_tag`);
+    `build.rs` reads no environment and emits no cfg; the profile features
+    and the 42 `cfg(not(feature = "embedded"))` arms (always true without
+    the feature) removed; the `gmath` CLI computes in Q64.64. The library's
+    unit tests are suite macros at the six formats (`for_each_format!` in
+    `lib.rs`), a profile arm an `on_words!` block kept for its storage words
+    (1108 lib tests, 373 per build before). The differential gate moved to
+    its own unpublished crate `differential/`, whose build script mirrors
+    the published crate's `GMATH_PROFILE` as `cfg(published_profile)`, so
+    g_math has no 0.6.7 dev-dependency. The realtime splits the CI matrix
+    ran through `GMATH_FRAC_BITS` are test-only cfgs: `gmath_all_splits`
+    adds F = 8, 12, 20, 24 to every suite, `gmath_edge_splits` F = 2, 4, 6,
+    26, 28, 30 (run for the four split-generic gates). The chain, exp
+    full-range and geometry generators gained the F = 8, 12, 20 tables.
+    Gates: full suite in one build 92/92 binaries, 7103 tests; all splits
+    89/89 binaries, 11,154 tests (the three correct-rounding gates then
+    44/44 with the new tables); edge splits 531/531; differential at six
+    published builds (realtime F = 10 and 16, compact, embedded, balanced,
+    scientific) 13/13 each. Compile time, clean, this machine: the whole
+    library with all five widths 38 s release (35 s without features),
+    10 s debug, against 26 s (embedded) and 33 s (scientific) for 0.6.7 at
+    one profile; the full test build 19.5 min. The `w32..w512` features
+    are therefore not added. CI (`ci.yml`, `differential.yml`) replaces the
+    eight per-profile workflows.
   - Kept from the spec: no default width (section 3); the `Q16_16` to
     `Q256_256` aliases exist since phase 2; `gmath!` (its feature is not
     built) emits text; `LazyExpr<T>` without a default means
@@ -677,7 +707,7 @@ generic code, while new tests exercise all widths in one build.
 | 4 | Geometry layers, ODE, tensors (4a, IMPLEMENTED), fused ops, compute_tier (4b, IMPLEMENTED), Interval, predicates (4c, IMPLEMENTED), tq19 (4d, IMPLEMENTED) | differential gate, certified-geometry gates |
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-format evaluators), canonical API. IMPLEMENTED (5a format trait, 5b typed value + registry, 5c matrix layer + scalar string paths) | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D (6a); serialization v2 (6b). IMPLEMENTED | decimal gates per D, legacy-read tests |
-| 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain. 7a IN PROGRESS (2026-10-14) | full gate set in one build |
+| 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain. IMPLEMENTED (7a library, 7b tests, 7c one build, 2026-10-16) | full gate set in one build |
 | 8 | Docs (README, PUBLIC_API regen, CHANGELOG, CONTRACT, ROADMAP), consumer upgrade notes, 0.7.0 | release checklist |
 
 ## 11. Acceptance gates

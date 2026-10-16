@@ -39,9 +39,6 @@ proptest = "1.0"
 approx = "0.5"
 num-bigint = "0.4"
 num-rational = "0.4"
-# The published crate before width became a type (0.6.7; the scalar surface is unchanged since 0.6.5): the differential gate
-# (tests/differential_065_validation.rs) compares every result with it.
-g_math_065 = { package = "g_math", version = "=0.6.7", features = ["inference"] }
 
 [features]
 default = []
@@ -49,26 +46,19 @@ default = []
 # Optional: BigInt tier 8 in RationalNumber (unbounded precision)
 infinite-precision = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
 
-# Deployment profiles (select compute precision via GMATH_PROFILE env var)
-realtime = []      # Q16.16, 4 decimals, i32 storage, i64 compute
-compact = []       # Q32.32, 9 decimals, i64 storage, i128 compute
-embedded = []      # Q64.64, 19 decimals
-balanced = []      # Q128.128, 38 decimals
-scientific = []    # Q256.256, 77 decimals
-
 # Feature gates for optional subsystems
 legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
-serde = ["dep:serde"]    # Serialize/Deserialize impls for FixedPoint, FixedVector, FixedMatrix, Tensor
+serde = ["dep:serde"]    # Serialize/Deserialize impls for Fixed, FixedVector, FixedMatrix, Tensor
 inference = ["dep:rayon"] # TQ1.9 ternary inference ops + rayon row-parallel matvec
 # macros = ["dep:g_math_macros"]    # gmath!() — deferred to separate crate publish
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
-    'cfg(table_format, values("q16_16", "q32_32", "q64_64", "q128_128", "q256_256", "q512_512"))',
     'cfg(q16_16)', 'cfg(q32_32)', 'cfg(q64_64)', 'cfg(q128_128)', 'cfg(q256_256)', 'cfg(q512_512)',
     'cfg(feature, values("rebuild-tables", "serde", "inference"))',
+    'cfg(gmath_all_splits)', 'cfg(gmath_edge_splits)',
 ]
 
 [profile.release]

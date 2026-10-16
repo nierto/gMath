@@ -19,7 +19,6 @@ use super::FixedVector;
 use super::FixedMatrix;
 use super::kernels;
 use super::kernels::Orient;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage, WideInt};
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -404,7 +403,7 @@ where
 /// The transformation preserves the cross-ratio and maps circles/lines to
 /// circles/lines.
 #[derive(Clone, Copy, Debug)]
-pub struct Moebius<T = FixedPoint> {
+pub struct Moebius<T> {
     pub a: T,
     pub b: T,
     pub c: T,
@@ -494,7 +493,7 @@ where
 /// A Möbius transformation with complex coefficients: z ↦ (az+b)/(cz+d)
 /// where a,b,c,d,z are complex numbers represented as (real, imag) pairs.
 #[derive(Clone, Copy, Debug)]
-pub struct MoebiusComplex<T = FixedPoint> {
+pub struct MoebiusComplex<T> {
     pub a: (T, T), // (real, imag)
     pub b: (T, T),
     pub c: (T, T),

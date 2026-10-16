@@ -7,7 +7,6 @@
 #[cfg(test)]
 use super::format::FascFormat;
 #[cfg(test)]
-use crate::fixed_point::imperative::FixedPoint;
 #[cfg(test)]
 use crate::fixed_point::i256::I256;
 #[cfg(test)]
@@ -146,78 +145,86 @@ pub(super) fn shadow_divide(a: &CompactShadow, b: &CompactShadow) -> CompactShad
 
 #[cfg(test)]
 mod ternary_storage_arm_tests {
-    //! The Medium/Large/XLarge arms of `ternary_to_storage` are unreachable
-    //! from `0t` literals (from_str caps at Tier 3: i64 integer parts keep
-    //! raws inside i128), so they are pinned here at the unit level: small
-    //! raws convert exactly on every profile, raws exceeding the profile's
-    //! BinaryStorage are a loud TierOverflow, never a wrap.
-    use super::*;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                // The Medium/Large/XLarge arms of `ternary_to_storage` are unreachable
+                // from `0t` literals (from_str caps at Tier 3: i64 integer parts keep
+                // raws inside i128), so they are pinned here at the unit level: small
+                // raws convert exactly on every profile, raws exceeding the profile's
+                // BinaryStorage are a loud TierOverflow, never a wrap.
+                use super::super::*;
 
-    fn ternary_to_storage(
-        t: &UniversalTernaryFixed,
-    ) -> Result<(u8, <FixedPoint as crate::fixed_point::fixed_num::FixedNum>::Storage), crate::fixed_point::core_types::errors::OverflowDetected> {
-        <FixedPoint as FascFormat>::ternary_to_storage(t)
+                fn ternary_to_storage(
+                    t: &UniversalTernaryFixed,
+                ) -> Result<(u8, <FixedPoint as crate::fixed_point::fixed_num::FixedNum>::Storage), crate::fixed_point::core_types::errors::OverflowDetected> {
+                    <FixedPoint as FascFormat>::ternary_to_storage(t)
+                }
+
+                fn tier4(v: i128) -> UniversalTernaryFixed {
+                    UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(I256::from_i128(v))).unwrap()
+                }
+
+                #[test]
+                fn medium_arm_small_raw_converts_everywhere() {
+                    let (tier, _storage) = ternary_to_storage(&tier4(12_345)).expect("small Medium raw");
+                    assert_eq!(tier, 4);
+                    let (tier_n, _s) = ternary_to_storage(&tier4(-12_345)).expect("small negative Medium raw");
+                    assert_eq!(tier_n, 4);
+                }
+
+                #[test]
+                fn medium_arm_oversized_raw_fails_loud_on_narrow_storage() {
+                    // I256 raw beyond i128: fits only I256/I512 storage.
+                    let big = UniversalTernaryFixed::from_tier_raw(
+                        4,
+                        TernaryRaw::Medium(I256::from_i128(i128::MAX) + I256::from_i128(i128::MAX)),
+                    )
+                    .unwrap();
+                    let res = ternary_to_storage(&big);
+                    if BITS <= 128 { assert!(res.is_err(), "beyond-i128 Medium raw must be TierOverflow on narrow storage"); } else { assert!(res.is_ok(), "I256+ storage holds beyond-i128 Medium raws"); }
+                }
+
+                #[test]
+                fn large_and_xlarge_arms_small_and_oversized() {
+                    // Small Tier-5/6 raws (fit i128) convert on every profile.
+                    let t5 = UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i128(-777)))
+                        .unwrap();
+                    assert_eq!(ternary_to_storage(&t5).expect("small Large raw").0, 5);
+                    let t6 =
+                        UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i128(777)))
+                            .unwrap();
+                    assert_eq!(ternary_to_storage(&t6).expect("small XLarge raw").0, 6);
+
+                    // Oversized: I512 raw beyond i128 — Err on <= i128 storage.
+                    let big5 = UniversalTernaryFixed::from_tier_raw(
+                        5,
+                        TernaryRaw::Large(I512::from_i128(1) << 200),
+                    )
+                    .unwrap();
+                    let res5 = ternary_to_storage(&big5);
+                    if BITS <= 128 { assert!(res5.is_err()); } else { assert!(res5.is_ok()); }
+
+                    // I1024 raw beyond I512 — Err on EVERY profile (even scientific).
+                    let big6 = UniversalTernaryFixed::from_tier_raw(
+                        6,
+                        TernaryRaw::XLarge(I1024::from_i128(1) << 600),
+                    )
+                    .unwrap();
+                    assert!(
+                        ternary_to_storage(&big6).is_err(),
+                        "beyond-I512 XLarge raw must be TierOverflow everywhere"
+                    );
+                }
+            }
+        };
     }
-
-    fn tier4(v: i128) -> UniversalTernaryFixed {
-        UniversalTernaryFixed::from_tier_raw(4, TernaryRaw::Medium(I256::from_i128(v))).unwrap()
-    }
-
-    #[test]
-    fn medium_arm_small_raw_converts_everywhere() {
-        let (tier, _storage) = ternary_to_storage(&tier4(12_345)).expect("small Medium raw");
-        assert_eq!(tier, 4);
-        let (tier_n, _s) = ternary_to_storage(&tier4(-12_345)).expect("small negative Medium raw");
-        assert_eq!(tier_n, 4);
-    }
-
-    #[test]
-    fn medium_arm_oversized_raw_fails_loud_on_narrow_storage() {
-        // I256 raw beyond i128: fits only I256/I512 storage.
-        let big = UniversalTernaryFixed::from_tier_raw(
-            4,
-            TernaryRaw::Medium(I256::from_i128(i128::MAX) + I256::from_i128(i128::MAX)),
-        )
-        .unwrap();
-        let res = ternary_to_storage(&big);
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-        assert!(res.is_err(), "beyond-i128 Medium raw must be TierOverflow on narrow storage");
-        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-        assert!(res.is_ok(), "I256+ storage holds beyond-i128 Medium raws");
-    }
-
-    #[test]
-    fn large_and_xlarge_arms_small_and_oversized() {
-        // Small Tier-5/6 raws (fit i128) convert on every profile.
-        let t5 = UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i128(-777)))
-            .unwrap();
-        assert_eq!(ternary_to_storage(&t5).expect("small Large raw").0, 5);
-        let t6 =
-            UniversalTernaryFixed::from_tier_raw(6, TernaryRaw::XLarge(I1024::from_i128(777)))
-                .unwrap();
-        assert_eq!(ternary_to_storage(&t6).expect("small XLarge raw").0, 6);
-
-        // Oversized: I512 raw beyond i128 — Err on <= i128 storage.
-        let big5 = UniversalTernaryFixed::from_tier_raw(
-            5,
-            TernaryRaw::Large(I512::from_i128(1) << 200),
-        )
-        .unwrap();
-        let res5 = ternary_to_storage(&big5);
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32", table_format = "q64_64"))]
-        assert!(res5.is_err());
-        #[cfg(any(table_format = "q128_128", table_format = "q256_256"))]
-        assert!(res5.is_ok());
-
-        // I1024 raw beyond I512 — Err on EVERY profile (even scientific).
-        let big6 = UniversalTernaryFixed::from_tier_raw(
-            6,
-            TernaryRaw::XLarge(I1024::from_i128(1) << 600),
-        )
-        .unwrap();
-        assert!(
-            ternary_to_storage(&big6).is_err(),
-            "beyond-I512 XLarge raw must be TierOverflow everywhere"
-        );
-    }
+    for_each_format!(suite);
 }

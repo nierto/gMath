@@ -2,16 +2,14 @@
 //!
 //! Arithmetic operators and transcendentals work directly on the raw
 //! Q-format integer; the transcendentals compute one tier above storage and
-//! round once. `FixedPoint` is the format the build profile selects.
+//! round once.
 
 use std::fmt;
 use std::ops::{Add, Sub, Mul, Div, Neg, AddAssign, SubAssign, MulAssign, DivAssign};
 
 use crate::fixed_point::canonical::{
-    LazyExpr, StackValue, evaluate_in, gmath_parse_in, CompactShadow, FascFormat,
+    LazyExpr, StackValue, evaluate, gmath_parse, CompactShadow, FascFormat,
 };
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-use crate::fixed_point::universal::fasc::stack_evaluator::BinaryStorage;
 use crate::fixed_point::fixed_num::{Compute, FixedNum};
 pub use crate::fixed_point::fixed_num::Fixed;
 use crate::fixed_point::width::{Storage, WideInt};
@@ -23,22 +21,6 @@ pub use crate::fixed_point::core_types::errors::OverflowDetected;
 /// so their error grows with |x| faster than the margin model assumes: above
 /// 2^24 the sure path (pi at 1500 bits) evaluates sin, cos and tan.
 const TRIG_ENGINE_INT_BITS: u32 = 25;
-
-/// The fixed-point format this build's profile selects (`GMATH_PROFILE`,
-/// and `GMATH_FRAC_BITS` on the realtime profile).
-///
-/// Profile-dependent size:
-/// - `embedded` (Q64.64): 16 bytes (i128)
-/// - `balanced` (Q128.128): 32 bytes (I256)
-/// - `scientific` (Q256.256): 64 bytes (I512)
-///
-/// **Layout guarantee (0.6.5):** `FixedPoint` is `#[repr(transparent)]` over
-/// its raw storage integer, so a `FixedPoint` and its raw value have the same
-/// size, alignment and bit pattern, and every bit pattern of the raw type is a
-/// valid `FixedPoint`. [`FixedPoint::raw_slice`] and
-/// [`FixedPoint::from_raw_slice`] reinterpret slices without copying.
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-pub type FixedPoint = Fixed<BinaryStorage, { crate::fixed_point::frac_config::FRAC_BITS }>;
 
 impl<S: PartialEq, const F: u32> PartialEq for Fixed<S, F> {
     #[inline]
@@ -804,7 +786,7 @@ where
             compute: mode::ComputeMode::Binary,
             output: mode::OutputMode::Binary,
         });
-        let result = gmath_parse_in::<Self>(s).and_then(|expr| evaluate_in(&expr));
+        let result = gmath_parse::<Self>(s).and_then(|expr| evaluate(&expr));
         mode::set_mode(old_mode);
 
         Self::try_from_stack_value(result?)
@@ -815,7 +797,7 @@ where
         let sv1 = self.to_stack_value();
         let sv2 = exponent.to_stack_value();
         let expr = LazyExpr::from(sv1).pow(LazyExpr::from(sv2));
-        let result = evaluate_in(&expr)?;
+        let result = evaluate(&expr)?;
         Self::try_from_stack_value(result)
     }
     /// Fallible atan2(self=y, x).
@@ -824,7 +806,7 @@ where
         let sv_y = self.to_stack_value();
         let sv_x = x.to_stack_value();
         let expr = LazyExpr::from(sv_y).atan2(LazyExpr::from(sv_x));
-        let result = evaluate_in(&expr)?;
+        let result = evaluate(&expr)?;
         Self::try_from_stack_value(result)
     }
     #[inline]
@@ -838,7 +820,7 @@ where
                 // Non-binary domain — force conversion by adding binary zero
                 let zero_sv = StackValue::<Self>::Binary(<Self as FixedNum>::STORAGE_TIER, Self::ZERO.raw, CompactShadow::None);
                 let expr = LazyExpr::from(sv) + LazyExpr::from(zero_sv);
-                let result = evaluate_in(&expr)?;
+                let result = evaluate(&expr)?;
                 result.as_binary_storage()
                     .map(|raw| Self { raw })
                     .ok_or(OverflowDetected::InvalidInput)
@@ -852,7 +834,7 @@ where
     fn try_apply_unary(self, f: fn(LazyExpr<Self>) -> LazyExpr<Self>) -> Result<Self, OverflowDetected> {
         let sv = self.to_stack_value();
         let expr = f(LazyExpr::from(sv));
-        let result = evaluate_in(&expr)?;
+        let result = evaluate(&expr)?;
         Self::try_from_stack_value(result)
     }
 }
@@ -1090,41 +1072,50 @@ where
 
 #[cfg(test)]
 mod literal_parser_tests {
-    use super::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
 
-    /// The exact parser agrees bit for bit with the canonical evaluator on
-    /// every plain decimal and integer literal, in range or not: any digit
-    /// count (before 0.6.4 the canonical parser truncated past 38 digits and
-    /// wrapped `value * 10^dp` into i32 decimal storage on realtime).
-    #[test]
-    fn exact_parser_matches_the_canonical_path() {
-        let int_digits = crate::fixed_point::frac_config::INTEGER_BITS as u64 * 30103 / 100000 + 2;
-        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
-        let mut next = |bound: u64| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (state >> 33) % bound
+                /// The exact parser agrees bit for bit with the canonical evaluator on
+                /// every plain decimal and integer literal, in range or not: any digit
+                /// count (before 0.6.4 the canonical parser truncated past 38 digits and
+                /// wrapped `value * 10^dp` into i32 decimal storage on realtime).
+                #[test]
+                fn exact_parser_matches_the_canonical_path() {
+                    let int_digits = (BITS - FRAC_BITS - 1) as u64 * 30103 / 100000 + 2;
+                    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+                    let mut next = |bound: u64| {
+                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                        (state >> 33) % bound
+                    };
+                    let mut checked = 0;
+                    for _ in 0..20_000 {
+                        let mut s = String::new();
+                        if next(2) == 0 { s.push('-'); }
+                        let int_len = 1 + next(int_digits);
+                        for _ in 0..int_len { s.push((b'0' + next(10) as u8) as char); }
+                        let frac_len = next(46);
+                        if frac_len > 0 || next(2) == 0 {
+                            s.push('.');
+                            for _ in 0..frac_len.max(1) { s.push((b'0' + next(10) as u8) as char); }
+                        }
+                        let exact = FixedPoint::try_from_str(&s);
+                        let canonical = FixedPoint::try_from_str_canonical(&s);
+                        match (&exact, &canonical) {
+                            (Ok(a), Ok(b)) => assert_eq!(a, b, "{s}"),
+                            (Err(_), Err(_)) => {}
+                            _ => panic!("{s}: exact {exact:?}, canonical {canonical:?}"),
+                        }
+                        checked += exact.is_ok() as u32;
+                    }
+                    // most literals fit (at 30 fraction bits only |v| < 2 does)
+                    assert!(checked > 2_000, "{checked}");
+                }
+            }
         };
-        let mut checked = 0;
-        for _ in 0..20_000 {
-            let mut s = String::new();
-            if next(2) == 0 { s.push('-'); }
-            let int_len = 1 + next(int_digits);
-            for _ in 0..int_len { s.push((b'0' + next(10) as u8) as char); }
-            let frac_len = next(46);
-            if frac_len > 0 || next(2) == 0 {
-                s.push('.');
-                for _ in 0..frac_len.max(1) { s.push((b'0' + next(10) as u8) as char); }
-            }
-            let exact = FixedPoint::try_from_str(&s);
-            let canonical = FixedPoint::try_from_str_canonical(&s);
-            match (&exact, &canonical) {
-                (Ok(a), Ok(b)) => assert_eq!(a, b, "{s}"),
-                (Err(_), Err(_)) => {}
-                _ => panic!("{s}: exact {exact:?}, canonical {canonical:?}"),
-            }
-            checked += exact.is_ok() as u32;
-        }
-        // most literals fit (at 30 fraction bits only |v| < 2 does)
-        assert!(checked > 2_000, "{checked}");
     }
+    for_each_format!(suite);
 }

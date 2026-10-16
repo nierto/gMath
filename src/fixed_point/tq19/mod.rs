@@ -401,68 +401,81 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[allow(unused_imports)]
-    use crate::fixed_point::FixedPoint;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
+                #[allow(unused_imports)]
 
-    #[test]
-    fn trit_decode_table_spot_check() {
-        // Byte 0 = all Neg: {-1,-1,-1,-1,-1}
-        assert_eq!(TRIT_DECODE_TABLE[0], [-1, -1, -1, -1, -1]);
+                #[test]
+                fn trit_decode_table_spot_check() {
+                    // Byte 0 = all Neg: {-1,-1,-1,-1,-1}
+                    assert_eq!(TRIT_DECODE_TABLE[0], [-1, -1, -1, -1, -1]);
 
-        // Byte 121 = all Zero: 1*81+1*27+1*9+1*3+1 = 121
-        assert_eq!(TRIT_DECODE_TABLE[121], [0, 0, 0, 0, 0]);
+                    // Byte 121 = all Zero: 1*81+1*27+1*9+1*3+1 = 121
+                    assert_eq!(TRIT_DECODE_TABLE[121], [0, 0, 0, 0, 0]);
 
-        // Byte 242 = all Pos: 2*81+2*27+2*9+2*3+2 = 242
-        assert_eq!(TRIT_DECODE_TABLE[242], [1, 1, 1, 1, 1]);
+                    // Byte 242 = all Pos: 2*81+2*27+2*9+2*3+2 = 242
+                    assert_eq!(TRIT_DECODE_TABLE[242], [1, 1, 1, 1, 1]);
 
-        // Byte 1 = {-1,-1,-1,-1,0}: 0*81+0*27+0*9+0*3+1 = 1
-        assert_eq!(TRIT_DECODE_TABLE[1], [-1, -1, -1, -1, 0]);
+                    // Byte 1 = {-1,-1,-1,-1,0}: 0*81+0*27+0*9+0*3+1 = 1
+                    assert_eq!(TRIT_DECODE_TABLE[1], [-1, -1, -1, -1, 0]);
 
-        // Byte 2 = {-1,-1,-1,-1,+1}: 0*81+0*27+0*9+0*3+2 = 2
-        assert_eq!(TRIT_DECODE_TABLE[2], [-1, -1, -1, -1, 1]);
+                    // Byte 2 = {-1,-1,-1,-1,+1}: 0*81+0*27+0*9+0*3+2 = 2
+                    assert_eq!(TRIT_DECODE_TABLE[2], [-1, -1, -1, -1, 1]);
 
-        // Byte 3 = {-1,-1,-1,0,-1}: 0*81+0*27+0*9+1*3+0 = 3
-        assert_eq!(TRIT_DECODE_TABLE[3], [-1, -1, -1, 0, -1]);
+                    // Byte 3 = {-1,-1,-1,0,-1}: 0*81+0*27+0*9+1*3+0 = 3
+                    assert_eq!(TRIT_DECODE_TABLE[3], [-1, -1, -1, 0, -1]);
+                }
+
+                #[test]
+                fn trit_decode_roundtrip() {
+                    // Verify encode→decode roundtrip for all valid bytes
+                    for byte in 0u8..=242 {
+                        let trits = TRIT_DECODE_TABLE[byte as usize];
+                        // Re-encode: map {-1,0,1} → {0,1,2}, then d[0]*81+d[1]*27+d[2]*9+d[3]*3+d[4]
+                        let re_encoded = ((trits[0] + 1) as u8) * 81
+                            + ((trits[1] + 1) as u8) * 27
+                            + ((trits[2] + 1) as u8) * 9
+                            + ((trits[3] + 1) as u8) * 3
+                            + ((trits[4] + 1) as u8);
+                        assert_eq!(re_encoded, byte, "roundtrip failed for byte {byte}");
+                    }
+                }
+
+                #[test]
+                fn tq19_matrix_construction() {
+                    let m = TQ19Matrix::new(2, 3, vec![1, 2, 3, 4, 5, 6]);
+                    assert_eq!(m.rows(), 2);
+                    assert_eq!(m.cols(), 3);
+                    assert_eq!(m.get(0, 0), 1);
+                    assert_eq!(m.get(1, 2), 6);
+                    assert_eq!(m.row_slice(0), &[1, 2, 3]);
+                    assert_eq!(m.row_slice(1), &[4, 5, 6]);
+                }
+
+                #[test]
+                fn tq19_matrix_from_fn() {
+                    let m = TQ19Matrix::from_fn(3, 3, |r, c| if r == c { SCALE as i16 } else { 0 });
+                    assert_eq!(m.get(0, 0), SCALE as i16);
+                    assert_eq!(m.get(0, 1), 0);
+                    assert_eq!(m.get(1, 1), SCALE as i16);
+                }
+
+                #[test]
+                #[should_panic(expected = "data.len() must equal rows × cols")]
+                fn tq19_matrix_size_mismatch() {
+                    TQ19Matrix::new(2, 3, vec![0; 5]);
+                }
+            }
+        };
     }
-
-    #[test]
-    fn trit_decode_roundtrip() {
-        // Verify encode→decode roundtrip for all valid bytes
-        for byte in 0u8..=242 {
-            let trits = TRIT_DECODE_TABLE[byte as usize];
-            // Re-encode: map {-1,0,1} → {0,1,2}, then d[0]*81+d[1]*27+d[2]*9+d[3]*3+d[4]
-            let re_encoded = ((trits[0] + 1) as u8) * 81
-                + ((trits[1] + 1) as u8) * 27
-                + ((trits[2] + 1) as u8) * 9
-                + ((trits[3] + 1) as u8) * 3
-                + ((trits[4] + 1) as u8);
-            assert_eq!(re_encoded, byte, "roundtrip failed for byte {byte}");
-        }
-    }
-
-    #[test]
-    fn tq19_matrix_construction() {
-        let m = TQ19Matrix::new(2, 3, vec![1, 2, 3, 4, 5, 6]);
-        assert_eq!(m.rows(), 2);
-        assert_eq!(m.cols(), 3);
-        assert_eq!(m.get(0, 0), 1);
-        assert_eq!(m.get(1, 2), 6);
-        assert_eq!(m.row_slice(0), &[1, 2, 3]);
-        assert_eq!(m.row_slice(1), &[4, 5, 6]);
-    }
-
-    #[test]
-    fn tq19_matrix_from_fn() {
-        let m = TQ19Matrix::from_fn(3, 3, |r, c| if r == c { SCALE as i16 } else { 0 });
-        assert_eq!(m.get(0, 0), SCALE as i16);
-        assert_eq!(m.get(0, 1), 0);
-        assert_eq!(m.get(1, 1), SCALE as i16);
-    }
-
-    #[test]
-    #[should_panic(expected = "data.len() must equal rows × cols")]
-    fn tq19_matrix_size_mismatch() {
-        TQ19Matrix::new(2, 3, vec![0; 5]);
-    }
+    for_each_format!(suite);
 }

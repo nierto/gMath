@@ -18,7 +18,6 @@
 
 use super::FixedVector;
 use super::kernels;
-use super::FixedPoint;
 use super::Scalar;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage};
@@ -32,7 +31,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 ///
 /// Implement this for your specific ODE. The `eval` method must be deterministic
 /// and must not use floating-point internally (per gMath constraints).
-pub trait OdeSystem<T: Scalar = FixedPoint> {
+pub trait OdeSystem<T: Scalar> {
     /// Evaluate f(t, x) → dx/dt.
     fn eval(&self, t: T, x: &FixedVector<T>) -> FixedVector<T>;
 }
@@ -62,7 +61,7 @@ pub fn ode_fn<Func>(f: Func) -> OdeFn<Func> {
 
 /// A single point in an ODE solution trajectory.
 #[derive(Clone, Debug)]
-pub struct OdePoint<T = FixedPoint> {
+pub struct OdePoint<T> {
     pub t: T,
     pub x: FixedVector<T>,
 }
@@ -210,7 +209,7 @@ where
 /// We compute them as Fixed<S, F> rationals at the call site.
 
 /// Configuration for adaptive RK45 integration.
-pub struct Rk45Config<T = FixedPoint> {
+pub struct Rk45Config<T> {
     /// Error tolerance per step.
     pub tol: T,
     /// Initial step size.
@@ -374,7 +373,7 @@ where
 /// A Hamiltonian system: dq/dt = ∂H/∂p, dp/dt = -∂H/∂q.
 ///
 /// `grad_q` returns -∂H/∂q (the force), and `grad_p` returns ∂H/∂p (the velocity).
-pub trait HamiltonianSystem<T: Scalar = FixedPoint> {
+pub trait HamiltonianSystem<T: Scalar> {
     /// Force: dp/dt = -∂H/∂q(q, p).
     fn force(&self, q: &FixedVector<T>, p: &FixedVector<T>) -> FixedVector<T>;
     /// Velocity: dq/dt = ∂H/∂p(q, p).
@@ -385,7 +384,7 @@ pub trait HamiltonianSystem<T: Scalar = FixedPoint> {
 
 /// Result of a Hamiltonian integration step.
 #[derive(Clone, Debug)]
-pub struct HamiltonianPoint<T = FixedPoint> {
+pub struct HamiltonianPoint<T> {
     pub t: T,
     pub q: FixedVector<T>,
     pub p: FixedVector<T>,

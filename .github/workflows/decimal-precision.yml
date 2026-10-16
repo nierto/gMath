@@ -1,14 +1,10 @@
 name: decimal-precision
 
-# Publicly proves gMath's decimal-domain correctness on every push/PR. Two jobs:
+# Publicly proves gMath's decimal-domain correctness on every push/PR against
+# an external corpus (the decimal_fixed unit tests and the rounding-mode gate
+# run in the full suite of ci.yml, every format in one build):
 #
-#  1. lib-tests - the decimal_fixed module tests (incl. the d256 divmod
-#     root-cause regression, banker's rounding, and DecimalFixed mul/div) across
-#     the embedded/balanced/scientific profiles. DecimalFixed is i128-backed on
-#     every profile, so the arithmetic fixes are profile-agnostic; this confirms
-#     they hold across the cfg-gated profile code.
-#
-#  2. contract-harness - the full contract sweep against mootable/decimal-scaled's
+#  contract-harness - the full contract sweep against mootable/decimal-scaled's
 #     independent, adversarial mpmath corpus (pinned). Grades BOTH user-reachable
 #     decimal paths (imperative DecimalFixed + canonical gmath()/FASC) for all 15
 #     transcendentals, plus atan2 and add/sub/mul/div, at 0 LSB.
@@ -24,30 +20,6 @@ on:
   pull_request:
 
 jobs:
-  lib-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [embedded, balanced, scientific]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout (plain git - no external actions)
-        run: |
-          git init -q
-          git remote add origin "https://github.com/${{ github.repository }}.git"
-          git fetch -q --depth 1 origin "${{ github.sha }}"
-          git checkout -q FETCH_HEAD
-
-      - name: cargo test --lib decimal_fixed (${{ matrix.profile }})
-        env:
-          GMATH_PROFILE: ${{ matrix.profile }}
-        run: cargo test --lib decimal_fixed
-
-      - name: Decimal rounding modes and one-rounding mul_div (${{ matrix.profile }})
-        env:
-          GMATH_PROFILE: ${{ matrix.profile }}
-        run: cargo test --test decimal_rounding_mode_validation
-
   contract-harness:
     runs-on: ubuntu-latest
     steps:
@@ -72,11 +44,8 @@ jobs:
           git fetch -q --depth 1 origin e6c7497832be437cf464d07b841609a0b92aac87
           git checkout -q FETCH_HEAD
 
-      # Balanced profile: the harness is cfg-gated to q128_128 (DecimalFixed<28>
-      # needs compute dp 77 for guard digits). Single-threaded: the sweep swaps
-      # the panic hook around catch_unwind. Prebuilt tables -> build is seconds.
-      - name: Decimal contract validation (balanced, oracle #1 + oracle #2)
+      # Single-threaded: the sweep swaps the panic hook around catch_unwind.
+      - name: Decimal contract validation (oracle #1 + oracle #2)
         env:
-          GMATH_PROFILE: balanced
           GMATH_DECIMAL_SCALED_GOLDEN: ${{ runner.temp }}/decimal-scaled
-        run: cargo test --test decimal_contract_validation -- --test-threads=1 --nocapture
+        run: cargo test --release --test decimal_contract_validation -- --test-threads=1 --nocapture

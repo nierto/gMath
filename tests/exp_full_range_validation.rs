@@ -73,7 +73,7 @@ macro_rules! suite {
 
             /// The same function through the canonical evaluator (one-node tree on a binary value).
             fn eval_canonical(f: &str, x: FixedPoint, y: FixedPoint) -> Option<$S> {
-                use g_math::canonical::{evaluate_in, LazyExpr, StackValue};
+                use g_math::canonical::{evaluate, LazyExpr, StackValue};
                 use g_math::canonical::CompactShadow;
                 use g_math::fixed_point::FixedNum;
                 let leaf = |v: FixedPoint| LazyExpr::<FixedPoint>::from(StackValue::<FixedPoint>::Binary(<FixedPoint as FixedNum>::STORAGE_TIER, v.raw(), CompactShadow::None));
@@ -86,7 +86,7 @@ macro_rules! suite {
                         "atan2" => leaf(x).atan2(leaf(y)),
                         other => panic!("unknown function {other}"),
                     };
-                    evaluate_in(&e).ok().and_then(|v| v.as_binary_storage())
+                    evaluate(&e).ok().and_then(|v| v.as_binary_storage())
                 });
                 r.ok().flatten()
             }

@@ -9,10 +9,8 @@
 //! Reuses patterns from existing test suites (UlpStats, ValidationResult,
 //! gmath_safe, rational_exact_equal, build_arith_expr) without modifying them.
 //!
-//! Run per profile:
-//!   GMATH_PROFILE=embedded   cargo test --test validation_benchmark -- --nocapture --test-threads=1
-//!   GMATH_PROFILE=balanced   cargo test --test validation_benchmark -- --nocapture --test-threads=1
-//!   GMATH_PROFILE=scientific cargo test --test validation_benchmark -- --nocapture --test-threads=1
+//! Run (every format in one build):
+//!   cargo test --test validation_benchmark -- --nocapture --test-threads=1
 
 #[macro_use]
 mod common;
@@ -29,10 +27,10 @@ macro_rules! word_items_q16_16 {
                     assert_eq!(REALTIME_REFS_FRAC_BITS, FRAC_BITS, "no references for this GMATH_FRAC_BITS");
                     let refs: Vec<_> = REALTIME_REFS.iter().filter(|r| r.3 == name).collect();
                     let mut stats = UlpStats::new(name);
-                    if let Some(r) = refs.first() { let _ = evaluate_in(&method(gmath_safe(r.0))); }
+                    if let Some(r) = refs.first() { let _ = evaluate(&method(gmath_safe(r.0))); }
                     let start = Instant::now();
                     for r in &refs {
-                        match evaluate_in(&method(gmath_safe(r.0))).ok().and_then(|v| v.as_binary_storage()) {
+                        match evaluate(&method(gmath_safe(r.0))).ok().and_then(|v| v.as_binary_storage()) {
                             Some(actual) => { stats.record(((actual as i32) - r.2).unsigned_abs() as u128, r.0); }
                             None => stats.record_error(r.0),
                         }
@@ -65,10 +63,10 @@ macro_rules! word_items_q32_32 {
                 fn run_func(name: &str, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let refs: Vec<_> = Q32_REFS.iter().filter(|r| r.3 == name).collect();
                     let mut stats = UlpStats::new(name);
-                    if let Some(r) = refs.first() { let _ = evaluate_in(&method(gmath_safe(r.0))); }
+                    if let Some(r) = refs.first() { let _ = evaluate(&method(gmath_safe(r.0))); }
                     let start = Instant::now();
                     for r in &refs {
-                        match evaluate_in(&method(gmath_safe(r.0))).ok().and_then(|v| v.as_binary_storage()) {
+                        match evaluate(&method(gmath_safe(r.0))).ok().and_then(|v| v.as_binary_storage()) {
                             Some(actual) => { stats.record(((actual as i64) - r.2).unsigned_abs() as u128, r.0); }
                             None => stats.record_error(r.0),
                         }
@@ -117,7 +115,7 @@ macro_rules! word_items_q64_64 {
                         for &(a_str, b_str, expected, label) in *refs {
                             result.total += 1;
                             let start = Instant::now();
-                            let eval_result = evaluate_in(&build_arith_expr(a_str, b_str, op));
+                            let eval_result = evaluate(&build_arith_expr(a_str, b_str, op));
                             let elapsed_ns = start.elapsed().as_nanos() as u64;
                             result.record_timing(elapsed_ns);
                             match eval_result {
@@ -151,19 +149,19 @@ macro_rules! word_items_q64_64 {
 
                 fn eval_unary(input: &'static str, expected: i128, f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
                     let expr = f(gmath_safe(input));
-                    let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                    let actual = evaluate(&expr).ok()?.as_binary_storage()?;
                     Some((actual as i128 - expected).unsigned_abs())
                 }
 
                 fn eval_binary(a: &'static str, b: &'static str, expected: i128, f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
                     let expr = f(gmath_safe(a), gmath_safe(b));
-                    let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                    let actual = evaluate(&expr).ok()?.as_binary_storage()?;
                     Some((actual as i128 - expected).unsigned_abs())
                 }
 
                 fn run_unary(name: &str, refs: &[(&'static str, i128, &'static str)], max_ulp: u128, max_err: usize, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let mut stats = UlpStats::new(name);
-                    if let Some(&(input, _, _)) = refs.first() { let _ = evaluate_in(&method(gmath_safe(input))); }
+                    if let Some(&(input, _, _)) = refs.first() { let _ = evaluate(&method(gmath_safe(input))); }
                     let start = Instant::now();
                     for &(input, expected, label) in refs {
                         match eval_unary(input, expected, method) {
@@ -177,7 +175,7 @@ macro_rules! word_items_q64_64 {
 
                 fn run_binary_fn(name: &str, refs: &[(&'static str, &'static str, i128, &'static str)], max_ulp: u128, f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let mut stats = UlpStats::new(name);
-                    if let Some(&(a, b, _, _)) = refs.first() { let _ = evaluate_in(&f(gmath_safe(a), gmath_safe(b))); }
+                    if let Some(&(a, b, _, _)) = refs.first() { let _ = evaluate(&f(gmath_safe(a), gmath_safe(b))); }
                     let start = Instant::now();
                     for &(a, b, expected, label) in refs {
                         match eval_binary(a, b, expected, f) {
@@ -256,7 +254,7 @@ macro_rules! word_items_q128_128 {
                         for &(a_str, b_str, expected_words, label) in *refs {
                             result.total += 1;
                             let start = Instant::now();
-                            let eval_result = evaluate_in(&build_arith_expr(a_str, b_str, op));
+                            let eval_result = evaluate(&build_arith_expr(a_str, b_str, op));
                             let elapsed_ns = start.elapsed().as_nanos() as u64;
                             result.record_timing(elapsed_ns);
                             match eval_result {
@@ -299,19 +297,19 @@ macro_rules! word_items_q128_128 {
 
                 fn eval_unary(input: &'static str, expected_words: [u64; 4], f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
                     let expr = f(gmath_safe(input));
-                    let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                    let actual = evaluate(&expr).ok()?.as_binary_storage()?;
                     Some(ulp_i256(actual, I256 { words: expected_words }))
                 }
 
                 fn eval_binary(a: &'static str, b: &'static str, expected_words: [u64; 4], f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
                     let expr = f(gmath_safe(a), gmath_safe(b));
-                    let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                    let actual = evaluate(&expr).ok()?.as_binary_storage()?;
                     Some(ulp_i256(actual, I256 { words: expected_words }))
                 }
 
                 fn run_unary(name: &str, refs: &[(&'static str, [u64; 4], &'static str)], max_ulp: u128, max_err: usize, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let mut stats = UlpStats::new(name);
-                    if let Some(&(input, _, _)) = refs.first() { let _ = evaluate_in(&method(gmath_safe(input))); }
+                    if let Some(&(input, _, _)) = refs.first() { let _ = evaluate(&method(gmath_safe(input))); }
                     let start = Instant::now();
                     for &(input, expected, label) in refs {
                         match eval_unary(input, expected, method) {
@@ -325,7 +323,7 @@ macro_rules! word_items_q128_128 {
 
                 fn run_binary_fn(name: &str, refs: &[(&'static str, &'static str, [u64; 4], &'static str)], max_ulp: u128, f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let mut stats = UlpStats::new(name);
-                    if let Some(&(a, b, _, _)) = refs.first() { let _ = evaluate_in(&f(gmath_safe(a), gmath_safe(b))); }
+                    if let Some(&(a, b, _, _)) = refs.first() { let _ = evaluate(&f(gmath_safe(a), gmath_safe(b))); }
                     let start = Instant::now();
                     for &(a, b, expected, label) in refs {
                         match eval_binary(a, b, expected, f) {
@@ -404,7 +402,7 @@ macro_rules! word_items_q256_256 {
                         for &(a_str, b_str, expected_words, label) in *refs {
                             result.total += 1;
                             let start = Instant::now();
-                            let eval_result = evaluate_in(&build_arith_expr(a_str, b_str, op));
+                            let eval_result = evaluate(&build_arith_expr(a_str, b_str, op));
                             let elapsed_ns = start.elapsed().as_nanos() as u64;
                             result.record_timing(elapsed_ns);
                             match eval_result {
@@ -447,19 +445,19 @@ macro_rules! word_items_q256_256 {
 
                 fn eval_unary(input: &'static str, expected_words: [u64; 8], f: fn(LazyExpr) -> LazyExpr) -> Option<u128> {
                     let expr = f(gmath_safe(input));
-                    let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                    let actual = evaluate(&expr).ok()?.as_binary_storage()?;
                     Some(ulp_i512(actual, I512 { words: expected_words }))
                 }
 
                 fn eval_binary(a: &'static str, b: &'static str, expected_words: [u64; 8], f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> Option<u128> {
                     let expr = f(gmath_safe(a), gmath_safe(b));
-                    let actual = evaluate_in(&expr).ok()?.as_binary_storage()?;
+                    let actual = evaluate(&expr).ok()?.as_binary_storage()?;
                     Some(ulp_i512(actual, I512 { words: expected_words }))
                 }
 
                 fn run_unary(name: &str, refs: &[(&'static str, [u64; 8], &'static str)], max_ulp: u128, max_err: usize, method: fn(LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let mut stats = UlpStats::new(name);
-                    if let Some(&(input, _, _)) = refs.first() { let _ = evaluate_in(&method(gmath_safe(input))); }
+                    if let Some(&(input, _, _)) = refs.first() { let _ = evaluate(&method(gmath_safe(input))); }
                     let start = Instant::now();
                     for &(input, expected, label) in refs {
                         match eval_unary(input, expected, method) {
@@ -473,7 +471,7 @@ macro_rules! word_items_q256_256 {
 
                 fn run_binary_fn(name: &str, refs: &[(&'static str, &'static str, [u64; 8], &'static str)], max_ulp: u128, f: fn(LazyExpr, LazyExpr) -> LazyExpr) -> TranscendentalResult {
                     let mut stats = UlpStats::new(name);
-                    if let Some(&(a, b, _, _)) = refs.first() { let _ = evaluate_in(&f(gmath_safe(a), gmath_safe(b))); }
+                    if let Some(&(a, b, _, _)) = refs.first() { let _ = evaluate(&f(gmath_safe(a), gmath_safe(b))); }
                     let start = Instant::now();
                     for &(a, b, expected, label) in refs {
                         match eval_binary(a, b, expected, f) {
@@ -526,7 +524,7 @@ macro_rules! suite {
             type LazyExpr<T = FixedPoint> = g_math::fixed_point::canonical::LazyExpr<T>;
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             use g_math::fixed_point::Fixed;
-            use g_math::fixed_point::canonical::{gmath_in, evaluate_in, set_gmath_mode, reset_gmath_mode};
+            use g_math::fixed_point::canonical::{gmath, evaluate, set_gmath_mode, reset_gmath_mode};
             use g_math::fixed_point::domains::binary_fixed::i256::I256;
             #[allow(unused_imports)]
             use g_math::fixed_point::domains::binary_fixed::i512::I512;
@@ -552,9 +550,9 @@ macro_rules! suite {
                             std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1)
                         )
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -804,7 +802,7 @@ macro_rules! suite {
                 for &(a_str, b_str, expected_num, expected_den, label) in refs {
                     result.total += 1;
                     let start = Instant::now();
-                    let eval_result = evaluate_in(&build_arith_expr(a_str, b_str, op));
+                    let eval_result = evaluate(&build_arith_expr(a_str, b_str, op));
                     let elapsed_ns = start.elapsed().as_nanos() as u64;
                     result.record_timing(elapsed_ns);
                     match eval_result {
@@ -860,7 +858,7 @@ macro_rules! suite {
                 for &(a_str, b_str, expected_num, expected_den, label) in refs {
                     result.total += 1;
                     let start = Instant::now();
-                    let eval_result = evaluate_in(&build_arith_expr(a_str, b_str, op));
+                    let eval_result = evaluate(&build_arith_expr(a_str, b_str, op));
                     let elapsed_ns = start.elapsed().as_nanos() as u64;
                     result.record_timing(elapsed_ns);
 
@@ -975,7 +973,7 @@ macro_rules! suite {
                 for &(a, b, op, expected_num, expected_den, label) in MODE_ROUTING_CASES {
                     result.total += 1;
                     let expr = build_arith_expr(a, b, op);
-                    match evaluate_in(&expr) {
+                    match evaluate(&expr) {
                         Ok(val) => match val.to_rational() {
                             Ok(rational) => {
                                 if rational_exact_equal(&rational, expected_num, expected_den) {
@@ -1313,74 +1311,74 @@ macro_rules! suite {
 
                 let mut results: Vec<BenchResult> = Vec::new();
 
-                // Pre-build all expressions — benchmark measures evaluate_in() only, not parsing
-                let expr_bin_add = gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5");
-                let expr_bin_mul = gmath_in::<FixedPoint>("3.14159") * gmath_in::<FixedPoint>("2.71828");
-                let expr_dec_add = gmath_in::<FixedPoint>("0.1") + gmath_in::<FixedPoint>("0.2");
-                let expr_dec_mul = gmath_in::<FixedPoint>("0.25") * gmath_in::<FixedPoint>("0.75");
-                let expr_sym_add = gmath_in::<FixedPoint>("1/3") + gmath_in::<FixedPoint>("1/7");
-                let expr_sym_mul = gmath_in::<FixedPoint>("22/7") * gmath_in::<FixedPoint>("355/113");
-                let expr_exp = gmath_in::<FixedPoint>("1.5").exp();
-                let expr_ln = gmath_in::<FixedPoint>("2.5").ln();
-                let expr_sqrt = gmath_in::<FixedPoint>("2.0").sqrt();
-                let expr_sin = gmath_in::<FixedPoint>("1.0").sin();
-                let expr_cos = gmath_in::<FixedPoint>("1.0").cos();
-                let expr_atan = gmath_in::<FixedPoint>("0.5").atan();
+                // Pre-build all expressions — benchmark measures evaluate() only, not parsing
+                let expr_bin_add = gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5");
+                let expr_bin_mul = gmath::<FixedPoint>("3.14159") * gmath::<FixedPoint>("2.71828");
+                let expr_dec_add = gmath::<FixedPoint>("0.1") + gmath::<FixedPoint>("0.2");
+                let expr_dec_mul = gmath::<FixedPoint>("0.25") * gmath::<FixedPoint>("0.75");
+                let expr_sym_add = gmath::<FixedPoint>("1/3") + gmath::<FixedPoint>("1/7");
+                let expr_sym_mul = gmath::<FixedPoint>("22/7") * gmath::<FixedPoint>("355/113");
+                let expr_exp = gmath::<FixedPoint>("1.5").exp();
+                let expr_ln = gmath::<FixedPoint>("2.5").ln();
+                let expr_sqrt = gmath::<FixedPoint>("2.0").sqrt();
+                let expr_sin = gmath::<FixedPoint>("1.0").sin();
+                let expr_cos = gmath::<FixedPoint>("1.0").cos();
+                let expr_atan = gmath::<FixedPoint>("0.5").atan();
 
                 // Arithmetic benchmarks — 4 domains × 2 representative ops (add, mul)
                 results.push(bench_op("binary_add", || {
-                    evaluate_in(&expr_bin_add).is_ok()
+                    evaluate(&expr_bin_add).is_ok()
                 }));
                 results.push(bench_op("binary_mul", || {
-                    evaluate_in(&expr_bin_mul).is_ok()
+                    evaluate(&expr_bin_mul).is_ok()
                 }));
                 results.push(bench_op("decimal_add", || {
-                    evaluate_in(&expr_dec_add).is_ok()
+                    evaluate(&expr_dec_add).is_ok()
                 }));
                 results.push(bench_op("decimal_mul", || {
-                    evaluate_in(&expr_dec_mul).is_ok()
+                    evaluate(&expr_dec_mul).is_ok()
                 }));
                 results.push(bench_op("symbolic_add", || {
-                    evaluate_in(&expr_sym_add).is_ok()
+                    evaluate(&expr_sym_add).is_ok()
                 }));
                 results.push(bench_op("symbolic_mul", || {
-                    evaluate_in(&expr_sym_mul).is_ok()
+                    evaluate(&expr_sym_mul).is_ok()
                 }));
 
                 // Ternary benchmarks — must set mode before building AND evaluating
                 set_gmath_mode("ternary:ternary").ok();
-                let expr_tern_add = gmath_in::<FixedPoint>("3") + gmath_in::<FixedPoint>("7");
-                let expr_tern_mul = gmath_in::<FixedPoint>("5") * gmath_in::<FixedPoint>("4");
+                let expr_tern_add = gmath::<FixedPoint>("3") + gmath::<FixedPoint>("7");
+                let expr_tern_mul = gmath::<FixedPoint>("5") * gmath::<FixedPoint>("4");
                 results.push(bench_op("ternary_add", || {
-                    evaluate_in(&expr_tern_add).is_ok()
+                    evaluate(&expr_tern_add).is_ok()
                 }));
                 results.push(bench_op("ternary_mul", || {
-                    evaluate_in(&expr_tern_mul).is_ok()
+                    evaluate(&expr_tern_mul).is_ok()
                 }));
                 reset_gmath_mode();
 
                 // Transcendental benchmarks — 6 representative functions
                 results.push(bench_op("exp", || {
-                    evaluate_in(&expr_exp).is_ok()
+                    evaluate(&expr_exp).is_ok()
                 }));
                 results.push(bench_op("ln", || {
-                    evaluate_in(&expr_ln).is_ok()
+                    evaluate(&expr_ln).is_ok()
                 }));
                 results.push(bench_op("sqrt", || {
-                    evaluate_in(&expr_sqrt).is_ok()
+                    evaluate(&expr_sqrt).is_ok()
                 }));
                 results.push(bench_op("sin", || {
-                    evaluate_in(&expr_sin).is_ok()
+                    evaluate(&expr_sin).is_ok()
                 }));
                 results.push(bench_op("cos", || {
-                    evaluate_in(&expr_cos).is_ok()
+                    evaluate(&expr_cos).is_ok()
                 }));
                 results.push(bench_op("atan", || {
-                    evaluate_in(&expr_atan).is_ok()
+                    evaluate(&expr_atan).is_ok()
                 }));
 
                 // Mode routing throughput benchmarks — 11 modes (set once, benchmark evaluate)
-                let mode_expr = gmath_in::<FixedPoint>("1.5") + gmath_in::<FixedPoint>("2.5");
+                let mode_expr = gmath::<FixedPoint>("1.5") + gmath::<FixedPoint>("2.5");
                 let mode_benchmarks: [&str; 11] = [
                     "auto:binary", "auto:decimal", "auto:symbolic", "auto:ternary",
                     "binary:binary", "binary:decimal", "decimal:decimal",
@@ -1391,7 +1389,7 @@ macro_rules! suite {
                     set_gmath_mode(mode).ok();
                     let name = format!("mode:{}", mode);
                     results.push(bench_op(&name, || {
-                        evaluate_in(&mode_expr).is_ok()
+                        evaluate(&mode_expr).is_ok()
                     }));
                     reset_gmath_mode();
                 }

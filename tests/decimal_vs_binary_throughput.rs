@@ -12,7 +12,7 @@
 //! # Running
 //!
 //! ```bash
-//! GMATH_PROFILE=embedded cargo test --release --test decimal_vs_binary_throughput -- --nocapture
+//! cargo test --release --test decimal_vs_binary_throughput -- --nocapture
 //! ```
 
 #[macro_use]
@@ -30,7 +30,7 @@ macro_rules! cmp_row {
         let dec_start = Instant::now();
         for _ in 0..$iters {
             for s in INPUTS {
-                let _ = evaluate_in(&gmath_in::<FixedPoint>(s).$method());
+                let _ = evaluate(&gmath::<FixedPoint>(s).$method());
                 dec_iters += 1;
             }
         }
@@ -52,11 +52,11 @@ macro_rules! suite {
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::Fixed;
-            use g_math::fixed_point::canonical::{gmath_in, evaluate_in};
+            use g_math::fixed_point::canonical::{gmath, evaluate};
             use std::time::Instant;
 
             /// A set of representative inputs for throughput measurement.
-            /// Each input is a string that `gmath_in::<FixedPoint>()` will parse.
+            /// Each input is a string that `gmath::<FixedPoint>()` will parse.
             const INPUTS: &[&str] = &[
                 "0.1", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "0.25", "0.75",
                 "1.1", "1.2", "1.3", "1.4", "1.6", "1.7", "1.8", "1.9", "2.1",

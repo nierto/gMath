@@ -29,7 +29,7 @@ macro_rules! suite {
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{evaluate_in, gmath_in, gmath_parse_in};
+            use g_math::canonical::{evaluate, gmath, gmath_parse};
             use g_math::fixed_point::domains::balanced_ternary::{UniversalTernaryFixed, TernaryTier, SCALE_TQ10_10, SCALE_TQ20_20};
 
             // ============================================================================
@@ -41,12 +41,12 @@ macro_rules! suite {
             }
 
             fn display(expr: &LazyExpr) -> String {
-                format!("{}", evaluate_in(expr).expect("evaluate"))
+                format!("{}", evaluate(expr).expect("evaluate"))
             }
 
             /// Runtime-string literal (gmath! requires 'static strs).
             fn g(s: &str) -> LazyExpr {
-                gmath_parse_in::<FixedPoint>(s).expect("parse literal")
+                gmath_parse::<FixedPoint>(s).expect("parse literal")
             }
 
             fn is_ternary(v: &StackValue) -> bool {
@@ -145,7 +145,7 @@ macro_rules! suite {
                         "/" => ea / eb,
                         _ => unreachable!(),
                     };
-                    let result = evaluate_in(&expr).expect("fasc evaluate");
+                    let result = evaluate(&expr).expect("fasc evaluate");
                     assert!(is_ternary(&result), "0t{a} {op} 0t{b} left the ternary domain");
                     // Ternary integer results display as plain integers on all profiles.
                     assert_eq!(
@@ -200,11 +200,11 @@ macro_rules! suite {
                 // Each pair: expression with a ternary operand vs the same expression
                 // with a plain operand. Router coercion must produce identical display.
                 let pairs: &[(fn() -> LazyExpr, fn() -> LazyExpr)] = &[
-                    (|| gmath_in::<FixedPoint>("0t2") + gmath_in::<FixedPoint>("3"), || gmath_in::<FixedPoint>("2") + gmath_in::<FixedPoint>("3")),
-                    (|| gmath_in::<FixedPoint>("0t2") + gmath_in::<FixedPoint>("0.5"), || gmath_in::<FixedPoint>("2") + gmath_in::<FixedPoint>("0.5")),
-                    (|| gmath_in::<FixedPoint>("0t2") * gmath_in::<FixedPoint>("1/3"), || gmath_in::<FixedPoint>("2") * gmath_in::<FixedPoint>("1/3")),
-                    (|| gmath_in::<FixedPoint>("0t7") - gmath_in::<FixedPoint>("0.25"), || gmath_in::<FixedPoint>("7") - gmath_in::<FixedPoint>("0.25")),
-                    (|| gmath_in::<FixedPoint>("10") / gmath_in::<FixedPoint>("0t4"), || gmath_in::<FixedPoint>("10") / gmath_in::<FixedPoint>("4")),
+                    (|| gmath::<FixedPoint>("0t2") + gmath::<FixedPoint>("3"), || gmath::<FixedPoint>("2") + gmath::<FixedPoint>("3")),
+                    (|| gmath::<FixedPoint>("0t2") + gmath::<FixedPoint>("0.5"), || gmath::<FixedPoint>("2") + gmath::<FixedPoint>("0.5")),
+                    (|| gmath::<FixedPoint>("0t2") * gmath::<FixedPoint>("1/3"), || gmath::<FixedPoint>("2") * gmath::<FixedPoint>("1/3")),
+                    (|| gmath::<FixedPoint>("0t7") - gmath::<FixedPoint>("0.25"), || gmath::<FixedPoint>("7") - gmath::<FixedPoint>("0.25")),
+                    (|| gmath::<FixedPoint>("10") / gmath::<FixedPoint>("0t4"), || gmath::<FixedPoint>("10") / gmath::<FixedPoint>("4")),
                 ];
                 // Display formatting differs per result domain (ternary "5" vs decimal
                 // "5.000000000"), so equality is checked through the router itself:
@@ -253,7 +253,7 @@ macro_rules! suite {
                 // on realtime); now it is a loud TierOverflow at parse.
                 // Note the asymmetry: the same VALUE reached by arithmetic
                 // (0t29524 + 0t1) stays at Tier 1 raw 29525·3^10, which fits everywhere.
-                let parsed = gmath_parse_in::<FixedPoint>("0t29525");
+                let parsed = gmath_parse::<FixedPoint>("0t29525");
                 if (BITS == 32) {
                 assert!(parsed.is_err(), "Tier-2 literal must fail loud on realtime");
                 }
@@ -309,7 +309,7 @@ macro_rules! suite {
                 assert_eq!(v.current_tier(), TernaryTier::Tier3);
                 // And the same literal through FASC: loud error on narrow storage,
                 // exact on i128+ storage.
-                let parsed = gmath_parse_in::<FixedPoint>("0t9000000000000000000");
+                let parsed = gmath_parse::<FixedPoint>("0t9000000000000000000");
                 if (BITS == 32 || BITS == 64) {
                 assert!(parsed.is_err(), "big Tier-3 literal must fail loud on narrow storage");
                 }
@@ -323,7 +323,7 @@ macro_rules! suite {
             fn tier3_literal_storage_conversion_per_profile() {
                 // 9e14 is inside the Tier-3 window: raw = 9e14 · 3^32 ≈ 1.67e30 —
                 // fits i128 (embedded+) but not i64/i32 (realtime, compact).
-                let parsed = gmath_parse_in::<FixedPoint>("0t900000000000000");
+                let parsed = gmath_parse::<FixedPoint>("0t900000000000000");
                 if (BITS == 32 || BITS == 64) {
                 assert!(parsed.is_err(), "Tier-3 literal must fail loud on realtime/compact");
                 }
@@ -404,7 +404,7 @@ macro_rules! suite {
             #[test]
             fn column_routes_cross_domain_3adic_add_exactly() {
                 // 0t2 (ternary, class ALL) + 1/3 (symbolic, class TERN|SYM) → Ternary.
-                let result = evaluate_in(&(g("0t2") + g("1/3"))).expect("routed add");
+                let result = evaluate(&(g("0t2") + g("1/3"))).expect("routed add");
                 // Wide-enough profiles hold the coerced value and stay in-domain;
                 // narrow profiles may fall back (Decision 2) — the VALUE is pinned
                 // everywhere via router-difference-zero either way.
@@ -437,7 +437,7 @@ macro_rules! suite {
                 // storage — realtime must fall back silently to the rational path
                 // (Decision 2), never error, never wrap. Value identical everywhere.
                 let expr = || g("1000000000/3") + g("0t1");
-                let result = evaluate_in(&expr()).expect("must evaluate on every profile");
+                let result = evaluate(&expr()).expect("must evaluate on every profile");
                 let _ = result;
                 let diff = display(&(expr() - g("1000000003/3")));
                 let trimmed = if diff.contains('.') {
@@ -460,7 +460,7 @@ macro_rules! suite {
                 // every profile — realtime holds 1/3 at Tier 1 as raw 3^10/3 = 19,683.
                 use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
                 let _ = set_gmath_mode("auto:ternary");
-                let converted = evaluate_in(&g("1/3"));
+                let converted = evaluate(&g("1/3"));
                 reset_gmath_mode();
                 let v = converted.expect("1/3 is 3-adic: exact ternary on every profile");
                 assert!(is_ternary(&v), "output mode must yield a ternary value");

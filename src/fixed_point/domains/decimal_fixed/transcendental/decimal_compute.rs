@@ -17,9 +17,6 @@
 //! | scientific | I1024      | I2048      | I1024::mul_to_i2048        |
 
 #[allow(unused_imports)]
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-pub use crate::fixed_point::universal::fasc::stack_evaluator::{BinaryStorage, ComputeStorage};
-#[allow(unused_imports)]
 #[allow(unused_imports)]
 use super::word::DecimalWord;
 #[allow(unused_imports)]

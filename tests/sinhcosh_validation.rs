@@ -12,8 +12,7 @@
 //! output values.
 //!
 //! Run with:
-//!   GMATH_PROFILE=realtime cargo test --test sinhcosh_validation -- --nocapture
-//!   GMATH_PROFILE=compact  cargo test --test sinhcosh_validation -- --nocapture
+//!   cargo test --test sinhcosh_validation -- --nocapture
 
 #[macro_use]
 mod common;
@@ -24,7 +23,7 @@ macro_rules! realtime_suite {
         mod $m {
             type FixedPoint = g_math::fixed_point::Fixed<$S, $F>;
             const FRAC_BITS: u32 = $F;
-            use g_math::fixed_point::canonical::{evaluate_in, evaluate_sinhcosh_in, gmath_in};
+            use g_math::fixed_point::canonical::{evaluate, evaluate_sinhcosh, gmath};
 
             include!("data/fasc_ulp_refs_q16.rs");
 
@@ -35,9 +34,9 @@ macro_rules! realtime_suite {
                             std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1),
                         )
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -135,12 +134,12 @@ macro_rules! realtime_suite {
                 assert!(res.is_err(), "try_sinhcosh(22) should overflow realtime storage");
             }
 
-            /// FASC evaluate_sinhcosh via gmath_in::<FixedPoint>("...").sinhcosh() must match imperative path.
+            /// FASC evaluate_sinhcosh via gmath::<FixedPoint>("...").sinhcosh() must match imperative path.
             #[test]
             fn fasc_evaluate_sinhcosh_matches_imperative() {
                 for &(input_str, input_raw, _exp, func_name) in REALTIME_REFS {
                     if func_name != "sinh" { continue; }
-                    let (fasc_s, fasc_c) = evaluate_sinhcosh_in(&gmath_safe(input_str))
+                    let (fasc_s, fasc_c) = evaluate_sinhcosh(&gmath_safe(input_str))
                         .expect("FASC sinhcosh eval");
                     let fasc_s_raw = fasc_s.as_binary_storage().expect("binary storage");
                     let fasc_c_raw = fasc_c.as_binary_storage().expect("binary storage");
@@ -156,9 +155,9 @@ macro_rules! realtime_suite {
                         input_str, fasc_c_raw, imp_c.raw());
 
                     // Also cross-check FASC pair against separate FASC sinh/cosh.
-                    let sin_only = evaluate_in(&gmath_safe(input_str).sinh()).unwrap()
+                    let sin_only = evaluate(&gmath_safe(input_str).sinh()).unwrap()
                         .as_binary_storage().unwrap();
-                    let cos_only = evaluate_in(&gmath_safe(input_str).cosh()).unwrap()
+                    let cos_only = evaluate(&gmath_safe(input_str).cosh()).unwrap()
                         .as_binary_storage().unwrap();
                     assert!((fasc_s_raw as i64 - sin_only as i64).abs() <= 1,
                         "FASC pair sinh vs FASC single sinh drift at {}", input_str);
@@ -178,7 +177,7 @@ macro_rules! compact_suite {
         mod $m {
             type FixedPoint = g_math::fixed_point::Fixed<$S, $F>;
             const FRAC_BITS: u32 = $F;
-            use g_math::fixed_point::canonical::{evaluate_in, evaluate_sinhcosh_in, gmath_in};
+            use g_math::fixed_point::canonical::{evaluate, evaluate_sinhcosh, gmath};
 
             include!("data/fasc_ulp_refs_q32.rs");
 
@@ -189,9 +188,9 @@ macro_rules! compact_suite {
                             std::slice::from_raw_parts(input.as_ptr().add(1), input.len() - 1),
                         )
                     };
-                    -gmath_in::<FixedPoint>(positive)
+                    -gmath::<FixedPoint>(positive)
                 } else {
-                    gmath_in::<FixedPoint>(input)
+                    gmath::<FixedPoint>(input)
                 }
             }
 
@@ -281,7 +280,7 @@ macro_rules! compact_suite {
             fn fasc_evaluate_sinhcosh_matches_imperative() {
                 for &(input_str, input_raw, _exp, func_name) in Q32_REFS {
                     if func_name != "sinh" { continue; }
-                    let (fasc_s, fasc_c) = evaluate_sinhcosh_in(&gmath_safe(input_str))
+                    let (fasc_s, fasc_c) = evaluate_sinhcosh(&gmath_safe(input_str))
                         .expect("FASC sinhcosh eval");
                     let fasc_s_raw = fasc_s.as_binary_storage().expect("binary storage");
                     let fasc_c_raw = fasc_c.as_binary_storage().expect("binary storage");
@@ -290,9 +289,9 @@ macro_rules! compact_suite {
                     assert!((fasc_s_raw as i128 - imp_s.raw() as i128).abs() <= 1);
                     assert!((fasc_c_raw as i128 - imp_c.raw() as i128).abs() <= 1);
 
-                    let sin_only = evaluate_in(&gmath_safe(input_str).sinh()).unwrap()
+                    let sin_only = evaluate(&gmath_safe(input_str).sinh()).unwrap()
                         .as_binary_storage().unwrap();
-                    let cos_only = evaluate_in(&gmath_safe(input_str).cosh()).unwrap()
+                    let cos_only = evaluate(&gmath_safe(input_str).cosh()).unwrap()
                         .as_binary_storage().unwrap();
                     assert!((fasc_s_raw as i128 - sin_only as i128).abs() <= 1);
                     assert!((fasc_c_raw as i128 - cos_only as i128).abs() <= 1);

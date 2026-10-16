@@ -7,7 +7,6 @@
 
 use super::FixedMatrix;
 use super::kernels;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::Storage;
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -23,7 +22,7 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// via `to_fixed_matrix()` for 0-1 ULP final precision.
 #[derive(Clone, Debug)]
 #[doc(hidden)]
-pub struct ComputeMatrix<T: FixedNum = FixedPoint> {
+pub struct ComputeMatrix<T: FixedNum> {
     rows: usize,
     cols: usize,
     data: Vec<Compute<T>>,
@@ -216,7 +215,7 @@ where
 // ============================================================================
 
 #[derive(Clone, Debug)]
-pub(crate) struct ComputeLU<T: FixedNum = FixedPoint> {
+pub(crate) struct ComputeLU<T: FixedNum> {
     l: ComputeMatrix<T>,
     u: ComputeMatrix<T>,
     perm: Vec<usize>,

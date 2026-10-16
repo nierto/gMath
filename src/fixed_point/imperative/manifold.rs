@@ -15,7 +15,6 @@ use super::compute_matrix::{ComputeMatrix, compute_lu_decompose};
 use super::matrix_functions::{matrix_exp_compute, matrix_log_compute, matrix_sqrt_compute};
 use super::decompose::{svd_decompose, qr_decompose, cholesky_decompose};
 use super::kernels;
-use super::FixedPoint;
 use super::Scalar;
 use super::matrix_functions::MatrixFunctions;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
@@ -187,7 +186,7 @@ where
 ///
 /// Points and tangent vectors are represented as `FixedVector<Fixed<S, F>>`. The embedding
 /// dimension may differ from the intrinsic dimension (e.g., S^n uses R^{n+1}).
-pub trait Manifold<T: Scalar = FixedPoint> {
+pub trait Manifold<T: Scalar> {
     /// Intrinsic dimension of the manifold.
     fn dimension(&self) -> usize;
 
@@ -942,7 +941,7 @@ impl Grassmannian {
 
 /// The logarithm of Q2 at Q1 in factored form, at the compute tier:
 /// `log = U diag(theta) Aᵀ`.
-struct GrassmannLog<T: FixedNum = FixedPoint> {
+struct GrassmannLog<T: FixedNum> {
     /// n x k, column i = `P_i / |P_i|` (zero where `P_i` is zero).
     u: ComputeMatrix<T>,
     /// Principal angles `theta_i = atan2(|P_i|, |C_i|)`.
@@ -1378,7 +1377,7 @@ where
 /// operations internally. The components return storage values, so the
 /// combined distance, norm and inner product (combined at the compute tier,
 /// one rounding) can add up to one unit to the components' own errors.
-pub struct ProductManifold<T = FixedPoint> {
+pub struct ProductManifold<T> {
     m1: Box<dyn Manifold<T>>,
     m2: Box<dyn Manifold<T>>,
     /// Embedding dimension (FixedVector<T> length) for points on M₁.

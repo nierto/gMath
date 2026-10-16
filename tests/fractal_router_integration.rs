@@ -18,7 +18,7 @@ macro_rules! suite {
             const FRAC_BITS: u32 = $F;
             const BITS: u32 = <$S as g_math::fixed_point::WideInt>::BITS;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{gmath_in, gmath_parse_in, evaluate_in};
+            use g_math::canonical::{gmath, gmath_parse, evaluate};
 
             // ============================================================================
             // ROUTER CLASSIFICATION TESTS (via public API)
@@ -28,8 +28,8 @@ macro_rules! suite {
             fn crisscross_decimal_plus_integer_stays_decimal() {
                 // Previously: Decimal + Binary → rational fallback → Symbolic
                 // Now: Router sees both are decimal-exact → Decimal domain
-                let expr = gmath_in::<FixedPoint>("0.1") + gmath_in::<FixedPoint>("255");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("0.1") + gmath::<FixedPoint>("255");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 // 0.1 + 255 = 255.1
                 assert!(s.contains("255.1"), "Expected 255.1, got: {}", s);
@@ -37,8 +37,8 @@ macro_rules! suite {
 
             #[test]
             fn crisscross_integer_plus_decimal_stays_decimal() {
-                let expr = gmath_in::<FixedPoint>("100") + gmath_in::<FixedPoint>("0.25");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("100") + gmath::<FixedPoint>("0.25");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.contains("100.25"), "Expected 100.25, got: {}", s);
             }
@@ -46,8 +46,8 @@ macro_rules! suite {
             #[test]
             fn crisscross_decimal_mul_integer() {
                 // 0.1 * 10 = 1.0
-                let expr = gmath_in::<FixedPoint>("0.1") * gmath_in::<FixedPoint>("10");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("0.1") * gmath::<FixedPoint>("10");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("1"), "Expected 1, got: {}", s);
             }
@@ -55,8 +55,8 @@ macro_rules! suite {
             #[test]
             fn crisscross_integer_sub_decimal() {
                 // 100 - 0.01 = 99.99
-                let expr = gmath_in::<FixedPoint>("100") - gmath_in::<FixedPoint>("0.01");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("100") - gmath::<FixedPoint>("0.01");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.contains("99.99"), "Expected 99.99, got: {}", s);
             }
@@ -64,8 +64,8 @@ macro_rules! suite {
             #[test]
             fn crisscross_decimal_div_integer() {
                 // 1.0 / 4 = 0.25
-                let expr = gmath_in::<FixedPoint>("1.0") / gmath_in::<FixedPoint>("4");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("1.0") / gmath::<FixedPoint>("4");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.contains("0.25"), "Expected 0.25, got: {}", s);
             }
@@ -76,16 +76,16 @@ macro_rules! suite {
 
             #[test]
             fn same_domain_binary_add() {
-                let expr = gmath_in::<FixedPoint>("100") + gmath_in::<FixedPoint>("200");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("100") + gmath::<FixedPoint>("200");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("300"), "Expected 300, got: {}", s);
             }
 
             #[test]
             fn same_domain_decimal_add() {
-                let expr = gmath_in::<FixedPoint>("0.1") + gmath_in::<FixedPoint>("0.2");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("0.1") + gmath::<FixedPoint>("0.2");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("0.3"), "Expected 0.3, got: {}", s);
             }
@@ -94,8 +94,8 @@ macro_rules! suite {
             fn same_domain_symbolic_add() {
                 // 1/3 + 1/3 = 2/3 — both are ternary+symbolic, but ternary routing is deferred
                 // so they go through their native domain (symbolic for fractions)
-                let expr = gmath_in::<FixedPoint>("1/3") + gmath_in::<FixedPoint>("1/3");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("1/3") + gmath::<FixedPoint>("1/3");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.contains("2/3") || s.contains("0.666"), "Expected 2/3, got: {}", s);
             }
@@ -107,8 +107,8 @@ macro_rules! suite {
             #[test]
             fn financial_compound_interest_chain() {
                 // principal * rate: 1000.00 * 1.05 → should stay Decimal if both are decimal-exact
-                let expr = gmath_in::<FixedPoint>("1000.00") * gmath_in::<FixedPoint>("1.05");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("1000.00") * gmath::<FixedPoint>("1.05");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("1050"), "Expected ~1050, got: {}", s);
             }
@@ -116,9 +116,9 @@ macro_rules! suite {
             #[test]
             fn financial_mixed_integer_decimal_chain() {
                 // price * quantity + tax: (9.99 * 3) + 2
-                let price_qty = gmath_in::<FixedPoint>("9.99") * gmath_in::<FixedPoint>("3");
-                let total = price_qty + gmath_in::<FixedPoint>("2");
-                let result = evaluate_in(&total).unwrap();
+                let price_qty = gmath::<FixedPoint>("9.99") * gmath::<FixedPoint>("3");
+                let total = price_qty + gmath::<FixedPoint>("2");
+                let result = evaluate(&total).unwrap();
                 let s = format!("{}", result);
                 // 9.99 * 3 = 29.97, + 2 = 31.97
                 assert!(s.starts_with("31.97"), "Expected 31.97, got: {}", s);
@@ -132,8 +132,8 @@ macro_rules! suite {
             fn decimal_exp_plus_integer() {
                 // exp(0.1) + 1 — exp returns DecimalCompute, 1 is Binary
                 // The DecimalCompute + integer should work (compute-tier early exit handles this)
-                let expr = gmath_in::<FixedPoint>("0.1").exp() + gmath_in::<FixedPoint>("1");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("0.1").exp() + gmath::<FixedPoint>("1");
+                let result = evaluate(&expr).unwrap();
                 // exp(0.1) ~ 1.10517, + 1 ~ 2.10517
                 let s = format!("{}", result);
                 assert!(s.starts_with("2.1"), "Expected ~2.1, got: {}", s);
@@ -142,9 +142,9 @@ macro_rules! suite {
             #[test]
             fn integer_mul_after_decimal_add() {
                 // (0.5 + 0.5) * 100 → should be Decimal add then Decimal * integer
-                let sum = gmath_in::<FixedPoint>("0.5") + gmath_in::<FixedPoint>("0.5");
-                let expr = sum * gmath_in::<FixedPoint>("100");
-                let result = evaluate_in(&expr).unwrap();
+                let sum = gmath::<FixedPoint>("0.5") + gmath::<FixedPoint>("0.5");
+                let expr = sum * gmath::<FixedPoint>("100");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("100"), "Expected 100, got: {}", s);
             }
@@ -156,8 +156,8 @@ macro_rules! suite {
             #[test]
             fn incompatible_decimal_plus_ternary_fraction() {
                 // 0.1 (decimal) + 1/3 (ternary) → no common domain → symbolic
-                let expr = gmath_in::<FixedPoint>("0.1") + gmath_in::<FixedPoint>("1/3");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("0.1") + gmath::<FixedPoint>("1/3");
+                let result = evaluate(&expr).unwrap();
                 // 0.1 + 1/3 = 1/10 + 1/3 = 13/30 ≈ 0.4333...
                 let s = format!("{}", result);
                 assert!(
@@ -172,16 +172,16 @@ macro_rules! suite {
 
             #[test]
             fn zero_integer_plus_decimal() {
-                let expr = gmath_in::<FixedPoint>("0") + gmath_in::<FixedPoint>("0.5");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("0") + gmath::<FixedPoint>("0.5");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("0.5"), "Expected 0.5, got: {}", s);
             }
 
             #[test]
             fn negative_integer_plus_decimal() {
-                let expr = gmath_in::<FixedPoint>("-1") + gmath_in::<FixedPoint>("0.5");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("-1") + gmath::<FixedPoint>("0.5");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.contains("-0.5") || s.contains("0.5"), "Expected -0.5, got: {}", s);
             }
@@ -189,8 +189,8 @@ macro_rules! suite {
             #[test]
             fn large_integer_times_decimal() {
                 // 1000000 * 0.001 = 1000
-                let expr = gmath_in::<FixedPoint>("1000000") * gmath_in::<FixedPoint>("0.001");
-                let result = evaluate_in(&expr).unwrap();
+                let expr = gmath::<FixedPoint>("1000000") * gmath::<FixedPoint>("0.001");
+                let result = evaluate(&expr).unwrap();
                 let s = format!("{}", result);
                 assert!(s.starts_with("1000"), "Expected 1000, got: {}", s);
             }
@@ -204,11 +204,11 @@ macro_rules! suite {
             fn oversized_integer_literal_falls_back_to_symbolic() {
                 use g_math::canonical::StackValue;
                 for s in ["32768", "1000000", "9223372036854775807"] {
-                    let v = evaluate_in(&gmath_parse_in::<FixedPoint>(s).expect("must parse on every profile"))
+                    let v = evaluate(&gmath_parse::<FixedPoint>(s).expect("must parse on every profile"))
                         .expect("must evaluate on every profile");
                     // Value must be exact regardless of the domain it landed in:
                     // v - s == 0 through the router.
-                    let diff = format!("{}", evaluate_in(&(gmath_parse_in::<FixedPoint>(s).unwrap() - gmath_parse_in::<FixedPoint>(s).unwrap())).unwrap());
+                    let diff = format!("{}", evaluate(&(gmath_parse::<FixedPoint>(s).unwrap() - gmath_parse::<FixedPoint>(s).unwrap())).unwrap());
                     let trimmed = if diff.contains('.') {
                         diff.trim_end_matches('0').trim_end_matches('.')
                     } else {
@@ -234,7 +234,7 @@ macro_rules! suite {
                     }
                 }
                 // The original failing expression, end to end.
-                let r = evaluate_in(&(gmath_parse_in::<FixedPoint>("1000000").unwrap() * gmath_parse_in::<FixedPoint>("0.001").unwrap()))
+                let r = evaluate(&(gmath_parse::<FixedPoint>("1000000").unwrap() * gmath_parse::<FixedPoint>("0.001").unwrap()))
                     .expect("1000000 * 0.001 must evaluate on every profile");
                 assert!(format!("{r}").starts_with("1000"), "got {r}");
             }

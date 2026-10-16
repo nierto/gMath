@@ -22,21 +22,21 @@ macro_rules! suite {
             #[allow(dead_code)]
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{evaluate_in, gmath_in};
+            use g_math::canonical::{evaluate, gmath};
 
             fn disp(e: &LazyExpr) -> String {
-                format!("{}", evaluate_in(e).expect("evaluate"))
+                format!("{}", evaluate(e).expect("evaluate"))
             }
 
             #[test]
             fn odd_even_symmetries_bit_exact() {
                 for x in ["0.25", "0.5", "1", "1.5", "2.5", "7.75"] {
-                    assert_eq!(disp(&gmath_in::<FixedPoint>(x).sin()), disp(&(-(-gmath_in::<FixedPoint>(x)).sin())), "sin odd at {x}");
-                    assert_eq!(disp(&gmath_in::<FixedPoint>(x).cos()), disp(&(-gmath_in::<FixedPoint>(x)).cos()), "cos even at {x}");
-                    assert_eq!(disp(&gmath_in::<FixedPoint>(x).atan()), disp(&(-(-gmath_in::<FixedPoint>(x)).atan())), "atan odd at {x}");
-                    assert_eq!(disp(&gmath_in::<FixedPoint>(x).tanh()), disp(&(-(-gmath_in::<FixedPoint>(x)).tanh())), "tanh odd at {x}");
-                    assert_eq!(disp(&gmath_in::<FixedPoint>(x).sinh()), disp(&(-(-gmath_in::<FixedPoint>(x)).sinh())), "sinh odd at {x}");
-                    assert_eq!(disp(&gmath_in::<FixedPoint>(x).asinh()), disp(&(-(-gmath_in::<FixedPoint>(x)).asinh())), "asinh odd at {x}");
+                    assert_eq!(disp(&gmath::<FixedPoint>(x).sin()), disp(&(-(-gmath::<FixedPoint>(x)).sin())), "sin odd at {x}");
+                    assert_eq!(disp(&gmath::<FixedPoint>(x).cos()), disp(&(-gmath::<FixedPoint>(x)).cos()), "cos even at {x}");
+                    assert_eq!(disp(&gmath::<FixedPoint>(x).atan()), disp(&(-(-gmath::<FixedPoint>(x)).atan())), "atan odd at {x}");
+                    assert_eq!(disp(&gmath::<FixedPoint>(x).tanh()), disp(&(-(-gmath::<FixedPoint>(x)).tanh())), "tanh odd at {x}");
+                    assert_eq!(disp(&gmath::<FixedPoint>(x).sinh()), disp(&(-(-gmath::<FixedPoint>(x)).sinh())), "sinh odd at {x}");
+                    assert_eq!(disp(&gmath::<FixedPoint>(x).asinh()), disp(&(-(-gmath::<FixedPoint>(x)).asinh())), "asinh odd at {x}");
                 }
             }
 
@@ -70,13 +70,13 @@ macro_rules! suite {
                 // one — its unsigned shadow was renamed in this audit).
                 for x in ["4", "5", "10"] {
                     // sin(4), sin(5) < 0; product must be positive and equal sin²|computed once
-                    let prod = disp(&(gmath_in::<FixedPoint>(x).sin() * gmath_in::<FixedPoint>(x).sin()));
+                    let prod = disp(&(gmath::<FixedPoint>(x).sin() * gmath::<FixedPoint>(x).sin()));
                     assert!(
                         !prod.starts_with('-'),
                         "sin({x})² must be non-negative, got {prod}"
                     );
                     // (−sin)·(−sin) == sin·sin, bit-exact through the router.
-                    let prod_neg = disp(&((-gmath_in::<FixedPoint>(x).sin()) * (-gmath_in::<FixedPoint>(x).sin())));
+                    let prod_neg = disp(&((-gmath::<FixedPoint>(x).sin()) * (-gmath::<FixedPoint>(x).sin())));
                     assert_eq!(prod, prod_neg, "(-a)(-a) != a·a for a = sin({x})");
                 }
             }

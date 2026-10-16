@@ -13,7 +13,7 @@
 //! - path independence vs the imperative `FixedPoint` methods (bit-identical)
 //! - domain-violation panics and saturation behavior
 //!
-//! Requires: `cargo test --features inference` under GMATH_PROFILE=realtime|compact
+//! Requires: `cargo test --features inference`
 #![cfg(feature = "inference")]
 
 #[macro_use]

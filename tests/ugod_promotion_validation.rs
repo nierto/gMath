@@ -30,10 +30,10 @@ macro_rules! suite {
             #[allow(dead_code)]
             const FRAC_BITS: u32 = $F;
             use g_math::fixed_point::Fixed;
-            use g_math::canonical::{evaluate_in, gmath_in};
+            use g_math::canonical::{evaluate, gmath};
 
             fn disp(e: &LazyExpr) -> String {
-                format!("{}", evaluate_in(e).expect("must evaluate"))
+                format!("{}", evaluate(e).expect("must evaluate"))
             }
 
             fn int_part(s: &str) -> String {
@@ -44,11 +44,11 @@ macro_rules! suite {
             fn promoted_add_is_exact_never_wraps() {
                 // Pre-fix on embedded: promoted Tier-4 sum wrapped through as_i128 to 0.0.
                 assert_eq!(
-                    int_part(&disp(&(gmath_in::<FixedPoint>("9000000000000000000") + gmath_in::<FixedPoint>("9000000000000000000")))),
+                    int_part(&disp(&(gmath::<FixedPoint>("9000000000000000000") + gmath::<FixedPoint>("9000000000000000000")))),
                     "18000000000000000000"
                 );
                 assert_eq!(
-                    int_part(&disp(&(-gmath_in::<FixedPoint>("9000000000000000000") - gmath_in::<FixedPoint>("9000000000000000000")))),
+                    int_part(&disp(&(-gmath::<FixedPoint>("9000000000000000000") - gmath::<FixedPoint>("9000000000000000000")))),
                     "-18000000000000000000"
                 );
             }
@@ -59,11 +59,11 @@ macro_rules! suite {
                 // Pre-fix everywhere: the symbolic ladder couldn't hold 1e40 either.
                 let want = format!("1{}", "0".repeat(40));
                 assert_eq!(
-                    int_part(&disp(&(gmath_in::<FixedPoint>("100000000000000000000") * gmath_in::<FixedPoint>("100000000000000000000")))),
+                    int_part(&disp(&(gmath::<FixedPoint>("100000000000000000000") * gmath::<FixedPoint>("100000000000000000000")))),
                     want
                 );
                 // Negative operand keeps exactness through the same ladder.
-                let got = int_part(&disp(&(-gmath_in::<FixedPoint>("100000000000000000000") * gmath_in::<FixedPoint>("100000000000000000000"))));
+                let got = int_part(&disp(&(-gmath::<FixedPoint>("100000000000000000000") * gmath::<FixedPoint>("100000000000000000000"))));
                 assert_eq!(got, format!("-{want}"));
             }
 
@@ -74,12 +74,12 @@ macro_rules! suite {
                 // must stay EXACT through the chain: (1/1e20)·1e20 = 1 precisely.
                 // Pre-fix, the unchecked symbolic→binary coercion wrapped 1e20 mod
                 // 2^128 and this round-trip returned garbage.
-                let r = disp(&((gmath_in::<FixedPoint>("1") / gmath_in::<FixedPoint>("100000000000000000000"))
-                    * gmath_in::<FixedPoint>("100000000000000000000")));
+                let r = disp(&((gmath::<FixedPoint>("1") / gmath::<FixedPoint>("100000000000000000000"))
+                    * gmath::<FixedPoint>("100000000000000000000")));
                 assert_eq!(int_part(&r), "1", "1e-20 round-trip lost exactness: {r}");
                 // Huge quotient escapes binary storage → rational fallback, exact.
                 assert_eq!(
-                    int_part(&disp(&(gmath_in::<FixedPoint>("9000000000000000000") / gmath_in::<FixedPoint>("0.000000001")))),
+                    int_part(&disp(&(gmath::<FixedPoint>("9000000000000000000") / gmath::<FixedPoint>("0.000000001")))),
                     "9000000000000000000000000000"
                 );
             }
@@ -89,9 +89,9 @@ macro_rules! suite {
                 // Pre-fix, a Tier-4 quotient OVERFLOW was mislabeled DivisionByZero.
                 // Now: zero divisor → DivisionByZero (decided once at ladder entry);
                 // overflow → exact rational fallback (no error at all).
-                use g_math::canonical::gmath_parse_in;
-                let e = gmath_parse_in::<FixedPoint>("1").unwrap() / gmath_parse_in::<FixedPoint>("0").unwrap();
-                match evaluate_in(&e) {
+                use g_math::canonical::gmath_parse;
+                let e = gmath_parse::<FixedPoint>("1").unwrap() / gmath_parse::<FixedPoint>("0").unwrap();
+                match evaluate(&e) {
                     Err(err) => assert!(
                         format!("{err:?}").contains("DivisionByZero"),
                         "wrong error kind: {err:?}"
@@ -106,8 +106,8 @@ macro_rules! suite {
                 // divide is native binary on scientific, where 1e20 fits storage,
                 // and would honestly round instead). The product needs an I256
                 // numerator: the symbolic ladder must reach the Massive tier.
-                let got = disp(&(gmath_in::<FixedPoint>("100000000000000000000/3")
-                    * gmath_in::<FixedPoint>("300000000000000000000")));
+                let got = disp(&(gmath::<FixedPoint>("100000000000000000000/3")
+                    * gmath::<FixedPoint>("300000000000000000000")));
                 // (1e20/3)·3e20 = 1e40 exactly.
                 assert_eq!(int_part(&got), format!("1{}", "0".repeat(40)));
             }
@@ -124,21 +124,21 @@ macro_rules! suite {
             fn decimal_literals_beyond_the_decimal_storage_keep_their_value() {
                 // Realtime keeps value * 10^4 in i32 decimal storage. 0.6.3 wrapped it:
                 // at Q22.10 "467295.6470" was 37798.9 and "214748.3648" was -214748.3648.
-                assert!(is_zero(&(gmath_in::<FixedPoint>("467295.6470") - gmath_in::<FixedPoint>("467295.647"))), "{}", disp(&gmath_in::<FixedPoint>("467295.6470")));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("214748.3648") - gmath_in::<FixedPoint>("2147483648/10000"))), "{}", disp(&gmath_in::<FixedPoint>("214748.3648")));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("-214748.3649") + gmath_in::<FixedPoint>("2147483649/10000"))), "{}", disp(&gmath_in::<FixedPoint>("-214748.3649")));
-                assert!(disp(&gmath_in::<FixedPoint>("3000000.0001")).starts_with("3000000.0001"), "{}", disp(&gmath_in::<FixedPoint>("3000000.0001")));
+                assert!(is_zero(&(gmath::<FixedPoint>("467295.6470") - gmath::<FixedPoint>("467295.647"))), "{}", disp(&gmath::<FixedPoint>("467295.6470")));
+                assert!(is_zero(&(gmath::<FixedPoint>("214748.3648") - gmath::<FixedPoint>("2147483648/10000"))), "{}", disp(&gmath::<FixedPoint>("214748.3648")));
+                assert!(is_zero(&(gmath::<FixedPoint>("-214748.3649") + gmath::<FixedPoint>("2147483649/10000"))), "{}", disp(&gmath::<FixedPoint>("-214748.3649")));
+                assert!(disp(&gmath::<FixedPoint>("3000000.0001")).starts_with("3000000.0001"), "{}", disp(&gmath::<FixedPoint>("3000000.0001")));
             }
 
             #[test]
             fn decimal_results_beyond_the_decimal_storage_are_exact() {
                 // 0.6.3 narrowed every decimal UGOD result back to storage with a
                 // truncating cast: at Q22.10, 214748.3647 + 1 = -214747.3649.
-                assert!(is_zero(&(gmath_in::<FixedPoint>("214748.3647") + gmath_in::<FixedPoint>("1") - gmath_in::<FixedPoint>("2147493647/10000"))),
-                    "{}", disp(&(gmath_in::<FixedPoint>("214748.3647") + gmath_in::<FixedPoint>("1"))));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("214748.3647") + gmath_in::<FixedPoint>("0.0001") - gmath_in::<FixedPoint>("2147483648/10000"))));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("-214748.3647") - gmath_in::<FixedPoint>("0.0002") + gmath_in::<FixedPoint>("2147483649/10000"))));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("107374.1824") * gmath_in::<FixedPoint>("2.0000") - gmath_in::<FixedPoint>("2147483648/10000"))));
+                assert!(is_zero(&(gmath::<FixedPoint>("214748.3647") + gmath::<FixedPoint>("1") - gmath::<FixedPoint>("2147493647/10000"))),
+                    "{}", disp(&(gmath::<FixedPoint>("214748.3647") + gmath::<FixedPoint>("1"))));
+                assert!(is_zero(&(gmath::<FixedPoint>("214748.3647") + gmath::<FixedPoint>("0.0001") - gmath::<FixedPoint>("2147483648/10000"))));
+                assert!(is_zero(&(gmath::<FixedPoint>("-214748.3647") - gmath::<FixedPoint>("0.0002") + gmath::<FixedPoint>("2147483649/10000"))));
+                assert!(is_zero(&(gmath::<FixedPoint>("107374.1824") * gmath::<FixedPoint>("2.0000") - gmath::<FixedPoint>("2147483648/10000"))));
             }
 
             #[test]
@@ -146,19 +146,19 @@ macro_rules! suite {
                 // 0.6.3 stored the digits as raw storage bits at tier 1 while the shadow
                 // said 255/1: "0xFF" alone, "0xFF" + 1 and the shadow disagreed, and
                 // "0x1FFFFFFFF" wrapped to 0 on realtime.
-                assert!(is_zero(&(gmath_in::<FixedPoint>("0xFF") - gmath_in::<FixedPoint>("255"))), "{}", disp(&gmath_in::<FixedPoint>("0xFF")));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("0xFF") + gmath_in::<FixedPoint>("1") - gmath_in::<FixedPoint>("256"))));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("0b101") - gmath_in::<FixedPoint>("5"))));
-                assert!(is_zero(&(gmath_in::<FixedPoint>("0x1FFFFFFFF") - gmath_in::<FixedPoint>("8589934591"))), "{}", disp(&gmath_in::<FixedPoint>("0x1FFFFFFFF")));
+                assert!(is_zero(&(gmath::<FixedPoint>("0xFF") - gmath::<FixedPoint>("255"))), "{}", disp(&gmath::<FixedPoint>("0xFF")));
+                assert!(is_zero(&(gmath::<FixedPoint>("0xFF") + gmath::<FixedPoint>("1") - gmath::<FixedPoint>("256"))));
+                assert!(is_zero(&(gmath::<FixedPoint>("0b101") - gmath::<FixedPoint>("5"))));
+                assert!(is_zero(&(gmath::<FixedPoint>("0x1FFFFFFFF") - gmath::<FixedPoint>("8589934591"))), "{}", disp(&gmath::<FixedPoint>("0x1FFFFFFFF")));
             }
 
             #[test]
             fn canonical_literal_grammar_is_unchanged() {
                 // The exact converter behind the 0.6.4 fixes reads exponent notation;
                 // the canonical grammar must not (FixedPoint::from_str does).
-                use g_math::canonical::gmath_parse_in;
+                use g_math::canonical::gmath_parse;
                 for s in ["1e5", "1.5e3", "2E-3", " 1.5", "1.5 "] {
-                    assert!(gmath_parse_in::<FixedPoint>(s).is_err(), "{s:?} parsed");
+                    assert!(gmath_parse::<FixedPoint>(s).is_err(), "{s:?} parsed");
                 }
             }
         }

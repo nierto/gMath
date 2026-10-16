@@ -12,7 +12,6 @@ use crate::fixed_point::domains::symbolic::rational::RationalNumber;
 
 // Import extended-precision integer types for tier 6-7 arithmetic
 #[allow(unused_imports)]
-#[cfg(not(feature = "embedded"))]
 use crate::fixed_point::domains::binary_fixed::I256;
 #[allow(unused_imports)]
 use crate::fixed_point::domains::binary_fixed::I512;

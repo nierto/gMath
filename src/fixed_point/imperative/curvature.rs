@@ -23,7 +23,6 @@ use super::tensor::Tensor;
 use super::compute_matrix::{compute_lu_decompose, ComputeMatrix};
 use super::ode::{OdeSystem, rk4_step_compute, state_to_compute};
 use super::kernels;
-use super::FixedPoint;
 use super::Scalar;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage, WideInt};
@@ -62,7 +61,7 @@ where
 /// This is the fundamental input for Christoffel symbol computation.
 /// For known manifolds, this wraps the closed-form metric (e.g., sphere,
 /// hyperbolic). For generic manifolds, it can wrap numerical evaluation.
-pub trait MetricProvider<T: Scalar = FixedPoint> {
+pub trait MetricProvider<T: Scalar> {
     /// Dimension of the manifold.
     fn dimension(&self) -> usize;
     /// Evaluate the metric tensor g_ij at point p.
@@ -102,7 +101,7 @@ pub trait MetricProvider<T: Scalar = FixedPoint> {
 /// Opaque: only the crate's built-in metrics construct it.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
-pub struct ComputeChristoffel<T: FixedNum = FixedPoint> {
+pub struct ComputeChristoffel<T: FixedNum> {
     data: Vec<Compute<T>>,
 }
 
@@ -623,7 +622,7 @@ where
 ///   g = [[1, 0], [0, sin²(θ)]]
 ///
 /// Sectional curvature = 1 everywhere.
-pub struct SphereMetric<T = FixedPoint> {
+pub struct SphereMetric<T> {
     pub radius: T,
 }
 
@@ -780,7 +779,7 @@ where
 /// **FASC-UGOD integration:** The Christoffel symbols stay at the compute tier
 /// and the Γ·v·v contraction is summed there (exact v^i v^j, one compute-tier
 /// product with Γ per term), rounded to storage once per velocity component.
-pub struct GeodesicOde<'a, T = FixedPoint> {
+pub struct GeodesicOde<'a, T> {
     provider: &'a dyn MetricProvider<T>,
 }
 

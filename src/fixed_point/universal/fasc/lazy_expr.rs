@@ -7,7 +7,6 @@
 use core::ops::{Add, Sub, Mul, Div, Neg};
 use core::fmt::{self, Display};
 use super::stack_evaluator::{FascFormat, StackValue};
-use crate::fixed_point::imperative::FixedPoint;
 
 /// Stack reference (index into evaluation stack)
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -29,7 +28,7 @@ pub enum ConstantId {
 /// **EVALUATION**: Deferred until explicitly requested or display
 /// **OPTIMIZATION**: Compile-time constant folding where possible
 #[derive(Debug, Clone)]
-pub enum LazyExpr<T: FascFormat = FixedPoint> {
+pub enum LazyExpr<T: FascFormat> {
     /// String literal (compile-time or static reference)
     Literal(&'static str),
 
@@ -40,7 +39,7 @@ pub enum LazyExpr<T: FascFormat = FixedPoint> {
     ///
     /// ```rust
     /// use g_math::canonical::{gmath, evaluate, LazyExpr};
-    /// let balance = evaluate(&(gmath("1000.00") * gmath("1.05"))).unwrap();
+    /// let balance = evaluate::<g_math::fixed_point::Q64_64>(&(gmath("1000.00") * gmath("1.05"))).unwrap();
     /// // Feed result back into next expression: shadow + precision preserved
     /// let next = evaluate(&(LazyExpr::from(balance) * gmath("1.05"))).unwrap();
     /// ```
@@ -160,18 +159,9 @@ impl<T: FascFormat> From<StackValue<T>> for LazyExpr<T> {
     }
 }
 
-/// Universal entry point - zero allocation expression builder
-///
-/// **USAGE**: `let expr = gmath("123.456");`
-/// **ARCHITECTURE**: Returns expression node without parsing
-/// **EVALUATION**: Deferred until display or explicit evaluation
-pub const fn gmath(input: &'static str) -> LazyExpr {
-    LazyExpr::Literal(input)
-}
-
-/// `gmath` for the format `T`: the literal is parsed when the tree is
-/// evaluated, in that format.
-pub const fn gmath_in<T: FascFormat>(input: &'static str) -> LazyExpr<T> {
+/// A literal of the format `T`, parsed when the tree is evaluated, in that
+/// format (`evaluate::<Q64_64>(&(gmath("1.5") + gmath("0.1")))`).
+pub const fn gmath<T: FascFormat>(input: &'static str) -> LazyExpr<T> {
     LazyExpr::Literal(input)
 }
 
@@ -367,21 +357,35 @@ impl<T: FascFormat> Display for LazyExpr<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    macro_rules! suite {
+        ($m:ident, $S:ty, $F:literal, $W:ident) => {
+            mod $m {
+                #![allow(dead_code, unused_imports, unreachable_code)]
+                use super::super::*;
+                type FixedPoint = crate::fixed_point::Fixed<$S, $F>;
+                type BinaryStorage = $S;
+                type ComputeStorage = <$S as crate::fixed_point::Storage>::Compute;
+                const FRAC_BITS: u32 = $F;
+                const BITS: u32 = <$S as crate::fixed_point::WideInt>::BITS;
+                use super::super::*;
 
-    #[test]
-    fn test_expression_building() {
-        let expr = gmath("10") + gmath("20") * gmath("30");
-        assert_eq!(expr.depth(), 3);
-        assert_eq!(expr.operation_count(), 2);
+                #[test]
+                fn test_expression_building() {
+                    let expr = gmath::<FixedPoint>("10") + gmath::<FixedPoint>("20") * gmath::<FixedPoint>("30");
+                    assert_eq!(expr.depth(), 3);
+                    assert_eq!(expr.operation_count(), 2);
+                }
+
+                #[test]
+                fn test_constant_detection() {
+                    let const_expr = gmath::<FixedPoint>("10") + gmath::<FixedPoint>("20");
+                    assert!(const_expr.is_constant());
+
+                    let var_expr = LazyExpr::Variable(StackRef(0)) + gmath::<FixedPoint>("10");
+                    assert!(!var_expr.is_constant());
+                }
+            }
+        };
     }
-
-    #[test]
-    fn test_constant_detection() {
-        let const_expr = gmath("10") + gmath("20");
-        assert!(const_expr.is_constant());
-
-        let var_expr = LazyExpr::Variable(StackRef(0)) + gmath("10");
-        assert!(!var_expr.is_constant());
-    }
+    for_each_format!(suite);
 }

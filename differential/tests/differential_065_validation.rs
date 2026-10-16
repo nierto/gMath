@@ -1,9 +1,11 @@
 //! Differential gate: bit-identity with the published 0.6.7 (the scalar surface is unchanged since 0.6.5).
 //!
-//! `g_math` 0.6.7 from crates.io is a dev-dependency (`g_math_065`). Both
-//! crates read the same `GMATH_PROFILE` / `GMATH_FRAC_BITS`, so in each build
-//! the old `FixedPoint` and the new one are the same format, and every
-//! operation is run on both with the same raw inputs. Required: the same
+//! `g_math` 0.6.7 from crates.io is a dependency of this crate (`g_math_065`).
+//! It reads `GMATH_PROFILE` / `GMATH_FRAC_BITS`; the new type is derived from
+//! its storage word and split, so in each build the old `FixedPoint` and the
+//! new one are the same format, and every operation is run on both with the
+//! same raw inputs. `build.rs` mirrors the profile as `published_profile`
+//! for the paths that exist on some formats only. Required: the same
 //! integers, the same `Err` variants, and a panic exactly where the old
 //! crate panicked. Run once per profile and split.
 //!
@@ -654,9 +656,9 @@ fn transcendentals_are_bit_identical_to_0_6_5() {
         // Whether the product overflows depends on the exponent (pow(-1, 0) is
         // 1.0 everywhere), so only the pair (published value, tree panic) is
         // the accepted divergence; every other outcome must still agree.
-        let base_non_positive = nx <= g_math::fixed_point::FixedPoint::ZERO;
+        let base_non_positive = nx <= New::ZERO;
         let (old_pow, new_pow) = (value(|| raw::old_raw(ox.pow(oy))), value(|| raw::new_raw(nx.pow(ny))));
-        let wrapped_in_published = cfg!(table_format = "q256_256")
+        let wrapped_in_published = cfg!(published_profile = "q256_256")
             && base_non_positive
             && matches!(old_pow, Outcome::Value(_))
             && matches!(new_pow, Outcome::Panic);
@@ -679,7 +681,8 @@ fn transcendentals_are_bit_identical_to_0_6_5() {
 
 // ---- vectors and matrices ---------------------------------------------------
 
-use g_math::fixed_point::{FixedMatrix as NewMatrix, FixedVector as NewVector};
+type NewMatrix<T = New> = g_math::fixed_point::FixedMatrix<T>;
+type NewVector<T = New> = g_math::fixed_point::FixedVector<T>;
 use g_math_065::fixed_point::{FixedMatrix as OldMatrix, FixedVector as OldVector};
 
 fn old_vec(raws: &[Raw]) -> OldVector { OldVector::from_slice(&raws.iter().map(|&r| raw::old(r)).collect::<Vec<_>>()) }
@@ -815,7 +818,7 @@ fn decompositions_are_bit_identical_to_0_6_5() {
         chol.check(fallible(|| ov::inverse_spd(&os).map(|x| old_mraws(&x))), fallible(|| nv::inverse_spd(&ns).map(|x| new_mraws(&x))), &m);
         if bits < WIDTH - 1 {
             // a positive definite form: M^T M plus the identity
-            let (opd, npd) = (&(&om.transpose() * &om) + &OldMatrix::identity(d), &(&nm.transpose() * &nm) + &NewMatrix::<g_math::fixed_point::FixedPoint>::identity(d));
+            let (opd, npd) = (&(&om.transpose() * &om) + &OldMatrix::identity(d), &(&nm.transpose() * &nm) + &NewMatrix::<New>::identity(d));
             chol.check(
                 fallible(|| od::cholesky_decompose(&opd).and_then(|f| Ok((old_mraws(&f.l), old_raws(&f.solve(&ob)?), raw::old_raw(f.determinant()))))),
                 fallible(|| nd::cholesky_decompose(&npd).and_then(|f| Ok((new_mraws(&f.l), new_raws(&f.solve(&nb)?), raw::new_raw(f.determinant()))))),
@@ -877,7 +880,7 @@ fn matrix_functions_are_bit_identical_to_0_6_5() {
         let m: Vec<Raw> = (0..d * d).map(|_| rng.raw(FRAC - 1)).collect();
         let (om, nm) = (old_mat(d, d, &m), new_mat(d, d, &m));
         // I + M for the square root and the logarithm (near the identity)
-        let (oi, ni) = (&OldMatrix::identity(d) + &om, &NewMatrix::<g_math::fixed_point::FixedPoint>::identity(d) + &nm);
+        let (oi, ni) = (&OldMatrix::identity(d) + &om, &NewMatrix::<New>::identity(d) + &nm);
         exp.check(fallible(|| of::matrix_exp(&om).map(|x| old_mraws(&x))), fallible(|| nf::matrix_exp(&nm).map(|x| new_mraws(&x))), &m);
         sqrt.check(fallible(|| of::matrix_sqrt(&oi).map(|x| old_mraws(&x))), fallible(|| nf::matrix_sqrt(&ni).map(|x| new_mraws(&x))), &m);
         log.check(fallible(|| of::matrix_log(&oi).map(|x| old_mraws(&x))), fallible(|| nf::matrix_log(&ni).map(|x| new_mraws(&x))), &m);
@@ -908,7 +911,8 @@ mod geo_new {
     pub use g_math::fixed_point::imperative::manifold::{HyperbolicSpace, Manifold, SPDManifold, Sphere};
     pub use g_math::fixed_point::imperative::ode::{ode_fn, rk4_step, rk45_integrate, verlet_integrate, HamiltonianSystem, Rk45Config};
     pub use g_math::fixed_point::imperative::projective::{cross_ratio_1d, from_homogeneous, stereo_project, stereo_unproject, to_homogeneous, Moebius};
-    pub use g_math::fixed_point::imperative::tensor::{contract, symmetrize, trace, Tensor};
+    pub use g_math::fixed_point::imperative::tensor::{contract, symmetrize, trace};
+    pub type Tensor<T = super::New> = g_math::fixed_point::imperative::tensor::Tensor<T>;
     pub use g_math::fixed_point::imperative::tensor_decompose::{cp_decompose, truncated_svd, tucker_decompose};
 }
 
@@ -919,7 +923,7 @@ impl geo_old::HamiltonianSystem for Oscillator {
     fn velocity(&self, _q: &OldVector, p: &OldVector) -> OldVector { p.clone() }
     fn energy(&self, q: &OldVector, p: &OldVector) -> Old { (q.dot(q) + p.dot(p)) / Old::from_int(2) }
 }
-impl geo_new::HamiltonianSystem for Oscillator {
+impl geo_new::HamiltonianSystem<New> for Oscillator {
     fn force(&self, q: &NewVector, _p: &NewVector) -> NewVector { -q }
     fn velocity(&self, _q: &NewVector, p: &NewVector) -> NewVector { p.clone() }
     fn energy(&self, q: &NewVector, p: &NewVector) -> New { (q.dot(q) + p.dot(p)) / New::from_int(2) }
@@ -1189,7 +1193,7 @@ fn debug_words(s: &str) -> Vec<I1024> {
 #[test]
 fn intervals_and_predicates_are_bit_identical_to_0_6_5() {
     use g_math::fixed_point::imperative::predicates as np;
-    use g_math::fixed_point::Interval as NI;
+    type NI<T = New> = g_math::fixed_point::Interval<T>;
     use g_math_065::fixed_point::imperative::predicates as op;
     use g_math_065::fixed_point::Interval as OI;
     silence_panics();
@@ -1234,7 +1238,7 @@ fn intervals_and_predicates_are_bit_identical_to_0_6_5() {
         ori.check(value(|| format!("{:?}", op::orient2d(oa2, ob2, od2))), value(|| format!("{:?}", np::orient2d(na2, nb2, nd2))), &pts);
         let ((oa3, na3), (ob3, nb3), (oc3, nc3), (od3, nd3)) = (pt3(&pts[0..3]), pt3(&pts[3..6]), pt3(&pts[6..9]), pt3(&pts[9..12]));
         ori.check(value(|| format!("{:?}", op::orient3d(oa3, ob3, oc3, od3))), value(|| format!("{:?}", np::orient3d(na3, nb3, nc3, nd3))), &pts);
-        #[cfg(not(table_format = "q256_256"))]
+        #[cfg(not(published_profile = "q256_256"))]
         {
             let ((oe2, ne2), (of2, nf2)) = (pt2(&pts[6..8]), pt2(&pts[8..10]));
             ori.check(value(|| format!("{:?}", op::incircle(oa2, ob2, oc2, oe2))), value(|| format!("{:?}", np::incircle(na2, nb2, nc2, ne2))), &pts);
@@ -1248,7 +1252,7 @@ fn intervals_and_predicates_are_bit_identical_to_0_6_5() {
         let (ospd, nspd) = (&(&om.transpose() * &om) + &OldMatrix::identity(3), &(&nm.transpose() * &nm) + &NewMatrix::<New>::identity(3));
         let (onot, nnot) = (&(&om.transpose() * &om) - &OldMatrix::identity(3), &(&nm.transpose() * &nm) - &NewMatrix::<New>::identity(3));
         let overdict = |v: Result<op::PdVerdict, _>| v.map(|v| format!("{v:?}"));
-        let nverdict = |v: Result<np::PdVerdict, _>| v.map(|v| format!("{v:?}"));
+        let nverdict = |v: Result<np::PdVerdict<New>, _>| v.map(|v| format!("{v:?}"));
         pd.check(fallible(|| overdict(op::pd_verdict(&ospd))), fallible(|| nverdict(np::pd_verdict(&nspd))), &mm);
         pd.check(fallible(|| overdict(op::pd_verdict(&onot))), fallible(|| nverdict(np::pd_verdict(&nnot))), &mm);
     }
@@ -1289,7 +1293,7 @@ fn inference_kernels_are_bit_identical_to_0_6_5() {
         let packed: Vec<u8> = tr.chunks(5).map(|c| c.iter().fold(0u8, |acc, &t| acc * 3 + (t + 1) as u8)).collect();
         let s = rng.raw(FRAC + 1);
         dots.check(value(|| old_res(ot::packed_trit_dot(&packed, cols, &oa, raw::old(s).raw()))), value(|| raw::new_raw(nt::packed_trit_dot(&packed, cols, &na, raw::new(s)))), &(&tr, &a, s));
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+        #[cfg(any(published_profile = "q16_16", published_profile = "q32_32"))]
         dots.check(value(|| format!("{:?}", ot::tq19_dot_q2f(&w, &oa))), value(|| format!("{:?}", nt::tq19_dot_q2f(&w, &na))), &(&w, &a));
         // the dense matrix and its repacked forms
         let data = weights(&mut rng, rows * cols);
@@ -1303,7 +1307,7 @@ fn inference_kernels_are_bit_identical_to_0_6_5() {
         dense.check(value(|| old_vec_res(om.matvec_par(&oa))), value(|| new_raws_of(nm.matvec_par(&na))), &(&data, &a));
         dense.check(value(|| om.matvec_batch(&obr).into_iter().map(old_vec_res).collect::<Vec<_>>()), value(|| nm.matvec_batch(&nbr).into_iter().map(new_raws_of).collect::<Vec<_>>()), &(&data, &b));
         dense.check(value(|| om.matvec_batch_par(&obr).into_iter().map(old_vec_res).collect::<Vec<_>>()), value(|| nm.matvec_batch_par(&nbr).into_iter().map(new_raws_of).collect::<Vec<_>>()), &(&data, &b));
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+        #[cfg(any(published_profile = "q16_16", published_profile = "q32_32"))]
         {
             dense.check(value(|| format!("{:?}", om.matvec_q2f(&oa))), value(|| format!("{:?}", nm.matvec_q2f(&na))), &(&data, &a));
             dense.check(value(|| format!("{:?}", om.matvec_q2f_batch_par(&obr))), value(|| format!("{:?}", nm.matvec_q2f_batch_par(&nbr))), &(&data, &b));
@@ -1314,7 +1318,7 @@ fn inference_kernels_are_bit_identical_to_0_6_5() {
         let (oh, nh) = (ot::HybridTQ19::from_tq19(&om), nt::HybridTQ19::from_tq19(&nm));
         hybrid.check(value(|| old_vec_res(oh.matvec(&oa))), value(|| new_raws_of(nh.matvec(&na))), &(&data, &a));
         hybrid.check(value(|| oh.matvec_batch_par(&obr).into_iter().map(old_vec_res).collect::<Vec<_>>()), value(|| nh.matvec_batch_par(&nbr).into_iter().map(new_raws_of).collect::<Vec<_>>()), &(&data, &b));
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+        #[cfg(any(published_profile = "q16_16", published_profile = "q32_32"))]
         {
             planar.check(value(|| format!("{:?}", op.matvec_q2f(&oa))), value(|| format!("{:?}", np_.matvec_q2f(&na))), &(&data, &a));
             hybrid.check(value(|| format!("{:?}", oh.matvec_q2f(&oa))), value(|| format!("{:?}", nh.matvec_q2f(&na))), &(&data, &a));
@@ -1325,7 +1329,7 @@ fn inference_kernels_are_bit_identical_to_0_6_5() {
             rowscaled.check(value(|| format!("{:?}", or.matvec_q2f(&oa))), value(|| format!("{:?}", nr.matvec_q2f(&na))), &(&data, &a, &scales));
             rowscaled.check(value(|| format!("{:?}", or.matvec_q2f_batch_par(&obr))), value(|| format!("{:?}", nr.matvec_q2f_batch_par(&nbr))), &(&data, &b, &scales));
         }
-        #[cfg(table_format = "q16_16")]
+        #[cfg(published_profile = "q16_16")]
         {
             let codes: Vec<i8> = (0..rows * cols).map(|_| ((rng.next() % 243) as i32 - 121) as i8).collect();
             let scales: Vec<u64> = (0..rows).map(|_| rng.next() % (1u64 << 28)).collect();
@@ -1343,13 +1347,13 @@ fn inference_kernels_are_bit_identical_to_0_6_5() {
         for kind in [ot::bits::HalfKind::BFloat16, ot::bits::HalfKind::Binary16] {
             let nkind = match kind { ot::bits::HalfKind::BFloat16 => nt::bits::HalfKind::BFloat16, _ => nt::bits::HalfKind::Binary16 };
             bits.check(value(|| ot::bits::to_tq19_raw(hb, kind).map_err(|e| format!("{e:?}"))), value(|| nt::bits::to_tq19_raw(hb, nkind).map_err(|e| format!("{e:?}"))), &hb);
-            #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+            #[cfg(any(published_profile = "q16_16", published_profile = "q32_32"))]
             bits.check(value(|| ot::bits::to_fixed(hb, kind).map(raw::old_raw).map_err(|e| format!("{e:?}"))), value(|| nt::bits::to_fixed::<_, FRAC>(hb, nkind).map(raw::new_raw).map_err(|e| format!("{e:?}"))), &hb);
         }
         let wb: Vec<u8> = (0..rows * cols * 2).map(|_| (rng.next() & 0xFF) as u8).collect();
         let (ow, nw) = (ot::bits::WeightBits::from_le_bytes(rows, cols, ot::bits::HalfKind::BFloat16, &wb).unwrap(), nt::bits::WeightBits::from_le_bytes(rows, cols, nt::bits::HalfKind::BFloat16, &wb).unwrap());
         bits.check(value(|| ot::quantize::quantize_tq19(&ow).map(|m| m.data().to_vec())), value(|| nt::quantize::quantize_tq19(&nw).map(|m| m.data().to_vec())), &wb);
-        #[cfg(any(table_format = "q16_16", table_format = "q32_32"))]
+        #[cfg(any(published_profile = "q16_16", published_profile = "q32_32"))]
         bits.check(value(|| ot::quantize::quantize_tq19_rowscaled(&ow).map(|m| (m.data().to_vec(), m.scales_q32().to_vec()))), value(|| nt::quantize::quantize_tq19_rowscaled(&nw).map(|m| (m.data().to_vec(), m.scales_q32().to_vec()))), &wb);
     }
     for t in [&dots, &dense, &planar, &hybrid, &rowscaled, &bits] {
@@ -1373,9 +1377,9 @@ macro_rules! fasc_case {
                 .map_err(|e| format!("{e:?}"))
         });
         let new = fallible(|| -> Result<(String, String), String> {
-            let $p = |s: &str| g_math::canonical::gmath_parse(s).map_err(|e| format!("{e:?}"));
+            let $p = |s: &str| g_math::canonical::gmath_parse::<New>(s).map_err(|e| format!("{e:?}"));
             let tree = $e;
-            g_math::canonical::evaluate(&tree)
+            g_math::canonical::evaluate::<New>(&tree)
                 .map(|v| (format!("{v}"), v.to_decimal_string(30)))
                 .map_err(|e| format!("{e:?}"))
         });
@@ -1502,15 +1506,15 @@ fn fasc_evaluation_is_identical_to_0_6_7() {
 
 /// The decimal compute digits of this build's profile up to 0.6.7 (the
 /// word every `DecimalFixed<D>` ran on, whatever `D`).
-#[cfg(table_format = "q16_16")]
+#[cfg(published_profile = "q16_16")]
 const OLD_DECIMAL_DP: u8 = 9;
-#[cfg(table_format = "q32_32")]
+#[cfg(published_profile = "q32_32")]
 const OLD_DECIMAL_DP: u8 = 19;
-#[cfg(table_format = "q64_64")]
+#[cfg(published_profile = "q64_64")]
 const OLD_DECIMAL_DP: u8 = 38;
-#[cfg(table_format = "q128_128")]
+#[cfg(published_profile = "q128_128")]
 const OLD_DECIMAL_DP: u8 = 77;
-#[cfg(table_format = "q256_256")]
+#[cfg(published_profile = "q256_256")]
 const OLD_DECIMAL_DP: u8 = 154;
 
 /// Both crates' `try_` transcendentals at one `D` on the same raws. Where

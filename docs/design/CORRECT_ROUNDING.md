@@ -82,7 +82,7 @@ its error bound in units of 2^-p relative.
 
 ## 4. Where it plugs in
 
-- Canonical: `evaluate_in` runs the existing evaluator (routing, exact
+- Canonical: `evaluate` runs the existing evaluator (routing, exact
   domains, UGOD, the output mode); when the result is binary or decimal and
   came through a compute tier (a transcendental or an inexact division in
   the tree), it is replaced by the tracked evaluation of the same tree,

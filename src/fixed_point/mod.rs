@@ -7,9 +7,9 @@
 /// Canonical FASC entry point: the public API for gMath.
 pub mod canonical;
 
-/// Imperative numeric types: `FixedPoint`, `FixedVector`, `FixedMatrix`.
+/// Imperative numeric types: `Fixed`, `FixedVector`, `FixedMatrix`.
 pub mod imperative;
-pub use imperative::{FixedPoint, FixedVector, FixedMatrix, Interval, Scalar};
+pub use imperative::{FixedVector, FixedMatrix, Interval, Scalar};
 
 // Width as a type: a format is a storage word and a number of fractional bits.
 pub use fixed_num::{Fixed, FixedNum, Q16_16, Q32_32, Q64_64, Q128_128, Q256_256};
@@ -37,10 +37,6 @@ pub(crate) mod width;
 pub(crate) mod fixed_num;
 // Correct rounding by two stages: the compute tier with bounds, then Mpf.
 pub(crate) mod exact;
-
-/// Build-time Q-format configuration (FRAC_BITS and derived constants).
-// SCAFFOLDING (width-types phase 7): the build's profile, read by the tests only; removed in 7c.
-#[doc(hidden)] pub mod frac_config;
 
 // Internal modules — pub for integration test access, hidden from docs
 #[doc(hidden)] pub mod domains;

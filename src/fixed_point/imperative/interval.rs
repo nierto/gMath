@@ -50,7 +50,6 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use super::{FixedMatrix, FixedVector};
 use super::kernels;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Compute, Fixed, FixedNum};
 use crate::fixed_point::width::{Storage, WideInt};
 use crate::fixed_point::core_types::errors::OverflowDetected;
@@ -197,7 +196,7 @@ where
 /// every choice of operands within the input intervals. See the module
 /// documentation for what that guarantee rests on and what it excludes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Interval<T = FixedPoint> {
+pub struct Interval<T> {
     lo: T,
     hi: T,
 }

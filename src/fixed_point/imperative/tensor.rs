@@ -9,7 +9,6 @@
 //! downscale, giving 1 ULP regardless of the number of summed terms.
 
 use super::kernels;
-use super::FixedPoint;
 use crate::fixed_point::fixed_num::{Fixed, FixedNum};
 use crate::fixed_point::width::{Storage};
 use super::FixedVector;
@@ -25,7 +24,7 @@ use super::FixedMatrix;
 /// Shape `[d₀, d₁, ..., d_{N-1}]` means the tensor has N indices,
 /// each ranging from 0 to d_i - 1.
 #[derive(Clone, Debug)]
-pub struct Tensor<T = FixedPoint> {
+pub struct Tensor<T> {
     shape: Vec<usize>,
     strides: Vec<usize>,
     data: Vec<T>,

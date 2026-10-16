@@ -58,7 +58,7 @@ use super::tensor::Tensor;
 use crate::fixed_point::core_types::errors::OverflowDetected;
 use crate::fixed_point::fixed_num::FixedNum;
 use crate::fixed_point::width::Storage;
-use crate::fixed_point::{Fixed, FixedPoint};
+use crate::fixed_point::Fixed;
 
 /// The high bits of the first tag byte of the 0.7.0 scalar format.
 const FORMAT_TAG: u8 = 0x20;
@@ -153,14 +153,6 @@ where
     /// Size in bytes of the raw storage (without tag).
     pub fn raw_byte_len() -> usize {
         S::BYTES
-    }
-}
-
-impl FixedPoint {
-    /// The tag a 0.6.x build of this profile and split wrote; the same as
-    /// [`Fixed::legacy_tag`] (kept under its 0.6.x name).
-    pub fn profile_tag() -> u8 {
-        Self::legacy_tag()
     }
 }
 
@@ -322,7 +314,7 @@ pub const MANIFOLD_TAG_GRASSMANNIAN: u8 = 0x05;
 /// This bundles the manifold identity (type + parameters) with the
 /// coordinate vector, so a receiver can reconstruct the full context.
 #[derive(Clone, Debug)]
-pub struct ManifoldPoint<T = FixedPoint> {
+pub struct ManifoldPoint<T> {
     /// Manifold type tag.
     pub manifold_tag: u8,
     /// Manifold parameters (interpretation depends on tag).

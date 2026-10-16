@@ -1,11 +1,10 @@
 # Fresh randomized decomposition corpus, weekly and on demand.
 #
 # Draws a new seed, regenerates tests/data/decomposition_random_refs.rs with
-# mpmath (pinned, in a virtualenv), and runs the randomized gate on every
-# profile and at GMATH_FRAC_BITS=10. The committed corpus runs on every push in
-# linalg-decompositions; this job keeps drawing cases no one has looked at. All
-# jobs of one run share the seed, the log prints it, and a failing case names
-# the command that reproduces its corpus.
+# mpmath (pinned, in a virtualenv), and runs the randomized gate at every
+# format in one build. The committed corpus runs on every push in ci.yml;
+# this job keeps drawing cases no one has looked at. The log prints the
+# seed, and a failing case names the command that reproduces its corpus.
 name: linalg-decompositions-fresh
 
 on:
@@ -20,16 +19,6 @@ on:
 
 jobs:
   fresh-seed:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { profile: realtime, frac_bits: "" }
-          - { profile: realtime, frac_bits: "10" }
-          - { profile: compact, frac_bits: "" }
-          - { profile: embedded, frac_bits: "" }
-          - { profile: balanced, frac_bits: "" }
-          - { profile: scientific, frac_bits: "" }
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (plain git - no external actions)
@@ -54,9 +43,5 @@ jobs:
           /tmp/refs-venv/bin/python scripts/generate_decomposition_refs.py --random --seed "$SEED" --cases 64
 
       - name: Randomized decomposition gate
-        env:
-          GMATH_PROFILE: ${{ matrix.profile }}
-          FRAC_BITS: ${{ matrix.frac_bits }}
         run: |
-          if [ -n "$FRAC_BITS" ]; then export GMATH_FRAC_BITS="$FRAC_BITS"; fi
-          cargo test --no-fail-fast --test decomposition_convergence_validation random_corpus -- --nocapture
+          cargo test --release --no-fail-fast --test decomposition_convergence_validation random_corpus -- --nocapture

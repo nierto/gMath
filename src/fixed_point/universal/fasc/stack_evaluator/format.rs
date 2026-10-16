@@ -7,7 +7,6 @@
 
 #![allow(clippy::all, unused_braces)]
 
-use crate::deployment_profiles::DeploymentProfile;
 use crate::fixed_point::domains::balanced_ternary::ternary_types::{TernaryRaw, UniversalTernaryFixed};
 use crate::fixed_point::domains::binary_fixed::binary_types::{BinaryRaw, UniversalBinaryFixed};
 use crate::fixed_point::domains::decimal_fixed::decimal_types::UniversalDecimalTiered;
@@ -34,8 +33,6 @@ pub trait FascFormat: FixedNum + 'static {
     const MAX_BINARY_TIER: u8;
     /// The top of the ternary UGOD ladder for this format.
     const MAX_TERNARY_TIER: u8;
-    /// The deployment profile this format was.
-    const DEPLOYMENT_PROFILE: DeploymentProfile;
     /// Fraction bits of UGOD tier 1 for this format: `F` on a 32-bit word,
     /// 16 for the internal Q16.16 tier elsewhere.
     const TIER1_FRAC_BITS: u32;
@@ -170,7 +167,6 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
     const TIER1_FRAC_BITS: u32 = F;
     const TIER1_RATIONAL_FRAC_BITS: u32 = F;
     const NARROW_DECIMAL: bool = true;
-    const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Realtime;
     fn decimal_to_binary_storage(dp: u8, scaled: i32) -> Result<i32, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
 
@@ -670,7 +666,6 @@ impl FascFormat for Fixed<i64, 32> {
     const TIER1_FRAC_BITS: u32 = 16;
     const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
     const NARROW_DECIMAL: bool = true;
-    const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Compact;
     fn decimal_to_binary_storage(dp: u8, scaled: i64) -> Result<i64, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
 
@@ -1170,7 +1165,6 @@ impl FascFormat for Fixed<i128, 64> {
     const TIER1_FRAC_BITS: u32 = 16;
     const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
     const NARROW_DECIMAL: bool = false;
-    const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Embedded;
     fn decimal_to_binary_storage(dp: u8, scaled: i128) -> Result<i128, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
 
@@ -1672,7 +1666,6 @@ impl FascFormat for Fixed<I256, 128> {
     const TIER1_FRAC_BITS: u32 = 16;
     const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
     const NARROW_DECIMAL: bool = false;
-    const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Balanced;
     fn decimal_to_binary_storage(dp: u8, scaled: I256) -> Result<I256, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
 
@@ -2202,7 +2195,6 @@ impl FascFormat for Fixed<I512, 256> {
     const TIER1_FRAC_BITS: u32 = 16;
     const TIER1_RATIONAL_FRAC_BITS: u32 = 0;
     const NARROW_DECIMAL: bool = false;
-    const DEPLOYMENT_PROFILE: DeploymentProfile = DeploymentProfile::Scientific;
     fn decimal_to_binary_storage(dp: u8, scaled: I512) -> Result<I512, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
 
