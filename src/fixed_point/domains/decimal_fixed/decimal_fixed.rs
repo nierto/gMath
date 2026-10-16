@@ -87,16 +87,6 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         Self { value }
     }
     
-    /// Create from raw scaled value with overflow check
-    #[inline(always)]
-    pub fn from_raw_checked(value: i128) -> Result<Self, ParseError> {
-        if value > Self::MAX_VALUE || value < Self::MIN_VALUE {
-            Err(ParseError::Overflow)
-        } else {
-            Ok(Self { value })
-        }
-    }
-    
     /// Create from integer value (no decimal part)
     ///
     /// Panics when `int_val * 10^DECIMALS` leaves i128 (only possible for

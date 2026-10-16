@@ -214,7 +214,6 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `ZERO` | Zero value |
 | `ONE` | One value |
 | `from_raw` | Create from raw scaled value (internal use) |
-| `from_raw_checked` | Create from raw scaled value with overflow check |
 | `from_integer` | Create from integer value (no decimal part) |
 | `try_from_integer` | Create from integer value, `Err(TierOverflow)` when `int_val * 10^DECIMALS` leaves i128. |
 | `from_parts` | Create from parts: integer and fractional parts |
