@@ -600,6 +600,14 @@ mod serde_impl {
                         fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
                             self.visit_bytes(&v)
                         }
+                        // formats that write bytes as an array of u8 (JSON, among others)
+                        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                            let mut v = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                            while let Some(b) = seq.next_element::<u8>()? {
+                                v.push(b);
+                            }
+                            self.visit_bytes(&v)
+                        }
                     }
                     deserializer.deserialize_bytes(V::<S, F>(PhantomData))
                 }
@@ -634,6 +642,14 @@ mod serde_impl {
                     Fixed::from_bytes(v).map_err(|_| E::custom("invalid Fixed bytes"))
                 }
                 fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                    self.visit_bytes(&v)
+                }
+                // formats that write bytes as an array of u8 (JSON, among others)
+                fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                    let mut v = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                    while let Some(b) = seq.next_element::<u8>()? {
+                        v.push(b);
+                    }
                     self.visit_bytes(&v)
                 }
             }

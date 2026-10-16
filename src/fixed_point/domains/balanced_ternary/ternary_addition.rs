@@ -91,25 +91,23 @@ pub fn subtract_ternary_tq40_40(a: i128, b: i128) -> Result<i128, OverflowDetect
 }
 
 // ============================================================================
-// TIER 4: TQ80.80 ADD/SUBTRACT (I256 storage, NEVER FAILS)
+// TIER 4: TQ80.80 ADD/SUBTRACT (I256 storage)
 // ============================================================================
 
-/// TQ80.80 addition (maximum precision, never fails)
+/// TQ80.80 addition.
 ///
-/// **PRECISION**: 64 integer + 64 fractional trits
-/// **STORAGE**: I256 operations with saturation
-/// **GUARANTEE**: Never fails, uses saturation for extreme overflow
+/// Panics on overflow (it saturated before 0.7.0, a silent wrong value); the
+/// fallible form is [`add_ternary_tq80_80_checked`].
 #[inline]
 pub fn add_ternary_tq80_80(a: I256, b: I256) -> I256 {
-    // I256 addition with saturation protection
-    a.saturating_add(b)
+    a.checked_add(b).expect("ternary TQ80.80 addition overflow")
 }
 
-/// TQ80.80 subtraction (maximum precision, never fails)
+/// TQ80.80 subtraction. Panics on overflow (it saturated before 0.7.0); the
+/// fallible form is [`subtract_ternary_tq80_80_checked`].
 #[inline]
 pub fn subtract_ternary_tq80_80(a: I256, b: I256) -> I256 {
-    // I256 subtraction with saturation protection
-    a.saturating_sub(b)
+    a.checked_sub(b).expect("ternary TQ80.80 subtraction overflow")
 }
 
 // ============================================================================
@@ -157,21 +155,19 @@ pub fn subtract_ternary_tq160_160(a: I512, b: I512) -> Result<I512, OverflowDete
 }
 
 // ============================================================================
-// TIER 6: TQ320.320 ADD/SUBTRACT (I1024 storage, saturating — NEVER FAILS)
+// TIER 6: TQ320.320 ADD/SUBTRACT (I1024 storage)
 // ============================================================================
 
-/// TQ320.320 addition (maximum precision, never fails)
+/// TQ320.320 addition. Panics on overflow (it wrapped before 0.7.0).
 #[inline]
 pub fn add_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
-    // I1024 addition — wrap on overflow (saturating not available, but
-    // at 1024 bits the range is so enormous overflow is practically impossible)
-    a + b
+    a.checked_add(b).expect("ternary TQ320.320 addition overflow")
 }
 
-/// TQ320.320 subtraction (maximum precision, never fails)
+/// TQ320.320 subtraction. Panics on overflow (it wrapped before 0.7.0).
 #[inline]
 pub fn subtract_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
-    a - b
+    a.checked_sub(b).expect("ternary TQ320.320 subtraction overflow")
 }
 
 // ============================================================================

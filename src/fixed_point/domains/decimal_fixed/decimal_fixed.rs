@@ -516,10 +516,42 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
         }
     }
     
-    /// Convert to f64 (lossy conversion for display/debugging)
-    #[inline(always)]
+    /// Convert to f64: the binary64 nearest to `raw / 10^DECIMALS` (ties to
+    /// even), assembled from the raw integer with integer arithmetic only.
+    /// "Lossy" because most decimals have no exact binary64; before 0.7.0 this
+    /// divided two converted floats and could round twice (1 ulp off).
     pub fn to_f64_lossy(self) -> f64 {
-        (self.value as f64) / (Self::SCALE as f64)
+        if self.value == 0 {
+            return 0.0;
+        }
+        let (n, d) = (self.value.unsigned_abs(), Self::SCALE as u128);
+        // value = (q + r / d) * 2^e; long division until q has 55 bits
+        // (r < d <= 10^38 < 2^127, so r << 1 fits u128)
+        let (mut q, mut r, mut e) = (n / d, n % d, 0i32);
+        while 128 - q.leading_zeros() < 55 {
+            r <<= 1;
+            q <<= 1;
+            if r >= d {
+                q |= 1;
+                r -= d;
+            }
+            e -= 1;
+        }
+        let drop = 128 - q.leading_zeros() - 53;
+        let mut mant = q >> drop;
+        let rest = q & ((1u128 << drop) - 1);
+        let half = 1u128 << (drop - 1);
+        if rest > half || (rest == half && (r != 0 || mant & 1 == 1)) {
+            mant += 1;
+        }
+        // mant in [2^52, 2^53]: value = mant * 2^(e + drop), always a normal binary64
+        let mut exp = e + drop as i32 + 52;
+        if mant == 1 << 53 {
+            mant >>= 1;
+            exp += 1;
+        }
+        let bits = (((exp + 1023) as u64) << 52) | (mant as u64 & ((1u64 << 52) - 1)) | ((self.value < 0) as u64) << 63;
+        f64::from_bits(bits)
     }
     
     /// Convert to different decimal precision

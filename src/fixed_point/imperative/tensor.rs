@@ -473,7 +473,8 @@ where
 
 /// Raise an index: T^i = g^{ij} T_j (contraction with metric inverse).
 ///
-/// Contracts index `idx` of tensor T with the second index of `metric_inverse`.
+/// Contracts index `idx` of tensor T with the second index of
+/// `metric_inverse`; the raised index stays at position `idx`.
 pub fn raise_index<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, idx: usize, metric_inverse: &Tensor<Fixed<S, F>>) -> Tensor<Fixed<S, F>>
 where
     Fixed<S, F>: FixedNum<Storage = S>,
@@ -481,12 +482,13 @@ where
     assert_eq!(metric_inverse.rank(), 2, "raise_index: metric must be rank 2");
     assert_eq!(t.shape[idx], metric_inverse.shape()[1],
         "raise_index: dimension mismatch");
-    contract(metric_inverse, t, &[(1, idx)])
+    index_back_in_place(contract(metric_inverse, t, &[(1, idx)]), idx)
 }
 
 /// Lower an index: T_i = g_{ij} T^j (contraction with metric).
 ///
-/// Contracts index `idx` of tensor T with the second index of `metric`.
+/// Contracts index `idx` of tensor T with the second index of `metric`; the
+/// lowered index stays at position `idx`.
 pub fn lower_index<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, idx: usize, metric: &Tensor<Fixed<S, F>>) -> Tensor<Fixed<S, F>>
 where
     Fixed<S, F>: FixedNum<Storage = S>,
@@ -494,7 +496,19 @@ where
     assert_eq!(metric.rank(), 2, "lower_index: metric must be rank 2");
     assert_eq!(t.shape[idx], metric.shape()[1],
         "lower_index: dimension mismatch");
-    contract(metric, t, &[(1, idx)])
+    index_back_in_place(contract(metric, t, &[(1, idx)]), idx)
+}
+
+/// `contract(g, t, &[(1, idx)])` puts the new index first; move it back to
+/// position `idx` so the result has `t`'s index order (before 0.7.0 it stayed
+/// first, which transposed the result for any `idx > 0`).
+fn index_back_in_place<S: Storage, const F: u32>(r: Tensor<Fixed<S, F>>, idx: usize) -> Tensor<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    if idx == 0 { return r; }
+    let perm: Vec<usize> = (0..r.rank()).map(|k| if k < idx { k + 1 } else if k == idx { 0 } else { k }).collect();
+    transpose(&r, &perm)
 }
 
 /// Symmetrize over specified indices: average over all permutations.
