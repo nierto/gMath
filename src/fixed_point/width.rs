@@ -157,32 +157,32 @@ macro_rules! word_wide_int {
         impl WideInt for $t {
             const BITS: u32 = $bits;
             const ZERO: Self = $t::zero();
-            #[inline] fn zero() -> Self { $t::zero() }
-            #[inline] fn one() -> Self { $t::from_i128(1) }
-            #[inline] fn from_i64(v: i64) -> Self { $t::from_i128(v as i128) }
-            #[inline] fn from_i128(v: i128) -> Self { $t::from_i128(v) }
-            #[inline] fn from_i128_checked(v: i128) -> Option<Self> { Some($t::from_i128(v)) }
-            #[inline] fn is_negative(self) -> bool { $t::is_negative(self) }
-            #[inline] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
-            #[inline] fn checked_add_wide(self, rhs: Self) -> Option<Self> { $t::checked_add(self, rhs) }
-            #[inline] fn checked_sub_wide(self, rhs: Self) -> Option<Self> { $t::checked_sub(self, rhs) }
-            #[inline] fn checked_neg_wide(self) -> Option<Self> { $t::checked_neg(self) }
-            #[inline] fn shl_bits(self, n: u32) -> Self { self << n as usize }
-            #[inline] fn shr_bits(self, n: u32) -> Self { self >> n as $shr }
-            #[inline] fn bit(self, i: u32) -> bool { (self.words[(i / 64) as usize] >> (i % 64)) & 1 == 1 }
-            #[inline]
+            #[inline(always)] fn zero() -> Self { $t::zero() }
+            #[inline(always)] fn one() -> Self { $t::from_i128(1) }
+            #[inline(always)] fn from_i64(v: i64) -> Self { $t::from_i128(v as i128) }
+            #[inline(always)] fn from_i128(v: i128) -> Self { $t::from_i128(v) }
+            #[inline(always)] fn from_i128_checked(v: i128) -> Option<Self> { Some($t::from_i128(v)) }
+            #[inline(always)] fn is_negative(self) -> bool { $t::is_negative(self) }
+            #[inline(always)] fn bit_length(self) -> u32 { words_bit_length(&self.words) }
+            #[inline(always)] fn checked_add_wide(self, rhs: Self) -> Option<Self> { $t::checked_add(self, rhs) }
+            #[inline(always)] fn checked_sub_wide(self, rhs: Self) -> Option<Self> { $t::checked_sub(self, rhs) }
+            #[inline(always)] fn checked_neg_wide(self) -> Option<Self> { $t::checked_neg(self) }
+            #[inline(always)] fn shl_bits(self, n: u32) -> Self { self << n as usize }
+            #[inline(always)] fn shr_bits(self, n: u32) -> Self { self >> n as $shr }
+            #[inline(always)] fn bit(self, i: u32) -> bool { (self.words[(i / 64) as usize] >> (i % 64)) & 1 == 1 }
+            #[inline(always)]
             fn low_bits_any(self, n: u32) -> bool {
                 let (w, b) = ((n / 64) as usize, n % 64);
                 self.words[..w].iter().any(|&x| x != 0) || (b > 0 && self.words[w] & ((1u64 << b) - 1) != 0)
             }
-            #[inline]
+            #[inline(always)]
             fn magnitude_bit_length(self) -> u32 {
                 // -MIN wraps to MIN, whose words read as the magnitude 2^(BITS-1)
                 let m = if self.is_negative() { -self } else { self };
                 words_bit_length(&m.words)
             }
-            #[inline] fn divmod(self, d: Self) -> (Self, Self) { $divmod(self, d) }
-            #[inline]
+            #[inline(always)] fn divmod(self, d: Self) -> (Self, Self) { $divmod(self, d) }
+            #[inline(always)]
             fn word(self, i: u32) -> u64 {
                 match self.words.get(i as usize) { Some(w) => *w, None => if self.is_negative() { u64::MAX } else { 0 } }
             }
