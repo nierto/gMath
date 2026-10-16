@@ -6,7 +6,7 @@
 # linalg-decompositions, realtime-splits, ternary-domain, wide-tier),
 # which ran subsets of the same suites once per GMATH_PROFILE.
 #
-# full-suite: lib, integration and doc tests, release, inference + serde.
+# full-suite: lib, integration and doc tests, release, serde.
 # no-features: the crate and its lib tests without optional features.
 # splits: the full suite with the realtime splits F = 8, 12, 20, 24 added
 #   (the range the suite gates, owner decision 2026-09-24).
@@ -30,7 +30,7 @@ jobs:
           git checkout -q FETCH_HEAD
 
       - name: Full suite, every format
-        run: cargo test --release --features inference,serde --no-fail-fast
+        run: cargo test --release --features serde --no-fail-fast
 
   no-features:
     runs-on: ubuntu-latest
@@ -60,7 +60,7 @@ jobs:
       - name: Full suite with the realtime splits 8, 12, 20, 24
         env:
           RUSTFLAGS: "--cfg gmath_all_splits"
-        run: cargo test --release --features inference,serde --no-fail-fast
+        run: cargo test --release --features serde --no-fail-fast
 
   edge-splits:
     runs-on: ubuntu-latest

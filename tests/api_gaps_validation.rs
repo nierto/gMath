@@ -5,10 +5,10 @@
 //! SVD with automatic rank, the Lie groups' actions, inner products and
 //! dimensions, interval and verdict predicates, FixedVector::from_f32_slice,
 //! FixedMatrix::swap_rows, the SE(3) hat / vee maps, the tensor
-//! decompositions' compression ratios, the parallel packed-trit matvec, and
-//! (outside the format suite) DecimalFixed's batch multiply, float conversion
-//! and predicates, the wide ternary add / subtract tiers, the tq19 accessors
-//! and the serde impls.
+//! decompositions' compression ratios, and (outside the format suite)
+//! DecimalFixed's batch multiply, float conversion and predicates, the wide
+//! ternary add / subtract tiers and the serde impls. The tq19 part moved to
+//! the `g_math_inference` crate with the module.
 //!
 //! References: `tests/data/api_gaps_refs.rs` from
 //! `scripts/generate_api_gap_refs.py` (exact sums of products, or mpmath at
@@ -35,8 +35,6 @@ macro_rules! suite {
             use g_math::fixed_point::imperative::tensor::{lower_index, raise_index};
             use g_math::fixed_point::imperative::tensor_decompose::{truncated_svd, truncated_svd_auto, tucker_decompose};
             use g_math::fixed_point::{Fixed, Interval};
-            #[cfg(feature = "inference")]
-            use g_math::tq19;
 
             #[allow(dead_code)]
             mod refs {
@@ -212,32 +210,6 @@ macro_rules! suite {
                 assert!(pd_verdict(&pd).unwrap().is_proven_positive_definite());
                 assert!(!pd_verdict(&indef).unwrap().is_proven_positive_definite());
             }
-
-            #[cfg(feature = "inference")]
-            #[test]
-            fn packed_trit_matvec_par_equals_the_serial_kernel() {
-                use g_math::fixed_point::domains::balanced_ternary::{pack_trits, Trit};
-                // small exact case: scale 1, activations integers
-                let trits = [Trit::Pos, Trit::Neg, Trit::Zero, Trit::Pos, Trit::Pos, Trit::Neg, Trit::Zero];
-                let (rows, cols) = (2, 7);
-                let mut both = trits.to_vec();
-                both.extend(trits.iter().map(|t| match t { Trit::Pos => Trit::Neg, Trit::Neg => Trit::Pos, Trit::Zero => Trit::Zero }));
-                let packed: Vec<u8> = both.chunks(cols).flat_map(|r| pack_trits(r)).collect();
-                let act = fps(&["1", "2", "3", "4", "5", "6", "7"]);
-                let sc = fps(&["1", "0.5"]);
-                let got = tq19::packed_trit_matvec_par(&packed, rows, cols, &act, &sc);
-                // 1 - 2 + 4 + 5 - 6 = 2; second row negated and halved
-                assert_eq!(got, fps(&["2", "-1"]));
-                // larger: parallel and serial bit-identical
-                let (rows, cols) = (37, 53);
-                let mut s = 12345u64;
-                let mut next = || { s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (s >> 33) as u32 };
-                let bpr = (cols + 4) / 5;
-                let packed: Vec<u8> = (0..rows * bpr).map(|_| (next() % 243) as u8).collect();
-                let act: Vec<FixedPoint> = (0..cols).map(|_| fp(&format!("{}", (next() % 16) as i32 - 8))).collect();
-                let sc: Vec<FixedPoint> = (0..rows).map(|_| fp(&format!("0.{}", 1 + next() % 9))).collect();
-                assert_eq!(tq19::packed_trit_matvec_par(&packed, rows, cols, &act, &sc), tq19::packed_trit_matvec(&packed, rows, cols, &act, &sc));
-            }
         }
     };
 }
@@ -321,40 +293,6 @@ mod ternary {
     fn trit_as_i8() {
         assert_eq!([Trit::Neg.as_i8(), Trit::Zero.as_i8(), Trit::Pos.as_i8()], [-1, 0, 1]);
         for v in [-1i8, 0, 1] { assert_eq!(Trit::from_i8(v).unwrap().as_i8(), v); }
-    }
-}
-
-#[cfg(feature = "inference")]
-mod tq19_accessors {
-    use g_math::fixed_point::Fixed;
-    use g_math::tq19::bits::{to_storage_raw, HalfKind, WeightBits};
-    use g_math::tq19::{HybridTQ19, RowScaledTQ19, TQ19Matrix, HYBRID_LOW_TRITS, LOW_BIAS, LOW_MOD, NUM_PLANES, POW3, SPARSE_DENSITY_PERCENT};
-
-    #[test]
-    fn hybrid_counts_its_high_corrections() {
-        // a raw needs a high correction when it leaves the 7-trit low range [-1093, 1093]
-        let data: Vec<i16> = vec![0, 1093, -1093, 1094, -1094, 29524, -29524, 5, 2187, -3000, 12, 0];
-        let h = HybridTQ19::from_tq19(&TQ19Matrix::new(3, 4, data.clone()));
-        let want = data.iter().filter(|&&r| (r as i32).abs() > LOW_BIAS as i32).count();
-        assert_eq!(h.num_high_corrections(), want);
-        assert_eq!((HYBRID_LOW_TRITS, LOW_MOD, LOW_BIAS), (7, 3i32.pow(7), ((3i32.pow(7) - 1) / 2) as i16));
-        assert_eq!(NUM_PLANES, 10);
-        for (i, p) in POW3.iter().enumerate() { assert_eq!(*p as i32, 3i32.pow(i as u32)); }
-        assert_eq!(SPARSE_DENSITY_PERCENT, 5);
-    }
-
-    #[test]
-    fn rowscaled_size_and_weight_bits_storage() {
-        let r = RowScaledTQ19::from_parts(3, 5, vec![1i16; 15], vec![1u64 << 32; 3]);
-        assert_eq!(r.size_bytes(), 15 * 2 + 3 * 8);
-        let halves: [u16; 6] = [0x3f80, 0xbf80, 0x3e00, 0x4040, 0x0000, 0xc2c8]; // bf16: 1, -1, 0.125, 3, 0, -100
-        let bytes: Vec<u8> = halves.iter().flat_map(|h| h.to_le_bytes()).collect();
-        let w = WeightBits::from_le_bytes(2, 3, HalfKind::BFloat16, &bytes).unwrap();
-        for (i, h) in halves.iter().enumerate() {
-            assert_eq!(w.storage_raw::<i32, 10>(i).unwrap(), to_storage_raw::<i32, 10>(*h, HalfKind::BFloat16).unwrap());
-            assert_eq!(w.storage_raw::<i64, 32>(i).unwrap(), to_storage_raw::<i64, 32>(*h, HalfKind::BFloat16).unwrap());
-        }
-        assert_eq!(Fixed::<i32, 10>::from_raw(w.storage_raw::<i32, 10>(5).unwrap()), Fixed::<i32, 10>::from_str("-100"));
     }
 }
 

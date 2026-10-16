@@ -12,17 +12,13 @@ pub mod imperative;
 pub use imperative::{FixedVector, FixedMatrix, Interval, Scalar};
 
 // Width as a type: a format is a storage word and a number of fractional bits.
-pub use fixed_num::{Fixed, FixedNum, Q16_16, Q32_32, Q64_64, Q128_128, Q256_256};
+pub use fixed_num::{Compute, Fixed, FixedNum, Q16_16, Q32_32, Q64_64, Q128_128, Q256_256};
 pub use width::{CircleStorage, Storage, WideInt};
+/// The wide signed integers: storage words of `Q128_128` (`I256`) and
+/// `Q256_256` (`I512`), compute and accumulator words above them.
+pub use domains::binary_fixed::{I256, I512, I1024, I2048};
 
-/// TQ1.9 compact ternary operations: standalone, decoupled from FASC/routing.
-/// Gated behind the `inference` feature flag.
-#[cfg(feature = "inference")]
-pub mod tq19;
-
-/// Public compute-tier (tier N+1) transcendentals over raw `ComputeStorage`.
-/// Gated behind the `inference` feature flag.
-#[cfg(feature = "inference")]
+/// Public compute-tier (tier N+1) transcendentals over a format's compute word.
 pub mod compute_tier;
 
 /// Q64.64 transcendentals, π constants and an exact decimal-literal parser
@@ -54,10 +50,7 @@ pub(crate) mod exact;
 #[doc(hidden)] pub use domains::symbolic;
 
 // Binary domain types (used across internal codebase)
-#[doc(hidden)] pub use domains::binary_fixed::{
-    multiply_binary_i128, I256, I512, I1024, I2048,
-    transcendental,
-};
+#[doc(hidden)] pub use domains::binary_fixed::{multiply_binary_i128, transcendental};
 #[doc(hidden)] pub use domains::binary_fixed::{i256, i512, i1024};
 
 // Decimal domain: `g_math::fixed_point::DecimalFixed` is a supported public type

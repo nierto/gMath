@@ -28,8 +28,6 @@ num-bigint = { version = "0.4", optional = true }
 num-integer = { version = "0.1", optional = true }
 # Optional: serde serialization support
 serde = { version = "1", features = ["derive"], optional = true }
-# Optional: rayon row-parallel TQ1.9 matvec
-rayon = { version = "1.10", optional = true }
 # Optional: gmath!() proc-macro for compile-time literal parsing (published separately)
 # g_math_macros = { path = "g_math_macros", optional = true }
 
@@ -50,14 +48,13 @@ infinite-precision = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
 legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
 serde = ["dep:serde"]    # Serialize/Deserialize impls for Fixed, FixedVector, FixedMatrix, Tensor
-inference = ["dep:rayon"] # TQ1.9 ternary inference ops + rayon row-parallel matvec
 # macros = ["dep:g_math_macros"]    # gmath!() — deferred to separate crate publish
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
     'cfg(q16_16)', 'cfg(q32_32)', 'cfg(q64_64)', 'cfg(q128_128)', 'cfg(q256_256)', 'cfg(q512_512)',
-    'cfg(feature, values("rebuild-tables", "serde", "inference"))',
+    'cfg(feature, values("rebuild-tables", "serde"))',
     'cfg(gmath_all_splits)', 'cfg(gmath_edge_splits)',
 ]
 

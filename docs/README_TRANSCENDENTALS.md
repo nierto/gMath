@@ -66,7 +66,7 @@ Transcendental methods appear on each surface's entry in the index:
 `sincos`/`sinhcosh` (imperative) and `evaluate_sincos`/`evaluate_sinhcosh`
 (canonical). Live signatures on [docs.rs](https://docs.rs/g_math).
 
-With the `inference` feature, **[g_math::compute_tier](../PUBLIC_API.md#compute-tier-transcendentals)**
+**[g_math::compute_tier](../PUBLIC_API.md#compute-tier-transcendentals)**
 exposes the tier-N+1 engines directly over raw `ComputeStorage` values at
 2·FRAC_BITS precision (`exp`/`ln`/`sqrt`/`sinhcosh` plus `sigmoid`/`softplus`/`ln1p`
 compositions) for wide-precision consumers (e.g. chaining on the wide-output

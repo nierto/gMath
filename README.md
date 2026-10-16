@@ -69,11 +69,11 @@ The build-with surface is five layers; everything beneath them is internal.
   decimal-literal parser, exact decimal ratios and a full-width integer
   `mul_div`, for quantities outside the storage tiers. Each function's
   measured error is in the module documentation.
-- **Compute tier** - `g_math::compute_tier` (feature `inference`): the tier-N+1
-  engines over raw compute-tier integers.
-- **TQ1.9** - `g_math::tq19` (feature `inference`): standalone ternary inference,
-  with the five-trit row-scaled form, the weight-bit decoders and quantisers,
-  and batch matvecs that write into one caller-provided buffer.
+- **Compute tier** - `g_math::compute_tier`: the tier-N+1 engines over raw
+  compute-tier integers.
+- **Ternary inference** - the TQ1.9 weight formats and kernels (`g_math::tq19`
+  behind the `inference` feature until 0.6.7) are the separate crate
+  `g_math_inference` from 0.7.0.
 - **Internal** - the `universal`/`fasc` evaluator, the domain implementations
   beneath `DecimalFixed` and the ternary types, the wide-integer types, and the
   shadow/router internals are not part of the surface and may change between
@@ -97,7 +97,7 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
 | [Fused operations](docs/README_FUSED.md) | Compute-tier `sqrt_sum_sq`, `euclidean_distance`, `softmax`, `softmax_mix`, `rms_norm_factor`, `silu` |
 | [Linear algebra](docs/README_LINALG.md) | LU/QR/Cholesky/SVD/eigen/Schur, solvers, matrix functions |
 | [Geometry](docs/README_GEOMETRY.md) | Manifolds, Lie groups, curvature, projective geometry, fiber bundles, ODE, tensors |
-| [Ternary & TQ1.9](docs/README_TERNARY.md) | Balanced-ternary arithmetic and the trit-plane inference weight formats |
+| [Balanced ternary](docs/README_TERNARY.md) | Balanced-ternary arithmetic and trit packing |
 | [Precision & profiles](docs/README_PRECISION.md) | The five profiles, `GMATH_FRAC_BITS`, rounding, validation, feature flags, build |
 
 ## Capabilities
@@ -123,7 +123,7 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
   from the certified set until their bounds are proven. Design and measured
   widths: `docs/design/CERTIFIED_INTERVALS.md`.
 - **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
-  and Lie groups, and standalone TQ1.9 ternary inference.
+  and Lie groups.
 - **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;
   results are bit-identical across platforms within a profile.
 - **Zero float internally, zero runtime dependencies by default.**

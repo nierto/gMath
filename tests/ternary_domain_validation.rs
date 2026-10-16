@@ -11,9 +11,9 @@
 //! trit-wise carry propagation, shift-and-add multiply). The UGOD tiers it
 //! is checked against are *scaled integers* (contract §1a vs §1b), so these
 //! tests double as the bridge proving the two representations agree —
-//! `theorem_trit_truncation_is_round_nearest` most directly. The native-trit
-//! operations that ship (packing, zero-multiply dots) have their own suite
-//! in `tq19_validation.rs`.
+//! `theorem_trit_truncation_is_round_nearest` most directly. The zero-multiply
+//! trit dots built on the packing have their own suite in the
+//! `g_math_inference` crate.
 //!
 //! Profile-independent: Tier 1/2 ternary functions are plain integer ops
 //! with no `table_format` gating. Runs under every profile and feature set.

@@ -64,15 +64,8 @@ pub mod fixed_point;
 // Canonical API — the single public entry point
 pub use fixed_point::canonical;
 
-/// TQ1.9 compact ternary operations: standalone module for inference and signal processing.
-/// Requires the `inference` feature flag.
-#[cfg(feature = "inference")]
-pub use fixed_point::tq19;
-
 /// Compute-tier (tier N+1) transcendentals over raw wide integers: exp, ln,
 /// sqrt, sinhcosh, sigmoid, softplus, ln1p at 2×FRAC_BITS precision.
-/// Requires the `inference` feature flag.
-#[cfg(feature = "inference")]
 pub use fixed_point::compute_tier;
 
 /// Q64.64 exp, ln, sin, cos, π constants and an exact decimal-literal parser.

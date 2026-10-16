@@ -10,8 +10,8 @@ publish = false
 build = "build.rs"
 
 [dependencies]
-g_math = { path = "..", features = ["inference"] }
-g_math_065 = { package = "g_math", version = "=0.6.7", features = ["inference"] }
+g_math = { path = ".." }
+g_math_065 = { package = "g_math", version = "=0.6.7", features = ["inference"] }  # its compute_tier sat behind the feature
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

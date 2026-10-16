@@ -47,7 +47,6 @@ dependencies = [
  "num-integer",
  "num-rational",
  "num-traits",
- "rayon",
 ]
 
 [[package]]

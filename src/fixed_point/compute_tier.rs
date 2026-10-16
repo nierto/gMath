@@ -3,13 +3,12 @@
 //! Direct access to the tier-N+1 transcendental engines that back every
 //! other API in this crate, operating on raw compute-tier values
 //! (`Compute<T>`) at `2F` fraction bits for the format `T = Fixed<S, F>`.
-//! Requires the `inference` feature.
 //!
 //! ## Format
 //!
-//! A `Compute<T>` value represents `raw / 2^(2F)`. This is exactly the
-//! format produced by the `tq19` wide-output `matvec_q2f` family, so those
-//! accumulators feed these functions with no conversion. Use
+//! A `Compute<T>` value represents `raw / 2^(2F)`. Wide accumulators at
+//! that scale (for example the `matvec_q2f` outputs of the separate
+//! `g_math_inference` crate) feed these functions with no conversion. Use
 //! [`from_fixed`]/[`to_fixed`] to cross between storage and the compute
 //! tier; a chain of calls at the compute tier rounds once at the final
 //! [`to_fixed`], not once per step.
@@ -29,7 +28,6 @@
 //! ## Example (any format)
 //!
 //! ```
-//! # #[cfg(feature = "inference")] {
 //! use g_math::fixed_point::compute_tier as ct;
 //! use g_math::fixed_point::Fixed;
 //!
@@ -38,7 +36,6 @@
 //! let y = ct::sigmoid::<Q22_10>(x);                     // stays at 2F fraction bits
 //! let s = ct::to_fixed::<Q22_10>(y);                    // single rounding, back to storage
 //! # let _ = s;
-//! # }
 //! ```
 
 use crate::fixed_point::fixed_num::{Compute, FixedNum};

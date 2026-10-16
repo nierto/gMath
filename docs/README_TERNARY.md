@@ -1,50 +1,18 @@
-# Balanced ternary & TQ1.9 inference
+# Balanced ternary
 
-Base-3 arithmetic with digits {−1, 0, +1}, and the standalone 2-byte ternary
-weight format used for zero-multiply neural-network inference.
+Base-3 arithmetic with digits {−1, 0, +1}.
 
 ## What it is
 
-Two related surfaces. The **balanced-ternary domain**
+The **balanced-ternary domain**
 (`g_math::fixed_point::domains::balanced_ternary`) provides base-3 fixed-point
 arithmetic across six tier formats (TQ10.10 up to TQ320.320) plus trit packing
-(5 balanced trits per byte). **TQ1.9** (`g_math::tq19`, feature `inference`) is a
-decoupled, standalone format for neural-network weights: 1 integer trit + 9
-fractional trits per weight (2 bytes, range ±1.5). Because weights are {−1, 0, +1}
-at the trit level, a dot product needs no multiplications. `PlanarTQ19` and
-`HybridTQ19` are lossless re-encodings of a `TQ19Matrix` that trade layout for
-fewer weight bytes at bit-identical matvec results. `RowScaledTQ19`
-(q16_16/q32_32) carries one quantization scale per row instead of the single
-global step, adapting resolution to each row's own max at unchanged
-2 bytes/weight.
+(5 balanced trits per byte).
 
-All four forms also expose a **wide-output matvec** (`matvec_q2f`, `_par`,
-`_batch_par`; q16_16/q32_32): the exact row accumulator at 2·FRAC_BITS
-fractional precision with exactly one rounding, for consumers whose signal
-sits below the storage rounding floor. `q2f / (1 << FRAC_BITS)` (truncating
-division) reproduces the narrow `matvec` bit-for-bit for `TQ19Matrix`,
-`HybridTQ19`, and `PlanarTQ19`; `RowScaledTQ19` applies its per-row scale to
-the wide dot, which is strictly more precise and may differ from the narrow
-path by at most 1 storage LSB for non-unit scales.
-
-## Usage
-
-TQ1.9 inference (requires `--features inference`):
-
-```rust
-use g_math::tq19::{TQ19Matrix, PlanarTQ19};
-use g_math::fixed_point::FixedPoint;
-
-// 2×3 weight matrix; raw TQ1.9 values, |raw| ≤ 29524. 19683 = 3^9 = weight 1.0.
-let w = TQ19Matrix::new(2, 3, vec![19683, 0, -19683, 0, 19683, 19683]);
-let acts: Vec<_> = [1, 2, 3].iter().map(|&x| FixedPoint::from_int(x).raw()).collect();
-
-let dense = w.matvec(&acts);
-
-// Lossless trit-plane re-encoding: same matvec, fewer weight bytes.
-let planar = PlanarTQ19::from_tq19(&w);
-assert_eq!(planar.matvec(&acts), dense);
-```
+The ternary weight formats for zero-multiply inference (TQ1.9 and its
+compressed and row-scaled forms), the module `g_math::tq19` behind the
+`inference` feature until 0.6.7, are the separate crate `g_math_inference`
+from 0.7.0.
 
 ## What's here
 
@@ -54,43 +22,17 @@ assert_eq!(planar.matvec(&acts), dense);
   [canonical layer](README_ROUTING.md) via `0t` literals or
   `set_gmath_mode("...:ternary")`; transcendentals on ternary values route through
   the binary engines.
-- **TQ1.9** (`TQ19Matrix` with `matvec` / `matvec_batch` (and rayon `_par`
-  variants), the `tq19_dot` / `trit_dot` / `packed_trit_dot` kernels (AVX2 on
-  x86_64 with a scalar fallback), and the `PlanarTQ19` / `HybridTQ19` compressed
-  weight forms) each bit-identical to dense `TQ19Matrix::matvec` on every profile.
-  A result that does not fit the storage type panics (0.6.5; it wrapped before).
-- **`RowScaledTQ19`** (realtime and compact) and **`RowScaledTQ5`** (realtime,
-  0.6.5): one scale per row in unsigned Q32.32, with ten trits in an i16 or
-  five trits in an i8 per weight. `RowScaledTQ5` is half the bytes per weight;
-  its kernels (scalar, AVX2 on 16-bit halves of the activations, a 4x4
-  register tile for batches) all compute the same integer per row.
-- **`tq19::bits`** and **`tq19::quantize`** (0.6.5): binary16 / bfloat16 bit
-  patterns decoded to fixed point by integer shifts, and the quantisers from
-  those bits to `TQ19Matrix`, `RowScaledTQ19` and `RowScaledTQ5` by exact
-  rational rounding. No float type is involved.
-  `matvec_batch_par_into` (0.6.7, on `TQ19Matrix`, `PlanarTQ19`,
-  `HybridTQ19`, `RowScaledTQ19` and `RowScaledTQ5`) writes a batch into one
-  caller-provided buffer, flat and batch-major (`out[b * rows + r]`), with
-  the same integers as `matvec_batch_par` and no result vectors allocated.
-  Rows may mix values of any magnitude: an element too small to reach half a
-  step of its row's scale quantises to 0 (0.6.6; a gap of a little over 100 binary
-  orders inside one bfloat16 row overflowed in 0.6.5).
 
 ## Public API
 
 See **[PUBLIC_API.md → Balanced ternary](../PUBLIC_API.md#balanced-ternary)** and
-**[→ TQ1.9 inference](../PUBLIC_API.md#tq19-inference)**, and
-[docs.rs](https://docs.rs/g_math) (build with `--features inference` for the tq19
-symbols).
+[docs.rs](https://docs.rs/g_math).
 
 ## Behaviour & limits
 
-- The tq19 module is gated behind the `inference` feature; it is standalone and
-  does not depend on the routing or imperative layers.
-- `TQ19Matrix` raw values must satisfy |raw| ≤ 29524 (the 10-digit balanced-ternary
-  range); `PlanarTQ19::from_tq19` rejects out-of-range weights.
-- `PlanarTQ19` / `HybridTQ19` are lossless: their matvec equals dense matvec
-  bit-for-bit; they change only the weight byte layout.
+- Every infallible ternary operation panics on overflow, at every tier; the
+  `_checked` forms return `Err` (the TQ80.80 and TQ320.320 add and subtract
+  saturated or wrapped before 0.7.0).
 
 The exactness contract is covered in **[CONTRACT.md](../CONTRACT.md)**.
 

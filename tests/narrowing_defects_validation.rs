@@ -484,7 +484,6 @@ macro_rules! narrow_suite {
             /// are single compute-tier quotients; the expected raw is the exact nearest
             /// (ties toward +infinity) of the integer quotient. Before 0.6.4 it was the
             /// truncated quotient, one unit low on about half the inputs.
-            #[cfg(feature = "inference")]
             #[test]
             fn compute_divide_rounds_to_nearest() {
                 use g_math::compute_tier::{exp, one, sigmoid};

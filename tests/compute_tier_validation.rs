@@ -13,8 +13,6 @@
 //! - path independence vs the imperative `FixedPoint` methods (bit-identical)
 //! - domain-violation panics and saturation behavior
 //!
-//! Requires: `cargo test --features inference`
-#![cfg(feature = "inference")]
 
 #[macro_use]
 mod common;
