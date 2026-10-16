@@ -244,7 +244,7 @@ Exact decimal fixed-point arithmetic with configurable precision
 | `try_mul_div_with` | [`try_mul_div`](Self::try_mul_div) with the given tie rule. |
 | `mul_div` | `self * num / den` with one rounding (half to even); see [`try_mul_div`](Self::try_mul_div). |
 | `multiply_batch_decimal` | High-performance multiplication for batch operations |
-| `to_f64_lossy` | Convert to f64 (lossy conversion for display/debugging) |
+| `to_f64_lossy` | Convert to f64: the binary64 nearest to `raw / 10^DECIMALS` (ties to even), assembled from the raw integer with integer arithmetic only. |
 | `try_convert` | Convert to different decimal precision |
 | `convert_with_rounding` | Force conversion to different decimal precision with rounding (half to even when digits are dropped). |
 | `convert_with_rounding_mode` | Conversion to a different decimal precision; dropped digits round with the given tie rule. |
@@ -1477,4 +1477,5 @@ A serializable point on a manifold with its manifold type.
 | `expecting` |  |
 | `visit_bytes` |  |
 | `visit_byte_buf` |  |
+| `visit_seq` |  |
 
