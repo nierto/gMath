@@ -21,20 +21,14 @@ Modules: g_math::canonical
 | `LazyMatrixExpr` | `super::universal::fasc` |
 | `DomainMatrix` | `super::universal::fasc` |
 | `gmath` | `super::universal::fasc` |
-| `gmath_in` | `super::universal::fasc` |
 | `gmath_parse` | `super::universal::fasc` |
-| `gmath_parse_in` | `super::universal::fasc` |
 | `ConstantId` | `super::universal::fasc` |
 | `StackEvaluator` | `super::universal::fasc` |
 | `StackValue` | `super::universal::fasc` |
 | `evaluate` | `super::universal::fasc` |
-| `evaluate_in` | `super::universal::fasc` |
 | `evaluate_matrix` | `super::universal::fasc` |
-| `evaluate_matrix_in` | `super::universal::fasc` |
 | `evaluate_sincos` | `super::universal::fasc` |
-| `evaluate_sincos_in` | `super::universal::fasc` |
 | `evaluate_sinhcosh` | `super::universal::fasc` |
-| `evaluate_sinhcosh_in` | `super::universal::fasc` |
 | `with_evaluator` | `super::universal::fasc` |
 | `FascFormat` | `super::universal::fasc` |
 | `GmathMode` | `super::universal::fasc` |
@@ -46,10 +40,6 @@ Modules: g_math::canonical
 ## FixedPoint
 
 Modules: FixedPoint (re-exported at g_math::fixed_point)
-
-| Item | Kind | Summary |
-| --- | --- | --- |
-| `FixedPoint` | type | The fixed-point format this build's profile selects (`GMATH_PROFILE`, and `GMATH_FRAC_BITS` on the realtime profile). |
 
 **Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
@@ -92,14 +82,14 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `atan` | atan(x) |
 | `asin` | asin(x) = atan(x / sqrt(1 - x^2)), \|x\| <= 1: direct composition |
 | `acos` | acos(x) = pi/2 - asin(x), \|x\| <= 1: direct composition |
-| `sinh` | sinh(x) = (exp(x) - exp(-x)) / 2: direct composition |
-| `cosh` | cosh(x) = (exp(x) + exp(-x)) / 2: direct composition |
+| `sinh` | sinh(x) = (exp(x) - exp(-x)) / 2, correctly rounded (panics where the result leaves storage; `try_sinh` returns the error) |
+| `cosh` | cosh(x) = (exp(x) + exp(-x)) / 2, correctly rounded (panics where the result leaves storage; `try_cosh` returns the error) |
 | `sinhcosh` | Fused (sinh(x), cosh(x)): single shared exp-pair evaluation at compute tier. |
 | `tanh` | tanh(x) = (exp(2x) - 1) / (exp(2x) + 1): direct composition |
 | `asinh` | asinh(x) = ln(x + sqrt(x^2 + 1)): direct composition |
 | `acosh` | acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1: direct composition |
 | `atanh` | atanh(x) = ln((1+x)/(1-x)) / 2, \|x\| < 1: direct composition |
-| `pow` | x^y = exp(y * ln(x)): direct composition |
+| `pow` | x^y = exp(y * ln(x)), correctly rounded for a positive base |
 | `atan2` | atan2(self=y, x): direct binary engine |
 | `try_exp` | Fallible e^x: returns `Err(TierOverflow)` if result exceeds storage tier. |
 | `try_ln` | Fallible ln(x): returns `Err(DomainError)` if x <= 0. |
@@ -597,9 +587,9 @@ The n-sphere S^n embedded as unit vectors in R^{n+1}.
 | `inner_product` |  |
 | `norm` | \|\|v\|\|: exact sum of squares and root at the compute tier, one rounding. |
 | `exp_map` | `cos(theta) p + sin(theta) v / theta` with `theta = \|v\|`: the root, sin and cos, the quotient and the sum at the compute tier, one rounding per component. |
-| `log_map` | `theta w / \|w\|` from [`Sphere::geodesic`]: angle, direction and scaling at the compute tier, one rounding per component. |
-| `distance` | `atan2(\|p x q\|, p.q)` at the compute tier, one rounding. |
-| `parallel_transport` | `v - <v, p+q> / (1 + <p,q>) (p + q)`: the products exact, the coefficient and each component formed at the compute tier with one rounding to storage. |
+| `log_map` | The `log_map` of the exact formula, rounded once per component. |
+| `distance` | `atan2(\|p x q\|, p.q)` of the exact values, rounded once. |
+| `parallel_transport` | The transport of the exact formula, rounded once per component. |
 
 ### HyperbolicSpace
 
@@ -611,9 +601,9 @@ Hyperbolic space H^n in the hyperboloid model.
 | `inner_product` |  |
 | `norm` |  |
 | `exp_map` | `cosh(theta) p + sinh(theta) v / theta` with `theta = \|v\|_L`: the root, the shared exp pair, the quotient and the sum at the compute tier, one rounding per component. |
-| `log_map` | `d w / \|w\|_L` from [`HyperbolicSpace::geodesic`]: distance, direction and scaling at the compute tier, one rounding per component. |
-| `distance` | `acosh(-<p,q> / sqrt(<p,p> <q,q>))` at the compute tier, one rounding. |
-| `parallel_transport` | `v + <v,u>_L (sinh(d) p + (cosh(d) - 1) u)` with `u = w / \|w\|_L` the unit direction and `d` the distance of [`HyperbolicSpace::geodesic`]: everything at the compute tier, one rounding per component. |
+| `log_map` | The `log_map` of the exact formula, rounded once per component. |
+| `distance` | `acosh(-<p,q> / sqrt(<p,p> <q,q>))` of the exact values, rounded once. |
+| `parallel_transport` | The transport of the exact formula, rounded once per component. |
 
 ### SPDManifold
 
@@ -672,6 +662,54 @@ Product manifold M₁ × M₂: the Cartesian product of two manifolds.
 | `distance` |  |
 | `parallel_transport` |  |
 
+### SphereDistance
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### SphereLog
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### SphereExp
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### SphereTransport
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### HypDistance
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### HypLog
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### HypExp
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
+### HypTransport
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
+
 ### SO3
 
 SO(3): Special orthogonal group of 3D rotations.
@@ -686,7 +724,7 @@ SO(3): Special orthogonal group of 3D rotations.
 | `inner_product` |  |
 | `exp_map` | log(exp(base) exp(tangent)) with both exps, the product and the log at the compute tier; each component rounded once. |
 | `log_map` | log(exp(base)ᵀ exp(target)) entirely at the compute tier, rounded once. |
-| `distance` | \|log_map\| from the compute-tier log, one rounding. |
+| `distance` | \|log_map\| of the exact values, one rounding. |
 | `parallel_transport` | vee(R_half [v]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2), the whole chain at the compute tier and each component rounded once. |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
@@ -839,6 +877,12 @@ SL(n): Special linear group: n×n matrices with det = 1.
 | `adjoint` | vee(project_traceless(g ξ^ g⁻¹)) with the inverse, both products and the projection at the compute tier, each component rounded once. |
 | `bracket` | vee(AB - BA), each component one rounding of its exact value. |
 | `act` |  |
+
+### Form
+
+| Method | Summary |
+| --- | --- |
+| `eval` |  |
 
 ### EuclideanMetric
 
@@ -1333,14 +1377,6 @@ Modules: g_math::compute_tier _(feature: inference)_
 | `softplus` | fn | ln(1 + e^x) at the compute tier (sign-split: `x + ln(1 + e^-\|x\|)` for positive x, `ln(1 + e^x)` otherwise). |
 | `ln1p` | fn | ln(1 + x) at the compute tier. |
 
-**Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
-
-| Item | Re-exported from |
-| --- | --- |
-| `ComputeStorage` | `crate::fixed_point::universal::fasc::stack_evaluator` |
-| `FRAC_BITS` | `crate::fixed_point::frac_config` |
-| `COMPUTE_FRAC_BITS` | `crate::fixed_point::frac_config` |
-
 ## Wide tier (Q64.64)
 
 Modules: g_math::wide
@@ -1396,12 +1432,6 @@ Modules: g_math::fixed_point::imperative::serialization
 | `raw_byte_len` | Size in bytes of the raw storage (without tag). |
 | `to_compact_bytes` | Encode a value in compact format. |
 | `from_compact_bytes` | Decode a value from compact format. |
-
-### FixedPoint
-
-| Method | Summary |
-| --- | --- |
-| `profile_tag` | The tag a 0.6.x build of this profile and split wrote; the same as [`Fixed::legacy_tag`] (kept under its 0.6.x name). |
 
 ### FixedVector
 
