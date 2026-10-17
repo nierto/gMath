@@ -5,6 +5,28 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-10-17
+
+### Upgrading
+
+Deprecation only. No function changes a result: everything in 0.6.7
+returns the same integers.
+
+### Deprecated
+
+- The `tq19` module (`g_math::tq19`, `g_math::fixed_point::tq19`) and with it
+  the `inference` feature. g_math 0.7.0 (released 2026-10-17) removes both:
+  the ternary inference kernels (TQ1.9 and its planar, hybrid and row-scaled
+  forms, the five-trit form, the weight decoders and quantisers, the
+  parallel and wide-output matvecs) are the separate, separately licensed
+  crate `g_math_inference` (licensing enquiries: niels@nierto.com). Every use
+  of the module now prints a deprecation warning naming the new crate.
+  `compute_tier`, which was also behind `inference`, stays in g_math 0.7.0
+  without a feature gate. Upgrade guide: `docs/UPGRADING_0.7.md` in the
+  0.7.0 release.
+- Releases 0.4.x to 0.6.8 keep the module under their MIT or Apache-2.0
+  licences.
+
 ## [0.6.7] - 2026-10-05
 
 ### Upgrading

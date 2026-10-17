@@ -6,6 +6,16 @@ Built by **Niels Erik Toren** · published as `g_math` on [crates.io](https://cr
 
 ---
 
+> **0.6.8 (deprecation notice only):** the `tq19` module and the `inference`
+> feature are deprecated. g_math 0.7.0 (released 2026-10-17) removes them: the
+> ternary inference kernels are now the separate, separately licensed crate
+> `g_math_inference` (licensing: niels@nierto.com). 0.6.8 changes no result;
+> using `g_math::tq19` now prints a deprecation warning. 0.7.0 also makes the
+> format a type (`Fixed<S, F>`, every width in one build, no build-time
+> profile) and rounds the transcendentals correctly over their full range,
+> which fixes the known issue below. Upgrade guide:
+> [docs/UPGRADING_0.7.md](https://github.com/nierto/g_math/blob/v0.7.0/docs/UPGRADING_0.7.md).
+>
 > **Upgrading from 0.4.x?** 0.5.0 is more accurate, and as a side effect some
 > results end in a different final digit. It matters only if you store, hash, or
 > compare results across versions. The four-line summary is at the top of

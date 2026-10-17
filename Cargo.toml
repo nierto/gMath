@@ -1,13 +1,13 @@
 [package]
 name = "g_math"
-version = "0.6.7"
+version = "0.6.8"
 edition = "2021"
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — pure Rust, zero-float, deterministic"
 authors = ["Niels Erik Toren"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/nierto/gMath"
-homepage = "https://github.com/nierto/gMath"
+repository = "https://github.com/nierto/g_math"
+homepage = "https://github.com/nierto/g_math"
 documentation = "https://docs.rs/g_math"
 keywords = ["fixed-point", "arithmetic", "precision", "mathematics", "no-float"]
 categories = ["mathematics", "algorithms"]

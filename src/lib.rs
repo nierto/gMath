@@ -32,7 +32,12 @@ pub use fixed_point::canonical;
 
 /// TQ1.9 compact ternary operations: standalone module for inference and signal processing.
 /// Requires the `inference` feature flag.
+///
+/// **Deprecated (0.6.8):** g_math 0.7.0 removes this module and the
+/// `inference` feature; the kernels are the separate, separately licensed
+/// crate `g_math_inference` (licensing: niels@nierto.com).
 #[cfg(feature = "inference")]
+#[allow(deprecated)]
 pub use fixed_point::tq19;
 
 /// Compute-tier (tier N+1) transcendentals over raw wide integers: exp, ln,

@@ -13,7 +13,13 @@ pub use imperative::{FixedPoint, FixedVector, FixedMatrix, Interval};
 
 /// TQ1.9 compact ternary operations: standalone, decoupled from FASC/routing.
 /// Gated behind the `inference` feature flag.
+///
+/// **Deprecated (0.6.8):** g_math 0.7.0 removes this module and the
+/// `inference` feature; the kernels are the separate, separately licensed
+/// crate `g_math_inference` (licensing: niels@nierto.com). This release
+/// changes nothing else: every result is the same as in 0.6.7.
 #[cfg(feature = "inference")]
+#[deprecated(since = "0.6.8", note = "g_math 0.7.0 removes this module and the `inference` feature; the kernels are the separate, separately licensed crate g_math_inference (licensing: niels@nierto.com)")]
 pub mod tq19;
 
 /// Public compute-tier (tier N+1) transcendentals over raw `ComputeStorage`.
