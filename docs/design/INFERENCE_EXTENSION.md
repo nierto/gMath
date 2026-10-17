@@ -192,7 +192,7 @@ its extension shape.
 | Crate name | `g_math_inference` |
 | Keep the word "inference" | Keep it |
 | Where `compute_tier` lives | Stays in the open core, without a feature gate |
-| How licensees get the extension | crates.io with a proprietary licence file. Owner's reasoning: a company using it will do so for audit or legal reasons, so use becomes evident through audits and procedures; the protection is legal, by choice. |
+| How licensees get the extension | crates.io with a proprietary licence file. Owner's reasoning: a company using it will do so for audit or legal reasons, so use becomes evident through audits and procedures; the protection is legal, by choice. Superseded 2026-10-17, see section 10: crates.io under PolyForm Noncommercial 1.0.0 plus a grant for maniference licensees, commercial terms in the extension's `COMMERCIAL.md`. |
 | When the move happens | After phase 7c, before the 0.7.0 release |
 
 Owner's note on timing: a 0.6.8 release may separate the module from the
@@ -213,11 +213,20 @@ their open licences.
   `I512` and `imperative::OverflowDetected`. The core gained the exports of
   `Compute<T>` and `I256` .. `I2048` (they were hidden); nothing else.
 - Differences from the proposal: `rayon` is a plain dependency (every
-  consumer uses the parallel forms; no `par` feature); the crate is
-  `publish = false` until the owner publishes it, under a proprietary
-  licence (copyright Niels Erik Toren; licensing enquiries to
-  niels@nierto.com); it depends on
-  the core by path during development and on `g_math = "0.7"` at release.
+  consumer uses the parallel forms; no `par` feature); it depends on
+  `g_math = "0.7"`.
+- Licence: 0.1.0 and 0.1.1 (2026-10-17) shipped a proprietary licence file
+  (0.1.1 with a 30-day evaluation clause). 0.1.2 replaces it with the terms
+  of maniference: PolyForm Noncommercial 1.0.0 (`LICENSE.md`, Required
+  Notice: Copyright 2025-2026 Niels Erik Toren), a grant that lets everyone
+  licensed for maniference use the kernels as part of maniference on the
+  same terms (`MANIFERENCE-GRANT.md`; use apart from maniference or to build
+  a competing engine excluded), and commercial terms in `COMMERCIAL.md`
+  (component licences at one fifth of the maniference price, perpetual at
+  3x, a field-of-use limit, a competitor licence by agreement). PolyForm
+  Small Business is deliberately not offered: it would let any small
+  company use the kernels outside maniference, past the field-of-use limit.
+  Licensing enquiries: niels@nierto.com.
 - Tests moved with the module and match their counts in the core: 195 unit
   tests; tq19 138, tq5 18, weight_bits 48, batch_into 23, bench 30
   integration tests; the tq19 parts of three shared files (16, 1 and 8).
