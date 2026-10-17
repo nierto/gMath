@@ -7,7 +7,7 @@
 //! negative values through the transcendental compute chains — the paths
 //! where a violated invariant would corrupt sign extension — and pins
 //! the odd/even symmetries that corruption would break first. Most
-//! valuable on q128_128/q256_256 (the wide-kernel profiles), runs on all.
+//! valuable on q128_128/q256_256 (the wide-kernel formats), runs on all.
 
 
 macro_rules! suite {

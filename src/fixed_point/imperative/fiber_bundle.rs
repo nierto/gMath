@@ -418,7 +418,7 @@ pub struct PrincipalBundle<T> {
     pub group_dim: usize,   // dimension of the Lie algebra (= fiber_dim)
     pub matrix_dim: usize,  // dimension of the matrix representation
     pub num_charts: usize,
-    /// Transition functions g_{αβ} stored as FixedMatrix<T> values.
+    /// Transition functions g_{αβ} stored as `FixedMatrix<T>` values.
     /// Index: transitions[α * num_charts + β] = g_{αβ}.
     /// Only defined for α ≠ β. g_{αα} = identity.
     pub transitions: Vec<FixedMatrix<T>>,

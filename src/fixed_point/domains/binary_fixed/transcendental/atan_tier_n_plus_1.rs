@@ -32,7 +32,7 @@ use super::exp_tier_n_plus_1::{
 };
 
 // Re-include trig constants (each .rs file gets its own scope).
-// Not all constants are used on every profile — #[allow(dead_code)] prevents warnings.
+// Not all constants are used by every format, hence #[allow(dead_code)].
 #[allow(dead_code)]
 mod atan_trig_consts {
     #[cfg(feature = "rebuild-tables")]
@@ -446,7 +446,7 @@ pub fn atan2_q256_256_native(y: I512, x: I512) -> I512 {
 }
 
 // ============================================================================
-// Q512.512 IMPLEMENTATION (I1024) — COMPUTE TIER FOR SCIENTIFIC PROFILE
+// Q512.512 IMPLEMENTATION (I1024): COMPUTE TIER FOR Q256.256
 // ============================================================================
 
 #[allow(dead_code)]
@@ -576,10 +576,10 @@ pub fn atan2_q512_512_native(y: I1024, x: I1024) -> I1024 {
 // ============================================================================
 
 // ============================================================================
-// CROSS-PROFILE IMPLEMENTATIONS
+// COMPUTE-TIER IMPLEMENTATIONS FOR THE NARROWER FORMATS
 // ============================================================================
 
-// Q128.128 atan available under q64_64 for tier N+1
+// Q128.128 atan, the tier N+1 of Q64.64
 
 #[allow(dead_code)]
 pub fn atan_q128_128_compute(x: I256) -> I256 {

@@ -14,8 +14,8 @@
 //! scalar and sectional contractions all stay at the compute tier (2F bits)
 //! and each returned value is rounded to storage once: a storage rounding
 //! inside a central difference would come out multiplied by 1/(2h). Riemann
-//! tensor involves nested finite differences → O(h²) total error; scientific
-//! profile recommended for curvature computations.
+//! tensor involves nested finite differences → O(h²) total error; Q256.256
+//! recommended for curvature computations.
 
 use super::FixedVector;
 use super::FixedMatrix;
@@ -37,8 +37,8 @@ use crate::fixed_point::core_types::errors::OverflowDetected;
 /// This minimizes total error (truncation + rounding) for central differences.
 /// Being a power of 2, division by 2h is an exact bit-shift (no rounding).
 ///
-/// Profile values (k = FRAC_BITS/3 rounded to nearest, h = 2^-k):
-/// - realtime:  k = (FRAC_BITS + 1) / 3, e.g. 2^(-5) at Q16.16, 2^(-3) at Q22.10
+/// Values per format (k = F/3 rounded to nearest, h = 2^-k):
+/// - i32 splits: k = (F + 1) / 3, e.g. 2^(-5) at Q16.16, 2^(-3) at Q22.10
 /// - Q32.32:    h = 2^(-11)
 /// - Q64.64:    h ≈ 2^(-21) ≈ 4.8e-7
 /// - Q128.128:  h ≈ 2^(-43) ≈ 1.1e-13
@@ -112,7 +112,7 @@ pub struct ComputeChristoffel<T: FixedNum> {
 /// `(a - b) / (2h)` at the compute tier: the exact difference doubled
 /// k - 1 times (h = 2^-k), checked. Before 0.6.4 the difference of storage
 /// values was shifted in storage, so a rounding in either operand came out
-/// multiplied by 2^(k-1) (2^84 on scientific).
+/// multiplied by 2^(k-1) (2^84 at Q256.256).
 fn central_difference<S: Storage, const F: u32>(a: Compute<Fixed<S, F>>, b: Compute<Fixed<S, F>>) -> Result<Compute<Fixed<S, F>>, OverflowDetected>
 where
     Fixed<S, F>: FixedNum<Storage = S>,
@@ -329,7 +329,7 @@ where
 ///
 /// **Precision warning:** This involves nested finite differences (derivatives of
 /// Christoffel symbols). Total error is O(h²) where h = differentiation_step::<S, F>().
-/// For best precision, use the scientific profile.
+/// For best precision, use Q256.256.
 pub fn riemann_curvature<S: Storage, const F: u32>(
     provider: &dyn MetricProvider<Fixed<S, F>>,
     p: &FixedVector<Fixed<S, F>>,
@@ -663,7 +663,7 @@ where
     /// Γ^φ_{θφ} = Γ^φ_{φθ} = cos(θ)/sin(θ) = cot(θ)
     /// All others = 0.
     ///
-    /// These are derived analytically from g = r²[[1,0],[0,sin²θ]].
+    /// These are derived analytically from g = r²\[\[1,0\],\[0,sin²θ\]\].
     /// Uses the compute-tier sincos engine, no numerical differentiation
     /// involved; each symbol is rounded to storage once.
     fn christoffel_closed_form(&self, p: &FixedVector<Fixed<S, F>>) -> Option<Tensor<Fixed<S, F>>> {

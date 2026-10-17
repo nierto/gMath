@@ -86,7 +86,7 @@ impl BinaryTier4 {
 
     /// Checked Q128.128 multiply (0.5.0 item 1): the unchecked `mul` above
     /// silently truncated I512→I256 on overflow: 1e20 × 1e20 on the
-    /// balanced profile returned wrapped garbage. The UGOD ladder now uses
+    /// 0.4.x balanced profile returned wrapped garbage. The UGOD ladder now uses
     /// this and promotes to Tier 5 on None.
     pub fn checked_mul(&self, other: &Self) -> Option<Self> {
         let wide = I512::from_i256(self.value) * I512::from_i256(other.value);

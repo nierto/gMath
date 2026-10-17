@@ -1,6 +1,6 @@
 //! 0.6.5: the `FixedPoint` layout guarantee (zero-copy raw slice views) and
 //! `FixedVector::rotate_pairs`. Values stay small so the suite holds on every
-//! profile and realtime split it runs at.
+//! format and i32 split it runs at.
 
 
 macro_rules! suite {

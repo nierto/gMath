@@ -71,7 +71,7 @@ pub trait UniversalTieredArithmetic: Clone + Sized + Debug {
     /// Get current tier level (domain-specific mapping)
     fn current_tier(&self) -> u8;
     
-    /// Check if value can be promoted to target tier within deployment profile limits
+    /// Check if value can be promoted to target tier within the format's limits
     fn can_promote_to_tier(&self, tier: u8) -> bool;
     
     /// Promote to target tier (returns None if impossible)

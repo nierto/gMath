@@ -6,29 +6,20 @@ Built by **Niels Erik Toren** · published as `g_math` on [crates.io](https://cr
 
 ---
 
-> **Upgrading from 0.4.x?** 0.5.0 is more accurate, and as a side effect some
-> results end in a different final digit. It matters only if you store, hash, or
-> compare results across versions. The four-line summary is at the top of
+> **0.7.0: the format is a type.** `Fixed<S, F>` (or `Q16_16` .. `Q256_256`)
+> names the format of each value, every format is available in every build,
+> and `GMATH_PROFILE` / `GMATH_FRAC_BITS` are gone. The transcendentals,
+> canonical chains and closed-form geometry are correctly rounded over their
+> full range. The ternary inference kernels (`tq19`) are the separate crate
+> `g_math_inference`. Migration in about three edits per program:
+> **[docs/UPGRADING_0.7.md](docs/UPGRADING_0.7.md)**; every change:
 > [CHANGELOG.md](CHANGELOG.md).
 >
-> **0.6.0** adds certified arithmetic (`Interval`, `DecimalInterval`), a proven
-> positive-definiteness verdict (`pd_verdict`) and exact geometric predicates,
-> all additive. **0.5.1** carries only the three defect fixes that work found
-> in 0.5.0 (two on the scientific profile, one in the wide decimal integers);
-> every `^0.5` user receives them without adopting any new API.
->
-> **0.6.4 to 0.6.7**: the operators and every narrowing fail loudly instead of
-> wrapping, and each multi-step computation rounds once (0.6.4). The decimal
-> type has an explicit tie rule and a one-rounding `mul_div` (0.6.5). The wide
-> tier gains gate functions, a correctly rounded square root, a full-width
-> integer `mul_div` and exact decimal ratios, and the batch kernels can write
-> into caller-provided buffers (0.6.7). 0.6.5 to 0.6.7 change no in-range
-> result. Details per release: [CHANGELOG.md](CHANGELOG.md).
->
-> **Known issue**: on the compact profile `exp` is one unit from the nearest
-> value on about 1 input in 100 when the result is large. Small arguments and
-> the realtime profile are not affected. See "Open defect" in
-> [ROADMAP.md](ROADMAP.md).
+> **Earlier**: 0.5.0 unified rounding (some final digits moved), 0.6.0 added
+> certified arithmetic and exact predicates, 0.6.4 made operators and
+> narrowings fail loudly and every multi-step computation round once, 0.6.5
+> to 0.6.7 added the decimal tie rule, the wide-tier gates and caller
+> buffers without changing in-range results, and 0.6.8 deprecated `tq19`.
 
 ---
 
@@ -43,19 +34,25 @@ scientific computation.
 
 It is a library, not a service: pure computation, no I/O, no ambient state. Values
 route across four numeric domains (binary, decimal, balanced ternary, symbolic
-rational), and 18 transcendental functions plus linear algebra, geometry, and
-ternary-quantized inference are built on top. It is one component of the Geodineum
-ecosystem and is consumed by its geometric and inference projects.
+rational), and 17 correctly rounded transcendental functions plus linear algebra,
+geometry and certified arithmetic are built on top. Every format, from
+`Fixed<i32, 2>` to Q256.256, is a type and any number of them coexist in one
+program. It is one component of the Geodineum ecosystem and is consumed by its
+geometric and inference projects.
 
 ## Public build surface
 
 The build-with surface is five layers; everything beneath them is internal.
 
+- **Formats** - `g_math::fixed_point::{Fixed, Q16_16, Q32_32, Q64_64,
+  Q128_128, Q256_256}`: `Fixed<S, F>` over the storage words `i32` (any
+  `2 <= F <= 30`), `i64`, `i128`, `I256`, `I512`; the traits `FixedNum`,
+  `Storage`, `WideInt` and `Scalar` describe a format to generic code.
 - **Canonical / router** - `g_math::canonical`: `gmath("…")` builds a lazy
-  expression, `evaluate(…)` runs it with cross-domain routing and chain
-  persistence.
-- **Imperative** - `g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix}`
-  and `DecimalFixed<DECIMALS>`: direct `Copy` types, one call is one engine
+  expression, `evaluate::<Q64_64>(…)` runs it in a format with cross-domain
+  routing and one rounding for the whole tree.
+- **Imperative** - `Fixed<S, F>`, `FixedVector<T>`, `FixedMatrix<T>` and
+  `DecimalFixed<DECIMALS>`: direct `Copy` types, one call is one engine
   invocation.
 - **Fused** - `g_math::fixed_point::imperative::fused`: whole accumulation patterns
   at the wide compute tier (norms, softmax and its mixes, `rms_norm`,
@@ -69,14 +66,13 @@ The build-with surface is five layers; everything beneath them is internal.
   decimal-literal parser, exact decimal ratios and a full-width integer
   `mul_div`, for quantities outside the storage tiers. Each function's
   measured error is in the module documentation.
-- **Compute tier** - `g_math::compute_tier`: the tier-N+1 engines over raw
-  compute-tier integers.
+- **Compute tier** - `g_math::compute_tier`: the tier-N+1 engines over a
+  format's compute word (`Compute<T>`, `2F` fraction bits).
 - **Ternary inference** - the TQ1.9 weight formats and kernels (`g_math::tq19`
   behind the `inference` feature until 0.6.7) are the separate crate
   `g_math_inference` from 0.7.0.
 - **Internal** - the `universal`/`fasc` evaluator, the domain implementations
-  beneath `DecimalFixed` and the ternary types, the wide-integer types, and the
-  shadow/router internals are not part of the surface and may change between
+  beneath `DecimalFixed` and the ternary types, and the shadow/router internals are not part of the surface and may change between
   releases.
 
 The complete per-symbol index - every public item and a one-line summary - is
@@ -92,22 +88,26 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
 | Guide | What it covers |
 |---|---|
 | [Routing (FASC)](docs/README_ROUTING.md) | The `gmath()`/`evaluate()` layer: lazy trees, cross-domain routing, chain persistence (tier N+1), UGOD graceful overflow, the shadow system, mode routing |
-| [Imperative](docs/README_IMPERATIVE.md) | `FixedPoint`/`FixedVector`/`FixedMatrix` + `DecimalFixed`: direct, no-routing, `Copy` types for hot loops |
-| [Transcendentals](docs/README_TRANSCENDENTALS.md) | The 18 functions: dedicated engines, composed forms, fused `sincos`/`sinhcosh`, `try_*` variants |
+| [Imperative](docs/README_IMPERATIVE.md) | `Fixed<S, F>`/`FixedVector`/`FixedMatrix` + `DecimalFixed`: direct, no-routing, `Copy` types for hot loops |
+| [Transcendentals](docs/README_TRANSCENDENTALS.md) | The 17 functions: engines, correct rounding, fused `sincos`/`sinhcosh`, `try_*` variants |
 | [Fused operations](docs/README_FUSED.md) | Compute-tier `sqrt_sum_sq`, `euclidean_distance`, `softmax`, `softmax_mix`, `rms_norm_factor`, `silu` |
 | [Linear algebra](docs/README_LINALG.md) | LU/QR/Cholesky/SVD/eigen/Schur, solvers, matrix functions |
 | [Geometry](docs/README_GEOMETRY.md) | Manifolds, Lie groups, curvature, projective geometry, fiber bundles, ODE, tensors |
 | [Balanced ternary](docs/README_TERNARY.md) | Balanced-ternary arithmetic and trit packing |
-| [Precision & profiles](docs/README_PRECISION.md) | The five profiles, `GMATH_FRAC_BITS`, rounding, validation, feature flags, build |
+| [Formats & precision](docs/README_PRECISION.md) | The formats, choosing one, rounding, validation, feature flags, build |
+| [Upgrading to 0.7](docs/UPGRADING_0.7.md) | From profiles to format types, step by step |
 
 ## Capabilities
 
 - **Four numeric domains** - each value is held in the representation that is exact
   for it (binary, decimal, balanced ternary, or symbolic rational), routed
   automatically.
-- **18 transcendentals** - computed one tier wider than storage and rounded once,
-  reachable lazily (`gmath`), directly (`FixedPoint`), or natively in decimal
-  (`DecimalFixed`).
+- **17 transcendentals, correctly rounded** - computed one tier wider than
+  storage, with a sure path at about 1000 bits when the result lies near a
+  rounding boundary, so every result is the nearest value of the format;
+  reachable lazily (`gmath`), directly (`Fixed`), or natively in decimal
+  (`DecimalFixed`). Canonical chains and the closed-form geometry maps are
+  rounded once from their exact value too.
 - **Two computation paths** - a routed canonical layer for mixed or chained work
   and a direct imperative layer for known-domain hot loops. Results are
   path-independent: one rounding rule per domain on every path (unified
@@ -124,14 +124,15 @@ Each layer and cross-cutting concept has a focused guide under `docs/`.
   widths: `docs/design/CERTIFIED_INTERVALS.md`.
 - **Numerics on top** - fused ML ops, dense linear algebra, differential geometry
   and Lie groups.
-- **Five precision profiles** - Q16.16 through Q256.256, chosen at compile time;
-  results are bit-identical across platforms within a profile.
+- **Every format in one build** - from 2 to 256 fraction bits, chosen per
+  value by its type; results are bit-identical across platforms for each
+  format.
 - **Zero float internally, zero runtime dependencies by default.**
 
 ## Contract
 
 The precise contract - the supported surface and its stability boundary, the
-determinism guarantee, the per-domain rounding rules, cross-profile semantics, and
+determinism guarantee, the per-domain rounding rules, cross-format semantics, and
 what the crate requires - is in **[`CONTRACT.md`](CONTRACT.md)**. Agents should
 prime from **[`CONTRACT.scn.md`](CONTRACT.scn.md)**.
 
@@ -143,10 +144,17 @@ cargo add g_math
 
 ```rust
 use g_math::canonical::{gmath, evaluate};
+use g_math::fixed_point::{Fixed, Q64_64};
 
-// "100" and "50" route to binary, "3" keeps the result exact via symbolic routing.
-let value = evaluate(&((gmath("100") + gmath("50")) / gmath("3"))).unwrap();
+// The canonical layer: "100" and "50" route to binary, "/ 3" keeps the
+// value exact via symbolic routing, and the result is rounded once.
+let value = evaluate::<Q64_64>(&((gmath("100") + gmath("50")) / gmath("3"))).unwrap();
 println!("{value}");
+
+// The imperative layer: one type per format, any number per program.
+type Q = Fixed<i32, 10>; // Q22.10
+let x = Q::from_str("2").sqrt();
+println!("{x}");
 ```
 
 From here, follow the [guides](#guides): the [routing guide](docs/README_ROUTING.md)
@@ -156,7 +164,7 @@ for direct hot-loop arithmetic.
 ## Limits worth knowing
 
 - **The binary domain can't hold every literal exactly.** `0.3` and `1/3` repeat
-  in binary, so the direct `FixedPoint` path approximates them. The canonical
+  in binary, so the direct `Fixed` path approximates them. The canonical
   `gmath(...)` router avoids this for you: it classifies each literal and routes it
   to a domain where it is exact (`0.3`→decimal, `1/3`→symbolic), carrying the exact
   value in a `CompactShadow` - the limit only applies when you pin the binary
@@ -164,15 +172,18 @@ for direct hot-loop arithmetic.
 - **Ill-conditioned systems amplify input error.** Solver error scales with the
   matrix condition number; this is a property of finite precision, not of the
   implementation.
-- **Precision differs by profile.** A Q16.16 result cannot hold Q64.64 digits;
-  choose the profile for your accuracy and range needs.
+- **Precision differs by format.** A Q16.16 result cannot hold Q64.64 digits;
+  choose the format for your accuracy and range needs (several in one program
+  is fine).
 - **Certified means the arithmetic, not your model.** A certified bracket
   encloses the exact result of the computation on the values you passed in; it
-  cannot see rounding that happened while those values were produced. On the
-  realtime profile the brackets of a 50-dimensional interval Cholesky are a few
-  percent of the pivot; from the compact profile upward they are negligible.
-- **Switching profiles needs a clean incremental cache** (`rm -rf
-  target/*/incremental/`), or stale `cfg` artifacts can crash the build.
+  cannot see rounding that happened while those values were produced. At
+  Q16.16 the brackets of a 50-dimensional interval Cholesky are a few percent
+  of the pivot; from Q32.32 upward they are negligible.
+- **Correct rounding costs time where it is hard.** A result near a rounding
+  boundary is decided at about 1000 bits; canonical chains are 1.2 to 1.9x
+  slower than in 0.6.7 (3.4x at Q22.10) and wide-format `exp`/`ln`/`sin` add 12
+  to 33 ns. Arithmetic and the kernels run at 0.6.7's speed.
 
 ## Collaborate
 

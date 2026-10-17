@@ -11,7 +11,7 @@
 //
 // **PRECISION**: Uses build.rs-generated constants (77-digit π) and Taylor coefficients
 //
-// **PROFILES**:
+// **FORMATS**:
 //   - Q64.64 (i128): 11 Taylor terms → 19 correct digits
 //   - Q128.128 (I256): 21 Taylor terms → 38 correct digits
 //   - Q256.256 (I512): 41 Taylor terms → 77 correct digits
@@ -28,7 +28,7 @@ use crate::fixed_point::i1024::I1024;
 use crate::fixed_point::I2048;
 
 // Include trig constants (pre-built or regenerated via --features rebuild-tables).
-// Not all constants are used on every profile — #[allow(dead_code)] prevents warnings.
+// Not all constants are used by every format, hence #[allow(dead_code)].
 #[allow(dead_code)]
 mod sincos_trig_consts {
     #[cfg(feature = "rebuild-tables")]
@@ -444,10 +444,9 @@ pub(crate) fn taylor_cos_q256_256(r: I512) -> I512 {
 // ============================================================================
 
 // ============================================================================
-// Q512.512 IMPLEMENTATION (I1024) — COMPUTE TIER FOR SCIENTIFIC PROFILE
+// Q512.512 IMPLEMENTATION (I1024): COMPUTE TIER FOR Q256.256
 // ============================================================================
 //
-// This implementation is ONLY compiled under q256_256 (scientific profile).
 // It serves as the tier N+1 compute tier for Q256.256 storage.
 
 #[allow(dead_code)]
@@ -539,14 +538,14 @@ pub(crate) fn taylor_cos_q512_512(r: I1024) -> I1024 {
 // COMPUTE-TIER DISPATCH FUNCTIONS
 // ============================================================================
 //
-// These dispatch to the appropriate tier based on the compile-time profile.
-// Used by StackEvaluator to call sin/cos at the compute tier (tier N+1).
+// Used by StackEvaluator to call sin/cos at the compute tier (tier N+1) of
+// the format it evaluates in.
 
 // ============================================================================
-// CROSS-PROFILE IMPLEMENTATIONS (tier N+1 compute functions)
+// TIER N+1 COMPUTE FUNCTIONS FOR THE NARROWER FORMATS
 // ============================================================================
 //
-// Q128.128 sin/cos available under q64_64 for tier N+1 computation
+// Q128.128 sin/cos, the tier N+1 of Q64.64
 
-// Q256.256 sin/cos available under q128_128 for tier N+1 computation
+// Q256.256 sin/cos, the tier N+1 of Q128.128
 

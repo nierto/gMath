@@ -19,8 +19,8 @@ macro_rules! suite {
                 else { FixedPoint::from_str(s) }
             }
 
-            /// `k` units in the last place of this build's storage (realtime follows
-            /// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+            /// `k` units in the last place of this format's storage (on the i32 word it
+            /// follows the split: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }

@@ -7,7 +7,7 @@
 //! 4. Conserved quantity monitoring detects drift
 //! 5. mpmath-validated reference values for each integrator
 //!
-//! All tests run on the active profile (embedded/balanced/scientific).
+//! All tests run at every format the suite macro instantiates.
 
 
 macro_rules! suite {
@@ -26,8 +26,8 @@ macro_rules! suite {
                 else { FixedPoint::from_str(s) }
             }
 
-            /// `k` units in the last place of this build's storage (realtime follows
-            /// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+            /// `k` units in the last place of this format's storage (on the i32 word it
+            /// follows the split: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
@@ -175,11 +175,11 @@ macro_rules! suite {
                 let x0 = FixedVector::from_slice(&[fp("1")]);
                 // h = 0.1 is not representable in binary (102/1024 at 10 fraction bits),
                 // so the step is h = 3/32: the RK4 polynomial 1 - h + h^2/2 - h^3/6 + h^4/24
-                // is then exactly 7637915/8388608 on every profile.
+                // is then exactly 7637915/8388608 at every format.
                 let result = rk4_step(&sys, fp("0"), &x0, fp("0.09375"));
                 assert_fp(result[0], fp("0.91051042079925537109375"), at_least(fp("0.0001"), 2), "rk4_single_step");
 
-                // the original h = 0.1 on the profiles that resolve it (0.9048375)
+                // the original h = 0.1 at the formats that resolve it (0.9048375)
                 if FRAC_BITS >= 16 {
                     let result = rk4_step(&sys, fp("0"), &x0, fp("0.1"));
                     assert_fp(result[0], fp("0.9048375"), fp("0.0001"), "rk4_single_step h = 0.1");
@@ -323,14 +323,14 @@ macro_rules! suite {
                 let p0 = FixedVector::from_slice(&[fp("0")]);
 
                 // h = 0.1 is 26/256 at 8 fraction bits (q_new is then 0.99484, 0.0011 from
-                // 0.995 before any rounding), so the step is h = 3/32 on every profile:
+                // 0.995 before any rounding), so the step is h = 3/32 at every format:
                 // q_new = 1 - h^2/2 = 2039/2048, p_new = -(h/2)(1 + q_new) = -12261/131072
                 // (python3 fractions). Three roundings of half a unit, weights <= 1.
                 let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.09375"));
                 assert_fp(q_new[0], fp("0.99560546875"), at_least(fp("0.001"), 2), "verlet_step_q h = 3/32");
                 assert_fp(p_new[0], fp("-0.09354400634765625"), at_least(fp("0.001"), 2), "verlet_step_p h = 3/32");
 
-                // the original h = 0.1 on the profiles that resolve it
+                // the original h = 0.1 at the formats that resolve it
                 if FRAC_BITS >= 16 {
                     let (q_new, p_new) = verlet_step(&sys, &q0, &p0, fp("0.1"));
                     // Verlet is 2nd-order, so these won't be exact but close

@@ -2,8 +2,7 @@
 //!
 //! Gates `DecimalFixed<D>::{exp, sinh, cosh, tanh}` (plus the large-argument
 //! `asinh`/`acosh` path and the `sin`/`cos` range reduction up to the largest
-//! argument the compute tier holds) for every D the decimal tests use on the
-//! profile,
+//! argument the compute tier holds) for every D the decimal tests use,
 //! and the engine `decimal_exp` materialised at the canonical storage dp,
 //! from far below zero (results that round to 0) up to the largest argument
 //! whose result is representable. Expected values are f(x) * 10^D rounded
@@ -258,7 +257,7 @@ macro_rules! suite {
                     // mpmath: e^22 = 3584912846.131591561681159...
                     assert_eq!(DecimalFixed::<4>::from_integer(22).exp().raw_value(), 35849128461316);
                     // e^23 = 9744803446.2489026 exceeded the i64 compute tier of the
-                    // realtime profile (9223372036.9 at 9 dp) up to 0.6.7; the compute
+                    // 0.6.x realtime profile (9223372036.9 at 9 dp) up to 0.6.7; the compute
                     // word now follows D (I256 at D = 4), so it is a value
                     assert_eq!(DecimalFixed::<4>::from_integer(23).exp().raw_value(), 97448034462489);
                     // tanh doubled x at the compute tier and wrapped for |x| > 4.6e9

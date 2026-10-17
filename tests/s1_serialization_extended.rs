@@ -7,7 +7,7 @@
 //! 4. Compact encoding saves bytes vs full encoding
 //! 5. Compact FixedVector roundtrip
 //!
-//! All tests run on the active profile (embedded/balanced/scientific).
+//! All tests run at every format the suite macro instantiates.
 
 
 macro_rules! suite {
@@ -127,11 +127,11 @@ macro_rules! suite {
                 let compact = one.to_compact_bytes();
                 let full = one.to_bytes();
                 // one = 2^F raw has F/8 + 1 significant bytes; the compact form adds a
-                // tag and a length byte, the full form a profile tag.
+                // tag and a length byte, the full form a format tag.
                 let f = FRAC_BITS as usize;
                 assert_eq!(compact.len(), 2 + f / 8 + 1, "compact one = tag + len + significant bytes");
                 // Compact should be no larger than full while one has at least two
-                // leading zero bytes in abs. At GMATH_FRAC_BITS >= 24 on realtime it has
+                // leading zero bytes in abs. At F >= 24 on the i32 word it has
                 // only one (0x01000000), so compact is 6 bytes vs full 5 by construction.
                 if 2 + f / 8 + 1 <= full.len() {
                     assert!(compact.len() <= full.len(),
@@ -163,7 +163,7 @@ macro_rules! suite {
                 assert_fp(decoded, small, tight(), "compact small roundtrip");
             }
 
-            /// Q16.16/Q32.32: 999999999999 overflows both profiles.
+            /// Q16.16/Q32.32: 999999999999 overflows both formats.
             #[test]
             fn test_compact_large_value() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
@@ -207,7 +207,7 @@ macro_rules! suite {
                 }
             }
 
-            /// Q16.16/Q32.32: test uses 1e9 which overflows both profiles.
+            /// Q16.16/Q32.32: test uses 1e9 which overflows both formats.
             #[test]
             fn test_compact_savings_report() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }

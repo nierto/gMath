@@ -1,13 +1,13 @@
-//! Build script for gMath: Profile-Aware Mathematical Constants and Lookup Tables
+//! Build script for gMath: Mathematical Constants and Lookup Tables for Every Format
 //!
-//! ARCHITECTURE: Zero-float, profile-tiered precision, hardcoded constants
+//! ARCHITECTURE: Zero-float, tiered precision, hardcoded constants
 //! - Mathematical constants (π, e, √2, ln2, φ, ln10, √3, √5) hardcoded at 3 precision tiers
 //! - Q64.64/Q128.128/Q256.256 transcendental lookup tables generated from rational constants
-//! - Profile detection: embedded(19d) | balanced(38d) | scientific(77d)
+//! - Precision tiers: Q64.64 (19d) | Q128.128 (38d) | Q256.256 (77d), all generated in every build
 //! - ZERO floating point arithmetic - pure rational → fixed-point conversion
 //!
-//! **PROFILES**:
-//! - embedded: Q64.64 (scalar), balanced: Q128.128, scientific: Q256.256
+//! **TABLE FORMATS**:
+//! - Q64.64, Q128.128, Q256.256 (and Q512.512 as the compute tier of Q256.256)
 //!
 //! MEMORY: <10s build time, <500MB peak memory (vs 60GB explosion with algorithmic generation)
 //! PRECISION: Continued fraction convergents (unique denominators, NOT 10^N scaling)
@@ -167,7 +167,7 @@ fn bigint_to_u64_array_8(n: &BigInt) -> [u64; 8] {
 }
 
 // ============================================================================
-// PROFILE-AWARE CONSTANT GENERATION
+// CONSTANT GENERATION (EVERY FORMAT)
 // ============================================================================
 
 fn generate_mathematical_constants(out_dir: &str, config: &PrecisionConfig) {
@@ -206,11 +206,11 @@ fn generate_mathematical_constants(out_dir: &str, config: &PrecisionConfig) {
     // ========================================================================
     // UNIVERSAL 77d GENERATION (Type-Safety Strategy)
     // ========================================================================
-    // ALWAYS generate 77d tier ([u64; 8] arrays) regardless of GMATH_PROFILE
-    // Runtime will extract appropriate precision based on feature flags:
-    //   - embedded profile    → extract i128 from first 2 u64s
-    //   - balanced profile    → extract [u64; 4] from first 4 u64s
-    //   - scientific profile  → use full [u64; 8] directly
+    // ALWAYS generate the 77d tier ([u64; 8] arrays); every format is in the build
+    // Runtime extracts the precision each format needs:
+    //   - Q64.64      → extract i128 from first 2 u64s
+    //   - Q128.128    → extract [u64; 4] from first 4 u64s
+    //   - Q256.256    → use full [u64; 8] directly
     // Rationale: Eliminates build-time/compile-time type mismatch,
     //            enables type-safe downcasting, single source of truth
     // ========================================================================
@@ -279,7 +279,7 @@ fn generate_mathematical_constants(out_dir: &str, config: &PrecisionConfig) {
     // HELPER FUNCTIONS: Runtime Precision Extraction
     // ========================================================================
     // These functions enable type-safe downcasting from universal 77d tier
-    // to profile-appropriate precision levels based on feature flags
+    // to the precision level each format needs
     // ========================================================================
 
     writeln!(file, "    /// Extract i128 from [u64; 8] array (embedded profile: 19 decimals)").unwrap();
@@ -306,10 +306,10 @@ fn generate_mathematical_constants(out_dir: &str, config: &PrecisionConfig) {
 }
 
 // ============================================================================
-// PROFILE-AWARE TRANSCENDENTAL TABLE GENERATION
+// TRANSCENDENTAL TABLE GENERATION (EVERY FORMAT)
 // ============================================================================
 
-/// Get rational constant as BigRational based on profile
+/// Get rational constant as BigRational at the configured precision
 #[allow(dead_code)]
 fn get_rational_constant(name: &str, config: &PrecisionConfig) -> BigRational {
     match config.target_decimal_places {
@@ -653,24 +653,24 @@ fn rational_to_q512_512(r: &BigRational) -> ([u64; 16], [u64; 8]) {
     (main_i1024, compensation)
 }
 
-/// Profile-aware table generation dispatcher
+/// Table generation dispatcher
 ///
-/// - Embedded: Q64.64 tables (128-bit, 19 decimal places)
-/// - Balanced: Q128.128 tables (256-bit, 38 decimal places)
-/// - Scientific: Q256.256 tables (512-bit, 77 decimal places)
+/// - Q64.64 tables (128-bit, 19 decimal places)
+/// - Q128.128 tables (256-bit, 38 decimal places)
+/// - Q256.256 tables (512-bit, 77 decimal places)
 ///
 /// UGOD REQUIREMENT: Generate ALL table sets for multi-tier transcendental support.
 ///
-/// **ARCHITECTURE**: Profile determines which tables are USED at compile time via cfg,
-/// but ALL tables are GENERATED for potential runtime UGOD tier promotion.
+/// **ARCHITECTURE**: ALL tables are GENERATED and compiled into every build; each
+/// format uses the set of its own width and of its compute tier.
 ///
 /// **BUILD OUTPUT**:
 /// - q64_64_tables.rs (173KB, 19 decimals) - Tier 3
 /// - q128_128_tables.rs (329KB, 38 decimals) - Tier 4
 /// - q256_256_tables.rs (600KB+, 77 decimals) - Tier 5
 ///
-/// **PROFILE USAGE** (via #[cfg(table_format)]):
-/// - embedded/balanced/scientific: Chooses PRIMARY table set
+/// **USAGE**:
+/// - each format: the table set of its own width is its PRIMARY set
 /// - UGOD overflow: Can delegate to higher tiers if implemented
 fn generate_profile_aware_tables(out_dir: &str, config: &PrecisionConfig) {
     println!("cargo:warning=🔧 UGOD Multi-Tier: Generating ALL transcendental table sets");
@@ -759,7 +759,7 @@ fn generate_q64_64_tables(out_dir: &str, _config: &PrecisionConfig) {
     println!("cargo:warning=✅ Generated Q64.64 exponential tables (4 × 1024 entries)");
 }
 
-/// Generate Q128.128 exponential tables for Balanced profile (38 decimal precision)
+/// Generate Q128.128 exponential tables (38 decimal precision)
 fn generate_q128_128_tables(out_dir: &str, _config: &PrecisionConfig) {
     let dest_path = Path::new(out_dir).join("q128_128_tables.rs");
     let mut file = File::create(&dest_path).unwrap();
@@ -855,7 +855,7 @@ fn generate_q128_128_tables(out_dir: &str, _config: &PrecisionConfig) {
     println!("cargo:warning=✅ Generated Q128.128 tables: 3,169 entries, 38-decimal precision");
 }
 
-/// Generate Q256.256 exponential tables for Scientific profile (77 decimal precision)
+/// Generate Q256.256 exponential tables (77 decimal precision)
 fn generate_q256_256_tables(out_dir: &str, _config: &PrecisionConfig) {
     let dest_path = Path::new(out_dir).join("q256_256_tables.rs");
     let mut file = File::create(&dest_path).unwrap();
@@ -948,7 +948,7 @@ fn generate_q256_256_tables(out_dir: &str, _config: &PrecisionConfig) {
     println!("cargo:warning=✅ Generated Q256.256 tables: 3,169 entries, 77-decimal precision");
 }
 
-/// Generate Q512.512 tables (Tier 6) - for scientific profile tier N+1 strategy
+/// Generate Q512.512 tables (Tier 6): the tier N+1 of Q256.256
 fn generate_q512_512_tables(out_dir: &str, _config: &PrecisionConfig) {
     let dest_path = Path::new(out_dir).join("q512_512_tables.rs");
     let mut file = File::create(&dest_path).unwrap();
@@ -1655,7 +1655,7 @@ fn wheel_index(n: u64) -> usize {
 /// - Taylor coefficients for atan: 1/3, 1/5, 1/7, ... (odd reciprocals)
 /// - Threshold constant: tan(π/8) for atan range reduction
 ///
-/// All computed via pure BigRational arithmetic — ZERO float contamination
+/// All computed via pure BigRational arithmetic: ZERO float contamination
 fn generate_trig_constants(out_dir: &str, _config: &PrecisionConfig) {
     let dest_path = Path::new(out_dir).join("trig_constants.rs");
     let mut file = File::create(&dest_path).unwrap();
@@ -1918,7 +1918,7 @@ fn main() {
         // Generate mathematical constants
         generate_mathematical_constants(&out_dir, &config);
 
-        // Generate profile-aware transcendental tables (exp)
+        // Generate transcendental tables for every format (exp)
         generate_profile_aware_tables(&out_dir, &config);
 
         // Generate natural logarithm tables (ln)

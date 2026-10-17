@@ -168,8 +168,8 @@ where
 ///
 /// The two-stage form (`M v` rounded to storage, then `v . (M v)` rounded
 /// again) rounds twice and its error grows with `sum_i |v_i|`. Here every
-/// `v_i m_ij v_j` is an exact triple product at `3 * FRAC_BITS` fractional
-/// bits on the profile's widest accumulator, the sum is exact and checked,
+/// `v_i m_ij v_j` is an exact triple product at `3 * F` fractional
+/// bits on the format's widest accumulator, the sum is exact and checked,
 /// and the single narrowing rounds to nearest with ties toward positive
 /// infinity, the binary house rule. The result is the correctly rounded
 /// value of `v^T M v` for the stored operands, and it always lies inside
@@ -241,9 +241,9 @@ where
 ///
 /// # Errors
 /// - `TierOverflow`: the sum of the exponentials leaves the compute tier. Each
-///   term is at most 1, so this needs `n >= 2^(63 - 2 * FRAC_BITS)` scores on
-///   the realtime profile (about 8.8e12 at Q22.10, 2^31 at Q16.16, 32768 at
-///   Q8.24) and cannot happen on wider profiles.
+///   term is at most 1, so this needs `n >= 2^(63 - 2 * F)` scores on
+///   the i32 formats (about 8.8e12 at Q22.10, 2^31 at Q16.16, 32768 at
+///   Q8.24) and cannot happen on wider words.
 /// - No other error is reachable: the largest term is `exp(0) = 1`, so the
 ///   sum is never zero and every weight is at most 1.
 ///
@@ -295,8 +295,8 @@ where
 /// then reciprocal: all at tier N+1. Single downscale.
 ///
 /// `eps` is a storage-tier value, so any epsilon below the storage
-/// resolution `2^-FRAC_BITS` is zero before it is added (on the realtime
-/// profile at Q22.10 both `1e-5` and `1e-6` are zero). Use
+/// resolution `2^-F` is zero before it is added (on the i32
+/// word at Q22.10 both `1e-5` and `1e-6` are zero). Use
 /// [`rms_norm_factor_eps_wide`] to apply a small epsilon at the compute tier.
 ///
 /// **Use case**: RMSNorm: called once per layer per token in transformer inference.
@@ -314,12 +314,12 @@ where
 /// Fused 1/sqrt(mean(x²) + eps) with `eps` given in Q64.64 (`eps * 2^64`).
 ///
 /// Identical to [`rms_norm_factor`] except that epsilon enters at the
-/// compute tier (`2 × FRAC_BITS` fractional bits) instead of the storage
+/// compute tier (`2 × F` fractional bits) instead of the storage
 /// tier. The Q64.64 value is rounded to the compute tier once, to nearest
-/// with ties toward +infinity; it is exact on profiles whose compute tier
-/// has at least 64 fractional bits (compact and wider). On the realtime
-/// profile the compute tier holds `2 × FRAC_BITS` bits (20 at Q22.10,
-/// 32 at Q16.16), so an epsilon below `2^-(2 × FRAC_BITS + 1)` still rounds
+/// with ties toward +infinity; it is exact in formats whose compute tier
+/// has at least 64 fractional bits (Q32.32 and wider). On the i32
+/// word the compute tier holds `2 × F` bits (20 at Q22.10,
+/// 32 at Q16.16), so an epsilon below `2^-(2 × F + 1)` still rounds
 /// to zero there, and a small epsilon carries the compute tier's resolution
 /// (at Q22.10, `1e-5` becomes `10 / 2^20`).
 ///
@@ -328,10 +328,10 @@ where
 ///   compute tier (all-zero input with an epsilon that rounds to zero).
 /// - `DomainError`: `mean + eps` is negative (only possible with a negative
 ///   epsilon).
-/// - `TierOverflow`: `eps` does not fit the compute tier (realtime only); the
+/// - `TierOverflow`: `eps` does not fit the compute tier (i32 formats only); the
 ///   sum of squares or `mean + eps` leaves the compute tier (the sum holds
-///   `n * x^2` with `2 * FRAC_BITS` fractional bits, so on the realtime
-///   profile `n * max|x|^2` must stay below `2^(63 - 2 * FRAC_BITS)`); or the
+///   `n * x^2` with `2 * F` fractional bits, so on the i32
+///   word `n * max|x|^2` must stay below `2^(63 - 2 * F)`); or the
 ///   result `1 / sqrt(mean + eps)` exceeds the storage range.
 ///
 /// `g_math::wide::try_from_str("1e-5", 64)` produces the Q64.64 epsilon
@@ -379,7 +379,7 @@ where
     // mean = sum_sq / n
     // mean = sum_sq / n, truncated as the compute-tier division truncates
     // (bit-identical to dividing by from_int(n)); the count is never a
-    // storage value, so a realtime length past 2^(31 - F) no longer wraps
+    // storage value, so an i32-format length past 2^(31 - F) no longer wraps
     let mean = Fixed::<S, F>::compute_div_count(sum_sq, values.len())?;
 
     // mean + eps
@@ -397,7 +397,7 @@ where
     let inv = Fixed::<S, F>::compute_divide(compute_one::<S, F>(), root)?;
 
     // Err(TierOverflow), not a panic, when 1/sqrt(mean + eps) exceeds storage
-    // (1/sqrt(1e-6) = 1000 is beyond the realtime range past 23 fraction bits)
+    // (1/sqrt(1e-6) = 1000 is beyond the i32 range past 23 fraction bits)
     Ok(Fixed::from_raw(Fixed::<S, F>::downscale_to_storage(inv)?))
 }
 
@@ -443,8 +443,8 @@ where
 /// path; they stay at compute-tier resolution through the value accumulation,
 /// and only the mixed output vector is downscaled (one rounding per output
 /// element). This removes the storage-tier resolution floor on attention
-/// weights: with FRAC_BITS fractional bits, a materialized weight below
-/// 2^-FRAC_BITS truncates to zero and its value vector vanishes from the mix
+/// weights: with F fractional bits, a materialized weight below
+/// 2^-F truncates to zero and its value vector vanishes from the mix
 /// entirely: the cause of long-context attention starvation. Here a weight
 /// of any compute-representable magnitude still contributes.
 ///
@@ -460,9 +460,9 @@ where
 ///
 /// # Errors
 /// - `TierOverflow`: a numerator `sum_j e_j * v[j][d]` leaves the compute
-///   tier. Each term is at most `max|v|`, so the realtime profile is safe
-///   while `n * max|v| < 2^(63 - 2 * FRAC_BITS)` in value terms (in raw
-///   terms `n * max|v_raw| < 2^(63 - FRAC_BITS)`; with full-range values that
+///   tier. Each term is at most `max|v|`, so the i32 formats are safe
+///   while `n * max|v| < 2^(63 - 2 * F)` in value terms (in raw
+///   terms `n * max|v_raw| < 2^(63 - F)`; with full-range values that
 ///   is `n < 2^22` at Q22.10 and `n < 2^16` at Q16.16). Also returned if the
 ///   sum of exponentials overflows (see [`softmax`]) or a mixed output
 ///   exceeds storage, which cannot happen for in-range values because the
@@ -669,8 +669,8 @@ where
     Ok(())
 }
 
-/// Realtime numerators in plain i64, where bounds prove that nothing can
-/// overflow: with `F = FRAC_BITS <= 15`, `0 <= e <= 2^(2F)` (the exponent is
+/// Numerators of the i32 formats in plain i64, where bounds prove that nothing can
+/// overflow: with `F <= 15`, `0 <= e <= 2^(2F)` (the exponent is
 /// never positive) and `|v| <= 2^31`, each product `e * v` is at most
 /// `2^(2F + 31) <= 2^61`, each rounded term at most `2^(F + 31)`, and up to
 /// `2^(31 - F)` positions keep every partial sum within `2^62`.
@@ -684,8 +684,8 @@ where
 
 /// `sigmoid(gate)` at the wide tier for one storage value.
 ///
-/// Realtime and compact: Q64.64 (`wide::sigmoid_q64`), returned with its 64
-/// fractional bits. Wider profiles: the compute tier (`2F` fractional bits).
+/// i32 formats and Q32.32: Q64.64 (`wide::sigmoid_q64`), returned with its 64
+/// fractional bits. Wider words: the compute tier (`2F` fractional bits).
 /// sigma(gate) at the compute tier (the sign-split form: the exponential
 /// argument is never positive and the denominator stays in [1, 2]).
 #[inline]
@@ -707,10 +707,10 @@ where
 /// `x * sigmoid(gate)`: the sigmoid at the wide tier, the product exact, one
 /// rounding to storage (nearest, ties toward +infinity).
 ///
-/// The sigmoid is evaluated at Q64.64 on the realtime and compact profiles
+/// The sigmoid is evaluated at Q64.64 on the i32 formats and Q32.32
 /// and at the compute tier on the wider ones, so its error reaches the
 /// result scaled by `|x|` and stays far below one storage unit for any `x`
-/// the profile can hold with a few integer bits to spare. Since
+/// the format can hold with a few integer bits to spare. Since
 /// `|x * sigmoid(gate)| <= |x|` the result always fits: this cannot fail.
 pub fn sigmoid_mul<S: Storage, const F: u32>(x: Fixed<S, F>, gate: Fixed<S, F>) -> Fixed<S, F>
 where
@@ -753,7 +753,7 @@ where
 /// wide tier and the sum rounded to storage once. A zero weight contributes
 /// zero. The weights are used as given: they are not normalised.
 ///
-/// The terms are formed at Q64.64 on the realtime and compact profiles and
+/// The terms are formed at Q64.64 on the i32 formats and Q32.32 and
 /// at the compute tier on the wider ones.
 ///
 /// `Err(DomainError)` if a weight is negative, `Err(TierOverflow)` if the
@@ -784,7 +784,7 @@ where
 /// accumulated at the compute tier and rounded to storage once, exactly as
 /// [`dot`] and `FixedVector::<Fixed<S, F>>::dot` round.
 ///
-/// On the realtime profile the query is bounded once; when
+/// On the i32 word the query is bounded once; when
 /// `dim * max|query| * 2^31 < 2^63` no key can overflow the accumulator and
 /// every key takes the unchecked, vectorised sum.
 ///
@@ -843,10 +843,10 @@ where
 /// roundings; at 10 fraction bits a factor of 0.05 alone is 0.4% off).
 ///
 /// Accuracy: the reciprocal carries a relative error below `2^-60` on the
-/// realtime profile (at every `GMATH_FRAC_BITS`) and below `2^-(2F - 2)` on
+/// i32 word (at every split) and below `2^-(2F - 2)` on
 /// the wider ones, so an output differs from the correctly rounded value by
 /// at most one unit, and only when the exact value lies that close to a
-/// rounding boundary. On realtime the epsilon enters exactly as given (it is
+/// rounding boundary. On the i32 word the epsilon enters exactly as given (it is
 /// not first rounded to the compute tier, as in
 /// [`rms_norm_factor_eps_wide`]).
 ///
@@ -854,8 +854,8 @@ where
 /// - `DivisionByZero`: `x` is empty, or `mean + eps` is zero.
 /// - `DomainError`: `mean + eps` is negative (a negative epsilon).
 /// - `TierOverflow`: an output leaves the storage range, or the sum of
-///   squares leaves the working width (realtime: `sum(x^2) + n * eps` at or
-///   above `2^62`; wider profiles: the compute tier).
+///   squares leaves the working width (i32 word: `sum(x^2) + n * eps` at or
+///   above `2^62`; wider words: the compute tier).
 ///
 /// # Panics
 /// Panics if `x` and `weight` differ in length.
@@ -902,8 +902,8 @@ where
 /// `(inv, shift)` with `x_raw * w_raw * inv / 2^shift` the storage raw of
 /// `x * w / sqrt(mean(values^2) + eps)`.
 ///
-/// Realtime: everything in 128-bit integers at Q64.64, independent of the
-/// compute tier's `2 * FRAC_BITS`. `T = n * (mean + eps)` is exact; `T / n`
+/// i32 word: everything in 128-bit integers at Q64.64, independent of the
+/// compute tier's `2 * F`. `T = n * (mean + eps)` is exact; `T / n`
 /// and its root are taken on top-aligned words, so `inv` in `(2^61, 2^62]`
 /// has a relative error below `2^-60`.
 fn rms_reciprocal<S: Storage, const F: u32>(values: &[Fixed<S, F>], eps_q64: i128) -> Result<(Compute<Fixed<S, F>>, u32), OverflowDetected>
@@ -970,7 +970,7 @@ mod tests {
                 }
 
                 /// `t`, raised to one storage unit where the build's split cannot
-                /// represent it (0.001 is 0 raw at GMATH_FRAC_BITS=8, so `diff < t`
+                /// represent it (0.001 is 0 raw at F = 8, so `diff < t`
                 /// could never hold). Unchanged wherever `t` is already >= 1 unit.
                 fn at_least_one_unit(t: FixedPoint) -> FixedPoint {
                     let mut u = FixedPoint::one();
@@ -981,7 +981,7 @@ mod tests {
                 /// The 0.001 tolerance of the approximate checks, at least 1 unit.
                 fn loose() -> FixedPoint { at_least_one_unit(fp("0.001")) }
 
-                /// Profile-appropriate tight tolerance: at least 1 ULP representable.
+                /// Format-appropriate tight tolerance: at least 1 ULP representable.
                 fn tight() -> FixedPoint {
                     if BITS == 32 { at_least_one_unit(fp("0.001")) } else { fp("0.000000001") }
                 }
@@ -1026,7 +1026,7 @@ mod tests {
                 fn test_euclidean_distance_squared_matches_distance() {
                     // dist²([0,0],[3,4]) = 25, and must equal euclidean_distance²
                     // within tolerance across varied vectors.
-                    // Values kept small so dist² fits the narrowest profile (Q8.24
+                    // Values kept small so dist² fits the narrowest format (Q8.24
                     // integer range is ±127); tolerance scales with d because the
                     // d*d side re-quantizes d at storage tier (error ~ d·LSB).
                     let cases: [(&[FixedPoint; 2], &[FixedPoint; 2]); 3] = [
@@ -1049,8 +1049,8 @@ mod tests {
                 on_words!($W in [w32] {
                 /// Oversized fused results must panic loudly, never wrap silently.
                 /// Before the round_to_storage fix, this returned a NEGATIVE squared
-                /// distance on realtime profiles. from_raw(i32::MAX) keeps the input
-                /// constructible and the square out of range at every GMATH_FRAC_BITS.
+                /// distance on the 0.6.x realtime profiles. from_raw(i32::MAX) keeps the input
+                /// constructible and the square out of range at every i32 split.
                 #[test]
                 #[should_panic(expected = "exceeds storage tier")]
                 fn test_euclidean_distance_squared_overflow_panics() {
@@ -1083,7 +1083,7 @@ mod tests {
                     // 0.3/0.4/0.2 are not exactly representable in binary: the inputs
                     // quantize to the storage grid, so the correctly rounded result can
                     // legitimately sit 1 LSB away from the rounded decimal literal at
-                    // coarse FRAC_BITS (seen at Q22.10). Allow 2 LSB.
+                    // coarse F (seen at Q22.10). Allow 2 LSB.
                     let p = [fp("0.3"), fp("0.4")];
                     let q = [fp("-0.2"), fp("0.5")];
                     let quant_tol = tight() + tight();
@@ -1146,7 +1146,7 @@ mod tests {
                     // silu(x) = x/(1+exp(−x)) → 0 super-exponentially as x → −∞: for
                     // every x past the exp saturation threshold |silu(x)| is below half
                     // an LSB at all storage widths. Pre-fix, the wrapping exp downscale
-                    // returned huge garbage for x ≲ −30 on realtime profiles
+                    // returned huge garbage for x ≲ −30 on the 0.6.x realtime profiles
                     // (MoE expert gate values can reach ±70).
                     for s in ["-30", "-40", "-70", "-100"] {
                         let v = silu(fp(s));
@@ -1210,7 +1210,7 @@ mod tests {
 
                 #[test]
                 fn test_softmax_mix_agrees_with_materialized_at_short_length() {
-                    // At short lengths (weights well above 2^-FRAC_BITS) the fused mix
+                    // At short lengths (weights well above 2^-F) the fused mix
                     // must closely match softmax-then-materialized-mix.
                     let scores = vec![fp("1.5"), fp("0.5"), fp("-0.25"), fp("2")];
                     let rows = [
@@ -1251,7 +1251,7 @@ mod tests {
                         .collect();
                     let refs: Vec<&[FixedPoint]> = rows.iter().map(|r| r.as_slice()).collect();
 
-                    // Fused path recovers the true mean (= 3.0) on EVERY profile — this is
+                    // Fused path recovers the true mean (= 3.0) in EVERY format; this is
                     // the guarantee, and it is asserted unconditionally.
                     let (out, _) = softmax_mix(&scores, &refs).unwrap();
                     assert!(
@@ -1261,9 +1261,9 @@ mod tests {
                     );
 
                     // The floor only bites when the storage quantum is coarser than ~1/n
-                    // (realtime at small FRAC_BITS, e.g. Q22.10): there the *materialized*
+                    // (an i32 format with small F, e.g. Q22.10): there the *materialized*
                     // mix collapses toward zero and the fused path must strictly beat it.
-                    // On high-precision profiles there is no floor to survive, so this half
+                    // In high-precision formats there is no floor to survive, so this half
                     // is conditional on the collapse actually occurring.
                     let w = softmax(&scores).unwrap();
                     let mut materialized = FixedPoint::ZERO;
@@ -1285,7 +1285,7 @@ mod tests {
                 // ------------------------------------------------------------------
 
                 /// The 0.6.4 body of `softmax_mix` (checked compute-tier accumulation),
-                /// kept verbatim as the reference for the realtime i64 numerator path.
+                /// kept verbatim as the reference for the i64 numerator path of the i32 formats.
                 fn softmax_mix_reference(
                     scores: &[FixedPoint],
                     values: &[&[FixedPoint]],
@@ -1366,7 +1366,7 @@ mod tests {
                         self.0 >> 33
                     }
                     /// k / 64 with |k| <= amp, built from an integer part below 127 so it
-                    /// fits every profile and every realtime split the suite gates
+                    /// fits every format and every i32 split the suite gates
                     /// (Q8.24 holds +-128).
                     fn value(&mut self, amp: i32) -> FixedPoint {
                         assert!(amp <= 8000);
@@ -1405,7 +1405,7 @@ mod tests {
                 }
 
                 on_words!($W in [w32] {
-                /// Realtime: raw-level extremes, including full-range values, lengths
+                /// i32 word: raw-level extremes, including full-range values, lengths
                 /// around the fast path's position bound, and inputs where the reference
                 /// reports `TierOverflow` (both must agree on the error too).
                 #[test]
@@ -1451,7 +1451,7 @@ mod tests {
                 }
 
                 on_words!($W in [w32] {
-                /// Realtime: the bounded sum equals the checked sum on raw extremes
+                /// i32 word: the bounded sum equals the checked sum on raw extremes
                 /// (rounding ties in both signs, large operands), and an overflowing
                 /// input panics on both paths.
                 #[test]

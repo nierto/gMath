@@ -193,7 +193,7 @@ macro_rules! suite {
                 assert!(s.starts_with("1000"), "Expected 1000, got: {}", s);
             }
 
-            /// 0.5.0 item 0 regression: integer literals beyond the profile's binary
+            /// 0.5.0 item 0 regression: integer literals beyond the format's binary
             /// storage range must fall back to the Symbolic domain (UGOD's ladder top
             /// never fails) instead of erroring at parse. Pre-fix, realtime failed to
             /// parse "32768"+ with Overflow, so `1000000 * 0.001` errored on realtime
@@ -213,8 +213,8 @@ macro_rules! suite {
                         diff.as_str()
                     };
                     assert!(trimmed == "0" || trimmed == "-0" || trimmed == "0/1", "self-diff of {s} = {diff:?}");
-                    // On profiles whose integer range cannot hold the value, the
-                    // fallback domain is Symbolic; wide profiles keep Binary.
+                    // On formats whose integer range cannot hold the value, the
+                    // fallback domain is Symbolic; wide formats keep Binary.
                     let fits_binary = if BITS == 32 {
                         // integer range of the format's split: 2^(31 - F)
                         s.parse::<i128>().unwrap().unsigned_abs() < (1u128 << (31 - FRAC_BITS))

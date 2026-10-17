@@ -14,14 +14,14 @@
 //!   comparison for two negative operands. Two's-complement negatives already
 //!   order correctly as unsigned words (`-1 = 0xFF..F > 0xFF..E = -2`), so
 //!   the reversal made `-2 > -1`. `I256` and `I512` had been corrected
-//!   earlier; the other four had not. On the scientific profile the compute
+//!   earlier; the other four had not. At Q256.256 the compute
 //!   tier is `I1024`, so any `<`, `min` or `max` between two negative
 //!   compute-tier values there was wrong.
 //!
-//! Profile-independent: these types exist on every profile.
+//! Format-independent: these types exist in every build.
 //!
-//! Also here since 0.6.1: `I2048::checked_add`, added for the scientific
-//! profile's fused quadratic-form accumulator, which had no checked addition.
+//! Also here since 0.6.1: `I2048::checked_add`, added for the Q256.256
+//! fused quadratic-form accumulator, which had no checked addition.
 
 use g_math::fixed_point::domains::decimal_fixed::{D256, D512};
 use g_math::fixed_point::{I1024, I2048, I256, I512};

@@ -132,6 +132,6 @@ pub(super) fn pow10_compute_fallback_i1024(exp: u8) -> I1024 {
 // COMPUTE-TIER TRANSCENDENTAL DISPATCH FUNCTIONS
 // ============================================================================
 //
-// These free functions dispatch to the profile-appropriate compute-tier
+// These free functions dispatch to the format-appropriate compute-tier
 // implementations. They are called by the StackEvaluator evaluate_* methods.
 

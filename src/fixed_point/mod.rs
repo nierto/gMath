@@ -1,8 +1,10 @@
-//! Fixed-Point Arithmetic Module: Canonical FASC+UGOD Pipeline
+//! The formats and every layer built on them.
 //!
-//! **Public API**: [`canonical`] module: `use g_math::canonical::{gmath, evaluate};`
-//!
-//! All other modules are internal implementation details.
+//! **Formats**: [`Fixed`] and the aliases [`Q16_16`] .. [`Q256_256`], with the
+//! traits [`FixedNum`], [`Storage`], [`WideInt`] and [`Scalar`]. **Layers**:
+//! [`canonical`] (routing, `gmath` / `evaluate`), [`imperative`] (vectors,
+//! matrices, linear algebra, geometry, fused kernels, intervals),
+//! [`compute_tier`] and [`wide`]. Modules marked hidden are internal.
 
 /// Canonical FASC entry point: the public API for gMath.
 pub mod canonical;
@@ -22,7 +24,7 @@ pub use domains::binary_fixed::{I256, I512, I1024, I2048};
 pub mod compute_tier;
 
 /// Q64.64 transcendentals, π constants and an exact decimal-literal parser
-/// for quantities outside the storage and compute tiers. Every profile.
+/// for quantities outside the storage and compute tiers. Every format.
 pub mod wide;
 
 /// Width traits: the integer words and, per storage word, its compute word

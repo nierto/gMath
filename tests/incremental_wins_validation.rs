@@ -2,7 +2,7 @@
 //! GL(n), O(n), SL(n), parallel transport ODE, Product manifold,
 //! Stiefel manifold, Möbius circle-preserving.
 //!
-//! mpmath-validated where applicable. All 3 profiles.
+//! mpmath-validated where applicable. Every format the suite instantiates.
 
 
 macro_rules! suite {
@@ -25,8 +25,8 @@ macro_rules! suite {
                 if s.starts_with('-') { -FixedPoint::from_str(&s[1..]) }
                 else { FixedPoint::from_str(s) }
             }
-            /// `k` units in the last place of this build's storage (realtime follows
-            /// GMATH_FRAC_BITS: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
+            /// `k` units in the last place of this format's storage (on the i32 word it
+            /// follows F: one unit is 2^-10 at Q22.10, 64x coarser than Q16.16).
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
@@ -193,10 +193,10 @@ macro_rules! suite {
                 let g = sl.lie_exp(&xi).unwrap();
 
                 // The result is about 84 and scaling and squaring (four squarings here)
-                // amplifies the working resolution: at the realtime compute tier's 2F
+                // amplifies the working resolution: at the i32 compute tier's 2F
                 // bits the entries were 8, 2, 2, 1 units off at 8 fraction bits. The
-                // matrix functions now run at Q64.64 on realtime: correctly rounded on
-                // every build (assert_fp is strict, so ulps(1) admits only 0).
+                // matrix functions now run at Q64.64 on the i32 word: correctly rounded
+                // at every format (assert_fp is strict, so ulps(1) admits only 0).
                 assert_fp(g.get(0, 0), fp("83.91872010058223246954388803185160330589607209650807833735155368235331772998142731341517786975646802"), ulps(1), "SL large exp [0,0]");
                 assert_fp(g.get(0, 1), fp("17.93072628343059896812096124731467572361497306578726479512144267056290158969229400429775958719058020"), ulps(1), "SL large exp [0,1]");
                 assert_fp(g.get(1, 0), fp("-26.89608942514589845218144187097201358542245959868089719268216400584435238453844100644663938078587030"), ulps(1), "SL large exp [1,0]");
@@ -325,7 +325,7 @@ macro_rules! suite {
                     "UGOD: matmul intermediate overflow absorbed by compute tier");
             }
 
-            /// Q16.16/Q32.32: 1e8 * 1e8 * 64 = 6.4e17 overflows both profiles.
+            /// Q16.16/Q32.32: 1e8 * 1e8 * 64 = 6.4e17 overflows both formats.
             #[test]
             fn test_ugod_dot_product_many_terms() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
@@ -367,7 +367,7 @@ macro_rules! suite {
 
                 // The FASC path evaluates the entire tree at BinaryCompute tier.
                 // Single downscale at materialization → best possible precision.
-                // Verify against mpmath to profile-appropriate precision.
+                // Verify against mpmath to format-appropriate precision.
                 // compare the raw result, not a Display round trip (Display truncates
                 // to 3 digits at Q22.10, which alone moved the value by a unit)
                 let result_fp = FixedPoint::from_raw(result_sv.as_binary_storage().expect("binary storage"));
@@ -514,7 +514,7 @@ macro_rules! suite {
                 assert!(result.is_err(), "SL inverse of zero matrix should Err via UGOD");
             }
 
-            /// Q16.16/Q32.32: exp(40) ≈ 2.35e17 overflows both profiles.
+            /// Q16.16/Q32.32: exp(40) ≈ 2.35e17 overflows both formats.
             #[test]
             fn test_gln_exp_overflow_large_input() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }

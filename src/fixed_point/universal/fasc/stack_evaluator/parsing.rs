@@ -92,9 +92,9 @@ impl<T: FascFormat> StackEvaluator<T> {
     /// For >38 fractional digits: use two-part parsing (Q256.256 only) or
     /// truncate to 38 digits (i128 scale factor limit).
     ///
-    /// All profiles accept up to 38 fractional digits via the i128 path.
+    /// All formats accept up to 38 fractional digits via the i128 path.
     /// The decimal→binary conversion naturally rounds to the closest
-    /// representable Q-format value. Do NOT truncate to profile precision
+    /// representable Q-format value. Do NOT truncate to the format's precision
     /// before conversion: truncation introduces different rounding than
     /// the mathematically correct round-to-nearest.
     pub(crate) fn parse_decimal(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
@@ -108,20 +108,20 @@ impl<T: FascFormat> StackEvaluator<T> {
         let fractional_str = &s[dot_pos + 1..];
         let frac_len = fractional_str.len();
 
-        // All profiles use i128 path for ≤38 digits (10^38 fits in i128).
+        // All formats use the i128 path for ≤38 digits (10^38 fits in i128).
         // Q256.256 extends to 76 digits via two-part parsing.
         let max_frac: usize = T::PARSE_MAX_FRAC;
 
-        // 0.5.0 item 1: on the narrow profiles max_frac IS the decimal
+        // 0.5.0 item 1: on the narrow formats max_frac IS the decimal
         // storage cap, so truncating here destroys information above one
-        // storage ulp — "0.000000001" on realtime silently parsed to 0,
+        // storage ulp: "0.000000001" on the realtime profile silently parsed to 0,
         // turning later divisions into division-by-zero. Fall back to the
         // exact Symbolic domain instead (the fractional twin of the item-0
         // integer parse fallback). Trailing zeros carry no value: trim
         // before the width check. The i128 rational holds 38 total digits;
         // the integer part's digits shrink the fractional budget. Digits
         // beyond the budget are dropped — at >= (38 - int_digits) decimals
-        // they sit far below one narrow-profile storage ulp. Only if the
+        // they sit far below one narrow-format storage ulp. Only if the
         // budget cannot beat max_frac does this fall through to the old
         // truncation.
         if T::NARROW_DECIMAL && frac_len > max_frac {
@@ -153,14 +153,14 @@ impl<T: FascFormat> StackEvaluator<T> {
         }
 
         // Beyond max_frac the Decimal domain cannot hold the literal. On the
-        // wide profiles convert it exactly to binary instead of truncating it
-        // (before 0.6.4 the extra digits were dropped: on balanced, where one
+        // wide formats convert it exactly to binary instead of truncating it
+        // (before 0.6.4 the extra digits were dropped: at Q128.128, where one
         // ulp is 2.9e-39, "0." + 38 zeros + "999" = 3.4 ulp parsed to 0).
         if !T::NARROW_DECIMAL && frac_len > max_frac {
             return self.parse_decimal_as_binary(s);
         }
 
-        // Truncate to what the profile can represent (the narrow profiles
+        // Truncate to what the format can represent (the narrow formats
         // only reach this with trailing zeros past max_frac, see above)
         let effective_frac_len = frac_len.min(max_frac);
         let effective_frac_str = &fractional_str[..effective_frac_len];
@@ -191,7 +191,7 @@ impl<T: FascFormat> StackEvaluator<T> {
                 let shadow = CompactShadow::from_rational(scaled, scale as u128);
                 Ok(StackValue::Decimal(decimals, storage, shadow))
             }
-            // realtime / compact: the decimal storage is i32 / i64. Beyond it
+            // i32 / i64 words: the decimal storage is i32 / i64. Beyond it
             // keep the exact rational (before 0.6.4 this wrapped: at Q22.10
             // "467295.6470" evaluated to 37798.9, "214748.3648" to -214748.3648).
             Err(_) => Ok(StackValue::Symbolic(RationalNumber::new(scaled, scale as u128))),
@@ -317,19 +317,19 @@ impl<T: FascFormat> StackEvaluator<T> {
     pub(crate) fn parse_integer(&mut self, s: &str) -> Result<StackValue<T>, OverflowDetected> {
         match s.parse::<i128>() {
             Ok(value) => self.integer_value(value),
-            // Beyond i128: the scientific range (2^255) still holds it; before
+            // Beyond i128: the Q256.256 range (2^255) still holds it; before
             // 0.6.4 this was a ParseError. Exact conversion or TierOverflow.
             Err(_) => self.parse_decimal_as_binary(s),
         }
     }
 
-    /// An integer literal's value: binary storage when it fits the profile's
+    /// An integer literal's value: binary storage when it fits the format's
     /// integer range, the exact rational otherwise.
     fn integer_value(&self, value: i128) -> Result<StackValue<T>, OverflowDetected> {
         // Create shadow: exact rational = value/1
         let shadow = CompactShadow::from_rational(value, 1);
 
-        // Convert to Q-format based on profile (shift left by fractional bits)
+        // Convert to the format's Q-format (shift left by fractional bits)
         let storage_tier = self.profile_max_binary_tier();
 
         match T::integer_value(value) {
@@ -347,7 +347,7 @@ impl<T: FascFormat> StackEvaluator<T> {
     /// **PURPOSE**: Replaces NumberClassifier + parse_mathematical_constant() path
     /// for alphabetic inputs. O(1) match on ~10 known constant names.
     ///
-    /// **PRECISION**: Uses SymbolicConstants high-precision methods (profile-aware:
+    /// **PRECISION**: Uses SymbolicConstants high-precision methods (per format:
     /// 19/38/77 decimals), NOT crude rational approximations.
     ///
     /// **EXAMPLES**: "pi" → π (full precision), "e" → Euler's number, "sqrt2" → √2
@@ -355,7 +355,7 @@ impl<T: FascFormat> StackEvaluator<T> {
         use crate::fixed_point::domains::symbolic::rational::mathematical_constants::SymbolicConstants;
 
         // Fast match on ASCII constant names and UTF-8 symbols.
-        // Returns full profile-aware precision from build.rs-generated constants.
+        // Returns the format's full precision from build.rs-generated constants.
         let rational = match s {
             "pi" | "PI" | "Pi" | "π" => {
                 SymbolicConstants::pi_high_precision()
@@ -422,7 +422,7 @@ impl<T: FascFormat> StackEvaluator<T> {
         Ok(StackValue::Ternary(tier, storage, shadow))
     }
 
-    /// Load mathematical constant with full profile-aware precision
+    /// Load mathematical constant with the format's full precision
     pub(crate) fn load_constant(&mut self, constant: ConstantId) -> Result<StackValue<T>, OverflowDetected> {
         use crate::fixed_point::domains::symbolic::rational::mathematical_constants::SymbolicConstants;
 

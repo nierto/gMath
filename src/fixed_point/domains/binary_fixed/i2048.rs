@@ -2,7 +2,7 @@
 //!
 //! PRODUCTION-READY: Maximum precision arithmetic for Q512.512 multiplication
 //! ARCHITECTURE: Based on proven I128/I256/I512/I1024 pattern
-//! PRECISION: Foundation for scientific profile exp() with 70+ decimal accuracy
+//! PRECISION: Foundation for Q256.256 exp() with 70+ decimal accuracy
 //!
 //! **CRITICAL**: This type is REQUIRED for native I1024 × I1024 multiplication
 //! Without I2048, multiply_i1024_q512_512() loses ~26.5 ULP per exp() call
@@ -17,7 +17,7 @@ use crate::fixed_point::domains::binary_fixed::i256::I256;
 ///
 /// ARCHITECTURE: Array of 32 × 64-bit words (little-endian)
 /// USAGE: Enables I1024 × I1024 → I2048 native multiplication
-/// PRIMARY USE: Scientific profile Q512.512 transcendental functions
+/// PRIMARY USE: Q512.512 transcendental functions (the compute tier of Q256.256)
 #[derive(Clone, Copy, Debug)]
 pub struct I2048 {
     /// Stored as thirty-two 64-bit words (little-endian)
@@ -580,7 +580,7 @@ impl From<i64> for I2048 {
 ///
 /// **ALGORITHM**: Bit-by-bit long division, processing 2048 bits from MSB to LSB.
 /// This exists because I2048 does not implement the Div trait.
-/// Used by compute-tier division in the scientific profile (Q512.512 format).
+/// Used by compute-tier division for Q256.256 (Q512.512 format).
 pub fn i2048_div(dividend: I2048, divisor: I2048) -> I2048 {
     i2048_divmod(dividend, divisor).0
 }

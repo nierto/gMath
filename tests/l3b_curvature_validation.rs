@@ -8,7 +8,7 @@
 //! 5. Bianchi identity (first): R^l_{[ijk]} = 0
 //! 6. mpmath-validated Christoffel values for sphere
 //!
-//! All tests run on the active profile (embedded/balanced/scientific).
+//! All tests run at every format the suite macro instantiates.
 
 
 macro_rules! suite {
@@ -34,8 +34,8 @@ macro_rules! suite {
                 if BITS == 32 { fp("1") } else if BITS == 64 { fp("0.5") } else if BITS == 128 { fp("0.1") } else if BITS == 256 { fp("0.001") } else { fp("0.0000001") }
             }
 
-            /// `k` units in the last place of this build's storage (realtime follows
-            /// GMATH_FRAC_BITS: one unit is 2^-8 at Q24.8, 256x coarser than Q16.16).
+            /// `k` units in the last place of this format's storage (on the i32 word it
+            /// follows the split: one unit is 2^-8 at Q24.8, 256x coarser than Q16.16).
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }

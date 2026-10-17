@@ -5,6 +5,192 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - unreleased
+
+### Upgrading
+
+The format is a type now. A build no longer selects one format through
+`GMATH_PROFILE` / `GMATH_FRAC_BITS`: every format is available in every
+build, as `Fixed<S, F>` (storage word `S`, `F` fraction bits) or one of the
+aliases `Q16_16`, `Q32_32`, `Q64_64`, `Q128_128`, `Q256_256`. Code that named
+`FixedPoint` names a format instead (one `type` line is usually the whole
+change); canonical expressions are evaluated in a format,
+`evaluate::<Q64_64>(&e)`. The ternary inference kernels (`tq19`, feature
+`inference`) are the separate crate `g_math_inference`.
+
+Results: the transcendentals, canonical chains and closed-form geometry are
+correctly rounded now. Where 0.6.7 was not, results change, by one unit in
+almost every case and by much more near the top of a format's range (see
+"Changed results"). Everything else returns the integers it returned in
+0.6.7: the differential gate compares every public operation with the
+published 0.6.7 at its six build configurations and accepts a difference
+only where the new value is the correctly rounded one.
+
+Step-by-step migration: [docs/UPGRADING_0.7.md](docs/UPGRADING_0.7.md).
+
+### Changed (breaking)
+
+- **Formats are types.** `Fixed<S, const F: u32>` over the storage words
+  `i32` (any `2 <= F <= 30`), `i64` (F = 32), `i128` (64), `I256` (128) and
+  `I512` (256), with the aliases `Q16_16` .. `Q256_256`. All of them coexist
+  in one build and one binary; two crates in one dependency graph can use
+  different formats. The environment variables `GMATH_PROFILE` and
+  `GMATH_FRAC_BITS`, the features `realtime`, `compact`, `embedded`,
+  `balanced`, `scientific`, and the `FixedPoint` alias are gone; `build.rs`
+  reads no environment.
+- **Containers and layers are generic over the format:** `FixedVector<T>`,
+  `FixedMatrix<T>`, `Tensor<T>`, `ComputeMatrix<T>`, `Interval<T>`,
+  `PdVerdict<T>`, `ManifoldPoint<T>`, the decompositions, matrix functions,
+  manifolds (`Manifold<T>`), Lie groups (`LieGroup<T>`), ODE integrators,
+  curvature, projective maps, fiber bundles, the fused kernels and the
+  certified predicates. There is no default type parameter: name the format.
+- **The canonical layer is generic under its plain names.** `gmath`,
+  `gmath_parse`, `evaluate`, `evaluate_sincos`, `evaluate_sinhcosh`,
+  `evaluate_matrix` take the format as a type parameter, usually inferred
+  from one annotation: `evaluate::<Q64_64>(&(gmath("1.5") + gmath("2.5")))`.
+  Each thread keeps one evaluator per format it uses.
+- **`compute_tier` is generic and ungated.** `exp::<T>(x: Compute<T>)`,
+  `to_fixed::<T>`, `from_fixed(x)` (inferred) and the rest; `Compute<T>` is
+  the format's compute word at `2F` fraction bits. The constants `FRAC_BITS`,
+  `COMPUTE_FRAC_BITS` and the type `ComputeStorage` are gone (use `F`,
+  `2 * F` and `Compute<T>`). The module no longer needs a feature.
+- **Serialized scalars carry their word and split.** `to_bytes` writes
+  `[0x20 | code, F as u16 big-endian][raw big-endian]` (code 1 = i32,
+  2 = i64, 3 = i128, 4 = I256, 5 = I512); `from_bytes` requires that tag.
+  Bytes written by 0.6.x read with `from_bytes_legacy`; `legacy_tag()`
+  returns the byte 0.6.x wrote for the format (it replaces `profile_tag()`).
+  `to_raw_bytes` / `from_raw_bytes` and the compact form are unchanged on
+  the wire. The containers' and `ManifoldPoint`'s byte forms embed the new
+  scalar tag.
+- **The inference module moved.** `g_math::tq19` (TQ1.9, its planar,
+  hybrid and row-scaled forms, the five-trit form, the weight decoders and
+  quantisers, the parallel and wide-output matvecs) is the separate,
+  separately licensed crate `g_math_inference`, unchanged apart from its
+  paths (its differential gate against 0.6.7 shows no difference in value,
+  error or panic). The `inference` feature and the `rayon` dependency are
+  gone. 0.4.x to 0.6.8 keep the module under MIT or Apache-2.0.
+- **Infallible operations that used to return a wrong value panic now:**
+  `asin`, `acos` outside `[-1, 1]` and `atanh` outside `(-1, 1)`, `acosh`
+  below 1 (0.6.7 returned a plausible number, e.g. `asin(-2097152) = 0`);
+  the balanced-ternary `add/subtract_ternary_tq80_80` (saturated) and
+  `_tq320_320` (wrapped) on overflow. The `try_` and `_checked` forms
+  return `Err`.
+- **Index maps keep the index in place.** `tensor::raise_index` and
+  `lower_index` returned the mapped index at position 0, which transposed
+  the result for `idx > 0`; it stays at position `idx` now.
+- **Panic messages** name `Fixed` (`"Fixed: addition overflow"`,
+  `"Fixed::from_str: parse failed"`) instead of `FixedPoint`, and the
+  infallible transcendentals panic with the function's name and the error
+  (`"Fixed::asin: DomainError"`) instead of `"transcendental overflow"`.
+
+### Changed results (more accurate)
+
+Every change below moves a result to the correctly rounded value (nearest,
+ties toward +infinity for binary; nearest, ties to even for decimal), gated
+against mpmath without tolerance.
+
+- **Transcendentals over their full range** (exp, ln, sqrt, sin, cos, tan,
+  atan, asin, acos, sinh, cosh, tanh, asinh, acosh, atanh, pow, atan2), on
+  the imperative and the canonical paths. A fast engine decides when its
+  result lies clear of a rounding boundary; otherwise a sure path at about
+  1000 bits decides. 0.6.7 missed near the top of each range: of 2,720
+  cases per format, 26 (Q16.16), 198 (Q22.10; pow up to 9,048 units off),
+  108 (Q32.32; the known compact `exp` defect), 582 (Q64.64; exp family up
+  to 1.5e10 units), 89 (Q128.128), 673 (Q256.256; sin and cos refused large
+  arguments). Now 0 of 19,040, plus 214,200 stress cases.
+- **Canonical chains** (any tree with an operation) are rounded once from
+  the exact value of the whole tree (binary results to storage, decimal
+  results at their storage places). 0.6.7 misrounded 10 to 30 of 300 random
+  chains per format, some by millions of units; now 0 of 23,100 binary and
+  15,400 decimal chains.
+- **Closed-form geometry**: Sphere and HyperbolicSpace distance, exp, log
+  and transport, SO(3) and SE(3) exp, log, exp_map, log_map and distance,
+  SO(3) transport, each component correctly rounded (0 of 41,860; 0.6.7 was
+  within a few units).
+- **`sqrt`** is the exact integer root on words up to 256 bits (0.6.7 was 1
+  unit off on about 1 input in 2,000 at Q22.10, e.g. raw 1023 gave 1024).
+- **Decimal transcendentals** compute on a word chosen by the number of
+  places D (`Dp<D>: DecimalTier`), with a wider sure word on an ambiguous
+  rounding: the result no longer depends on a build profile. 0.6.7
+  double-rounded at D <= 4 and overflowed above its profile's digits; now
+  1573 of 1573 mpmath cases exact at every D. `atanh` near -1 lost
+  significant digits (formed its ratio on x); fixed.
+- **`DecimalFixed::to_f64_lossy`** is the nearest binary64 of the decimal
+  (0.6.7 divided two converted floats and rounded twice).
+- **Constants**: phi, sqrt 3 and sqrt 2 carried 138 to 253 bits (below a
+  Q256.256 unit); Euler's gamma was 5772/10000 in the evaluator; `E_SQUARED`
+  returned e. All now below 2^-381.
+- **`compute_tier::exp`** raw values were 4.4e8 compute units off at
+  Q64.64 and 8.6e60 at Q256.256 (a missing Taylor term); fixed.
+- **RationalNumber** numerator, denominator, Display, `is_integer` and
+  `is_one` read only the low 128 bits of the 256- and 512-bit tiers; fixed.
+
+### Fixed
+
+- serde: `Fixed`, `FixedVector`, `FixedMatrix`, `Tensor` and `ManifoldPoint`
+  could not be deserialized from formats that write bytes as an array of
+  numbers (JSON, among others); the visitors accept sequences now.
+- The compact byte form of a word's minimum value panicked; it serializes
+  now.
+- Engine defects found by the full-range gate: the Q128.128 `exp` Taylor
+  tail stopped at x^2/2; the tier-6 `exp` tables carried about 311 of 512
+  bits; pi/2 was a storage-precision constant on two compute tiers; the
+  compute-tier `atan` series stopped at 2^-85 / 2^-165.
+
+### Removed
+
+- `FixedPoint`, `BinaryStorage`, `ComputeStorage`, `frac_config`,
+  `DeploymentProfile`, `profile_tag`, the profile features and the
+  environment variables (see "Changed (breaking)").
+- `DecimalFixed::from_raw_checked`: it compared a raw value with an
+  integer-part bound and rejected valid raws; every `i128` is a valid raw.
+- The `legacy-tests` feature (it gated nothing).
+- The `tq19` module and the `inference` feature (see `g_math_inference`).
+
+### Added
+
+- `Fixed<S, F>`, `FixedNum`, the aliases `Q16_16` .. `Q256_256`, the word
+  traits `Storage`, `WideInt`, `CircleStorage`, `Scalar`, `MatrixFunctions`,
+  `Compute<T>`, and the wide integers `I256`, `I512`, `I1024`, `I2048` as
+  documented public types (they were hidden).
+- `DecimalTier` and `Dp<D>`: the words a `DecimalFixed<D>` computes on.
+- `from_bytes_legacy`, `legacy_tag`, `format_tag` on `Fixed`.
+
+### Performance
+
+Release, one quiet machine, median of 9 alternating runs against 0.6.7
+built once per profile:
+
+- Arithmetic, `exp`, `ln`, `sin`, dot products and matrix-vector products at
+  parity with 0.6.7 at the narrow formats; at Q64.64 and Q128.128 `exp`,
+  `ln` and `sin` cost 12 to 33 ns more (the correct-rounding check).
+- `atan` 9 to 76x faster at Q64.64 and wider; `sqrt` 37 to 340x faster at
+  the narrow formats (14 to 50 ns) and 3 to 4x at Q64.64 / Q128.128.
+- Canonical chains 1.2 to 1.9x slower (3.4x at Q22.10) and SO(3) `exp` 1.1
+  to 1.5x slower (9.8x at Q22.10): the price of rounding them correctly.
+- One binary with all six formats is 9.8 MB of code, against 10.1 MB for the
+  six 0.6.7 builds together.
+
+## [0.6.8] - 2026-10-17
+
+### Upgrading
+
+Deprecation only. No function changes a result: everything in 0.6.7
+returns the same integers.
+
+### Deprecated
+
+- The `tq19` module (`g_math::tq19`, `g_math::fixed_point::tq19`) and with it
+  the `inference` feature. From g_math 0.7.0 the ternary inference kernels
+  (TQ1.9 and its planar, hybrid and row-scaled forms, the five-trit form,
+  the weight decoders and quantisers, the parallel and wide-output matvecs)
+  are the separate, separately licensed crate `g_math_inference`; 0.7.0
+  removes the module and the feature. Every use of the module now prints a
+  deprecation warning naming the new crate. `compute_tier`, which was also
+  behind `inference`, stays in g_math 0.7.0 without a feature gate.
+- Releases 0.4.x to 0.6.8 keep the module under their MIT or Apache-2.0
+  licences.
+
 ## [0.6.7] - 2026-10-05
 
 ### Upgrading

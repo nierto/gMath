@@ -2,7 +2,7 @@
 //! the compute word `C`; the tier below it (`Narrow`), the word above it
 //! (`Wide`), the high-precision working word (`Hp`) and the digit budgets
 //! are the word's associated items. The bodies are the 0.6.7 profile arms,
-//! transplanted; the profile-bound names in `decimal_compute` delegate here.
+//! transplanted; the generic functions in `decimal_compute` delegate here.
 
 #![allow(clippy::all, unused_braces)]
 
@@ -256,8 +256,8 @@ impl DecimalWord for i64 {
         }
         let factor = Self::pow10_compute_ct(Self::DP - dp);
         { widened.checked_mul(factor).ok_or(OverflowDetected::TierOverflow) }
-        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (embedded),
-        // < 2^383 (balanced), < 2^639 (scientific): always inside the tier
+        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (I256),
+        // < 2^383 (I512), < 2^639 (I1024): always inside the tier
     }
     #[inline]
     fn try_i128_to_compute(value: i128) -> Result<i64, OverflowDetected> {
@@ -468,8 +468,8 @@ impl DecimalWord for i128 {
         }
         let factor = Self::pow10_compute_ct(Self::DP - dp);
         { widened.checked_mul(factor).ok_or(OverflowDetected::TierOverflow) }
-        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (embedded),
-        // < 2^383 (balanced), < 2^639 (scientific): always inside the tier
+        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (I256),
+        // < 2^383 (I512), < 2^639 (I1024): always inside the tier
     }
     #[inline]
     fn try_i128_to_compute(value: i128) -> Result<i128, OverflowDetected> {
@@ -677,8 +677,8 @@ impl DecimalWord for I256 {
             return Ok(widened);
         }
         let factor = Self::pow10_compute_ct(Self::DP - dp);
-        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (embedded),
-        // < 2^383 (balanced), < 2^639 (scientific): always inside the tier
+        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (I256),
+        // < 2^383 (I512), < 2^639 (I1024): always inside the tier
         { Ok(widened * factor) }
     }
     #[inline]
@@ -915,8 +915,8 @@ impl DecimalWord for I512 {
             return Ok(widened);
         }
         let factor = Self::pow10_compute_ct(Self::DP - dp);
-        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (embedded),
-        // < 2^383 (balanced), < 2^639 (scientific): always inside the tier
+        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (I256),
+        // < 2^383 (I512), < 2^639 (I1024): always inside the tier
         { Ok(widened * factor) }
     }
     #[inline]
@@ -1159,8 +1159,8 @@ impl DecimalWord for I1024 {
             return Ok(widened);
         }
         let factor = Self::pow10_compute_ct(Self::DP - dp);
-        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (embedded),
-        // < 2^383 (balanced), < 2^639 (scientific): always inside the tier
+        // |value| * 10^Self::DP < 2^127 * 10^38 < 2^254 (I256),
+        // < 2^383 (I512), < 2^639 (I1024): always inside the tier
         { Ok(widened * factor) }
     }
     #[inline]

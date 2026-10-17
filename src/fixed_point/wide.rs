@@ -4,9 +4,9 @@
 //! value = `raw / 2^64`), for quantities outside every storage tier, such as
 //! RoPE inverse frequencies `theta^(-2i/d)` with `theta` up to `1e7`.
 //!
-//! These are the Q64.64 engines that the realtime and compact profiles run at
-//! their compute tier. They are the same functions with the same results on
-//! every profile. Before 0.6.4 they were reachable only through the
+//! These are the Q64.64 engines that the i32 and i64 formats run at their
+//! compute tier. They are the same functions with the same results in
+//! every format. Before 0.6.4 they were reachable only through the
 //! undocumented `domains` path (`exp_q64_64_native`, `ln_q64_64_native`),
 //! which they match bit for bit.
 //!
@@ -18,32 +18,32 @@
 //!
 //! | fn | domain | result | measured error |
 //! |----|--------|--------|----------------|
-//! | [`exp_q64`] | any `i128` | saturates to `i128::MAX` for `x >= 41`, flushes to 0 for `x < -40` | 4 units of `2^-64` relative to the result (absolute below 1) |
-//! | [`ln_q64`] | `x > 0` | `None` for `x <= 0` | 55 |
-//! | [`sin_q64`], [`cos_q64`], [`sincos_q64`] | any `i128` | in `[-1, 1]` | 3 for `|x| <= 2π`, then growing as `0.34 |x|` |
-//! | [`sigmoid_q64`] | any `i128` | in `[0, 1]` | 3 |
-//! | [`softplus_q64`] | any `i128` | saturates to `i128::MAX` | 9 |
-//! | [`silu_q64`] | any `i128` | `|result| <= |x|` | 79 at `|x|` near 40 (the sigmoid error times `|x|`) |
-//! | [`sqrt_q64`], [`sqrt_q64_to`] | `x >= 0` | `None` for `x < 0` | 0: correctly rounded, proven |
+//! | [`exp_q64`](crate::fixed_point::wide::exp_q64) | any `i128` | saturates to `i128::MAX` for `x >= 41`, flushes to 0 for `x < -40` | 4 units of `2^-64` relative to the result (absolute below 1) |
+//! | [`ln_q64`](crate::fixed_point::wide::ln_q64) | `x > 0` | `None` for `x <= 0` | 55 |
+//! | [`sin_q64`](crate::fixed_point::wide::sin_q64), [`cos_q64`](crate::fixed_point::wide::cos_q64), [`sincos_q64`](crate::fixed_point::wide::sincos_q64) | any `i128` | in `[-1, 1]` | 3 for `|x| <= 2π`, then growing as `0.34 |x|` |
+//! | [`sigmoid_q64`](crate::fixed_point::wide::sigmoid_q64) | any `i128` | in `[0, 1]` | 3 |
+//! | [`softplus_q64`](crate::fixed_point::wide::softplus_q64) | any `i128` | saturates to `i128::MAX` | 9 |
+//! | [`silu_q64`](crate::fixed_point::wide::silu_q64) | any `i128` | `|result| <= |x|` | 79 at `|x|` near 40 (the sigmoid error times `|x|`) |
+//! | [`sqrt_q64`](crate::fixed_point::wide::sqrt_q64), [`sqrt_q64_to`](crate::fixed_point::wide::sqrt_q64_to) | `x >= 0` | `None` for `x < 0` | 0: correctly rounded, proven |
 //!
 //! The gate functions (0.6.7) were measured on 400 inputs each with
 //! `|x| <= 40`, given at 40 fractional bits. Narrowed once with
-//! [`narrow_q64`] to 40 or to 20 fractional bits, sigmoid, softplus and silu
+//! [`narrow_q64`](crate::fixed_point::wide::narrow_q64) to 40 or to 20 fractional bits, sigmoid, softplus and silu
 //! were the nearest value on every input: the error above is far below half
 //! a unit at those precisions, so the narrowed result can differ from the
 //! nearest value only when the exact value lies within that error of a
 //! rounding boundary. That is rare, not impossible. The square root has no
-//! such case: [`sqrt_q64_to`] rounds once from the exact radicand.
+//! such case: [`sqrt_q64_to`](crate::fixed_point::wide::sqrt_q64_to) rounds once from the exact radicand.
 //!
-//! [`exp_q64`] narrowed the same way was the nearest value on 3,675 of 3,675
+//! [`exp_q64`](crate::fixed_point::wide::exp_q64) narrowed the same way was the nearest value on 3,675 of 3,675
 //! inputs with `x <= 1`. For larger `x` its error grows with the result
 //! (it is relative), and the narrowed value is often not the nearest one
 //! (68 of 325 inputs at 40 bits): do not narrow it there and expect a
 //! correctly rounded exponential.
 //!
-//! Integer helpers, exact: [`mul_div_floor`], [`mul_div_nearest`],
-//! [`mul_div_floor_u128`] (the product formed at full width) and
-//! [`try_ratio_from_str`] (a decimal literal as a fraction in lowest terms).
+//! Integer helpers, exact: [`mul_div_floor`](crate::fixed_point::wide::mul_div_floor), [`mul_div_nearest`](crate::fixed_point::wide::mul_div_nearest),
+//! [`mul_div_floor_u128`](crate::fixed_point::wide::mul_div_floor_u128) (the product formed at full width) and
+//! [`try_ratio_from_str`](crate::fixed_point::wide::try_ratio_from_str) (a decimal literal as a fraction in lowest terms).
 //!
 //! The sine and cosine error grows with the angle because range reduction
 //! subtracts multiples of the truncated `PI_HALF_Q64`, which is 0.537 units
@@ -83,7 +83,7 @@ pub const TWO_PI_Q64: i128 = 115904311329233965478;
 /// `floor(π/2 * 2^64)`.
 pub const PI_HALF_Q64: i128 = sincos::PI_HALF_Q64;
 
-/// `floor(π * 2^32)`, the Q32.32 angle format of `FixedPoint::sincos_wide`.
+/// `floor(π * 2^32)`, the Q32.32 angle format of `Fixed::sincos_wide`.
 pub const PI_Q32: i64 = 13493037704;
 
 /// `floor(2π * 2^32)`.
@@ -132,7 +132,7 @@ pub fn sincos_q64(x: i128) -> (i128, i128) {
 /// Grammar: `[+-]? digits [. digits] [e [+-]? digits]`, also `.5` and `5.`,
 /// surrounding whitespace ignored; no expressions or constants. Converted
 /// exactly with integer arithmetic and rounded once to nearest, ties toward
-/// +infinity, the same rule as `FixedPoint::try_from_str`. Any number of
+/// +infinity, the same rule as `Fixed::try_from_str`. Any number of
 /// digits is accepted.
 ///
 /// `Err(ParseError)` for a string outside the grammar, `Err(TierOverflow)`

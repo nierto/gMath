@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 //! Mathematical Constants: Single Source of Truth
 //!
-//! All constants are generated at build-time with profile-aware precision via pure-Rust
+//! All constants are generated at build-time at up to 77-decimal precision via pure-Rust
 //! BigRational arithmetic. Zero floating-point contamination.
 //!
 //! ARCHITECTURE: Build-time generation → symbolic rationals → domain conversion
-//! PRECISION: Profile-aware (Embedded, Balanced, Scientific)
+//! PRECISION: per format (Q64.64, Q128.128, Q256.256)
 //! DETERMINISM: Bit-identical results across all platforms and threads
 
 use crate::fixed_point::domains::symbolic::rational::RationalNumber;
@@ -34,10 +34,10 @@ include!("../../../../generated_tables/mathematical_constants.rs");
 ///
 /// **GENERATION**: Build-time via build.rs using algorithmic series:
 /// - π: Machin's formula (16*arctan(1/5) - 4*arctan(1/239))
-/// - e: Factorial series (Σ(1/n!) for n=0 to profile_terms)
-/// - √2: Continued fraction algorithm with profile-aware terms
+/// - e: Factorial series (Σ(1/n!) for n=0 to the number of terms the precision needs)
+/// - √2: Continued fraction algorithm with as many terms as the precision needs
 ///
-/// **PRECISION**: Profile-aware (Embedded→19, Balanced→38, Scientific→77 decimals)
+/// **PRECISION**: per format (Q64.64→19, Q128.128→38, Q256.256→77 decimals)
 /// **DETERMINISM**: Bit-identical across all platforms via pure rational arithmetic
 /// **ZERO FLOATING POINT**: All constants generated as exact rational pairs
 pub struct SymbolicConstants;
@@ -45,7 +45,7 @@ pub struct SymbolicConstants;
 impl SymbolicConstants {
     /// High-precision π using build-generated rational approximation
     ///
-    /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
+    /// **PRECISION**: 19 decimals at Q64.64, 38 at Q128.128, 77 at Q256.256
     /// **SOURCE**: Verified 100+ decimal string from OEIS A000796
     /// **ARCHITECTURE**: Scaled-integer rational (numerator / 10^decimals)
     pub fn pi_high_precision() -> RationalNumber {
@@ -57,7 +57,7 @@ impl SymbolicConstants {
 
     /// High-precision e using build-generated rational approximation
     ///
-    /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
+    /// **PRECISION**: 19 decimals at Q64.64, 38 at Q128.128, 77 at Q256.256
     /// **SOURCE**: Verified 100+ decimal string from OEIS A001113
     pub fn e_high_precision() -> RationalNumber {
         let (num_words, den_words) = MathematicalConstants::E();
@@ -68,7 +68,7 @@ impl SymbolicConstants {
 
     /// High-precision √2 using build-generated rational approximation
     ///
-    /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
+    /// **PRECISION**: 19 decimals at Q64.64, 38 at Q128.128, 77 at Q256.256
     /// **SOURCE**: Verified 100+ decimal string from OEIS A002193
     pub fn sqrt_2_high_precision() -> RationalNumber {
         let (num_words, den_words) = MathematicalConstants::SQRT_2();
@@ -79,7 +79,7 @@ impl SymbolicConstants {
 
     /// High-precision natural logarithm of 2
     ///
-    /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
+    /// **PRECISION**: 19 decimals at Q64.64, 38 at Q128.128, 77 at Q256.256
     /// **SOURCE**: Verified 100+ decimal string from OEIS A002162
     pub fn ln_2_high_precision() -> RationalNumber {
         let (num_words, den_words) = MathematicalConstants::LN_2();
@@ -90,7 +90,7 @@ impl SymbolicConstants {
 
     /// High-precision golden ratio φ = (1 + √5)/2
     ///
-    /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
+    /// **PRECISION**: 19 decimals at Q64.64, 38 at Q128.128, 77 at Q256.256
     /// **SOURCE**: Verified 100+ decimal string from OEIS A001622
     pub fn golden_ratio_high_precision() -> RationalNumber {
         let (num_words, den_words) = MathematicalConstants::GOLDEN_RATIO();
@@ -101,7 +101,7 @@ impl SymbolicConstants {
 
     /// High-precision √3 using build-generated rational approximation
     ///
-    /// **PRECISION**: Profile-aware (embedded: 19, balanced: 38, scientific: 77 decimals)
+    /// **PRECISION**: 19 decimals at Q64.64, 38 at Q128.128, 77 at Q256.256
     /// **SOURCE**: Verified 100+ decimal string from OEIS A002194
     pub fn sqrt_3_high_precision() -> RationalNumber {
         let (num_words, den_words) = MathematicalConstants::SQRT_3();

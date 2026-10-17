@@ -30,7 +30,7 @@ macro_rules! shared_items {
             // Measured error bounds (Q64.64 units), from the reference sweep below
             // ============================================================================
 
-            // The engines are profile-independent, so every profile measures the same.
+            // The engines are format-independent, so every format measures the same.
             const EXP_MAX_REL_UNITS: i128 = 4;
             const LN_MAX_UNITS: i128 = 55;
             const EXP_LN_MAX_REL_UNITS: i128 = 33;
@@ -84,10 +84,10 @@ macro_rules! shared_items {
                 let scale = (want.abs() >> 64).max(1);
                 diff / scale
             }
-            /// Fraction bits of this build (FRAC_BITS on realtime).
+            /// Fraction bits of this suite's format.
             fn frac_bits() -> u32 {
                 // the build's split (halving one with from_int(2) fails where 2 is out of
-                // range, at GMATH_FRAC_BITS = 30)
+                // range, at F = 30)
                 FRAC_BITS
             }
             fn storage_literals() -> Option<&'static [refs::Storage]> {
@@ -155,9 +155,9 @@ macro_rules! suite {
                         assert_eq!(wide::sincos_q64(x), (wide::sin_q64(x), wide::cos_q64(x)), "sincos {x}");
                     }
                 }
-                // the 0.6.3 compute-tier wrappers on the profiles whose compute tier is Q64.64
+                // the 0.6.3 compute-tier wrappers at the formats whose compute tier is Q64.64
                 if (BITS == 32 || BITS == 64) {
-                    // the 0.6.x `*_binary_i128` routing of these profiles, by name since 0.7.0
+                    // the 0.6.x `*_binary_i128` routing of these formats, by name since 0.7.0
                     use g_math::fixed_point::domains::binary_fixed::transcendental::{
                         exp_tier_n_plus_1::exp_q64_64_native,
                         ln_tier_n_plus_1::ln_q64_64_native,

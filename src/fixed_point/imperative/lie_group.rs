@@ -75,7 +75,7 @@ where
     down(Fixed::<S, F>::sqrt_at_compute_tier(sum))
 }
 
-/// The profile's atan2 at the compute tier (arguments and angle at 2F).
+/// The format's atan2 at the compute tier (arguments and angle at 2F).
 fn atan2_compute<S: Storage, const F: u32>(y: Compute<Fixed<S, F>>, x: Compute<Fixed<S, F>>) -> Compute<Fixed<S, F>>
 where
     Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
@@ -274,7 +274,7 @@ where
 /// theta^2 = |omega|^2 and theta at the compute tier. For storage omega the
 /// squares and the sum are exact, so theta^2 is never 0 for a nonzero omega
 /// (before 0.6.4 it was rounded to storage: 0 raw for theta below about
-/// 2^-(F/2), a DivisionByZero from exp on realtime).
+/// 2^-(F/2), a DivisionByZero from exp on the i32 formats).
 fn angle_compute<S: Storage, const F: u32>(omega: &[Compute<Fixed<S, F>>]) -> (Compute<Fixed<S, F>>, Compute<Fixed<S, F>>)
 where
     Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
@@ -520,14 +520,14 @@ impl SO3 {
 
     /// Rodrigues exponential: ω (3-vector) → rotation matrix R.
     ///
-    /// R = I + sinc(θ)·[ω]× + half_cosc(θ)·[ω]×²
+    /// R = I + sinc(θ)·\[ω\]× + half_cosc(θ)·\[ω\]×²
     ///
     /// **Precision:** θ² (exact), θ, the fused sincos, both coefficients (or
     /// their Taylor series below the threshold) and R are all at the compute
     /// tier; each entry is rounded to storage once. Before 0.6.4 θ² was
     /// rounded to storage and used as a divisor, so a θ just above the
     /// threshold with θ² below half a unit returned `Err(DivisionByZero)` on
-    /// realtime (omega = [0.002, 0, 0] at Q16.16).
+    /// the i32 formats (omega = [0.002, 0, 0] at Q16.16).
     pub fn rodrigues_exp<S: Storage, const F: u32>(omega: &FixedVector<Fixed<S, F>>) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected>
     where
         Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
@@ -590,7 +590,7 @@ where
         norm_to_storage(&so3_log_map_compute(p, q)?)
     }
 
-    /// vee(R_half [v]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2),
+    /// vee(R_half \[v\]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2),
     /// the whole chain at the compute tier and each component rounded once.
     fn parallel_transport(&self, base: &FixedVector<Fixed<S, F>>, target: &FixedVector<Fixed<S, F>>, tangent: &FixedVector<Fixed<S, F>>) -> Result<FixedVector<Fixed<S, F>>, OverflowDetected> {
         if let Some(v) = exact_forms::settled::<Fixed<S, F>>(exact_forms::Op::So3Transport, &vraws(base), &vraws(target), &vraws(tangent))? { return Ok(as_vector(v)); }
@@ -698,7 +698,7 @@ impl SE3 {
     /// **Precision:** θ² (exact), the sincos, R, the V coefficients (their
     /// Taylor series below 2^(2 - F/2)) and V·v are at the compute tier; each
     /// entry is rounded to storage once. Before 0.6.4 θ² was rounded to
-    /// storage (a `DivisionByZero` for small θ on realtime) and the small-angle
+    /// storage (a `DivisionByZero` for small θ on the i32 formats) and the small-angle
     /// branch used the constants 1/2 and 1/6 alone (θ³/24·|v| truncation:
     /// 746 units at θ = 8.8e-6 on Q64.64).
     pub fn se3_exp<S: Storage, const F: u32>(xi: &FixedVector<Fixed<S, F>>) -> Result<FixedMatrix<Fixed<S, F>>, OverflowDetected>
@@ -1204,9 +1204,9 @@ pub struct SLn {
 impl SLn {
     /// hat: (n²-1)-vector → traceless n×n matrix.
     ///
-    /// Layout: first (n-1) entries = diagonal d[0]..d[n-2],
+    /// Layout: first (n-1) entries = diagonal d\[0\]..d\[n-2\],
     /// remaining n²-n entries = off-diagonal row-major.
-    /// d[n-1] = -(d[0]+...+d[n-2]) enforces tr=0.
+    /// d\[n-1\] = -(d\[0\]+...+d\[n-2\]) enforces tr=0.
     pub fn hat_sln<S: Storage, const F: u32>(&self, xi: &FixedVector<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>>
     where
         Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,

@@ -15,12 +15,12 @@
 //!    wrapped value. The compute word follows D (`Dp<D>: DecimalTier`, at
 //!    least ten guard digits at every D on every build), so an in-domain
 //!    argument never reaches a domain boundary at the compute tier; the
-//!    `PrecisionLimit` that the narrow profiles' coarse compute dp caused up
+//!    `PrecisionLimit` that the 0.6.x narrow profiles' coarse compute dp caused up
 //!    to 0.6.7 is gone, and the results at every D are the same on every
 //!    build.
 //! 4. `try_` never panics, for any raw at any D: swept below over the i128
 //!    and compute-tier extremes and every power of ten, at D in
-//!    {0, 2, 4, 9, 18, 19, 20, 28, 38} on every profile.
+//!    {0, 2, 4, 9, 18, 19, 20, 28, 38} on every format.
 //!
 //! Correctness of the values: the `try_` forms of exp/sinh/cosh/tanh/asinh/
 //! acosh/sin/cos are checked against the mpmath corpus of
@@ -81,10 +81,10 @@ macro_rules! suite {
                 "sinhcosh", "tanh", "asinh", "acosh", "atanh",
             ];
 
-            /// Every D the sweep covers (the type allows 0..=38 on every profile).
+            /// Every D the sweep covers (the type allows 0..=38 on every format).
             const SWEEP_D: &[u8] = &[0, 2, 4, 9, 18, 19, 20, 28, 38];
 
-            /// The D values the decimal tests use on this profile.
+            /// The D values the decimal tests use on this storage word.
             const PROFILE_D: &[u8] = if BITS == 32 { &[4, 2, 0] } else if BITS == 64 { &[9, 4, 0] } else if BITS == 128 { &[19, 9, 0] } else if BITS == 256 { &[38, 28, 19, 0] } else { &[38, 19, 0] };
 
             thread_local! {
@@ -223,7 +223,7 @@ macro_rules! suite {
                 try_round_str(s, d).expect("constant beyond i128 at this D")
             }
 
-            /// Raws the no-panic sweep feeds every method: the i128 and i64 (realtime
+            /// Raws the no-panic sweep feeds every method: the i128 and i64 (0.6.x realtime
             /// compute tier) extremes, 0, +-1, +-SCALE and its neighbours, +-10^k.
             fn sweep_raws(d: u8) -> Vec<i128> {
                 let s = scale(d);
@@ -278,7 +278,7 @@ macro_rules! suite {
             }
 
             /// In-domain values n / 10^k: bit-identity on ordinary inputs, per function,
-            /// at every D the decimal tests use on the profile.
+            /// at every D the decimal tests use on the storage word.
             #[test]
             fn try_bit_identical_on_in_domain_grid() {
                 const GRID: &[(i128, u32)] = &[
@@ -467,7 +467,7 @@ macro_rules! suite {
             /// (1+x)/(1-x) = 2e19 for x = 1 - 1e-19 fits the compute tier and atanh is
             /// finite: mpmath
             /// atanh(1 - 1e-19) = 22.2211319737234066528545348802 (up to 0.6.7 the
-            /// compact profile computed D = 19 on i128 at 19 dp and reported
+            /// 0.6.x compact profile computed D = 19 on i128 at 19 dp and reported
             /// `TierOverflow` here).
             #[test]
             fn atanh_next_to_one_at_d19_is_finite_on_every_build() {
@@ -558,7 +558,7 @@ macro_rules! suite {
 
             /// asin(+-1) = +-pi/2 and acos(-1) = pi correctly rounded to D, acos(1) = 0,
             /// and the zeros and ones of every function exact, at every D the decimal
-            /// tests use on the profile (all at or below the compute dp).
+            /// tests use on the storage word (all at or below the compute dp).
             #[test]
             fn boundary_values_are_exact() {
                 let mut failures = Vec::new();

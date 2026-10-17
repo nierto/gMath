@@ -2,8 +2,8 @@
 //!
 //! # Algorithm
 //!
-//! A result near the top of the compute tier (about 10^9 on realtime, 10^19
-//! on compact, far more on the wider profiles) needs as many significant
+//! A result near the top of the compute tier (about 10^9 on the i64 word,
+//! 10^19 on i128, far more on the wider words) needs as many significant
 //! digits as the tier holds, so the engine works at a wider decimal precision
 //! `C::HP_DP` in the next integer tier, on values below 2 only:
 //!
@@ -18,7 +18,7 @@
 //!
 //! The relative error before that rounding is a few units at `C::HP_DP`
 //! whatever the size of `x`. `C::HP_DP` exceeds (digits of the largest
-//! representable result) + (storage dp) by at least 8 on every profile, so
+//! representable result) + (storage dp) by at least 8 on every compute word, so
 //! the compute-dp result is the correctly rounded value. Before 0.6.4 the
 //! engine built `exp(k) = e^k` by `k` successive multiplications at the
 //! compute dp: up to 267 units off at 19 decimals on embedded (x near 44),

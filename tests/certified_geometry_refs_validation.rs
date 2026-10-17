@@ -5,10 +5,10 @@
 //! `scripts/generate_certified_geometry_refs.py`: Python exact integers and
 //! fractions, cross-checked against mpmath at 300 digits inside the generator,
 //! sharing no code with the Rust side. Raw values arrive as exact little-endian
-//! two's-complement bytes at the storage width, so the wide profiles, whose
+//! two's-complement bytes at the storage width, so the wide formats, whose
 //! raws exceed i128, are covered with operands near the storage maximum.
 //!
-//! Checked on every profile:
+//! Checked on every format:
 //! - certified sqrt endpoints equal the reference floor and ceil exactly;
 //! - directed product and quotient endpoints equal the references exactly,
 //!   including operands within a factor of four of the storage maximum;
@@ -74,9 +74,9 @@ macro_rules! shared_items {
                 }
             }
 
-            /// The references match the build's split: the sqrt(1) = 1 entry decodes to
-            /// exactly 1.0 only when the table's FRAC_BITS is the build's (every profile,
-            /// and every realtime GMATH_FRAC_BITS from 2 to 30, has a table).
+            /// The references match the suite's split: the sqrt(1) = 1 entry decodes to
+            /// exactly 1.0 only when the table's FRAC_BITS is the suite's (every format,
+            /// and every i32 split from 2 to 30, has a table).
             fn assert_default_split() {
                 let one = FixedPoint::one();
                 let found = refs::SQRT.iter().any(|(x, f, c)| fp_le(x) == one && fp_le(f) == one && fp_le(c) == one);
@@ -116,8 +116,8 @@ macro_rules! suite {
                     assert_eq!(iv.lo(), fp_le(f), "sqrt floor, reference {idx}");
                     assert_eq!(iv.hi(), fp_le(c), "sqrt ceil, reference {idx}");
                     // the scalar engine's result must lie inside the certified enclosure,
-                    // including for inputs near the storage maximum. On the scientific
-                    // profile this once failed above ~2^200 (the Q512.512 engine lost
+                    // including for inputs near the storage maximum. At Q256.256
+                    // this once failed above ~2^200 (the Q512.512 engine lost
                     // precision for large inputs; fixed by normalising the input).
                     let scalar = fp_le(x).sqrt();
                     assert!(

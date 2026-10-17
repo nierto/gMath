@@ -42,7 +42,7 @@ use core::fmt::{self, Display};
 #[allow(unused_imports)]
 
 /// Maximum decimal places before promoting Decimal to BinaryCompute.
-/// Matches each profile's meaningful decimal precision.
+/// Matches each format's meaningful decimal precision.
 /// Beyond this threshold, the scaled integer exceeds BinaryStorage range,
 /// so we promote to binary fixed-point (which has FIXED fractional bits, no dp growth).
 
@@ -59,11 +59,11 @@ use core::fmt::{self, Display};
 /// **ARCHITECTURE**: Tagged union for domain-specific values
 /// **MEMORY**: Stack-allocated, no heap pointers
 /// **CONVERSION**: Lazy conversion between domains as needed
-/// **PRECISION**: Profile-specific storage eliminates downconversion loss
+/// **PRECISION**: Format-specific storage eliminates downconversion loss
 #[derive(Debug, Clone)]
 pub enum StackValue<T: FascFormat> {
     /// Binary fixed-point value (tier, mantissa, shadow)
-    /// **STORAGE**: Profile-specific (i128 | I256 | I512) - zero precision loss
+    /// **STORAGE**: Format-specific (`T::Storage`: i32 | i64 | i128 | I256 | I512) - zero precision loss
     /// **SHADOW**: Exact rational representation for precision preservation
     Binary(u8, T::Storage, CompactShadow),
 
@@ -74,24 +74,24 @@ pub enum StackValue<T: FascFormat> {
     BinaryCompute(u8, Compute<T>, CompactShadow),
 
     /// Decimal fixed-point value (decimals, scaled_value, shadow)
-    /// **STORAGE**: Profile-specific (i128 | I256 | I512) - matches binary precision
+    /// **STORAGE**: Format-specific (`T::Storage`: i32 | i64 | i128 | I256 | I512) - matches binary precision
     /// **SHADOW**: Exact rational representation for precision preservation
     Decimal(u8, T::Storage, CompactShadow),
 
     /// Decimal compute-tier value for transcendental chain persistence.
     ///
-    /// **STORAGE**: Compute<T> at `DECIMAL_COMPUTE_DP` scaling (10^-dp).
+    /// **STORAGE**: `Compute<T>` at `DECIMAL_COMPUTE_DP` scaling (10^-dp).
     /// **PURPOSE**: Decimal equivalent of BinaryCompute: keeps intermediate
     /// transcendental results at compute-tier precision between chained ops.
     /// Materialized to `Decimal` at non-transcendental boundaries (display, arithmetic
     /// with non-decimal operands, etc.) with dp chosen to guarantee 0 storage ULP.
     ///
     /// **FIELDS**: `(storage_tier, compute_value, shadow)` where `compute_value`
-    /// is scaled by `10^DECIMAL_COMPUTE_DP` (per-profile: 9, 19, 38, 77, 154).
+    /// is scaled by `10^DECIMAL_COMPUTE_DP` (per compute word: 9, 19, 38, 77, 154).
     DecimalCompute(u8, Compute<T>, CompactShadow),
 
     /// Balanced ternary value (precision_tier, trit_value, shadow)
-    /// **STORAGE**: Profile-specific (i128 | I256 | I512) - matches binary precision
+    /// **STORAGE**: Format-specific (`T::Storage`: i32 | i64 | i128 | I256 | I512) - matches binary precision
     /// **SHADOW**: Exact rational representation for precision preservation
     Ternary(u8, T::Storage, CompactShadow),
 
@@ -172,12 +172,12 @@ impl<T: FascFormat> StackValue<T> {
                     return Ok(RationalNumber::new(num, den));
                 }
                 // Binary Q-format: rational = value / 2^frac_bits
-                // Tier mapping depends on profile — the storage tier IS the profile's max tier.
+                // Tier mapping depends on the format ; the storage tier IS the format's max tier.
                 let frac_bits: u32 = match tier {
                     1 => {
-                        // Tier 1: the realtime storage tier, raw integer on others.
-                        // It follows GMATH_FRAC_BITS; a fixed 16 read every
-                        // shadowless realtime value 64x too small at Q22.10
+                        // Tier 1: the i32 storage tier, raw integer on others.
+                        // It follows the format's F; a fixed 16 read every
+                        // shadowless i32 value 64x too small at Q22.10
                         // (before 0.6.4: -1000 + 1/1 became -999/64).
                         T::TIER1_RATIONAL_FRAC_BITS
                     }
@@ -216,7 +216,7 @@ impl<T: FascFormat> StackValue<T> {
         }
     }
 
-    /// Extract the raw binary storage value (profile-specific type).
+    /// Extract the raw binary storage value (format-specific type).
     ///
     /// Returns `None` for non-materializable values and error states.
     /// - `Binary` → returns as-is
@@ -257,7 +257,7 @@ impl<T: FascFormat> StackValue<T> {
     /// Convert to decimal string with specified precision.
     ///
     /// Uses integer-only multiply-by-10 extraction (zero floats).
-    /// Profile-dispatched: Q64.64 → max 19 digits, Q128.128 → max 38, Q256.256 → max 76.
+    /// Per format: Q64.64 → max 19 digits, Q128.128 → max 38, Q256.256 → max 76.
     ///
     /// For non-binary values: converts to rational first, then extracts digits.
     pub fn to_decimal_string(&self, max_digits: usize) -> String {
@@ -533,7 +533,7 @@ impl<T: FascFormat> StackEvaluator<T> {
     /// Materialize a DecimalCompute raw at the highest storage dp that
     /// fits (0.5.0 item 0d fix): try DECIMAL_STORAGE_MAX_DP first and step
     /// down only when the magnitude genuinely needs fewer decimals. The
-    /// old fixed `MAX_DP - 2` slack silently cost realtime HALF its digits
+    /// old fixed `MAX_DP - 2` slack silently cost the realtime profile HALF its digits
     /// (dp 4 → 2: cos(0.1) = 0.9952 displayed as "1.00"), which masqueraded
     /// as a sin/cos kernel plateau for months. Deterministic; the
     /// downscale is checked, so a too-large dp errors and we retry, never

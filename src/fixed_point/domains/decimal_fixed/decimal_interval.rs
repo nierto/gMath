@@ -10,8 +10,8 @@
 //! its remainder. Nothing else about the soundness argument differs; see
 //! `docs/design/CERTIFIED_INTERVALS.md`.
 //!
-//! Profile-independent: `DecimalFixed` is an `i128` scaled by `10^DECIMALS`
-//! on every profile, so there is one code path here rather than five.
+//! Independent of the binary format: `DecimalFixed` is an `i128` scaled by
+//! `10^DECIMALS`, so there is one code path here (0.6.x had five profiles).
 //!
 //! **What may carry the word certified.** `+`, `-`, `*`, `/` by the standard
 //! endpoint argument. [`DecimalInterval::sqrt`] a posteriori: the returned

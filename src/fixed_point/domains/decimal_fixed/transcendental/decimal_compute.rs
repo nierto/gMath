@@ -8,13 +8,13 @@
 //! `a × b` on two compute-tier values overflows the compute type. We use the next-wider
 //! integer type for the product, then divide by 10^compute_dp to return to compute tier.
 //!
-//! | Profile    | Compute    | Wide       | Widening op                |
-//! |------------|------------|------------|----------------------------|
-//! | realtime   | i64        | i128       | (val as i128)              |
-//! | compact    | i128       | I256       | I256::from_i128            |
-//! | embedded   | I256       | I512       | I256::mul_to_i512          |
-//! | balanced   | I512       | I1024      | I512::mul_to_i1024         |
-//! | scientific | I1024      | I2048      | I1024::mul_to_i2048        |
+//! | Compute    | Wide       | Widening op                |
+//! |------------|------------|----------------------------|
+//! | i64        | i128       | (val as i128)              |
+//! | i128       | I256       | I256::from_i128            |
+//! | I256       | I512       | I256::mul_to_i512          |
+//! | I512       | I1024      | I512::mul_to_i1024         |
+//! | I1024      | I2048      | I1024::mul_to_i2048        |
 
 #[allow(unused_imports)]
 #[allow(unused_imports)]
@@ -31,7 +31,7 @@ use crate::fixed_point::I1024;
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 
 // ============================================================================
-// PROFILE-SPECIFIC CONSTANTS
+// PER-WORD CONSTANTS
 // ============================================================================
 
 /// Decimal compute-tier precision (decimal places): matches binary compute frac bits.
@@ -100,7 +100,7 @@ pub(crate) fn pow10_compute_ct<C: DecimalWord>(exp: u8) -> C {
 }
 
 // ============================================================================
-// PROFILE-SPECIFIC WIDENING / NARROWING
+// PER-WORD WIDENING / NARROWING
 // ============================================================================
 
 #[cfg(test)]
@@ -116,7 +116,7 @@ fn wide_div<C: DecimalWord>(a: C::Wide, b: C::Wide) -> C::Wide {
 #[cfg(test)]
 #[allow(dead_code)]
 /// `w / 10^C::DP` truncated toward zero: bit-identical to
-/// `C::wide_div(w, C::wide_scale())`. On balanced and scientific the wide integers
+/// `C::wide_div(w, C::wide_scale())`. For the I512 and I1024 compute words the wide integers
 /// divide bit by bit (2048 steps for I2048, about 69 us a call in release),
 /// once per decimal multiply, which made FASC decimal transcendentals about
 /// 570x slower than the binary engine there. Dividing the magnitude by 10^19
@@ -300,7 +300,7 @@ pub fn decimal_upscale_to_compute<C: DecimalWord>(scaled: C::Narrow, storage_dp:
         let factor = C::pow10_compute_ct(diff);
         let widened = C::binary_storage_to_compute_widen(scaled);
         // Check that widened × factor fits in C.
-        // For our profiles this is always true because storage_dp ≤ C::STORAGE_MAX_DP
+        // For every compute word this is always true because storage_dp ≤ C::STORAGE_MAX_DP
         // and compute_dp ≤ 2 × C::STORAGE_MAX_DP, so the product is bounded.
         return Ok(widened * factor);
     }
@@ -371,7 +371,7 @@ pub fn decimal_downscale_to_storage<C: DecimalWord>(compute_val: C, target_dp: u
 
 /// Widen an i128 value to C (no rescale, just type widening).
 ///
-/// Panics on realtime when `value` does not fit the i64 compute tier (the
+/// Panics for the i64 compute word when `value` does not fit it (the
 /// cast truncated it silently before 0.6.4).
 #[inline]
 pub fn i128_to_compute<C: DecimalWord>(value: i128) -> C {
@@ -380,7 +380,7 @@ pub fn i128_to_compute<C: DecimalWord>(value: i128) -> C {
 
 /// Upscale an i128 decimal value at `dp` decimal places to C at C::DP.
 ///
-/// For DecimalFixed<DECIMALS>: value is `real × 10^dp`. Result is `real × 10^C::DP`.
+/// For `DecimalFixed<DECIMALS>`: value is `real × 10^dp`. Result is `real × 10^C::DP`.
 /// Panics when the value does not fit the decimal compute tier; see
 /// [`try_i128_upscale_to_compute`].
 pub fn i128_upscale_to_compute<C: DecimalWord>(value: i128, dp: u8) -> C {
@@ -389,11 +389,11 @@ pub fn i128_upscale_to_compute<C: DecimalWord>(value: i128, dp: u8) -> C {
 }
 
 /// Upscale an i128 decimal value at `dp` decimal places to the compute dp,
-/// `Err(TierOverflow)` when it does not fit the compute tier (realtime and
-/// compact only: every i128 fits the wider tiers at every dp).
+/// `Err(TierOverflow)` when it does not fit the compute tier (the i64 and
+/// i128 compute words only: every i128 fits the wider words at every dp).
 ///
 /// A `dp` beyond the compute dp rounds half to even (the decimal rule), in
-/// i128 before the value is narrowed. Before 0.6.4 realtime cast the i128 to
+/// i128 before the value is narrowed. Before 0.6.4 the realtime profile cast the i128 to
 /// i64 first (silently dropping the high bits), the upscale multiply was
 /// unchecked, and the division truncated.
 pub fn try_i128_upscale_to_compute<C: DecimalWord>(value: i128, dp: u8) -> Result<C, OverflowDetected> {
@@ -413,10 +413,11 @@ pub fn decimal_compute_to_i128<C: DecimalWord>(value: C, dp: u8) -> i128 {
 /// Downscale C at C::DP to i128 at `dp` decimal
 /// places, half to even, `Err(TierOverflow)` when the result does not fit
 /// i128. Before 0.6.4 the wide profiles narrowed with an unchecked cast, so
-/// e.g. `DecimalFixed::<19>::exp(50)` on embedded returned a wrapped value.
+/// e.g. `DecimalFixed::<19>::exp(50)` on the 0.6.x embedded profile returned
+/// a wrapped value.
 pub fn try_decimal_compute_to_i128<C: DecimalWord>(value: C, dp: u8) -> Result<i128, OverflowDetected> {
     if dp > C::DP {
-        // realtime and compact only (the wider compute dps exceed every i128 scale)
+        // i64 and i128 compute words only (the wider compute dps exceed every i128 scale)
         let factor = pow10_i128((dp - C::DP) as u32);
         return C::compute_to_i128(value)?.checked_mul(factor).ok_or(OverflowDetected::TierOverflow);
     }

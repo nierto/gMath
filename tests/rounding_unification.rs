@@ -9,7 +9,7 @@
 //!
 //! The measured pre-unification divergence (48.7% of sampled products,
 //! imperative vs canonical, compact) must be ZERO now — asserted here on
-//! every profile, including constructed exact-tie inputs.
+//! every format, including constructed exact-tie inputs.
 
 
 macro_rules! shared_items {

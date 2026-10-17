@@ -13,8 +13,8 @@
 //!   (router coercion must not change the value).
 //! - The `0t` fractional-literal conversion boundary (contract §5) pinned.
 //!
-//! Profile-independent (UGOD tiers 1–3 are plain integer ops; FASC display
-//! comparisons avoid profile-specific raw layouts).
+//! Format-independent (UGOD tiers 1–3 are plain integer ops; FASC display
+//! comparisons avoid format-specific raw layouts).
 
 
 macro_rules! suite {
@@ -145,7 +145,7 @@ macro_rules! suite {
                     };
                     let result = evaluate(&expr).expect("fasc evaluate");
                     assert!(is_ternary(&result), "0t{a} {op} 0t{b} left the ternary domain");
-                    // Ternary integer results display as plain integers on all profiles.
+                    // Ternary integer results display as plain integers at all formats.
                     assert_eq!(
                         format!("{result}"),
                         expected,
@@ -246,7 +246,7 @@ macro_rules! suite {
             #[test]
             fn ternary_literal_tier2_storage_limit_is_loud() {
                 // from_str window-gates 29525 to Tier 2 (raw 29525·3^20 ≈ 1.03e14). On the
-                // narrow profiles that raw does not fit BinaryStorage — before 0.4.33
+                // narrow formats that raw does not fit BinaryStorage; before 0.4.33
                 // this silently wrapped into garbage (pre-resize, 0t3281 displayed as "-11.56021"
                 // on realtime); now it is a loud TierOverflow at parse.
                 // Note the asymmetry: the same VALUE reached by arithmetic
@@ -403,8 +403,8 @@ macro_rules! suite {
             fn column_routes_cross_domain_3adic_add_exactly() {
                 // 0t2 (ternary, class ALL) + 1/3 (symbolic, class TERN|SYM) → Ternary.
                 let result = evaluate(&(g("0t2") + g("1/3"))).expect("routed add");
-                // Wide-enough profiles hold the coerced value and stay in-domain;
-                // narrow profiles may fall back (Decision 2) — the VALUE is pinned
+                // Wide-enough formats hold the coerced value and stay in-domain;
+                // narrow formats may fall back (Decision 2); the VALUE is pinned
                 // everywhere via router-difference-zero either way.
                 if !((BITS == 32)) {
                 assert!(is_ternary(&result), "expected ternary-domain result");
@@ -454,8 +454,8 @@ macro_rules! suite {
                 // History: the output-mode conversion once stored tier-3 raws through
                 // an UNCHECKED cast (silent wrap on realtime; made a loud error in
                 // 0.4.34). Since the 0.5.0 tier resize the coercion targets the
-                // PROFILE's own tier and scale, so a 3-adic value converts EXACTLY on
-                // every profile — realtime holds 1/3 at Tier 1 as raw 3^10/3 = 19,683.
+                // format's own tier and scale, so a 3-adic value converts EXACTLY on
+                // every format: the i32 word holds 1/3 at Tier 1 as raw 3^10/3 = 19,683.
                 use g_math::canonical::{reset_gmath_mode, set_gmath_mode};
                 let _ = set_gmath_mode("auto:ternary");
                 let converted = evaluate(&g("1/3"));

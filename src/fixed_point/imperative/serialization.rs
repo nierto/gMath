@@ -318,10 +318,10 @@ pub struct ManifoldPoint<T> {
     /// Manifold type tag.
     pub manifold_tag: u8,
     /// Manifold parameters (interpretation depends on tag).
-    /// - Euclidean: [dim]
-    /// - Sphere: [dim]
-    /// - Hyperbolic: [dim]
-    /// - SPD: [n]
+    /// - Euclidean: \[dim\]
+    /// - Sphere: \[dim\]
+    /// - Hyperbolic: \[dim\]
+    /// - SPD: \[n\]
     /// - Grassmannian: [k, n]
     pub params: Vec<u32>,
     /// Coordinate vector on the manifold.

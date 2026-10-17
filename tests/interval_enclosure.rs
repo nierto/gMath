@@ -1,6 +1,6 @@
 //! Certified interval arithmetic: the permanent gate.
 //!
-//! Three properties, on every profile:
+//! Three properties, on every format:
 //! 1. Directed rounding: for every product and quotient, the interval of the
 //!    point operands is `[floor, ceil]` of the exact result, the scalar
 //!    (nearest, ties toward +infinity) lies inside it, and the two endpoints
@@ -8,8 +8,8 @@
 //!    are included, because arithmetic-shift floor is where a directed
 //!    rounding goes wrong.
 //! 2. Enclosure: for `+ - * /`, `dot`, `quadratic_form` and `sqrt`, the exact
-//!    result lies within the interval. On the narrow profiles the exact result
-//!    is computed in i128/u128 from raw values; on the wide profiles the
+//!    result lies within the interval. On the narrow formats the exact result
+//!    is computed in i128/u128 from raw values; on the wide formats the
 //!    scalar path (whose enclosure is implied) and structural pins are used.
 //!    `quadratic_form` is `[floor, ceil]` of one exact value (width at most
 //!    1 ulp, 0 when representable) and `fused::quadratic_form` is its nearest
@@ -30,10 +30,10 @@ macro_rules! shared_items {
             use g_math::fixed_point::imperative::fused;
             use g_math::fixed_point::{Fixed, OverflowDetected};
 
-            // realtime: the build's split (GMATH_FRAC_BITS; 16 by default, 10 at Q22.10)
+            // i32 word: the suite's split F (16 at Q16.16, 10 at Q22.10)
             const FB: u32 = if BITS == 32 { FRAC_BITS } else if BITS == 64 { 32 } else { 64 };
 
-            /// Storage width in bits on the narrow profiles; results must fit it.
+            /// Storage width in bits on the narrow formats; results must fit it.
             const SB: u32 = if BITS == 32 { 32 } else if BITS == 64 { 64 } else { 128 };
 
 
@@ -71,7 +71,7 @@ macro_rules! suite {
         mod $m {
             #![allow(unused_imports, dead_code)]
             shared_items!($S, $F);
-            /// Constructed ties, both signs, on every profile.
+            /// Constructed ties, both signs, on every format.
             #[test]
             fn constructed_ties_bracket_nearest_and_are_one_ulp_wide() {
                 let half = fp("0.5");
@@ -101,7 +101,7 @@ macro_rules! suite {
                 assert!(iv.contains(nearest));
                 assert_eq!(nearest, iv.hi());
 
-                // 1/3 is inexact on every binary profile: one ulp wide, scalar inside
+                // 1/3 is inexact on every binary format: one ulp wide, scalar inside
                 let third = Interval::point(one) / pt("3");
                 assert_eq!(third.width(), ulp());
                 assert!(third.contains(one / fp("3")));
@@ -117,7 +117,7 @@ macro_rules! suite {
 
 
 
-            /// Constructed ties on every profile: `v = [1/2]`, `m = [[2 ulp]]` makes the
+            /// Constructed ties on every format: `v = [1/2]`, `m = [[2 ulp]]` makes the
             /// exact value exactly half an ulp. The interval is `[0, 1 ulp]`, the fused
             /// scalar rounds the tie toward +infinity to `1 ulp`; the negative twin gives
             /// `[-1 ulp, 0]` and a scalar of `0`.
@@ -147,7 +147,7 @@ macro_rules! suite {
                 assert_eq!(fused::quadratic_form(&v2, &m2), ulp());
             }
 
-            /// Structural pin on every profile: with the identity metric the fused
+            /// Structural pin on every format: with the identity metric the fused
             /// scalar is `fused::dot(v, v)` bit for bit (the same exact value, the same
             /// nearest rounding), and the quadratic form's interval brackets it.
             #[test]
@@ -181,7 +181,7 @@ macro_rules! suite {
             }
 
 
-            /// Structural pin on every profile: with the identity metric the quadratic
+            /// Structural pin on every format: with the identity metric the quadratic
             /// form's first stage is exact, so `quadratic_form(v, I) == dot(v, v)`.
             #[test]
             fn quadratic_form_with_identity_equals_dot() {
@@ -196,7 +196,7 @@ macro_rules! suite {
             }
 
             /// Chains: the scalar path rounds at every step and must still lie inside the
-            /// interval path on every profile.
+            /// interval path on every format.
             #[test]
             fn composed_chain_contains_scalar_result() {
                 // the last field bounds the magnitude of every intermediate (integer part)
@@ -208,7 +208,7 @@ macro_rules! suite {
                 ];
                 for (a, b, c, d, bound) in cases {
                     // the result (-137.2 for the third case) must fit the storage range
-                    // 2^(SB - FB - 1): not at 24 or more realtime fraction bits (+-128)
+                    // 2^(SB - FB - 1): not at 24 or more i32 fraction bits (+-128)
                     if (bound as i128) >= (1i128 << (ALL_SB - ALL_FB - 1).min(126)) { continue; }
                     let (fa, fb, fc, fd) = (fp(a), fp(b), fp(c), fp(d));
                     let scalar = (fa * fb + fc) / fd - fa;
@@ -224,7 +224,7 @@ macro_rules! suite {
             // ----------------------------------------------------------------------------
 
 
-            /// Structural sqrt pins on every profile.
+            /// Structural sqrt pins on every format.
             #[test]
             fn sqrt_pins() {
                 // perfect squares are points
@@ -251,8 +251,8 @@ macro_rules! suite {
             }
 
             /// The scalar sqrt engine must lie inside the certified enclosure across the
-            /// profile's whole magnitude range, not only the validated [1e-4, 1e4] window.
-            /// On the scientific profile this found the Q512.512 engine losing precision
+            /// format's whole magnitude range, not only the validated [1e-4, 1e4] window.
+            /// At Q256.256 this found the Q512.512 engine losing precision
             /// above ~2^200 (fixed by normalising its input); it stays as the gate.
             #[test]
             fn scalar_sqrt_lies_inside_the_certified_enclosure_across_magnitudes() {
@@ -327,7 +327,7 @@ macro_rules! narrow_suite {
             /// which is 2^188 at FB = 64; so at q64_64 the sweep restricts to |raw| < 2^62.
             /// The width is also capped at (SB + FB)/2 - 2 bits so that operands are valid
             /// storage values and their products fit the storage tier (a*b / 2^FB <
-            /// 2^(SB - 4)). The cap only binds on realtime above 16 fraction bits: it
+            /// 2^(SB - 4)). The cap only binds on the i32 word above 16 fraction bits: it
             /// equals FB + FB/2 - 2 at FB = 16 and FB = 32 and exceeds it below.
             fn sample_raw(rng: &mut Rng) -> i128 {
                 sample_bits(rng, if FB >= 64 { 62 } else { (FB + FB / 2 - 2).min((SB + FB) / 2 - 2) })
@@ -368,7 +368,7 @@ macro_rules! narrow_suite {
                 let mut negatives = 0usize;
                 let mut overflowed = 0usize;
                 for _ in 0..20_000 {
-                    // Below 16 fraction bits, FB + FB/2 - 2 bits never reach the realtime
+                    // Below 16 fraction bits, FB + FB/2 - 2 bits never reach the i32
                     // storage boundary (13 bits at Q22.10): draw both operands wider.
                     // Above 16, sample_raw >> FB/2 makes nearly every quotient (about
                     // 1.5 FB bits) overflow: draw b with FB + 4 bits so the quotient has

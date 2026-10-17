@@ -10,7 +10,7 @@
 ///
 /// Indicates why an arithmetic operation cannot proceed in current tier/domain:
 /// - **TierOverflow**: Result exceeds current tier capacity (promote to higher tier)
-/// - **PrecisionLimit**: Result exceeds deployment profile maximum precision
+/// - **PrecisionLimit**: Result exceeds the format's maximum precision
 /// - **PrecisionLoss**: Intermediate calculation would lose unacceptable precision
 /// - **DivisionByZero**: Division by zero detected
 /// - **InvalidInput**: Invalid input format or value
@@ -24,7 +24,7 @@
 pub enum OverflowDetected {
     /// Result would exceed current tier capacity
     TierOverflow,
-    /// Result would exceed deployment profile precision limit
+    /// Result would exceed the format's precision limit
     PrecisionLimit,
     /// Intermediate calculation would lose precision
     PrecisionLoss,

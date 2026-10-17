@@ -7,7 +7,7 @@
 //! **ARCHITECTURE**:
 //! - Layer 1: Shadow classifier (~15 ns): factors denominator, sets exact_in bits
 //! - Layer 2: Routing table (~3 ns): static lookup in .rodata, zero sync
-//! - Layer 3: Tree walker (~200 ns): bottom-up LazyExpr<T> annotation
+//! - Layer 3: Tree walker (~200 ns): bottom-up `LazyExpr<T>` annotation
 //!
 //! **INVARIANTS**:
 //! - Zero mutable state; routing table in .rodata
@@ -133,7 +133,7 @@ const NUM_OPS: usize = 21;
 // SHADOW CLASSIFIER (~15 ns)
 // ============================================================================
 
-/// Classify a StackValue<T> by factoring its CompactShadow denominator.
+/// Classify a `StackValue<T>` by factoring its CompactShadow denominator.
 ///
 /// **Performance**: ~15 ns for shadow path (typical), ~5 ns for variant fallback.
 /// **Coverage**: ~95% of parsed values have shadows (from parse_literal).
@@ -353,7 +353,7 @@ pub fn route_unary_op(op: OpId, operand: OperandClass) -> DomainChoice {
 // CROSS-DOMAIN COERCION
 // ============================================================================
 
-/// Coerce a StackValue<T> to the Decimal domain using its CompactShadow.
+/// Coerce a `StackValue<T>` to the Decimal domain using its CompactShadow.
 ///
 /// Returns `Some(Decimal(dp, scaled, shadow))` if the shadow's denominator
 /// has only factors of 2 and 5 (decimal-representable).
@@ -374,7 +374,7 @@ pub fn coerce_to_decimal<T: FascFormat>(value: &StackValue<T>) -> Option<StackVa
     }
 }
 
-/// Convert a rational (num/den) to a Decimal StackValue<T> via denominator factoring.
+/// Convert a rational (num/den) to a Decimal `StackValue<T>` via denominator factoring.
 ///
 /// Given value = num/den where den = 2^a × 5^b:
 ///   dp = max(a, b)
@@ -414,7 +414,7 @@ fn shadow_to_decimal<T: FascFormat>(num: i128, den: u128, shadow: CompactShadow)
         scaled = scaled.checked_mul(5)?;
     }
 
-    // beyond the realtime / compact decimal storage: not decimal-coercible
+    // beyond the i32 / i64 decimal storage: not decimal-coercible
     let storage = T::try_to_binary_storage(scaled).ok()?;
     Some(StackValue::Decimal(dp as u8, storage, shadow))
 }
@@ -423,7 +423,7 @@ fn shadow_to_decimal<T: FascFormat>(num: i128, den: u128, shadow: CompactShadow)
 // TREE WALKER — O(N) bottom-up expression routing
 // ============================================================================
 
-/// Walk a LazyExpr<T> tree bottom-up, returning the root's OperandClass.
+/// Walk a `LazyExpr<T>` tree bottom-up, returning the root's OperandClass.
 ///
 /// **Complexity**: O(N) in tree size, single recursive pass.
 /// **Performance**: ~200-300 ns for typical 10-node expressions.

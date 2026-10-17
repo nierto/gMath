@@ -64,7 +64,9 @@ use std::process;
 // ============================================================================
 const SURFACE: &[(&str, &str, &str, Option<&str>)] = &[
     ("src/fixed_point/canonical.rs", "g_math::canonical", "canonical", None),
-    ("src/fixed_point/imperative/fixed_point.rs", "FixedPoint (re-exported at g_math::fixed_point)", "fixedpoint", None),
+    ("src/fixed_point/mod.rs", "g_math::fixed_point", "fixed", None),
+    ("src/fixed_point/fixed_num.rs", "Fixed<S, F>, FixedNum and the aliases (re-exported at g_math::fixed_point)", "fixed", None),
+    ("src/fixed_point/imperative/fixed_point.rs", "Fixed<S, F> methods (g_math::fixed_point)", "fixed", None),
     ("src/fixed_point/imperative/fixed_vector.rs", "FixedVector", "fixedvector", None),
     ("src/fixed_point/imperative/fixed_matrix.rs", "FixedMatrix", "fixedmatrix", None),
     ("src/fixed_point/domains/decimal_fixed/decimal_fixed.rs", "DecimalFixed", "decimal", None),
@@ -93,7 +95,7 @@ const SURFACE: &[(&str, &str, &str, Option<&str>)] = &[
 // Section rendering order + headings. (section_key, heading)
 const SECTIONS: &[(&str, &str)] = &[
     ("canonical", "Canonical (g_math::canonical)"),
-    ("fixedpoint", "FixedPoint"),
+    ("fixed", "Fixed"),
     ("fixedvector", "FixedVector"),
     ("fixedmatrix", "FixedMatrix"),
     ("decimal", "DecimalFixed"),

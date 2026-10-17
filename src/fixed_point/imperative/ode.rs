@@ -74,7 +74,7 @@ pub struct OdePoint<T> {
 ///
 /// Each stage offset and the final update `(h/6)(k1 + 2k2 + 2k3 + k4)` are
 /// formed at the compute tier and rounded to storage once. Before 0.6.4, h/6
-/// was rounded to storage first: at h = 0.01 on realtime Q22.10 that is 2
+/// was rounded to storage first: at h = 0.01 at Q22.10 that is 2
 /// units instead of 1.67, and every step ran 20% long (38.7 units of error at
 /// Q16.16 on the same test).
 pub fn rk4_step<S: Storage, const F: u32, Sys: OdeSystem<Fixed<S, F>>>(

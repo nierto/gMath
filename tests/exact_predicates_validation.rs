@@ -2,7 +2,7 @@
 //!
 //! `orient2d`, `orient3d`, `incircle`, `insphere` return a `Sign` decided by
 //! exact integer evaluation of a determinant. The gate checks, on every
-//! profile:
+//! format:
 //! - hand-checkable configurations with all three signs, including the exact
 //!   degenerate cases (collinear, coplanar, cocircular, cospherical), which
 //!   are the reason the predicates exist;
@@ -12,7 +12,7 @@
 //!   random raw coordinates small enough that the i128 oracle cannot
 //!   overflow (the oracle is exact integer arithmetic, never a float).
 //!
-//! The circle predicates are not compiled on the scientific profile.
+//! The circle predicates are not available at Q256.256.
 
 
 macro_rules! shared_items {

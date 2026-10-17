@@ -15,20 +15,20 @@ fastest correct path for these specific shapes.
 ## Usage
 
 ```rust
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q16_16;
 use g_math::fixed_point::imperative::fused;
 
-let xs = [FixedPoint::from_str("3"), FixedPoint::from_str("4")];
+let xs = [Q16_16::from_str("3"), Q16_16::from_str("4")];
 let norm = fused::sqrt_sum_sq(&xs);                 // 5, accumulated wide
 
-let scores = [FixedPoint::from_int(1), FixedPoint::from_int(2), FixedPoint::from_int(3)];
+let scores = [Q16_16::from_int(1), Q16_16::from_int(2), Q16_16::from_int(3)];
 let weights = fused::softmax(&scores).unwrap();     // numerically stable
 
 // Fused attention step: softmax(scores) · V without materializing the weights.
-let v0 = [FixedPoint::from_int(1), FixedPoint::from_int(0)];
-let v1 = [FixedPoint::from_int(0), FixedPoint::from_int(1)];
-let v2 = [FixedPoint::from_int(2), FixedPoint::from_int(2)];
-let values: [&[FixedPoint]; 3] = [&v0, &v1, &v2];
+let v0 = [Q16_16::from_int(1), Q16_16::from_int(0)];
+let v1 = [Q16_16::from_int(0), Q16_16::from_int(1)];
+let v2 = [Q16_16::from_int(2), Q16_16::from_int(2)];
+let values: [&[Q16_16]; 3] = [&v0, &v1, &v2];
 let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 ```
 
@@ -54,26 +54,26 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | `try_quadratic_form(&v, &m)` | the same, `Err(TierOverflow)` instead of a panic where the result leaves storage |
 
 `rms_norm_factor` takes ε at the storage tier, so an ε below `2^-FRAC_BITS` is
-zero: on realtime at Q22.10 both `1e-5` and `1e-6` vanish, and an all-zero input
+zero: at Q22.10 both `1e-5` and `1e-6` vanish, and an all-zero input
 is `Err(DivisionByZero)` instead of `1/√ε`. `rms_norm_factor_eps_wide` takes ε as a
 Q64.64 integer (`g_math::wide::try_from_str("1e-5", 64)`) and rounds it once to
-the compute tier (`2·FRAC_BITS` fractional bits; nearest, ties toward +∞; exact on
-compact and wider). On realtime the compute tier still limits it: at Q22.10,
+the compute tier (`2F` fractional bits; nearest, ties toward +∞; exact from
+Q32.32 up). On the 32-bit formats the compute tier still limits it: at Q22.10,
 `1e-5` becomes `10/2^20` (`9.54e-6`) and an all-zero input gives 323.83, where the
 exact `1/√1e-5` is 316.23.
 
 Error conditions are listed on each function. In short: `softmax` can only
-fail when the number of scores reaches `2^(63 - 2·FRAC_BITS)` on realtime
-(never on wider profiles); `softmax_mix` returns `Err(TierOverflow)` when a
-numerator leaves the compute tier, which on realtime needs
-`n · max|v_raw| ≥ 2^(63 - FRAC_BITS)`; the RMS-norm factors return
+fail when the number of scores reaches `2^(63 - 2F)` on a 32-bit format
+(never on the wider words); `softmax_mix` returns `Err(TierOverflow)` when a
+numerator leaves the compute tier, which on a 32-bit format needs
+`n · max|v_raw| ≥ 2^(63 - F)`; the RMS-norm factors return
 `Err(DivisionByZero)` for empty input or a zero `mean + ε`, `Err(DomainError)`
 for a negative one (0.6.5), and `Err(TierOverflow)` when the sum of squares
 leaves the compute tier or the result leaves storage.
 
 `softmax_mix` exists because materializing softmax weights to storage tier before
-the value mix imposes a 2^−FRAC_BITS resolution floor: under a low-fractional-bit
-profile a small attention weight rounds to zero and its value row vanishes from
+the value mix imposes a 2^−F resolution floor: in a format with few fraction
+bits a small attention weight rounds to zero and its value row vanishes from
 the mix. Keeping the weights at the compute tier through the accumulation removes
 that floor. It returns the mixed output plus a storage-quantized copy of the
 weights for observers (attention recording, diagnostics): the observer copy is
@@ -93,7 +93,7 @@ rather than wrapping silently.
   otherwise bite.
 - `softmax_mix` requires every value row to have the same length; a ragged matrix
   is a programming error and panics.
-- These are binary-domain (`FixedPoint`) operations.
+- These are binary-domain operations, generic over every `Fixed<S, F>`.
 
 Determinism and rounding guarantees are in **[CONTRACT.md](../CONTRACT.md)**.
 

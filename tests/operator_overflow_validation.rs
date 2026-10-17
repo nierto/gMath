@@ -5,8 +5,8 @@
 //! instead. In range the operators and their try twins are bit-identical.
 //!
 //! Every edge value is built from the build's own storage (doubling to the
-//! top bit, the unit from FRAC_BITS), so the gate holds on every profile and
-//! every realtime split.
+//! top bit, the unit from FRAC_BITS), so the gate holds at every format and
+//! every i32 split.
 
 
 macro_rules! suite {

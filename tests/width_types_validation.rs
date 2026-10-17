@@ -1,8 +1,8 @@
 //! Every width in one build.
 //!
 //! `Fixed<S, F>` makes the width part of the type, so one test binary can
-//! compute with all of them, whatever profile the build selected. Two
-//! things are checked here that no per-profile suite can check:
+//! compute with all of them in one build. Two
+//! things are checked here that no single-format suite can check:
 //!
 //! - the same generic code runs at every width and satisfies the exact
 //!   identities of fixed-point arithmetic there;

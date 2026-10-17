@@ -36,7 +36,7 @@ macro_rules! suite {
                 }
             }
 
-            /// Profile-appropriate tolerance for mpmath validation.
+            /// Format-appropriate tolerance for mpmath validation.
             /// Q32.32 has 9-digit precision — 1e-12 rounds to zero. Use 1e-4 instead.
             fn tol() -> FixedPoint {
                 if BITS == 64 { fp("0.0001") } else { fp("0.000000000001") }

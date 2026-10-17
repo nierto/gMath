@@ -158,7 +158,7 @@ mod ternary_storage_arm_tests {
                 // The Medium/Large/XLarge arms of `ternary_to_storage` are unreachable
                 // from `0t` literals (from_str caps at Tier 3: i64 integer parts keep
                 // raws inside i128), so they are pinned here at the unit level: small
-                // raws convert exactly on every profile, raws exceeding the profile's
+                // raws convert exactly in every format, raws exceeding the format's
                 // BinaryStorage are a loud TierOverflow, never a wrap.
                 use super::super::*;
 
@@ -194,7 +194,7 @@ mod ternary_storage_arm_tests {
 
                 #[test]
                 fn large_and_xlarge_arms_small_and_oversized() {
-                    // Small Tier-5/6 raws (fit i128) convert on every profile.
+                    // Small Tier-5/6 raws (fit i128) convert in every format.
                     let t5 = UniversalTernaryFixed::from_tier_raw(5, TernaryRaw::Large(I512::from_i128(-777)))
                         .unwrap();
                     assert_eq!(ternary_to_storage(&t5).expect("small Large raw").0, 5);
@@ -212,7 +212,7 @@ mod ternary_storage_arm_tests {
                     let res5 = ternary_to_storage(&big5);
                     if BITS <= 128 { assert!(res5.is_err()); } else { assert!(res5.is_ok()); }
 
-                    // I1024 raw beyond I512 — Err on EVERY profile (even scientific).
+                    // I1024 raw beyond I512: Err in EVERY format (even Q256.256).
                     let big6 = UniversalTernaryFixed::from_tier_raw(
                         6,
                         TernaryRaw::XLarge(I1024::from_i128(1) << 600),

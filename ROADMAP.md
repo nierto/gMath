@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.4.34**
+Current version: **0.7.0** (unreleased; last published 0.6.7, deprecation release 0.6.8 prepared)
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise; this is a working list for a solo-maintained project.
 
@@ -524,16 +524,42 @@ it, but changes results the realtime and compact compute tiers depend on. On
 realtime, `rms_norm_factor_eps_wide` is limited by the compute tier's
 `2 x FRAC_BITS` bits (at Q22.10, 2.4% high on an all-zero input with `1e-5`).
 
+### v0.6.8: Deprecation of the tq19 module
+
+**Release 2026-10-17 (prepared, published with 0.7.0).** No result changes;
+every use of `g_math::tq19` warns that the module moves to the separate
+crate `g_math_inference` with 0.7.0.
+
+### v0.7.0: The format is a type; correct rounding; inference extracted
+
+**Unreleased.** `Fixed<S, F>` replaces the build profiles: every format, from
+`Fixed<i32, 2>` to Q256.256, is compiled into every build and chosen per
+value by its type; `GMATH_PROFILE`, `GMATH_FRAC_BITS`, the profile features
+and `FixedPoint` are gone, and every layer (containers, linear algebra,
+geometry, fused kernels, intervals, the canonical evaluator, the decimal
+compute words) is generic over the format. The 17 transcendentals are
+correctly rounded over their full range at every format (fast engine plus a
+1000-bit sure path), canonical chains are rounded once from the exact value
+of the whole tree (fast stage plus stack-only floats at 128 to 4160 bits),
+and the closed-form geometry maps are correctly rounded per component.
+Defects found and fixed on the way: the Q128.128 `exp` Taylor tail, the
+tier-6 `exp` tables, pi/2 at two compute tiers, the compute-tier `atan`
+series, generated constants below a Q256.256 unit, the wide tiers of
+`RationalNumber`, decimal `atanh` near -1, the inverse functions returning
+values outside their domain, the wide ternary tiers saturating or wrapping,
+index maps transposing, `to_f64_lossy` rounding twice, serde unable to read
+byte arrays. The ternary inference kernels are the separate crate
+`g_math_inference`. The test suite runs every format in one build (four
+binaries, about 6700 tests) and compares every public operation with the
+published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
+`docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
+
 ---
 
-## Next: 0.5.0: Correctness audit + remaining composed transcendental bypass
+## 0.5.0: Correctness audit + remaining composed transcendental bypass (delivered 2026-08-24)
 
-**Status: staged on `main`, not yet released.** Items 0 through 2c below are
-delivered, swept green on all five profiles, and CI-green; item 3 is deferred
-past the cut. What remains for the release itself: version bump, CHANGELOG
-dating, and the consumer notice for the two bit-level changes (binary
-mul/div rounding, ternary raw scales). Until the tag lands, the published
-crate is 0.4.34 and `Cargo.toml` still reads 0.4.34 by design.
+Items 0 through 2c below shipped in 0.5.0; item 3 was superseded by 0.7.0,
+which removed the profiles it targeted.
 
 ### 0. Narrow-profile integer-literal parse fallback: DELIVERED 2026-08-14
 
@@ -715,7 +741,11 @@ reference data: zero production callers since the composed
 exp(y·ln x) path shipped; its latent sign bugs (0b audit) are moot.
 Composed pow keeps its 0-ULP mpmath gates.
 
-### 3. Stack evaluator `profile_dispatch!` macro
+### 3. Stack evaluator `profile_dispatch!` macro: SUPERSEDED (0.7.0)
+
+0.7.0 removed the profiles: the evaluator is generic over its format through
+the `FascFormat` trait, so there are no profile arms left to deduplicate.
+Kept for the record:
 
 **Priority:** MEDIUM: reduces maintenance burden, prevents cfg copy-paste bugs
 **Effort:** ~750 lines, 2 sessions
@@ -724,7 +754,13 @@ Extract macro to replace the 5-way `#[cfg(table_format)]` blocks across all stac
 
 ---
 
-## Requested by consumers (gHyper/gFile): U2: cross-profile rounding contract
+## Requested by consumers (gHyper/gFile): U2: cross-format rounding contract
+
+0.7.0 note: profiles became formats, which coexist in one build, so the
+contract below is now about conversions between formats inside one program
+(widening, narrowing, reading another format's bytes). Serialization already
+tags word and split and refuses a foreign format; the conversions themselves
+are still to be added and gated. Original text:
 
 Different profile bit-widths necessarily round to different values (a Q32.32
 result cannot hold Q64.64 digits): that divergence is inherent and out of
@@ -769,7 +805,7 @@ bit-identical) for the four wide integers; it also closes the scientific
 "I1024/I2048 division slow" note (binary div 131 us per op in debug).
 Not done on the width-types branch, which changes no engine.
 
-### Follow-up: the hybrid TQ1.9 matvec has two codegen states
+### Follow-up: the hybrid TQ1.9 matvec has two codegen states (moved to `g_math_inference`)
 
 Measured 2026-10-06 (realtime Q22.10, 512 x 1024, release): `HybridTQ19::matvec`
 runs at about 480 us or about 730 us depending on the build, in the
@@ -802,9 +838,9 @@ Fix: the engine and table defects corrected, and every transcendental now
 rounds through a ladder: the engine's result when its error cannot cross a
 rounding boundary, otherwise a sure path at about 1000 bits
 (`transcendental/sure.rs`). Gate: 19,040 cases plus three fresh seeds of
-71,400, every one correctly rounded, imperative and canonical. Open: trees of
-several functions in the canonical evaluator keep the compute-tier chain and
-its single rounding; they are not proven correctly rounded.
+71,400, every one correctly rounded, imperative and canonical. Trees of
+several functions were closed the same week: every canonical tree is rounded
+once from its exact value (`tests/chain_correct_rounding_validation.rs`).
 
 ### Complete the imperative (non-routed) layer for every domain
 
@@ -922,13 +958,17 @@ The third compute domain after Binary and Decimal. Transcendental chains where A
 
 Cl(n,0,1) Clifford algebra with Vahlen matrix representation. Multivector arithmetic, geometric product, inner/outer products, grade extraction, and Vahlen matrix Mobius transformations. Fills a gap I'm not aware of an existing zero-float Rust crate addressing. Targeted for v0.5.0 release.
 
-### Custom FRAC_BITS for non-realtime profiles
+### Other splits on the wider words
 
-Extending `GMATH_FRAC_BITS` to compact (i64), embedded (i128), and higher profiles. Requires verifying that `COMPUTE_FRAC_BITS = 2 * FRAC_BITS` does not exceed the native transcendental tier's capacity. Deferred until demand.
+0.7.0 admits any split on the 32-bit word (`Fixed<i32, F>`, 2 <= F <= 30)
+but one split per wider word (`Fixed<i64, 32>`, `Fixed<i128, 64>`, ...).
+Other splits there (e.g. `Fixed<i64, 40>`) need each word's engines and
+tables to take F as a parameter, as the 32-bit word's do. Deferred until
+demand.
 
 ### Public API stabilization
 
-Pre-1.0 audit of exports, feature gating, StackValue extraction methods. Five API tiers documented (FASC, Imperative, Fused, Geometric, TQ1.9) but export hygiene not yet audited.
+Pre-1.0 audit of exports, feature gating, StackValue extraction methods. The API tiers are documented (formats, canonical, imperative, fused, geometric, compute and wide tiers); every public function is executed by the suite (2026-10-16 coverage audit and its gate), but export hygiene is not yet audited.
 
 ### Additional decimal operations
 

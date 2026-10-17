@@ -8,9 +8,9 @@
 //! ## Storage vs Compute
 //!
 //! - **Storage tier**: decimal value at user-specified dp, held in `BinaryStorage` type.
-//! - **Compute tier**: decimal value at `DECIMAL_COMPUTE_DP` (≈ 2× storage dp), held in
-//!   the profile's `ComputeStorage` type.
-//! - Per-profile compute dp: realtime=9, compact=19, embedded=38, balanced=77, scientific=154.
+//! - **Compute tier**: decimal value at `C::DP` (≈ 2× storage dp), held in a
+//!   compute word `C: DecimalWord`.
+//! - Compute dp per word: i64=9, i128=19, I256=38, I512=77, I1024=154.
 //!
 //! ## Iterative Taylor Strategy
 //!

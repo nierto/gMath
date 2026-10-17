@@ -11,7 +11,7 @@
 //! - the SYMBOLIC ladder's "promotion" retried i128×i128 at the same
 //!   width — Huge×Huge never reached the existing Massive (I256) tier
 //! - FASC binary arms now fall back to the exact rational path when the
-//!   promoted result exceeds profile storage: the true ladder top.
+//!   promoted result exceeds the format's storage: the true ladder top.
 //!
 //! Contract these tests pin: arithmetic on representable inputs either
 //! returns the EXACT value (possibly via a wider tier or the symbolic
@@ -67,8 +67,8 @@ macro_rules! suite {
 
             #[test]
             fn promoted_divide_is_exact_or_loud() {
-                // Tiny reciprocal: 1e-20 is below one ulp on narrow profiles (Q64.64
-                // ulp ≈ 5.4e-20), so its DISPLAY is profile-dependent — but the value
+                // Tiny reciprocal: 1e-20 is below one ulp at narrow formats (Q64.64
+                // ulp ≈ 5.4e-20), so its DISPLAY is format-dependent, but the value
                 // must stay EXACT through the chain: (1/1e20)·1e20 = 1 precisely.
                 // Pre-fix, the unchecked symbolic→binary coercion wrapped 1e20 mod
                 // 2^128 and this round-trip returned garbage.
@@ -100,7 +100,7 @@ macro_rules! suite {
 
             #[test]
             fn symbolic_ladder_reaches_wide_tiers() {
-                // A fraction literal is Symbolic on EVERY profile (a plain 1e20/3
+                // A fraction literal is Symbolic at EVERY format (a plain 1e20/3
                 // divide is native binary on scientific, where 1e20 fits storage,
                 // and would honestly round instead). The product needs an I256
                 // numerator: the symbolic ladder must reach the Massive tier.

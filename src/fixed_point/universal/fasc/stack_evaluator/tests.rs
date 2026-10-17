@@ -16,7 +16,7 @@ macro_rules! suite {
             use crate::fixed_point::universal::tier_types::{CompactShadow, ShadowConstantId};
 
             /// A hex and a binary literal whose integers fit the build's range: since
-            /// 0.6.4 they denote their integer, and 255 (10) leaves the realtime range past
+            /// 0.6.4 they denote their integer, and 255 (10) leaves the i32 range past
             /// 23 (27) fraction bits (then they parse to the exact rational instead).
             fn fitting_hex() -> (&'static str, i128) {
                 if FixedPoint::try_from_int(255).is_ok() { ("0xFF", 255) } else { ("0x1", 1) }
@@ -29,7 +29,7 @@ macro_rules! suite {
             fn test_literal_parsing() {
                 let mut eval = StackEvaluator::<FixedPoint>::new();
 
-                // Test decimal parsing (domain check only, not value — value is profile-specific BinaryStorage)
+                // Test decimal parsing (domain check only, not value: value is format-specific BinaryStorage)
                 let decimal = eval.parse_literal("123.456").unwrap();
                 assert!(matches!(decimal, StackValue::Decimal(3, _, _)));
 
@@ -81,8 +81,8 @@ macro_rules! suite {
             }
 
             // ========================================================================
-            // EXP COMPUTATION TESTS (Q64.64-specific — require BinaryStorage = i128)
-            // These tests use i128 literals and .abs() which only work in embedded profile
+            // EXP COMPUTATION TESTS (Q64.64-specific: require BinaryStorage = i128)
+            // These tests use i128 literals and .abs() which only work at Q64.64
             // ========================================================================
 
             on_words!($W in [w128] {
@@ -185,7 +185,7 @@ macro_rules! suite {
 
             #[test]
             fn test_exp_profile_tier_selection() {
-                // Test that different profiles select correct tiers
+                // Test that different formats select correct tiers
                 let eval_embedded = StackEvaluator::<Fixed<i128, 64>>::new();
                 assert_eq!(eval_embedded.profile_max_binary_tier(), 3);
 
@@ -220,7 +220,7 @@ macro_rules! suite {
             }
 
             // ========================================================================
-            // LN COMPUTATION TESTS (Q64.64-specific — require BinaryStorage = i128)
+            // LN COMPUTATION TESTS (Q64.64-specific: require BinaryStorage = i128)
             // ========================================================================
 
             on_words!($W in [w128] {
@@ -337,7 +337,7 @@ macro_rules! suite {
 
             #[test]
             fn test_sinh_zero() {
-                // sinh(0) = 0 — profile-independent
+                // sinh(0) = 0, independent of the format
                 let expr = gmath::<FixedPoint>("0").sinh();
                 let result = evaluate::<FixedPoint>(&expr).unwrap();
                 let eval = StackEvaluator::<FixedPoint>::new();
@@ -348,7 +348,7 @@ macro_rules! suite {
 
             #[test]
             fn test_cosh_zero() {
-                // cosh(0) = 1 — compare using profile-native Q-format
+                // cosh(0) = 1, compared in the format's own Q-format
                 let expr = gmath::<FixedPoint>("0").cosh();
                 let result = evaluate::<FixedPoint>(&expr).unwrap();
                 let eval = StackEvaluator::<FixedPoint>::new();
@@ -359,7 +359,7 @@ macro_rules! suite {
 
             #[test]
             fn test_tanh_zero() {
-                // tanh(0) = 0 — profile-independent
+                // tanh(0) = 0, independent of the format
                 let expr = gmath::<FixedPoint>("0").tanh();
                 let result = evaluate::<FixedPoint>(&expr).unwrap();
                 let eval = StackEvaluator::<FixedPoint>::new();
@@ -1177,11 +1177,11 @@ macro_rules! suite {
                 // Transcendental results have no shadow — to_rational must still work
                 let result = evaluate::<FixedPoint>(&gmath::<FixedPoint>("1.0").exp()).unwrap();
                 assert!(result.shadow().is_none(), "transcendental should have no shadow");
-                // to_rational must succeed via Q-format reconstruction on all profiles
+                // to_rational must succeed via Q-format reconstruction in all formats
                 let rational = result.to_rational();
                 assert!(rational.is_ok(), "to_rational must succeed even without shadow, got {:?}", rational.err());
-                // On embedded (i128 storage), numerator fits in i128.
-                // On balanced/scientific (I256/I512 storage), it may not — that's expected.
+                // At Q64.64 (i128 storage), numerator fits in i128.
+                // At Q128.128/Q256.256 (I256/I512 storage), it may not; that is expected.
                 on_words!($W in [w32 w64 w128] {
                 {
                     let num = rational.unwrap().numerator_i128();

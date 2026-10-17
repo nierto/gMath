@@ -4,7 +4,7 @@
 //! - Tier boundaries (i8::MAX, i16::MAX, i32::MAX, i64::MAX)
 //! - Transcendental function extremes (near overflow/underflow)
 //! - Decimal range extremes (18-digit precision limits)
-//! - Profile-specific type boundaries (i128, I256, I512)
+//! - Format-specific type boundaries (i128, I256, I512)
 //!
 //! All tests are pure Rust, no external dependencies, no rebuild required.
 
@@ -39,7 +39,7 @@ macro_rules! suite {
                 }
             }
 
-            /// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+            /// `k` storage units (k * 2^-FRAC_BITS) for the suite's split.
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
@@ -52,7 +52,7 @@ macro_rules! suite {
 
             /// Display-prefix check where the Display prints enough fractional digits to
             /// decide it. The canonical Display prints only the digits the split
-            /// resolves (2 at GMATH_FRAC_BITS=8), so a 3-digit prefix is undecidable
+            /// resolves (2 at F = 8), so a 3-digit prefix is undecidable
             /// there: the stored value must then lie within `k` storage units of the
             /// mpmath `reference` instead. A pattern without a '.' must match the whole
             /// Display string (e.g. "0" for an exact Symbolic zero).
@@ -94,7 +94,7 @@ macro_rules! suite {
                 let r = evaluate(&(gmath::<FixedPoint>("127") + gmath::<FixedPoint>("1")));
                 assert!(r.is_ok(), "127 + 1 should succeed (promote to tier 2), got {:?}", r);
                 let s = format!("{}", r.unwrap());
-                // 128 exceeds the binary range at GMATH_FRAC_BITS=24 (+-128): the exact
+                // 128 exceeds the binary range at F = 24 (+-128): the exact
                 // result then stays Symbolic and displays without a fraction point
                 assert!(s.starts_with("128.") || s == "128", "127 + 1 = 128, got '{}'", s);
             }
@@ -105,12 +105,12 @@ macro_rules! suite {
                 let r = evaluate(&gmath::<FixedPoint>("32767"));
                 assert!(r.is_ok(), "32767 should parse, got {:?}", r);
                 let s = format!("{}", r.unwrap());
-                // 32767 exceeds the binary range at GMATH_FRAC_BITS >= 17: the literal
+                // 32767 exceeds the binary range at F >= 17: the literal
                 // then parses to Symbolic and displays without a fraction point
                 assert!(s.starts_with("32767.") || s == "32767", "32767 should display correctly, got '{}'", s);
             }
 
-            /// Product requiring tier promotion — profile-appropriate values
+            /// Product requiring tier promotion: format-appropriate values
             #[test]
             fn tier_boundary_multiply_requires_promotion_beyond_q16_word() {
                 if !(!(BITS == 32)) { return; }
@@ -126,12 +126,12 @@ macro_rules! suite {
                 let r = evaluate(&(gmath::<FixedPoint>("15") * gmath::<FixedPoint>("15")));
                 assert!(r.is_ok(), "15 * 15 should succeed with tier promotion, got {:?}", r);
                 let s = format!("{}", r.unwrap());
-                // 225 exceeds the binary range at GMATH_FRAC_BITS=24 (+-128): the exact
+                // 225 exceeds the binary range at F = 24 (+-128): the exact
                 // product then stays Symbolic and displays without a fraction point
                 assert!(s.starts_with("225.") || s == "225", "15 * 15 = 225, got '{}'", s);
             }
 
-            /// Large multiply — profile-appropriate values
+            /// Large multiply: format-appropriate values
             #[test]
             fn tier_boundary_large_multiply_wide() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
@@ -152,9 +152,9 @@ macro_rules! suite {
                 let d = (FixedPoint::from_raw(raw) - expected).abs();
                 assert!(d <= unit, "46340² off by more than one unit: {}", d);
             }
-            /// Realtime: 180² = 32400 (near the Q16.16 max), raw 32400 * 2^F for the
-            /// build's split (2123366400 at Q16.16, 33177600 at Q22.10). Where 32400
-            /// exceeds the range 2^(31-F) (GMATH_FRAC_BITS >= 17) the largest n with n²
+            /// i32 word: 180² = 32400 (near the Q16.16 max), raw 32400 * 2^F for the
+            /// suite's split (2123366400 at Q16.16, 33177600 at Q22.10). Where 32400
+            /// exceeds the range 2^(31-F) (F >= 17) the largest n with n²
             /// in range is used instead (11² = 121 at Q8.24).
             #[test]
             fn tier_boundary_large_multiply_q16_word() {
@@ -242,7 +242,7 @@ macro_rules! suite {
             #[test]
             fn transcendental_exp_large_argument() {
                 let r = evaluate(&gmath::<FixedPoint>("44").exp());
-                // May succeed or overflow depending on profile — must not panic
+                // May succeed or overflow depending on format, but must not panic
                 match &r {
                     Ok(val) => {
                         let s = format!("{}", val);
@@ -272,7 +272,7 @@ macro_rules! suite {
                     Ok(val) => {
                         println!("exp(-44) = {}", val);
                         // Should be very close to zero (7.78e-20, far below 1 unit on
-                        // every realtime split)
+                        // every i32 split)
                         assert_display_or_stored(val, &["0.000", "-0.000"], "0", 0,
                             "exp(-44) should be near zero");
                     }
@@ -427,10 +427,10 @@ macro_rules! suite {
                     Ok(val) => {
                         let s = format!("{}", val);
                         println!("0.000000000000000001 = {}", s);
-                        // Should be very close to zero. On narrow profiles the literal
+                        // Should be very close to zero. On narrow formats the literal
                         // is held EXACTLY in the Symbolic domain (0.5.0 item 1 parse
-                        // fallback) and displays as "0." at profile precision — 1e-18
-                        // is far below one realtime/compact ulp.
+                        // fallback) and displays as "0." at the format's precision; 1e-18
+                        // is far below one Q16.16/Q32.32 ulp.
                         assert!(
                             s.starts_with("0.000") || s == "0.",
                             "18-place decimal should be near zero, got '{}'",
@@ -532,10 +532,10 @@ macro_rules! suite {
                     Ok(val) => {
                         let s = format!("{}", val);
                         println!("1.0000000000001 - 1.0 = {}", s);
-                        // Should give approximately 1e-13. On narrow profiles the
+                        // Should give approximately 1e-13. On narrow formats the
                         // 13-dp literal is held EXACTLY in the Symbolic domain (0.5.0
                         // item 1 parse fallback) and the difference displays as "0."
-                        // at profile precision — 1e-13 is below one narrow-profile ulp.
+                        // at the format's precision: 1e-13 is below one narrow-format ulp.
                         // (Pre-fix the literal itself truncated to 1.0 at parse and the
                         // subtraction was exactly zero — displayed "0.0000", passing
                         // this assertion by coincidence.)
@@ -552,7 +552,7 @@ macro_rules! suite {
             }
 
             // ============================================================================
-            // Phase 3D: Profile-Specific Type Boundaries
+            // Phase 3D: Format-Specific Type Boundaries
             // ============================================================================
 
             /// Q64.64: i128 storage, max integer ~9.2 × 10^18
@@ -670,7 +670,7 @@ macro_rules! suite {
             // Phase 3E: Arithmetic Edge Cases
             // ============================================================================
 
-            /// Profile-appropriate test values that fit in all profiles.
+            /// Format-appropriate test values that fit in all formats.
             /// Q16.16 max integer: 32767. Q16.16 min resolution: ~0.00001.
             const ARITH_CASES: &[&str] = if (BITS == 32 || BITS == 64) { &["1", "42", "0.5", "100", "0.01"] } else { &["1", "42", "0.5", "1000000", "0.001"] };
             const ARITH_CASES_NONZERO: &[&str] = if (BITS == 32 || BITS == 64) { &["1", "42", "0.5", "100"] } else { &["1", "42", "999999999", "0.5"] };
@@ -818,7 +818,7 @@ macro_rules! suite {
             /// pow(2, 10) = 1024
             #[test]
             fn transcendental_pow_2_10() {
-                // 1024 exceeds the realtime range at GMATH_FRAC_BITS >= 21: use the
+                // 1024 exceeds the i32 range at F >= 21: use the
                 // largest power of two in range there (2^6 = 64 at Q8.24)
                 let mut e: u32 = 10;
                 while FixedPoint::try_from_int(1 << e).is_err() { e -= 1; }

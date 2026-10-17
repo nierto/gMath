@@ -1,7 +1,7 @@
 //! FixedVector: dynamically-sized vector of fixed-point values of one format.
 //!
 //! All operations delegate to the element type's arithmetic. The element
-//! type defaults to `FixedPoint`, the build profile's format.
+//! type is the caller's format, usually a `Fixed<S, F>`.
 
 use std::ops::{Add, Sub, Neg, Mul, Index, IndexMut};
 use super::kernels;
@@ -46,7 +46,7 @@ where
         }
     }
 
-    /// Create from a slice of FixedPoint values.
+    /// Create from a slice of `Fixed<S, F>` values.
     pub fn from_slice(values: &[Fixed<S, F>]) -> Self {
         Self {
             data: values.to_vec(),
@@ -356,7 +356,7 @@ where
         Self::from_slice(&[component(1, 2), component(2, 0), component(0, 1)])
     }
 
-    /// Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j].
+    /// Outer product: u ⊗ v → Matrix where M\[i\]\[j\] = u\[i\] * v\[j\].
     pub fn outer_product(&self, other: &Self) -> super::FixedMatrix<Fixed<S, F>> {
         let mut m = super::FixedMatrix::<Fixed<S, F>>::new(self.len(), other.len());
         for i in 0..self.len() {

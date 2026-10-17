@@ -390,7 +390,7 @@ impl<const DECIMALS: u8> DecimalFixed<DECIMALS> {
     pub fn try_mul_with(self, other: Self, mode: DecimalRounding) -> Result<Self, OverflowDetected> {
         // UGOD-shaped: try the narrow i128 tier first; on overflow widen the
         // intermediate to 256 bits (a 128x128 product cannot exceed 256 bits).
-        // i128 storage is identical on every profile. In the narrow tier
+        // i128 storage, whatever the binary format. In the narrow tier
         // |product / SCALE| <= i128::MAX / SCALE, so the rounding step fits.
         if let Some(product) = self.value.checked_mul(other.value) {
             let rounded = round_decimal_i128(product / Self::SCALE, product % Self::SCALE, Self::SCALE, mode);
@@ -1169,7 +1169,7 @@ where
     /// `sinhcosh(x)`: fused hyperbolic pair sharing one exp-pair evaluation at
     /// decimal compute tier.
     ///
-    /// Mirrors `FixedPoint::sinhcosh` in the binary domain. sinh and cosh are
+    /// Mirrors `Fixed::sinhcosh` in the binary domain. sinh and cosh are
     /// derived from the same `(exp(x), exp(-x))` pair at compute tier, so their
     /// rounding bias is correlated: important for expressions of the form
     /// `cosh(θ)·p + (sinh(θ)/θ)·v`.
@@ -1213,7 +1213,7 @@ where
     /// `tanh(x)`: (exp(2x) - 1)/(exp(2x) + 1) at the compute tier, exactly ±1
     /// for |x| > 2 * compute dp (where 1 - |tanh x| < e^(-4 dp) is below half a
     /// unit at the compute dp). Before 0.6.4 the 2x was formed first and
-    /// wrapped the realtime compute tier for |x| > 4.6e9 (tanh(9e9) gave -1).
+    /// wrapped the realtime profile's compute tier for |x| > 4.6e9 (tanh(9e9) gave -1).
     pub fn tanh(&self) -> Self {
         Self::done(self.try_tanh(), "tanh: division")
     }
@@ -1229,7 +1229,7 @@ where
     /// `ln(|x| + sqrt(x^2 ± 1))` at the compute tier, the shared
     /// body of `asinh` (`+`) and `acosh` (`-`). When x^2 leaves the compute
     /// tier it uses `ln(|x|) + ln(1 + sqrt(1 ± 1/x^2))` instead: before 0.6.4
-    /// the square wrapped silently (embedded `asinh(1e30)` died in sqrt with a
+    /// the square wrapped silently (`asinh(1e30)` on the embedded profile died in sqrt with a
     /// negative argument; other sizes returned plausible wrong values).
     /// `Err(TierOverflow)` for the compute tier's minimum (no |x| there).
     fn ln_x_plus_root<C: DecimalWord>(xc: C, plus: bool) -> Result<C, OverflowDetected> {

@@ -1,10 +1,10 @@
 [package]
 name = "g_math"
-version = "0.6.7"
+version = "0.7.0"
 edition = "2021"
 # integration tests are four group binaries (tests/<group>.rs), not one per file
 autotests = false
-description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — pure Rust, zero-float, deterministic"
+description = "Deterministic fixed-point arithmetic, every format a type: correctly rounded transcendentals, decimal and symbolic domains, linear algebra, Lie groups, manifolds, ODE solvers, certified intervals. Pure Rust, zero-float"
 authors = ["Niels Erik Toren"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -47,10 +47,9 @@ default = []
 infinite-precision = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
 
 # Feature gates for optional subsystems
-legacy-tests = []        # Enable compilation of legacy test suites
 rebuild-tables = []      # Regenerate lookup tables from build.rs (~20 min)
 serde = ["dep:serde"]    # Serialize/Deserialize impls for Fixed, FixedVector, FixedMatrix, Tensor
-# macros = ["dep:g_math_macros"]    # gmath!() — deferred to separate crate publish
+# macros = ["dep:g_math_macros"]    # gmath!(): deferred to a separate crate publish
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

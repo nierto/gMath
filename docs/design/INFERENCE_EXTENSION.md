@@ -1,8 +1,8 @@
 # The inference module as a gMath extension
 
-Status: proposal (2026-10-10), for the owner. Nothing here is implemented.
-It is written against the `width-types` branch after phase 5b; the plan
-assumes phase 7 (the removal of the build profiles) lands first.
+Status: IMPLEMENTED 2026-10-17 (phase 7.5 of the width-as-type work; see
+section 10). Sections 1 to 9 are the proposal of 2026-10-10 and the owner's
+decisions of 2026-10-15, kept as written.
 
 ## 1. What is being decided
 
@@ -203,3 +203,28 @@ A 0.6.8 that keeps the feature, marks it deprecated and points to
 `g_math_inference` avoids that; the removal itself then lands in 0.7.0.
 Either way the published 0.4.x to 0.6.7 releases keep the module under
 their open licences.
+
+## 10. As built (2026-10-17)
+
+- The crate `g_math_inference` (its own private repository) holds the
+  module's files unchanged apart from their paths (`crate::fixed_point` to
+  `g_math::fixed_point`, `crate::tq19` to `crate`). It uses only documented
+  core items: `Fixed`, `FixedNum`, `Compute`, `Storage`, `WideInt`, `I256`,
+  `I512` and `imperative::OverflowDetected`. The core gained the exports of
+  `Compute<T>` and `I256` .. `I2048` (they were hidden); nothing else.
+- Differences from the proposal: `rayon` is a plain dependency (every
+  consumer uses the parallel forms; no `par` feature); the crate is
+  `publish = false` until the owner publishes it with 0.7.0, with a
+  placeholder licence file until the owner's text replaces it; it depends on
+  the core by path during development and on `g_math = "0.7"` at release.
+- Tests moved with the module and match their counts in the core: 195 unit
+  tests; tq19 138, tq5 18, weight_bits 48, batch_into 23, bench 30
+  integration tests; the tq19 parts of three shared files (16, 1 and 8).
+- Differential gate (`differential/` in the extension): every kernel against
+  g_math 0.6.7 with `inference` at realtime F = 10 and 16, compact, embedded,
+  balanced and scientific; 0 differences of value, error or panic.
+- Core after removal: no `inference` feature, no `rayon` in the dependency
+  tree, `compute_tier` without a gate; full suite 6702 tests (7180 minus the
+  478 moved), differential against 0.6.7 12/12 at six builds.
+- 0.6.8 (from v0.6.7) marks the module deprecated, naming the new crate;
+  release order: g_math 0.7.0, g_math_inference 0.1.0, then 0.6.8.

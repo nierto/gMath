@@ -16,7 +16,7 @@
 //!   23- and 50-dimensional dyadic SPD matrices stays within a bound set from
 //!   measurement (printed under --nocapture).
 //!
-//! All profiles.
+//! All formats.
 
 
 macro_rules! suite {
@@ -41,7 +41,7 @@ macro_rules! suite {
                     let x = self.0;
                     (x >> 33) ^ x
                 }
-                /// A dyadic value k / 16 with k in [-8, 8]: exact on every profile.
+                /// A dyadic value k / 16 with k in [-8, 8]: exact at every format.
                 fn dyadic(&mut self) -> FixedPoint {
                     let k = (self.next() % 17) as i32 - 8;
                     FixedPoint::from_int(k) / FixedPoint::from_int(16)

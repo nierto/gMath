@@ -400,17 +400,17 @@ macro_rules! shared_items {
 
             /// Generate a rational comparison test (decimal, symbolic, cross-domain).
 
-            /// Generate a binary ULP test (profile-specific).
+            /// Generate a binary ULP test (format-specific).
             #[allow(unused_macros)]
 
             // ════════════════════════════════════════════════════════════════════
-            // Detect active profile for reporting
+            // Name the active format for reporting
             // ════════════════════════════════════════════════════════════════════
 
             const ACTIVE_PROFILE: &str = if BITS == 32 { "Q16.16" } else if BITS == 64 { "Q32.32" } else if BITS == 128 { "Q64.64" } else if BITS == 256 { "Q128.128" } else { "Q256.256" };
 
             // ════════════════════════════════════════════════════════════════════
-            // Decimal domain tests (all profiles — cross-multiply rational compare)
+            // Decimal domain tests (all formats, cross-multiply rational compare)
             // ════════════════════════════════════════════════════════════════════
 
             // Decimal arithmetic through FASC: result may be Decimal or Symbolic.
@@ -433,7 +433,7 @@ macro_rules! suite {
             rational_test!(test_decimal_div, "decimal_div", DECIMAL_DIV_REFS, "div", ACTIVE_PROFILE, 2, 5);
 
             // ════════════════════════════════════════════════════════════════════
-            // Symbolic domain tests (all profiles — cross-multiply rational compare)
+            // Symbolic domain tests (all formats, cross-multiply rational compare)
             // ════════════════════════════════════════════════════════════════════
 
             // Symbolic (fraction) arithmetic. Cross-multiplication handles unreduced results.
@@ -445,7 +445,7 @@ macro_rules! suite {
             rational_test!(test_symbolic_div, "symbolic_div", SYMBOLIC_DIV_REFS, "div", ACTIVE_PROFILE, 2, 5);
 
             // ════════════════════════════════════════════════════════════════════
-            // Cross-domain tests (all profiles — cross-multiply rational compare)
+            // Cross-domain tests (all formats, cross-multiply rational compare)
             // ════════════════════════════════════════════════════════════════════
 
             // Cross-domain arithmetic (Binary+Decimal, Binary+Symbolic, Decimal+Symbolic).
@@ -457,17 +457,17 @@ macro_rules! suite {
             rational_test!(test_cross_domain_div, "cross_div", CROSS_DIV_REFS, "div", ACTIVE_PROFILE, 2, 10);
 
             // ════════════════════════════════════════════════════════════════════
-            // Q64.64 Binary tests (embedded profile)
+            // Q64.64 Binary tests
             // ════════════════════════════════════════════════════════════════════
 
 
             // ════════════════════════════════════════════════════════════════════
-            // Q128.128 Binary tests (balanced profile)
+            // Q128.128 Binary tests
             // ════════════════════════════════════════════════════════════════════
 
 
             // ════════════════════════════════════════════════════════════════════
-            // Q256.256 Binary tests (scientific profile)
+            // Q256.256 Binary tests
             // ════════════════════════════════════════════════════════════════════
         }
     };

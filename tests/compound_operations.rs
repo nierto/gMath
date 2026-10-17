@@ -84,9 +84,9 @@ macro_rules! suite {
                 let mut last_correct_year = 0;
 
                 // mpmath reference values: 1000 * 1.05^n (80-digit precision)
-                // Using ~15 significant digits — safe across all profiles.
-                // Years 1-8 are exact Decimal on all profiles.
-                // Years 9+ may be Binary depending on profile threshold.
+                // Using ~15 significant digits, safe across all formats.
+                // Years 1-8 are exact Decimal on all formats.
+                // Years 9+ may be Binary depending on format threshold.
                 let expected_prefixes: &[&str] = &[
                     "",                     // year 0 (skip)
                     "1050.0",               // year 1  (mpmath: 1050.0)
@@ -118,7 +118,7 @@ macro_rules! suite {
                         // Without `infinite-precision` the exact rational outgrows its
                         // widest tier at year 29 and multiply_via_rational falls back to
                         // the binary compute tier; 1000 * 1.05^29 = 4116.1 exceeds the
-                        // realtime storage range 2^(31-F) at GMATH_FRAC_BITS >= 19, so
+                        // i32 storage range 2^(31-F) at F >= 19, so
                         // that fallback must fail loud there. All checked years precede it.
                         Err(OverflowDetected::TierOverflow)
                             if year >= 29 && FixedPoint::try_from_int(4117).is_err() => break,
@@ -274,7 +274,7 @@ macro_rules! suite {
                 );
             }
 
-            /// Precision specifier: {:.6} gives 6 decimal places (profile-dependent)
+            /// Precision specifier: {:.6} gives 6 decimal places (format-dependent)
             #[test]
             fn display_precision_6() {
                 let val = evaluate(&gmath::<FixedPoint>("3.14159")).unwrap();
@@ -359,8 +359,8 @@ macro_rules! suite {
 
                     let s = format!("{}", sum);
                     assert!(
-                        // Accept realtime's shorter display ("1.00") alongside the
-                        // wider profiles' output — this assert was display-pessimistic
+                        // Accept the i32 splits' shorter display ("1.00") alongside the
+                        // wider formats' output: this assert was display-pessimistic
                         // and red on realtime since <=0.4.32 (pre-existing, unrelated
                         // to the 0.5.0 rounding unification).
                         s.starts_with("1.0") || s.starts_with("0.99"),
@@ -502,8 +502,8 @@ macro_rules! suite {
             #[test]
             fn deep_nesting_sqrt_squared() {
                 let test_values: &[(&str, &[&str])] = &[
-                    // Prefixes shortened to tolerate realtime's 4-decimal display
-                    // (pre-existing red on realtime; value-level accuracy is gated by
+                    // Prefixes shortened to tolerate the 4-decimal display at Q16.16
+                    // (pre-existing red there; value-level accuracy is gated by
                     // the mpmath suites, this test guards the composed pipeline).
                     ("2",   &["2.0", "1.99"]),
                     ("3",   &["3.0", "2.99"]),

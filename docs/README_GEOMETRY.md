@@ -17,12 +17,12 @@ else composes the wide-tier matrix functions.
 ## Usage
 
 ```rust
-use g_math::fixed_point::{FixedVector, FixedPoint};
+use g_math::fixed_point::{FixedVector, Q64_64};
 use g_math::fixed_point::imperative::manifold::{Manifold, Sphere};
 
 let s = Sphere { dim: 2 };                    // unit 2-sphere (ambient = dim + 1)
-let p = FixedVector::from_slice(&[FixedPoint::one(), FixedPoint::ZERO, FixedPoint::ZERO]);
-let q = FixedVector::from_slice(&[FixedPoint::ZERO, FixedPoint::one(), FixedPoint::ZERO]);
+let p = FixedVector::from_slice(&[Q64_64::one(), Q64_64::ZERO, Q64_64::ZERO]);
+let q = FixedVector::from_slice(&[Q64_64::ZERO, Q64_64::one(), Q64_64::ZERO]);
 let d = s.distance(&p, &q).unwrap();          // geodesic distance
 let v = s.log_map(&p, &q).unwrap();           // tangent vector p → q
 let back = s.exp_map(&p, &v).unwrap();        // ≈ q
@@ -67,9 +67,13 @@ See **[PUBLIC_API.md → Geometry](../PUBLIC_API.md#geometry)**,
   geodesic integration, ODE integrators, projective maps and tensor
   decompositions carry their intermediate state at the compute tier and round
   once. Against mpmath (or the same scheme in exact arithmetic, for
-  integrators and finite differences) they are within one unit on every
-  profile and at realtime 8 to 24 fraction bits, except the SE(3) log of a
-  rounded exp near pi (3 units) and CP-ALS reconstruction (2). Gates:
+  integrators and finite differences) they are within one unit at every
+  format, including the 32-bit splits from 8 to 24 fraction bits, except the
+  SE(3) log of a rounded exp near pi (3 units) and CP-ALS reconstruction (2).
+  The closed-form maps are correctly rounded per component (0.7.0): Sphere and
+  HyperbolicSpace distance, exp, log and transport; SO(3) and SE(3) exp, log,
+  exp_map, log_map and distance; SO(3) transport; the projective maps (gate
+  `tests/geometry_correct_rounding_validation.rs`, no tolerance). Gates:
   `tests/manifold_compute_tier_validation.rs`,
   `tests/lie_fiber_compute_tier_validation.rs`,
   `tests/curvature_compute_tier_validation.rs`,

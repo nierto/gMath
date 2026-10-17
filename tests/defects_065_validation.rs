@@ -33,7 +33,7 @@ macro_rules! suite {
             // rms_norm_factor: negative radicand is a domain error
             // ============================================================================
 
-            // Values stay inside [-2, 2) so the tests hold at every realtime split.
+            // Values stay inside [-2, 2) so the tests hold at every i32 split.
             #[test]
             fn rms_negative_radicand_is_a_domain_error() {
                 let zeros = [FixedPoint::ZERO; 4];
@@ -56,7 +56,7 @@ macro_rules! suite {
             }
 
             // ============================================================================
-            // Serialization tag names the realtime split
+            // Serialization tag names the i32 split
             // ============================================================================
 
             #[test]
@@ -85,7 +85,7 @@ macro_rules! suite {
                 assert_eq!(FixedPoint::from_bytes_legacy(&old), Ok(x));
             }
 
-            /// A non-default realtime split refuses another split's tag instead of
+            /// A non-default i32 split refuses another split's tag instead of
             /// reading the payload at the wrong scale, through both readers; the
             /// explicit raw read still works.
             #[test]

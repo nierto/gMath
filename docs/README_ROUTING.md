@@ -1,7 +1,8 @@
 # Canonical routing layer (FASC)
 
-The user-friendly entry point: `gmath("…")` builds a lazy expression, `evaluate(…)`
-runs it through a domain-routing stack evaluator.
+The user-friendly entry point: `gmath("…")` builds a lazy expression,
+`evaluate::<Q64_64>(…)` runs it in a format through a domain-routing stack
+evaluator and rounds the result once.
 
 ## What it is
 
@@ -18,22 +19,24 @@ transcendentals and want precision preserved across the whole chain.
 
 ```rust
 use g_math::canonical::{gmath, evaluate};
+use g_math::fixed_point::Q64_64;
 
 // Each literal is classified and routed: "0.1" → decimal, "3" → binary, "1/3" → symbolic.
+// The format is named once; the tree's type follows it.
 let expr = (gmath("100") + gmath("50")) / gmath("3");
-let value = evaluate(&expr).unwrap();
+let value = evaluate::<Q64_64>(&expr).unwrap();
 println!("{value}");
 
-// Transcendentals chain lazily; intermediates never leave the wide compute tier.
-let y = evaluate(&gmath("1.5").exp().sin()).unwrap();
+// A chain of transcendentals is rounded once from its exact value.
+let y = evaluate::<Q64_64>(&gmath("1.5").exp().sin()).unwrap();
 
 // Runtime strings return a Result instead of panicking.
 use g_math::canonical::gmath_parse;
-let parsed = gmath_parse("3.14159265358979323846").unwrap();
+let parsed = gmath_parse::<Q64_64>("3.14159265358979323846").unwrap();
 
 // Feed a result back into a new expression without reparsing.
 use g_math::canonical::LazyExpr;
-let year0 = evaluate(&gmath("1000")).unwrap();
+let year0 = evaluate::<Q64_64>(&gmath("1000")).unwrap();
 let year1 = evaluate(&(LazyExpr::from(year0) * gmath("1.05"))).unwrap();
 ```
 
@@ -41,19 +44,25 @@ let year1 = evaluate(&(LazyExpr::from(year0) * gmath("1.05"))).unwrap();
 
 **Four numeric domains.** Values route to the representation that is exact for
 them: binary fixed-point (integers, powers of two), decimal fixed-point (decimal
-literals like `0.1`), balanced ternary (powers of three; TQ1.9 weights), and
+literals like `0.1`), balanced ternary (powers of three), and
 symbolic rational (everything else, as an exact numerator/denominator pair). See
 [the ternary guide](README_TERNARY.md) and [the precision guide](README_PRECISION.md)
 for per-domain detail.
 
-**FASC: Fixed Allocation Stack Computation.** `gmath()` builds a `LazyExpr` tree;
-`evaluate()` walks it on a thread-local stack evaluator with fixed-size
-workspaces, so the hot path does not allocate on the heap per operation.
+**FASC: Fixed Allocation Stack Computation.** `gmath()` builds a `LazyExpr` tree
+(one small heap node per operation); `evaluate()` walks it on a thread-local
+stack evaluator with fixed-size workspaces (one per format the thread uses), so
+evaluation itself allocates nothing on the heap, including the 1000-bit sure
+path, whose numbers live on the stack.
 
-**Tier N+1 chain persistence.** Every transcendental and every accumulating
-operation computes one tier *wider* than the storage format and rounds down once
-at the end. Between chained operations the intermediate stays at the wide tier (
-`sin(exp(x))` never narrows mid-chain), so a chain rounds once, not once per step.
+**One rounding per tree.** Every transcendental and every accumulating
+operation computes one tier *wider* than the storage format; between chained
+operations the intermediate stays at the wide tier (`sin(exp(x))` never narrows
+mid-chain). The result is then rounded once from the exact value of the whole
+tree: when the wide-tier result lies too close to a rounding boundary for its
+tracked error bound to decide, the tree is evaluated again at 128 to 4160 bits
+until it is decided (0.7.0; 0.6.7 rounded the wide-tier result, which
+misrounded 10 to 30 of 300 random chains per format).
 
 **UGOD: tiered graceful overflow.** Arithmetic is attempted at the current tier;
 on overflow it promotes to a wider tier and retries. The top of the ladder is the
@@ -74,7 +83,7 @@ arithmetic is exact by construction; mul/div deliberately keep their
 previous routes because products can leave the tier's exactness range,
 and the router must never trade correctness for speed (the design
 reasoning lives in `docs/design/TERNARY_ROUTING_COLUMN.md`). If a routed
-value cannot fit ternary storage on a narrow profile, dispatch silently
+value cannot fit ternary storage in a narrow format, dispatch silently
 falls back to the previous route.
 
 **Mode routing.** `set_gmath_mode("compute:output")` forces the compute and output
@@ -85,7 +94,7 @@ domains independently (`auto`, `binary`, `decimal`, `symbolic`, `ternary`);
 
 See **[PUBLIC_API.md → Canonical](../PUBLIC_API.md#canonical-g_mathcanonical)** for
 the full symbol list, and [docs.rs](https://docs.rs/g_math) for live signatures.
-`LazyExpr` supports `+`, `-`, `*`, `/`, unary `-`, and the 18
+`LazyExpr` supports `+`, `-`, `*`, `/`, unary `-`, and the 17
 [transcendental methods](README_TRANSCENDENTALS.md). `LazyMatrixExpr` is the
 matrix analog of chain persistence; `DomainMatrix` holds per-element
 domain-tagged values for mixed-domain matrices.
@@ -105,7 +114,7 @@ domain-tagged values for mixed-domain matrices.
 - Literals may be decimals (`"0.1"`), integers, fractions (`"1/3"`), repeating
   decimals (`"0.333..."`), hex/binary/ternary (`"0x1F"` is 31, `"0b101"` is 5,
   `"0t10"`), or named constants (`"pi"`, `"e"`, `"sqrt2"`, `"phi"`). A literal
-  beyond the profile's storage is kept as an exact rational or fails with
+  beyond the format's storage is kept as an exact rational or fails with
   `TierOverflow`; it never wraps.
 
 The routing and determinism contract is in **[CONTRACT.md](../CONTRACT.md)**.

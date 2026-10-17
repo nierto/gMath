@@ -295,8 +295,8 @@ macro_rules! suite {
                         }
                     }
                 }
-                // the SVD contract as an error bit length in units: realtime (F <= 30)
-                // 2^(F - 10) units, at least 8; wider profiles 2^(F/3 + 1)
+                // the SVD contract as an error bit length in units: the i32 word (F <= 30)
+                // 2^(F - 10) units, at least 8; wider formats 2^(F/3 + 1)
                 let svd_bits = if f <= 30 { (f - 10).max(3) + 1 } else { f - 2 * f / 3 + 2 };
                 check("pseudoinverse (svd-limited, error bits)", worst, svd_bits);
                 check("pseudoinverse_with_threshold (svd-limited, error bits)", worst_t, svd_bits);

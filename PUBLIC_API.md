@@ -37,20 +37,88 @@ Modules: g_math::canonical
 | `CompactShadow` | `super::universal::tier_types` |
 | `ShadowConstantId` | `super::universal::tier_types` |
 
-## FixedPoint
+## Fixed
 
-Modules: FixedPoint (re-exported at g_math::fixed_point)
+Modules: g_math::fixed_point, Fixed<S, F>, FixedNum and the aliases (re-exported at g_math::fixed_point), Fixed<S, F> methods (g_math::fixed_point)
+
+| Item | Kind | Summary |
+| --- | --- | --- |
+| `Q16_16` | type | Q16.16 on a 32-bit word. |
+| `Q32_32` | type | Q32.32 on a 64-bit word. |
+| `Q64_64` | type | Q64.64 on a 128-bit word. |
+| `Q128_128` | type | Q128.128 on a 256-bit word. |
+| `Q256_256` | type | Q256.256 on a 512-bit word. |
+| `Compute` | type | The compute word of a format: twice the storage width, `2F` fractional bits. |
+| `FixedNum` | trait | The kernels of one fixed-point format. |
 
 **Re-exports**, signatures on [docs.rs](https://docs.rs/g_math):
 
 | Item | Re-exported from |
 | --- | --- |
+| `FixedVector` | `imperative` |
+| `FixedMatrix` | `imperative` |
+| `Interval` | `imperative` |
+| `Scalar` | `imperative` |
+| `CircleStorage` | `width` |
+| `Storage` | `width` |
+| `WideInt` | `width` |
+| `I256` | `domains::binary_fixed` |
+| `I512` | `domains::binary_fixed` |
+| `I1024` | `domains::binary_fixed` |
+| `I2048` | `domains::binary_fixed` |
+| `DecimalFixed` | `domains::decimal_fixed` |
+| `Currency` | `domains::decimal_fixed` |
+| `HighPrecisionCurrency` | `domains::decimal_fixed` |
+| `DecimalRounding` | `domains::decimal_fixed` |
+| `DecimalInterval` | `domains::decimal_fixed` |
+| `DecimalTier` | `domains::decimal_fixed::transcendental` |
+| `Dp` | `domains::decimal_fixed::transcendental` |
 | `OverflowDetected` | `crate::fixed_point::core_types::errors` |
 
 ### Fixed
 
+A fixed-point number: the raw integer `raw` stands for `raw / 2^F`.
+
 | Method | Summary |
 | --- | --- |
+| `from_raw_storage` |  |
+| `raw_storage` |  |
+| `upscale_to_compute` |  |
+| `downscale_to_storage` |  |
+| `downscale_to_storage_floor` |  |
+| `downscale_to_storage_ceil` |  |
+| `compute_ceiling` |  |
+| `exp_sentinel_reached` |  |
+| `compute_checked_multiply` |  |
+| `compute_checked_divide` |  |
+| `make_compute_int` |  |
+| `compute_mul_div_int` |  |
+| `compute_div_count` |  |
+| `one_storage` |  |
+| `truncated_raw` |  |
+| `try_fixed_multiply` |  |
+| `try_fixed_divide` |  |
+| `try_from_int` |  |
+| `try_to_int` |  |
+| `float_bits` |  |
+| `direct_exp` |  |
+| `direct_ln` |  |
+| `direct_sqrt` |  |
+| `direct_sin` |  |
+| `direct_cos` |  |
+| `direct_atan` |  |
+| `direct_atan2` |  |
+| `compute_pi_half` |  |
+| `exp_at_compute_tier` |  |
+| `ln_at_compute_tier` |  |
+| `sqrt_at_compute_tier` |  |
+| `sin_at_compute_tier` |  |
+| `cos_at_compute_tier` |  |
+| `sincos_at_compute_tier` |  |
+| `atan_at_compute_tier` |  |
+| `atan2_at_compute_tier` |  |
+| `pi_half_at_compute_tier` |  |
+| `compute_subtract` |  |
 | `from_raw` | Create from raw Q-format storage. |
 | `raw` | Access the raw Q-format storage. |
 | `raw_slice` | View a slice of values as their raw storage integers, without copying. |
@@ -60,15 +128,13 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `ZERO` | Zero constant. |
 | `one` | One (1.0) in Q-format. |
 | `from_int` | Create from an integer value. |
-| `try_from_int` | Create from an integer value, `Err(TierOverflow)` outside the range. |
 | `to_int` | Extract the integer part (floor toward negative infinity). |
-| `try_to_int` | The integer part (floor toward negative infinity), `Err(TierOverflow)` when it is outside the i32 range. |
 | `abs` | Absolute value. |
 | `is_negative` | Check if negative. |
 | `is_zero` | Check if zero. |
-| `from_f32` | Create from an f32 value, truncated toward zero to the profile's raw step. |
+| `from_f32` | Create from an f32 value, truncated toward zero to the format's raw step. |
 | `try_from_f32` | Create from an f32 value like `from_f32`, returning an error instead of panicking. |
-| `from_f64` | Create from an f64 value, truncated toward zero to the profile's raw step. |
+| `from_f64` | Create from an f64 value, truncated toward zero to the format's raw step. |
 | `try_from_f64` | Create from an f64 value like `from_f64`, returning an error instead of panicking. |
 | `to_f32` | Convert to f32: exact when the raw value fits 24 bits, else nearest-even. |
 | `to_f64` | Convert to f64: exact when the raw value fits 53 bits, else nearest-even. |
@@ -105,7 +171,7 @@ Modules: FixedPoint (re-exported at g_math::fixed_point)
 | `try_asin` | Fallible asin(x) = atan(x / sqrt(1 - x²)): `Err(DomainError)` if \|x\| > 1. |
 | `try_acos` | Fallible acos(x) = π/2 - asin(x): `Err(DomainError)` if \|x\| > 1. |
 | `try_sinh` | Fallible sinh(x) = (exp(x) - exp(-x)) / 2: `Err(TierOverflow)` when the result exceeds the storage tier (a ceiling exp means it already has, and the ceiling value would downscale to a plausible-wrong max). |
-| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when the result exceeds the storage tier (a ceiling exp means cosh already has; the checked add alone cannot see it on wide profiles). |
+| `try_cosh` | Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when the result exceeds the storage tier (a ceiling exp means cosh already has; the checked add alone cannot see it on wide formats). |
 | `try_tanh` | Fallible tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). |
 | `try_asinh` | Fallible asinh(x) = ln(x + sqrt(x² + 1)). |
 | `try_acosh` | Fallible acosh(x) = ln(x + sqrt(x² - 1)): `Err(DomainError)` if x < 1. |
@@ -134,7 +200,7 @@ A dynamically-sized vector of fixed-point values.
 | --- | --- |
 | `new` | Create a zero-filled vector of the given dimension. |
 | `from_f32_slice` | Create from a slice of f32 values. |
-| `from_slice` | Create from a slice of FixedPoint values. |
+| `from_slice` | Create from a slice of `Fixed<S, F>` values. |
 | `len` | Number of components. |
 | `dimension` | Alias for `len()`. |
 | `is_empty` | Whether the vector is empty. |
@@ -151,7 +217,7 @@ A dynamically-sized vector of fixed-point values.
 | `distance_to` | Fused Euclidean distance to another vector: sqrt(Σ (a_i - b_i)²) entirely at compute tier. |
 | `dot_precise` | Compute-tier precise dot product. |
 | `cross` | Cross product (3D vectors only). |
-| `outer_product` | Outer product: u ⊗ v → Matrix where M[i][j] = u[i] * v[j]. |
+| `outer_product` | Outer product: u ⊗ v → Matrix where M\[i\]\[j\] = u\[i\] * v\[j\]. |
 | `as_slice` | Access the underlying data slice (for compute-tier operations). |
 | `as_mut_slice` | Mutable access to the underlying data slice. |
 | `rotate_pairs` | Rotate the pairs `(v[i], v[i + half])`, `half = rotary_dim / 2`, by the angles whose sine and cosine are given: |
@@ -172,10 +238,10 @@ A row-major matrix of fixed-point values of one format.
 | `get` | Get element at (row, col). |
 | `set` | Set element at (row, col). |
 | `from_slice` | Create from a flat slice of values in row-major order. |
-| `from_fn` | Create from a function: M[i][j] = f(i, j). |
+| `from_fn` | Create from a function: M\[i\]\[j\] = f(i, j). |
 | `identity` | Identity matrix of size n×n. |
 | `diagonal` | Diagonal matrix from a vector. |
-| `transpose` | Transpose: Aᵀ[i][j] = A[j][i]. |
+| `transpose` | Transpose: Aᵀ\[i\]\[j\] = A\[j\]\[i\]. |
 | `trace` | Trace: sum of diagonal elements. |
 | `is_square` | Whether this is a square matrix. |
 | `row` | Extract a row as a FixedVector<Fixed<S, F>>. |
@@ -473,7 +539,7 @@ Result of Cholesky decomposition: A = LL^T.
 | Method | Summary |
 | --- | --- |
 | `solve` | Solve Ax = b: forward (Ly = b), then back (L^T x = y), on the compute-tier factor with exact sums; the solution rounded once. |
-| `determinant` | Determinant: det(A) = product(L[i][i])^2, formed at the compute tier and rounded once (before 0.6.4 a chain of storage products). |
+| `determinant` | Determinant: det(A) = product(L\[i\]\[i\])^2, formed at the compute tier and rounded once (before 0.6.4 a chain of storage products). |
 
 ### ComputeMatrix
 
@@ -628,9 +694,9 @@ The Grassmann manifold Gr(k, n): k-dimensional subspaces of R^n.
 | `inner_product` |  |
 | `norm` | \|\|V\|\|_F: exact sum of squares and root at the compute tier, one rounding. |
 | `exp_map` | `Q V cos(Σ) Vᵀ + Δ V sinc(Σ) Vᵀ` for the thin SVD `Δ = U Σ Vᵀ`, with `Δ V` (= `U Σ`) and `σ_i = \|(Δ V)_i\|` formed at the compute tier from the exact tangent, sin and cos at the compute tier, and one rounding per entry. |
-| `log_map` | `U diag(theta) Aᵀ` from [`Grassmannian::log_parts`], one rounding per entry. |
-| `distance` | `sqrt(sum theta_i^2)` of the principal angles of [`Grassmannian::log_parts`]: sum exact, root at the compute tier, one rounding. |
-| `parallel_transport` | Transport along the geodesic with `log_Q1(Q2) = U Θ Aᵀ`: `PT(Δ) = Δ - Q1 A sin(Θ) Uᵀ Δ + U (cos(Θ) - I) Uᵀ Δ`, the factors from [`Grassmannian::log_parts`] and the products at the compute tier, one rounding per entry. |
+| `log_map` | `U diag(theta) Aᵀ` from the shared principal-angle step, one rounding per entry. |
+| `distance` | `sqrt(sum theta_i^2)` of the principal angles of the shared principal-angle step: sum exact, root at the compute tier, one rounding. |
+| `parallel_transport` | Transport along the geodesic with `log_Q1(Q2) = U Θ Aᵀ`: `PT(Δ) = Δ - Q1 A sin(Θ) Uᵀ Δ + U (cos(Θ) - I) Uᵀ Δ`, the factors from the shared principal-angle step and the products at the compute tier, one rounding per entry. |
 
 ### StiefelManifold
 
@@ -724,7 +790,7 @@ SO(3): Special orthogonal group of 3D rotations.
 | `exp_map` | log(exp(base) exp(tangent)) with both exps, the product and the log at the compute tier; each component rounded once. |
 | `log_map` | log(exp(base)ᵀ exp(target)) entirely at the compute tier, rounded once. |
 | `distance` | \|log_map\| of the exact values, one rounding. |
-| `parallel_transport` | vee(R_half [v]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2), the whole chain at the compute tier and each component rounded once. |
+| `parallel_transport` | vee(R_half \[v\]× R_halfᵀ) = R_half v with R_half = exp(log_map / 2), the whole chain at the compute tier and each component rounded once. |
 | `algebra_dim` |  |
 | `matrix_dim` |  |
 | `identity_element` |  |
@@ -935,7 +1001,7 @@ A Möbius transformation on the complex plane: z ↦ (az+b)/(cz+d).
 | `compose` | Compose two Möbius transformations: (self ∘ other)(z) = self(other(z)). |
 | `inverse` | Inverse transformation: z ↦ (dz-b)/(-cz+a). |
 | `determinant` | Determinant: ad - bc. |
-| `to_matrix` | Convert to the corresponding 2×2 projective matrix [[a,b],[c,d]]. |
+| `to_matrix` | Convert to the corresponding 2×2 projective matrix \[\[a,b\],\[c,d\]\]. |
 
 ### MoebiusComplex
 
@@ -1038,7 +1104,7 @@ Modules: g_math::fixed_point::imperative::tensor, g_math::fixed_point::imperativ
 | --- | --- | --- |
 | `contract` | fn | Contract two tensors over specified index pairs. |
 | `outer` | fn | Outer (tensor) product: C_{i₁...iₐ j₁...jᵦ} = A_{i₁...iₐ} * B_{j₁...jᵦ}. |
-| `transpose` | fn | Transpose (reorder indices): T'_{perm[0], perm[1], ...} = T_{0, 1, ...}. |
+| `transpose` | fn | Transpose (reorder indices): T'_{perm\[0\], perm\[1\], ...} = T_{0, 1, ...}. |
 | `trace` | fn | Trace: contract index `idx1` with index `idx2` (self-contraction). |
 | `raise_index` | fn | Raise an index: T^i = g^{ij} T_j (contraction with metric inverse). |
 | `lower_index` | fn | Lower an index: T_i = g_{ij} T^j (contraction with metric). |
@@ -1194,7 +1260,7 @@ Modules: g_math::wide
 | `PI_Q64` | const | `floor(π * 2^64)`. |
 | `TWO_PI_Q64` | const | `floor(2π * 2^64)`. |
 | `PI_HALF_Q64` | const | `floor(π/2 * 2^64)`. |
-| `PI_Q32` | const | `floor(π * 2^32)`, the Q32.32 angle format of `FixedPoint::sincos_wide`. |
+| `PI_Q32` | const | `floor(π * 2^32)`, the Q32.32 angle format of `Fixed::sincos_wide`. |
 | `TWO_PI_Q32` | const | `floor(2π * 2^32)`. |
 | `exp_q64` | fn | `e^x` for `x` in Q64.64. |
 | `ln_q64` | fn | `ln(x)` for `x` in Q64.64; `None` when `x <= 0`. |

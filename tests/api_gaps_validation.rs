@@ -13,7 +13,7 @@
 //! References: `tests/data/api_gaps_refs.rs` from
 //! `scripts/generate_api_gap_refs.py` (exact sums of products, or mpmath at
 //! 120 digits). Inputs are dyadic with <= 8 fraction bits and |x| <= 8, exact
-//! on every format; each reference is parsed at the build's split, so it is
+//! on every format; each reference is parsed at the suite's split, so it is
 //! the correctly rounded result and every error below is in storage units.
 
 

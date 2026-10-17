@@ -1,11 +1,11 @@
-//! Q64.64 matrices for the realtime profile's matrix functions.
+//! Q64.64 matrices for the matrix functions of the i32 formats.
 //!
-//! On realtime the compute tier holds `2F` fractional bits in an i64 (16 at
-//! `GMATH_F = 8`), and scaling and squaring amplifies that resolution:
+//! On the i32 word the compute tier holds `2F` fractional bits in an i64 (16
+//! at `F = 8`), and scaling and squaring amplifies that resolution:
 //! `expm` of a norm-7 matrix was 8 units off at 8 fraction bits. The matrix
 //! functions therefore run on i128 values with 64 fractional bits there
 //! (40 to 56 guard bits over the compute tier across the gated splits), the
-//! width compact's compute tier already has. Inputs widen exactly; results are
+//! width the Q32.32 compute tier already has. Inputs widen exactly; results are
 //! rounded once, to the compute tier or to storage.
 //!
 //! Every sum of products is exact on the I256 accumulator (128 fractional

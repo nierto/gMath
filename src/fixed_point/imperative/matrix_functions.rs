@@ -1,8 +1,8 @@
 //! L1D: Matrix functions: exp, log, sqrt, pow.
 //!
 //! All operations run on a wide matrix internally and round once per output
-//! element at the very end. On every profile but realtime that is the compute
-//! tier (`ComputeMatrix`, `2 x FRAC_BITS` fractional bits); on realtime, whose
+//! element at the very end. On every storage word but i32 that is the compute
+//! tier (`ComputeMatrix`, `2F` fractional bits); on the i32 word, whose
 //! compute tier is only `2F` bits in an i64, it is a Q64.64 matrix
 //! (`WideMatrix`), 40 to 56 guard bits beyond the compute tier across the
 //! gated splits (0.6.3 ran realtime at `2F`: `expm` of a norm-7 matrix was 8
@@ -341,7 +341,7 @@ where
     // left is about 2^-(2F + 16) relative, small enough to survive
     // matrix_log's 2^s unscaling. A stop at one storage unit (2^-F) left
     // 2^-2F relative, 5 units in logm at 8 fraction bits; the older
-    // sqrt(quantum) stop (on realtime a fixed 2^-8) left 122 units at 24.
+    // sqrt(quantum) stop (at the i32 splits a fixed 2^-8) left 122 units at 24.
     let bits = F + 8;
 
     let mut y = a.copy();
@@ -399,7 +399,7 @@ where
     }
     // ... then until ||X|| < 2^-m: the 22-term series leaves ||X||^23 / 23,
     // amplified by the 2^s of the unscaling, which must stay below 2^-(F + 6):
-    // 22m >= F + 6 + s. m = 2 (the rule above) at realtime and compact splits;
+    // 22m >= F + 6 + s. m = 2 (the rule above) at the i32 splits and Q32.32;
     // 4 on Q64.64, 7 on Q128.128, 13 on Q256.256, where ||X|| < 0.25 alone
     // left the truncation far above one unit (before 0.6.4).
     let m = ((F + 6 + s + 21) / 22).max(2);

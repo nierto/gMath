@@ -723,7 +723,7 @@ impl I1024 {
     /// **ALGORITHM**: Grade-school multiplication with carry propagation
     /// **PRECISION**: Full 2048-bit result, no truncation
     /// **TIER N+1**: Enables error-less Q512.512 exp computation
-    /// **CRITICAL**: Fixes 32/77 → 70+/77 decimal precision for scientific profile
+    /// **CRITICAL**: Fixes 32/77 → 70+/77 decimal precision at Q256.256
     #[inline(always)]
     pub fn mul_to_i2048(&self, other: I1024) -> crate::fixed_point::I2048 {
         use crate::fixed_point::I2048;

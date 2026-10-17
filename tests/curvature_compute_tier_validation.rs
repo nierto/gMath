@@ -2,26 +2,26 @@
 //!
 //! References: `tests/data/curvature_compute_tier_refs.rs` from
 //! `scripts/generate_curvature_compute_tier_refs.py`: the SAME scheme the
-//! library runs (central differences with this build's step h = 2^-k for the
+//! library runs (central differences with this suite's step h = 2^-k for the
 //! metric partials and the Christoffel derivatives, exact inverse metric,
 //! exact contractions), so every error below is rounding, not the O(h^2)
 //! discretization error. The polynomial metric is exact at every point the
 //! scheme evaluates (exact rational references); the sphere and hyperbolic
 //! closed forms are mpmath at 300 digits. Each literal is parsed at the
-//! build's split and errors are in storage units (one unit = 2^-FRAC_BITS).
+//! suite's split and errors are in storage units (one unit = 2^-FRAC_BITS).
 //!
-//! Measured worst error in storage units over realtime at 8, 10, 12, 16, 20
-//! and 24 fraction bits, compact, embedded, balanced and scientific, 0.6.3
+//! Measured worst error in storage units over the i32 word at 8, 10, 12, 16,
+//! 20 and 24 fraction bits, Q32.32, Q64.64, Q128.128 and Q256.256, 0.6.3
 //! (storage-rounded symbols, differenced and multiplied by 2^(k-1)) -> 0.6.4
 //! (compute tier, one rounding):
 //!   poly christoffel                    1 -> 0
-//!   poly riemann / ricci   5 (F8) .. 1.0e25 (scientific) -> 0
-//!   poly scalar            4 (F10) .. 6.0e24 (scientific) -> 0
-//!   sphere riemann / ricci 1 (F10) .. 1.5e25 (scientific) -> 0
+//!   poly riemann / ricci   5 (F8) .. 1.0e25 (Q256.256) -> 0
+//!   poly scalar            4 (F10) .. 6.0e24 (Q256.256) -> 0
+//!   sphere riemann / ricci 1 (F10) .. 1.5e25 (Q256.256) -> 0
 //!   sphere / hyperbolic closed forms  1 -> 0
 //!   sectional (poly orthogonal, poly near-parallel, sphere): 73 .. 7.5e6 on
-//!     realtime, 1.9e9 compact, 8.2e18 embedded, 1.5e38 balanced, Err on
-//!     scientific -> 0, except 2 for the near-parallel pair at 8 fraction
+//!     i32, 1.9e9 Q32.32, 8.2e18 Q64.64, 1.5e38 Q128.128, Err at
+//!     Q256.256 -> 0, except 2 for the near-parallel pair at 8 fraction
 //!     bits (its denominator is 1.3 storage units there). Before 0.6.4 the
 //!     contraction was R^l_ijk u^i v^j v^k, zero in exact arithmetic: the
 //!     results were rounding noise, not the curvature.
@@ -194,8 +194,8 @@ macro_rules! suite {
                 check("hyperbolic closed forms", hyp, BOUND_CLOSED_FORMS);
             }
 
-            // Bounds: the measured worst over realtime at 8, 10, 12, 16, 20 and 24
-            // fraction bits, compact, embedded, balanced and scientific.
+            // Bounds: the measured worst over the i32 word at 8, 10, 12, 16, 20 and 24
+            // fraction bits, Q32.32, Q64.64, Q128.128 and Q256.256.
             const BOUND_POLY_CHRISTOFFEL: i128 = 0;
             const BOUND_POLY_RIEMANN: i128 = 0;
             const BOUND_POLY_RICCI: i128 = 0;

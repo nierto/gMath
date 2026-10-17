@@ -123,8 +123,7 @@ pub fn unpack_trits(data: &[u8], count: usize) -> Result<Vec<Trit>, OverflowDete
     Ok(trits)
 }
 
-// quantize_to_trits is profile-dependent and will be added
-// alongside the profile infrastructure in Phase 1 (Q32.32) and Phase 2 (Q16.16).
+// quantize_to_trits depends on the binary format and is not provided here.
 // For now, consumers can implement threshold-based quantization using
 // pack_trits() + their own threshold logic.
 

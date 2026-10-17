@@ -1,7 +1,7 @@
 //! Certified decimal interval arithmetic: the permanent gate.
 //!
-//! Profile-independent (`DecimalFixed` is an i128 scaled by `10^DECIMALS` on
-//! every profile), so every test here runs everywhere. Three properties:
+//! Format-independent (`DecimalFixed` is an i128 scaled by `10^DECIMALS`
+//! whatever binary format is in use), so every test here runs everywhere. Three properties:
 //! 1. Directed rounding: for point operands the interval is `[floor, ceil]`
 //!    of the exact result, the scalar (banker's) lies inside, and the two
 //!    endpoints are at most one unit in the last place apart. Negative
@@ -281,7 +281,7 @@ fn sqrt_pins() {
     let iv = I9::new(d9("4"), d9("9")).sqrt();
     assert_eq!(iv.lo(), d9("2"));
     assert_eq!(iv.hi(), d9("3"));
-    // the scalar engine (guard digits available at two places on every profile) lies inside
+    // the scalar engine (guard digits available at two places on every format) lies inside
     let s = p2("2").sqrt();
     assert_eq!(s.lo(), d2("1.41"));
     assert_eq!(s.hi(), d2("1.42"));

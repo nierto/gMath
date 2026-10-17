@@ -4,7 +4,7 @@
 //! library's rounding code (`2r` against the divisor on a floored quotient),
 //! plus literals and counts from an exact-rational model (Python `Fraction`;
 //! the model is described on each pin). No floats. `DecimalFixed` arithmetic
-//! is the same on every profile, so this suite is too.
+//! is the same on every format, so this suite is too.
 
 use g_math::fixed_point::{Currency, DecimalFixed, DecimalRounding, OverflowDetected};
 

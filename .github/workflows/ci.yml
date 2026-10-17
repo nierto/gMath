@@ -12,6 +12,8 @@
 #   (the range the suite gates, owner decision 2026-09-24).
 # edge-splits: the split-generic correctness gates at F = 2, 4, 6, 26, 28,
 #   30, where most tests cannot be meaningful (one unit is 1/16 at F = 4).
+# docs: rustdoc with warnings as errors (broken intra-doc links, stray HTML);
+#   the README and guide examples run as doc tests in full-suite.
 name: ci
 
 on:
@@ -31,6 +33,21 @@ jobs:
 
       - name: Full suite, every format
         run: cargo test --release --features serde --no-fail-fast
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (plain git - no external actions)
+        run: |
+          git init -q
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Documentation without warnings
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --features serde
 
   no-features:
     runs-on: ubuntu-latest

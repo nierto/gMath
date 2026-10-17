@@ -37,7 +37,7 @@
 //!
 //! **Where this sits.** An imperative-tier type beside `Fixed<S, F>`,
 //! `FixedVector<Fixed<S, F>>`, `FixedMatrix<Fixed<S, F>>` and `fused`: binary Q-format, fixed at the
-//! profile's storage tier, intermediates at the compute tier. It is not a
+//! format's storage tier, intermediates at the compute tier. It is not a
 //! FASC domain (no `StackValue` variant, no routing) and not UGOD-tiered
 //! (the imperative layer has no wider storage tier to promote into); on
 //! storage overflow it fails typed where the scalar operators wrap. See
@@ -93,7 +93,7 @@ where
 
 /// Directed quotient of two storage values: `(floor(a/b), ceil(a/b))` at the
 /// storage scale, computed from the truncating integer quotient and its
-/// remainder. Mirrors `fixed_divide`'s widening per profile.
+/// remainder. Mirrors `fixed_divide`'s widening per storage word.
 #[inline]
 fn directed_divide<S: Storage, const F: u32>(a: S, b: S) -> Result<(S, S), OverflowDetected>
 where
@@ -214,7 +214,7 @@ where
     /// `[lo, hi]`. Panics if `lo > hi`.
     #[inline]
     pub fn new(lo: Fixed<S, F>, hi: Fixed<S, F>) -> Self {
-        Self::try_new(lo, hi).expect("Interval::<Fixed<S, F>>::new: lo > hi")
+        Self::try_new(lo, hi).expect("Interval::new: lo > hi")
     }
 
     /// `[lo, hi]`, or `Err(InvalidInput)` if `lo > hi`.
@@ -244,7 +244,7 @@ where
     /// `hi - lo`. Panics if the width itself does not fit the storage tier.
     #[inline]
     pub fn width(self) -> Fixed<S, F> {
-        Fixed::from_raw(st_sub(self.hi.raw(), self.lo.raw()).expect("Interval::<Fixed<S, F>>::width: overflow"))
+        Fixed::from_raw(st_sub(self.hi.raw(), self.lo.raw()).expect("Interval::width: overflow"))
     }
 
     /// `lo == hi`.
@@ -353,7 +353,7 @@ where
     ///
     /// Panics if the slices differ in length.
     pub fn try_dot(a: &[Fixed<S, F>], b: &[Fixed<S, F>]) -> Result<Self, OverflowDetected> {
-        assert_eq!(a.len(), b.len(), "Interval::<Fixed<S, F>>::dot: length mismatch");
+        assert_eq!(a.len(), b.len(), "Interval::dot: length mismatch");
         let mut acc = compute_zero::<S, F>();
         for i in 0..a.len() {
             acc = Fixed::<S, F>::compute_checked_add(acc, S::mul_wide(a[i].raw(), b[i].raw()))?;
@@ -371,7 +371,7 @@ where
     ///
     /// Panics if the slices differ in length.
     pub fn try_dot_intervals(a: &[Interval<Fixed<S, F>>], b: &[Interval<Fixed<S, F>>]) -> Result<Self, OverflowDetected> {
-        assert_eq!(a.len(), b.len(), "Interval::<Fixed<S, F>>::dot_intervals: length mismatch");
+        assert_eq!(a.len(), b.len(), "Interval::dot_intervals: length mismatch");
         let mut lo_acc = compute_zero::<S, F>();
         let mut hi_acc = compute_zero::<S, F>();
         for i in 0..a.len() {
@@ -395,7 +395,7 @@ where
 
     /// Certified quadratic form `v^T M v` for point inputs, with one narrowing.
     ///
-    /// Every term `v_i m_ij v_j` is an exact triple product on the profile's
+    /// Every term `v_i m_ij v_j` is an exact triple product on the format's
     /// widest accumulator (the orient3d accumulator: `3W+3` bits and up) and
     /// the sum is exact, so the result is `[floor, ceil]` of ONE exact value:
     /// the width is at most 1 ulp, and exactly 0 when the value is
@@ -416,22 +416,22 @@ where
 
     /// Certified square root; panics on a negative lower endpoint or overflow.
     pub fn sqrt(self) -> Self {
-        self.try_sqrt().expect("Interval::<Fixed<S, F>>::sqrt: domain error or overflow")
+        self.try_sqrt().expect("Interval::sqrt: domain error or overflow")
     }
 
     /// Certified dot product; panics on overflow.
     pub fn dot(a: &[Fixed<S, F>], b: &[Fixed<S, F>]) -> Self {
-        Self::try_dot(a, b).expect("Interval::<Fixed<S, F>>::dot: overflow")
+        Self::try_dot(a, b).expect("Interval::dot: overflow")
     }
 
     /// Certified quadratic form; panics on overflow.
     pub fn quadratic_form(v: &FixedVector<Fixed<S, F>>, m: &FixedMatrix<Fixed<S, F>>) -> Self {
-        Self::try_quadratic_form(v, m).expect("Interval::<Fixed<S, F>>::quadratic_form: overflow")
+        Self::try_quadratic_form(v, m).expect("Interval::quadratic_form: overflow")
     }
 
     /// Certified dot product of interval vectors; panics on overflow.
     pub fn dot_intervals(a: &[Interval<Fixed<S, F>>], b: &[Interval<Fixed<S, F>>]) -> Self {
-        Self::try_dot_intervals(a, b).expect("Interval::<Fixed<S, F>>::dot_intervals: overflow")
+        Self::try_dot_intervals(a, b).expect("Interval::dot_intervals: overflow")
     }
 }
 

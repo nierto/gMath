@@ -29,7 +29,7 @@ macro_rules! suite {
                 FixedPoint::from_str(s)
             }
 
-            /// In-domain inputs valid for EVERY function under test on EVERY profile
+            /// In-domain inputs valid for EVERY function under test at EVERY format
             /// (|x| < 1 for the asin/acos/atanh subset; small enough for Q8.24).
             const UNIT_INTERVAL: &[&str] = &["0.5", "-0.5", "0.25", "-0.75", "0"];
             /// Inputs for the unrestricted functions (tan/atan/sinh/cosh/tanh/asinh).
@@ -57,7 +57,7 @@ macro_rules! suite {
                     assert_eq!(v.try_acosh().unwrap(), v.acosh(), "acosh({s})");
                 }
                 // tanh deep in saturation territory still matches the infallible twin
-                // (wide profiles resolve 1 - 2e-26; narrow ones round to exactly 1).
+                // (wide formats resolve 1 - 2e-26; narrow ones round to exactly 1).
                 let v = fp("30");
                 assert_eq!(v.try_tanh().unwrap(), v.tanh(), "tanh(30)");
             }
@@ -86,8 +86,8 @@ macro_rules! suite {
             fn asin_acos_boundaries_are_exact() {
                 // asin(±1) = ±π/2 via the boundary shortcut (no division by sqrt(0)).
                 //
-                // No decimal literal can serve as a sub-ulp π/2 reference on every
-                // profile (the parser caps at 76 fractional digits; scientific needs
+                // No decimal literal can serve as a sub-ulp π/2 reference at every
+                // format (the parser caps at 76 fractional digits; scientific needs
                 // 77+), so the numeric grounding is structural: acos(0) computes
                 // π/2 − atan(0) through the GENERAL branch — the same pi-half constant
                 // and the same single downscale — and must agree with the asin(1)
@@ -121,11 +121,11 @@ macro_rules! suite {
             #[test]
             fn overflow_is_loud_never_wrapped() {
                 // cosh(180) ≈ 3.7e77 exceeds even scientific Q256.256 (max ~5.8e76);
-                // every narrower profile overflows earlier still. The contract is a
+                // every narrower format overflows earlier still. The contract is a
                 // typed error — never a panic, never a wrapped value.
-                // 180 itself exceeds the coarsest realtime splits (+-128 at
-                // GMATH_FRAC_BITS=24); there x = 100 is used: cosh(100) ≈ 1.3e43 is far
-                // beyond every realtime range.
+                // 180 itself exceeds the coarsest i32 splits (+-128 at
+                // F = 24); there x = 100 is used: cosh(100) ≈ 1.3e43 is far
+                // beyond every i32 range.
                 let x = FixedPoint::try_from_str("180").unwrap_or_else(|_| fp("100"));
                 match x.try_cosh() {
                     Err(OverflowDetected::TierOverflow) => {}

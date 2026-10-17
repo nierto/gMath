@@ -6,13 +6,13 @@
 //! - **Exact** ([`orient2d`], [`orient3d`], [`incircle`], [`insphere`]):
 //!   each is the sign of a determinant of fixed degree in the input
 //!   coordinates, evaluated in exact integer arithmetic on an accumulator
-//!   wide enough for the worst case. The accumulator is chosen per profile
+//!   wide enough for the worst case. The accumulator is chosen per format
 //!   from the storage width (orient2d `2W+2` bits, orient3d `3W+3`, incircle
 //!   `4W+5`, insphere `5W+6`), never hand-tuned per predicate, and every
 //!   multiply asserts its bit-length budget before it runs, so a violation is
 //!   loud rather than wrong. The circle predicates are not compiled on the
-//!   scientific profile: at `W = 512` they need 2053 and 2566 bits against the
-//!   2048 available. If a consumer appears, the route is the arbitrary-precision
+//!   I512 word (Q256.256): at `W = 512` they need 2053 and 2566 bits against the
+//!   2048 available. If a use appears, the route is the arbitrary-precision
 //!   type behind the `infinite-precision` gate, not a wider hand-rolled type.
 //!   Returns are a trichotomy, [`Sign`], never a `bool`: the exact-zero case
 //!   (collinear, coplanar, cocircular, cospherical) is the whole reason exact
@@ -164,8 +164,8 @@ where
 ///
 /// The sign of the lifted determinant `| a-d, |a-d|^2 ; b-d, |b-d|^2 ; c-d,
 /// |c-d|^2 |`, expanded along the lift column so that every product pairs a
-/// degree-2 lift with a degree-2 minor. Not available on the scientific
-/// profile (see the module documentation).
+/// degree-2 lift with a degree-2 minor. Not available on the I512 word
+/// (see the module documentation).
 pub fn incircle<S: CircleStorage, const F: u32>(a: [Fixed<S, F>; 2], b: [Fixed<S, F>; 2], c: [Fixed<S, F>; 2], d: [Fixed<S, F>; 2]) -> Sign
 where
     Fixed<S, F>: FixedNum<Storage = S>,
@@ -182,7 +182,7 @@ where
 ///
 /// The sign of the lifted 4 x 4 determinant, expanded along the lift column so
 /// that every product pairs a degree-2 lift with a degree-3 minor. Not
-/// available on the scientific profile (see the module documentation).
+/// available on the I512 word (see the module documentation).
 pub fn insphere<S: CircleStorage, const F: u32>(
     a: [Fixed<S, F>; 3],
     b: [Fixed<S, F>; 3],

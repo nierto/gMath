@@ -1,9 +1,11 @@
 # Width as a type: one crate, every precision, no build profile
 
-**STATUS: IN PROGRESS, branch `width-types`, built on 0.6.5 (c81d3f0).**
-Phase 0 done (0.6.5 published). Phases 1 and 2 implemented: see the phase
-table in section 10 and the notes under sections 4 and 5. Target release: 0.7.0. `main` keeps shipping 0.6.x until this
-branch passes the acceptance gates in section 11.
+**STATUS: IMPLEMENTED, branch `width-types`, released as 0.7.0.** Every
+phase in the table of section 10 is done (phase 7.5, the inference
+extension, in `docs/design/INFERENCE_EXTENSION.md`). Sections 1 to 9
+describe the 0.6.x starting point and the plan as written; the phase notes
+record what was built and measured. Migration for users:
+`docs/UPGRADING_0.7.md`.
 
 ## 1. Problem
 
@@ -708,7 +710,8 @@ generic code, while new tests exercise all widths in one build.
 | 5 | FASC generic (`LazyExpr<T>`, `StackValue<T>`, per-format evaluators), canonical API. IMPLEMENTED (5a format trait, 5b typed value + registry, 5c matrix layer + scalar string paths) | differential gate on the FASC corpus |
 | 6 | DecimalFixed compute tier by D (6a); serialization v2 (6b). IMPLEMENTED | decimal gates per D, legacy-read tests |
 | 7 | Remove profiles, `frac_config`, `table_format`; tests generic over width; CI one build per toolchain. IMPLEMENTED (7a library, 7b tests, 7c one build, 2026-10-16) | full gate set in one build |
-| 8 | Docs (README, PUBLIC_API regen, CHANGELOG, CONTRACT, ROADMAP), consumer upgrade notes, 0.7.0 | release checklist |
+| 7.5 | The inference module (`tq19`) moved to the separate crate `g_math_inference`; `inference` feature and `rayon` removed from the core; `Compute<T>` and the wide integers exported. IMPLEMENTED (2026-10-17) | extension tests equal to the moved ones; differential of the extension against 0.6.7 at six builds; core full suite |
+| 8 | Docs (README, guides, PUBLIC_API regen, CHANGELOG, CONTRACT, ROADMAP, crate docs, panic texts), upgrade guide `docs/UPGRADING_0.7.md`, 0.7.0. IMPLEMENTED (2026-10-17) | doc tests of every guide example, release checklist |
 
 ## 11. Acceptance gates
 

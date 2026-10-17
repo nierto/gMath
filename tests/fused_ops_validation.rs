@@ -26,7 +26,7 @@ macro_rules! suite {
             fn tight() -> FixedPoint {
                 if BITS == 32 { fp("0.01") } else if BITS == 64 { fp("0.0001") } else { fp("0.000000001") }
             }
-            /// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+            /// `k` storage units (k * 2^-FRAC_BITS) for the suite's split.
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
@@ -35,7 +35,7 @@ macro_rules! suite {
             /// `t`, raised to `k` storage units where the split cannot resolve it.
             fn at_least(t: FixedPoint, k: i32) -> FixedPoint { if ulps(k) > t { ulps(k) } else { t } }
             /// The 0.001 tolerance of the approximate checks: 0 raw at
-            /// GMATH_FRAC_BITS=8, so raised to 1 unit (an exactness check) there.
+            /// F = 8, so raised to 1 unit (an exactness check) there.
             fn milli() -> FixedPoint { at_least(fp("0.001"), 1) }
 
             #[allow(dead_code)]
@@ -328,7 +328,7 @@ macro_rules! suite {
             // ============================================================================
             // softmax_mix — fused softmax + value mix (attention hot path)
             //
-            // Oracle: softmax_mix vs exact-rational softmax-dot-V across profiles, covering
+            // Oracle: softmax_mix vs exact-rational softmax-dot-V across formats, covering
             // long-n uniform and near-one-hot cases. References from mpmath at 60-digit
             // precision.
             // ============================================================================
@@ -349,7 +349,7 @@ macro_rules! suite {
 
             #[test]
             fn test_softmax_mix_mpmath_distinct_scores() {
-                // scores = [0, 0.5, 1.0, 1.5] (all dyadic → profile-independent reference)
+                // scores = [0, 0.5, 1.0, 1.5] (all dyadic → format-independent reference)
                 let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5")];
                 let rows = mix_rows();
                 let (out, _w) = fused::softmax_mix(&scores, &as_refs(&rows)).unwrap();
@@ -379,7 +379,7 @@ macro_rules! suite {
                 // value rows — a pure rational oracle needing no mpmath. Rows alternate
                 // M±A so the mean is exactly M (dyadic). Long n is where the naive path's
                 // storage-tier weight floor (2^-FRAC_BITS) collapses 1/n to zero; the fused
-                // path must still return M on every profile.
+                // path must still return M on every format.
                 let m = [fp("0.5"), fp("-1.5")];
                 let a = [fp("0.25"), fp("2")];
                 for &n in &[2usize, 100, 3000] {
@@ -449,7 +449,7 @@ macro_rules! suite {
                 // |d/dx x^(-1/2)| = 0.5 * 0.1^(-3/2) = 15.81 amplifies that to <= 7.91
                 // units, plus <= 0.5 unit output rounding and <= 0.5 unit reference
                 // rounding: |diff| <= 8.91 units, so < 9 units (measured 7 at
-                // GMATH_FRAC_BITS=8 and 10). Binding only below GMATH_FRAC_BITS=10,
+                // F = 8 and 10). Binding only below F = 10,
                 // where tight() = 0.01 is under 9 units (3 at 8).
                 assert_fp(
                     fp("0.1").inv_sqrt(),
@@ -464,8 +464,8 @@ macro_rules! suite {
                 // Inputs are exact on every split. Each factor is rounded (<= 0.5 unit),
                 // so the product is off by <= 0.5 * (sqrt(x) + 1/sqrt(x)) + 0.5 units
                 // (product rounding): 5.55 units at x = 100, the worst case here, so
-                // < 6 units (measured 4 at x = 100, GMATH_FRAC_BITS=8 and 10). Binding
-                // only below GMATH_FRAC_BITS=10, where tight() = 0.01 is under 6 units.
+                // < 6 units (measured 4 at x = 100, F = 8 and 10). Binding
+                // only below F = 10, where tight() = 0.01 is under 6 units.
                 for s in ["0.5", "2", "3", "7.75", "100"] {
                     let x = fp(s);
                     let product = x.inv_sqrt() * x.sqrt();
@@ -476,8 +476,8 @@ macro_rules! suite {
             #[test]
             fn test_inv_sqrt_matches_unfused_path() {
                 // Same engines, one fewer storage rounding: must agree within tight().
-                // 1000 exceeds the range of the coarsest realtime splits (+-512 at
-                // GMATH_FRAC_BITS=22): skip inputs the build cannot represent.
+                // 1000 exceeds the range of the coarsest i32 splits (+-512 at
+                // F = 22): skip inputs the format cannot represent.
                 for s in ["0.5", "2", "42", "1000"] {
                     let Ok(x) = FixedPoint::try_from_str(s) else { continue };
                     let unfused = fp("1") / x.sqrt();
@@ -523,7 +523,7 @@ macro_rules! suite {
                 // length (1/inv = 4.11 units); each n = x * inv rounds (<= 0.5 unit,
                 // squared: 2 * sum|n| * 0.5 = 1.83 units) and each n * n rounds
                 // (4 * 0.5 = 2 units): <= 7.94 units, so < 8 units (measured 3 at
-                // GMATH_FRAC_BITS=8, 2 at 10). Binding only below GMATH_FRAC_BITS=10,
+                // F = 8, 2 at 10). Binding only below F = 10,
                 // where tight() = 0.01 is under 8 units.
                 assert_fp(sum_sq, fp("1"), at_least(tight(), 8), "normalized length");
             }
@@ -541,10 +541,9 @@ macro_rules! suite {
                 // representable. Pins that the wide reciprocal cannot wrap for any
                 // storage-derived input (contract: fail loud, never wrap).
                 let x = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::from_i64(1));
-                // 2^(F/2) for the build's split (realtime follows GMATH_FRAC_BITS: 256 at
-                // Q16.16, 32 at Q22.10); an odd split gives sqrt(2) * 2^((F-1)/2)
+                // 2^(F/2) for the suite's split (256 at Q16.16, 32 at Q22.10); an odd split gives sqrt(2) * 2^((F-1)/2)
                 let f = FRAC_BITS;
-                // At coarse-range splits (GMATH_FRAC_BITS >= 21) 2^(F/2) exceeds the
+                // At coarse-range splits (F >= 21) 2^(F/2) exceeds the
                 // storage range 2^(31-F): the same contract then demands a loud error.
                 if FixedPoint::try_from_int(1 << ((f + 1) / 2)).is_err() {
                     match x.try_inv_sqrt() {

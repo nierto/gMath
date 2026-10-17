@@ -312,7 +312,7 @@ where
         narrow_vector(&x)
     }
 
-    /// Determinant: det(A) = product(L[i][i])^2, formed at the compute tier
+    /// Determinant: det(A) = product(L\[i\]\[i\])^2, formed at the compute tier
     /// and rounded once (before 0.6.4 a chain of storage products).
     pub fn determinant(&self) -> Fixed<S, F> {
         let n = self.l.rows();
@@ -440,7 +440,7 @@ pub struct EigenDecomposition<T: FixedNum> {
 ///
 /// **Algorithm:**
 /// 1. Cyclic-by-row sweeps: every (p,q) with p<q whose entry exceeds its bound
-///    is zeroed by a rotation (and A[q][p] by symmetry).
+///    is zeroed by a rotation (and A\[q\]\[p\] by symmetry).
 /// 2. The rotation angle comes from the quadratic formula, no trig: `t = tan θ`
 ///    is the smaller root, formed without squaring τ when |τ| > 1. The diagonal
 ///    is updated in Rutishauser's form `a_pp + t a_pq`, `a_qq - t a_pq`.
@@ -456,7 +456,7 @@ pub struct EigenDecomposition<T: FixedNum> {
 /// the compute tier through every rotation (coefficients too), each updated
 /// entry rounded once at the compute tier from its exact value, and rounded
 /// to storage once at the end. Measured against mpmath on well-separated
-/// spectra: eigenvalues and eigenvectors within one unit on every profile and
+/// spectra: eigenvalues and eigenvectors within one unit at every format and
 /// split (0.6.3 carried them at storage between rotations).
 ///
 /// **Errors:** `Err(PrecisionLimit)` if neither criterion is met within 100
@@ -688,7 +688,7 @@ pub struct SVDDecomposition<T: FixedNum> {
 /// coefficients and the Wilkinson shift too), each transformed entry rounded
 /// once at the compute tier from its exact value, and rounded to storage once
 /// at the end. Measured against mpmath on well-separated spectra: singular
-/// values and vectors within one unit on every profile and split (0.6.3
+/// values and vectors within one unit at every format and split (0.6.3
 /// carried them at storage and converged to `2^-(2F/3)` relative).
 ///
 /// **Convergence:** a superdiagonal entry is negligible within `2^-(3F/2)`
@@ -1083,7 +1083,7 @@ pub struct SchurDecomposition<T: FixedNum> {
 /// Hessenberg reduction and the whole iteration (Householder factors, rotation
 /// coefficients and shifts too), each transformed entry rounded once at the
 /// compute tier from its exact value, and rounded to storage once at the end.
-/// Measured against exact eigenvalues: within one unit on every profile and
+/// Measured against exact eigenvalues: within one unit at every format and
 /// split (0.6.3 carried H at storage and converged to `2^-(2F/3)` relative).
 /// A block that has not deflated after 30 iterations and in which no
 /// subdiagonal entry has reached a new minimum for five iterations has

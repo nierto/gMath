@@ -5,7 +5,7 @@
 //! - `DecimalFixed::sinhcosh`                (imperative decimal)
 //! - `canonical::evaluate_sinhcosh`          (FASC surface, domain routing)
 //!
-//! ULP references are reused from the per-profile `fasc_ulp_refs_q{16,32}.rs`
+//! ULP references are reused from the per-format `fasc_ulp_refs_q{16,32}.rs`
 //! datasets (generated at mpmath 50-digit precision). Sinhcosh must produce
 //! the same storage-tier values as separate `sinh` + `cosh` — its benefit is
 //! throughput (one exp-pair vs two) and error correlation, not different
@@ -125,7 +125,7 @@ macro_rules! realtime_suite {
             /// try_sinhcosh must return Err on inputs large enough that cosh overflows storage.
             #[test]
             fn binary_try_sinhcosh_overflow_gate() {
-                // cosh(22) ~ 1.8e9 exceeds every realtime split's range (Q16.16:
+                // cosh(22) ~ 1.8e9 exceeds every i32 split's range (Q16.16:
                 // 32768, Q22.10: 2^21) while 22 itself fits all of them.
                 let big = FixedPoint::from_int(22);
                 let res = big.try_sinhcosh();

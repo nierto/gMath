@@ -18,9 +18,9 @@
 //! result under any mode is `floor_raw` or `floor_raw+1`, derived from
 //! `(floor, cls, sign, mode)`.
 //!
-//! Balanced profile only: `DecimalFixed<28>` needs a compute dp wider than 28
-//! for guard digits (balanced = 77). Run with:
-//!   rm -rf target/debug/incremental/
+//! Instantiated at Q128.128 only: in 0.6.x it was bound to the balanced
+//! profile, whose compute dp of 77 gave `DecimalFixed<28>` its guard digits.
+//! Run with:
 //!   cargo test --test decimal_canonical decimal_contract_validation:: -- --nocapture
 
 
@@ -571,7 +571,7 @@ macro_rules! suite {
             // Routes Jack's inputs through gmath_parse::<FixedPoint>(...).f() -> evaluate. The fractal
             // router picks the domain per input (integers -> binary, decimals -> decimal),
             // so this exercises the real canonical experience, not just the decimal engine.
-            // FASC materializes decimal output at DECIMAL_STORAGE_MAX_DP-2 (=36 on balanced);
+            // FASC materializes decimal output at DECIMAL_STORAGE_MAX_DP-2 (=36 at Q128.128);
             // we downscale its Display string to the golden scale S. S<=28 keeps >=8 guard
             // digits so the extra rounding step is harmless; scale 37 is skipped.
             // ============================================================================

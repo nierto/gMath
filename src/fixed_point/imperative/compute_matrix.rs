@@ -138,7 +138,7 @@ where
             let row: Vec<Compute<Fixed<S, F>>> = (0..self.cols).map(|m| self.get(r, m)).collect();
             let col = other.col_vec(c);
             kernels::exact_sub_dot_compute::<Fixed<S, F>>(compute_zero::<S, F>(), &row, &col.iter().map(|v| Fixed::<S, F>::compute_negate(*v)).collect::<Vec<_>>())
-                .expect("ComputeMatrix::<Fixed<S, F>>::mat_mul: entry exceeds the compute tier")
+                .expect("ComputeMatrix::mat_mul: entry exceeds the compute tier")
         })
     }
 
@@ -156,7 +156,7 @@ where
         (0..self.rows).map(|r| {
             let row: Vec<Compute<Fixed<S, F>>> = (0..self.cols).map(|c| self.get(r, c)).collect();
             kernels::exact_sub_dot_compute::<Fixed<S, F>>(compute_zero::<S, F>(), &row, &neg)
-                .expect("ComputeMatrix::<Fixed<S, F>>::mul_vector_compute: entry exceeds the compute tier")
+                .expect("ComputeMatrix::mul_vector_compute: entry exceeds the compute tier")
         }).collect()
     }
 

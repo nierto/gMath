@@ -126,7 +126,7 @@ macro_rules! suite {
                     worst[g] = worst[g].max(err);
                 }
                 // small rows: before 0.6.4 Err(DivisionByZero) on realtime and the
-                // Taylor branch's missing theta^2 terms on the wide profiles (746 units
+                // Taylor branch's missing theta^2 terms at the wide formats (746 units
                 // at |omega| = 8.8e-6 on Q64.64, over 10^6 on Q128.128)
                 check("se3 exp small", worst[0], 1);
                 check("se3 exp moderate", worst[1], 0);

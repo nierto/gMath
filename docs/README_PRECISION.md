@@ -1,41 +1,41 @@
-# Precision, profiles & build
+# Formats, precision & build
 
-Storage widths, the fractional-bit split, the rounding rules per domain, how
-accuracy is validated, and how to build.
+The formats, their storage and compute words, the rounding rules per domain,
+how accuracy is validated, and how to build.
 
-## Profiles
+## Formats
 
-Storage width is a compile-time choice via the `GMATH_PROFILE` environment
-variable (default: `embedded`), or the equivalent Cargo feature.
+A format is a type, `Fixed<S, F>`: a storage word `S` and `F` fraction bits.
+Every format is compiled into every build and any number of them can be used
+in one program (0.6.x chose one per build through `GMATH_PROFILE`; see
+[UPGRADING_0.7.md](UPGRADING_0.7.md)).
 
-| Profile | Format | Storage | Compute | ~Decimal digits | Intended use |
-| ------- | ------ | ------- | ------- | --------------- | ------------ |
-| `realtime` | Q16.16 | i32 | i64 | 4 | ML inference, real-time |
-| `compact` | Q32.32 | i64 | i128 | 9 | mobile, game logic |
-| `embedded` | Q64.64 | i128 | I256 | 19 | IoT, financial |
-| `balanced` | Q128.128 | I256 | I512 | 38 | general services |
-| `scientific` | Q256.256 | I512 | I1024 | 77 | research |
+| Type | Storage | Compute | Fraction bits | ~Decimal digits | Range |
+| ---- | ------- | ------- | ------------- | --------------- | ----- |
+| `Fixed<i32, F>`, e.g. `Q16_16` | i32 | i64 | any F in 2..=30 | 0.3 F | ±2^(31 - F) |
+| `Q32_32` = `Fixed<i64, 32>` | i64 | i128 | 32 | 9 | ±2^31 |
+| `Q64_64` = `Fixed<i128, 64>` | i128 | I256 | 64 | 19 | ±2^63 |
+| `Q128_128` = `Fixed<I256, 128>` | I256 | I512 | 128 | 38 | ±2^127 |
+| `Q256_256` = `Fixed<I512, 256>` | I512 | I1024 | 256 | 77 | ±2^255 |
 
-```bash
-cargo build                           # embedded (default)
-GMATH_PROFILE=scientific cargo build  # 77-digit precision
+The 32-bit word moves its binary point anywhere from Q30.2 to Q2.30:
+`Fixed<i32, 10>` (Q22.10, range about ±2 million, 3 digits) and
+`Fixed<i32, 24>` (Q8.24, range ±128, 7 digits) are as available as Q16.16.
+Generic code takes the format as a parameter (`T: FixedNum`, or
+`Fixed<S, F>` with `S: Storage`).
+
+```rust
+use g_math::fixed_point::{Fixed, Q16_16, Q256_256};
+
+let a = Fixed::<i32, 10>::from_str("1234.5");   // Q22.10
+let b = Q16_16::from_str("1234.5");
+let c = Q256_256::from_str("1234.5");
+assert_eq!(a.raw(), 1_264_128);                   // 1234.5 * 2^10, exact
+assert_eq!(b.raw(), 80_904_192);                  // 1234.5 * 2^16, exact
+assert!(c.sqrt().to_string().starts_with("35.1354521815"));
 ```
 
-**Custom integer/fraction split (realtime only).** The realtime profile can move
-the binary point inside the 32-bit storage word via `GMATH_FRAC_BITS` (valid range
-2–30 fractional bits); the other profiles use fixed splits.
-
-```bash
-GMATH_FRAC_BITS=10 GMATH_PROFILE=realtime cargo build   # Q22.10: wider range, 3 digits
-GMATH_FRAC_BITS=24 GMATH_PROFILE=realtime cargo build   # Q8.24:  narrow range, 7 digits
-```
-
-**Switching profiles** compiles different code paths via `cfg` flags. Clear the
-incremental cache first, or stale artifacts can crash:
-
-```bash
-rm -rf target/debug/incremental/
-```
+A clean release build compiles every format in about 35 seconds.
 
 Lookup tables are checked in, so a default build is fast. `--features rebuild-tables`
 regenerates them from `build.rs` (pure-Rust generation: π via Machin's formula,
@@ -63,9 +63,15 @@ Accuracy is defined by the test suite, not slogans:
 
 - Reference values are generated with mpmath at 50–250 digit precision and
   embedded in the tests as exact strings, never computed with floats.
-- Transcendentals are validated pointwise against those references on every
-  profile; the wide-tier strategy means the final rounding step selects the
-  nearest representable value for the storage format in the measured cases.
+- Transcendentals are validated pointwise against those references at seven
+  formats (Q22.10, Q16.16, Q8.24, Q32.32, Q64.64, Q128.128, Q256.256, and the
+  32-bit splits 8, 12, 20 in CI), over the whole range including the top,
+  with no tolerance: every result is the correctly rounded value. A fast
+  engine decides when its result is clear of a rounding boundary by more
+  than its measured error bound, and a sure path at about 1000 bits decides
+  otherwise.
+- Canonical chains (random expression trees of the 17 functions and the four
+  operations) and the closed-form geometry maps are gated the same way.
 - Linear algebra, manifolds, Lie groups, ODE, and tensor tests combine structural
   checks (PA=LU, QᵀQ=I, exp/log roundtrips) with concrete mpmath-validated
   numerical comparisons.
@@ -85,7 +91,7 @@ cargo test --release
   `gmath(...)` router sidesteps this by classifying each literal and routing it to
   a domain where it *is* exact (decimal for `0.3`, symbolic for `1/3`) and
   preserving the exact value in a shadow; the limit applies only when the binary
-  domain is pinned (the imperative `FixedPoint` path or a forced binary mode).
+  domain is pinned (the imperative `Fixed` path or a forced binary mode).
 - **Conditioning.** Error in a solved system scales with the condition number of
   the matrix. An ill-conditioned system (e.g. a Hilbert matrix) amplifies input
   error by orders of magnitude in any finite precision; iterative refinement
@@ -98,15 +104,15 @@ cargo test --release
 | Flag | Effect |
 | ---- | ------ |
 | `infinite-precision` | BigInt tier for the symbolic rational domain (pulls in `num-bigint`) |
-| `serde` | `Serialize`/`Deserialize` for FixedPoint, vectors, matrices, tensors |
+| `serde` | `Serialize`/`Deserialize` for `Fixed`, vectors, matrices, tensors and manifold points (as bytes) |
 | `rebuild-tables` | regenerate lookup tables from `build.rs` |
-| `realtime` / `compact` / `embedded` / `balanced` / `scientific` | select profile via Cargo feature instead of `GMATH_PROFILE`. The profile is one choice per build: enabling two is a build error (0.6.5), and Cargo enables the union of what every crate in the build asks for, so libraries should leave the choice to the final binary |
-| `legacy-tests` | compile legacy test suites |
 
-No feature gates around core functionality: all domains, transcendentals, wide
-integers (I256/I512/I1024), and tiered overflow are always compiled.
+There is no feature per format and none around core functionality: every
+format, domain, transcendental, wide integer (I256 to I2048) and the tiered
+overflow are always compiled. The ternary inference kernels are the separate
+crate `g_math_inference`.
 
-The full determinism and cross-profile contract is in **[CONTRACT.md](../CONTRACT.md)**.
+The full determinism and cross-format contract is in **[CONTRACT.md](../CONTRACT.md)**.
 
 ## Disclaimer
 

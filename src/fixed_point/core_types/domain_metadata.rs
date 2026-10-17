@@ -10,7 +10,7 @@
 pub enum DomainType {
     /// Binary fixed-point (Q64.64)
     Binary = 0,
-    /// Decimal fixed-point (DecimalFixed<N>)
+    /// Decimal fixed-point (`DecimalFixed<N>`)
     Decimal = 1,
     /// Balanced ternary (geometric operations)
     Ternary = 2,
@@ -68,11 +68,11 @@ pub enum ExactnessType {
 /// BIT ALLOCATION (32 bits total):
 /// - [0-2]:   DomainType (3 bits = 8 domains)
 /// - [3-5]:   ExactnessType (3 bits = 8 types)
-/// - [6-8]:   TierLevel (3 bits = 8 tiers, 0-7)
-/// - [9-11]:  DecimalPlaces (3 bits)
-/// - [12-19]: ConfidenceScore (8 bits = 0-255)
-/// - [20-27]: PatternId (8 bits = 256 patterns)
-/// - [28-31]: Reserved (4 bits)
+/// - \[6-8\]:   TierLevel (3 bits = 8 tiers, 0-7)
+/// - \[9-11\]:  DecimalPlaces (3 bits)
+/// - \[12-19\]: ConfidenceScore (8 bits = 0-255)
+/// - \[20-27\]: PatternId (8 bits = 256 patterns)
+/// - \[28-31\]: Reserved (4 bits)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShadowMetadata {
     packed: u32,

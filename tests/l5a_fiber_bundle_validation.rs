@@ -9,7 +9,7 @@
 //! 6. Bundle curvature: flat connection → zero curvature
 //! 7. Bundle curvature: non-trivial connection → nonzero curvature
 //!
-//! All tests run on the active profile (embedded/balanced/scientific).
+//! All tests run at every format the suite macro instantiates.
 
 
 macro_rules! suite {

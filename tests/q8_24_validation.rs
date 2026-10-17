@@ -1,4 +1,4 @@
-//! Q8.24 realtime profile validation — mpmath 50-digit references.
+//! Q8.24 validation (the i32 word at F = 24): mpmath 50-digit references.
 //!
 //! Run: cargo test --test transcendentals q8_24_validation:: -- --nocapture
 //!

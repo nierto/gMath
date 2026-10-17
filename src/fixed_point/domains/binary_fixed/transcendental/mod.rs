@@ -5,22 +5,22 @@
 //! Dedicated engines: `exp`, `ln`, `sqrt`, `sin_cos`, `atan`. (pow is composed as exp(y·ln x) at the compute tier: the dead dedicated engine was removed in 0.5.0.)
 //! FASC-composed: `tan`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `atan2`.
 //!
-//! | Profile    | Format    | Decimals | ULP |
+//! | Storage    | Format    | Decimals | ULP |
 //! |------------|-----------|----------|-----|
-//! | Embedded   | Q64.64    | 19       | 0   |
-//! | Balanced   | Q128.128  | 38       | 0   |
-//! | Scientific | Q256.256  | 77       | 0   |
+//! | i128       | Q64.64    | 19       | 0   |
+//! | I256       | Q128.128  | 38       | 0   |
+//! | I512       | Q256.256  | 77       | 0   |
 //!
 //! Strategy: compute at tier N+1 (double precision), downscale with rounding.
 //!
 //! Naming. A function called `*_q64_64_native`, `*_q128_128_native`,
 //! `*_q256_256_native` or `*_q512_512_native` is an engine: it takes and
-//! returns values in that one format, is compiled on every profile and
-//! returns the same integers on every profile (`engine_identity_tests`
+//! returns values in that one format, is compiled in every build and
+//! returns the same integers in every build (`engine_identity_tests`
 //! below pins a digest of each). The atan engines exist twice at Q128.128 and
 //! Q256.256: `_native` carries enough series terms for the format's own
 //! precision, `_compute` carries the terms needed when the format is the
-//! compute tier of the storage format half its width. The profile-bound
+//! compute tier of the storage format half its width. The 0.6.x profile-bound
 //! wrappers (`*_binary_iN`, `*_compute_tier_iN`, `pi_half_iN`) are gone since
 //! 0.7.0: a caller names the engine of the format it computes in.
 
@@ -44,8 +44,8 @@ pub mod mpf;
 mod engine_identity_tests {
     //! One name, one meaning: every engine returns the same integers in every
     //! build. Each digest below was recorded once and must hold on all
-    //! profiles; the accuracy of each engine is established separately by the
-    //! mpmath gates of the profile that computes with it.
+    //! builds; the accuracy of each engine is established separately by the
+    //! mpmath gates of the format that computes with it.
     use super::atan_tier_n_plus_1::*;
     use super::exp_tier_n_plus_1::*;
     use super::ln_tier_n_plus_1::*;

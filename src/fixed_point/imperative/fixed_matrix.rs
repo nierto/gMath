@@ -1,4 +1,4 @@
-//! FixedMatrix: row-major matrix of FixedPoint values.
+//! FixedMatrix: row-major matrix of `Fixed<S, F>` values.
 //!
 //! All matrix arithmetic uses compute-tier accumulation for precision:
 //! matrix multiply, matrix-vector multiply accumulate at tier N+1 and
@@ -13,7 +13,7 @@ use crate::fixed_point::width::Storage;
 /// A row-major matrix of fixed-point values of one format.
 ///
 /// Backed by a flat `Vec<T>`. Not `Copy` due to heap allocation. The element
-/// type defaults to `FixedPoint`, the build profile's format.
+/// type is the caller's format, usually a `Fixed<S, F>`.
 #[derive(Clone, Debug)]
 pub struct FixedMatrix<T> {
     rows: usize,
@@ -82,7 +82,7 @@ where
     /// Panics if `values.len() != rows * cols`.
     pub fn from_slice(rows: usize, cols: usize, values: &[Fixed<S, F>]) -> Self {
         assert_eq!(values.len(), rows * cols,
-            "FixedMatrix::<Fixed<S, F>>::from_slice: expected {} elements, got {}", rows * cols, values.len());
+            "FixedMatrix::from_slice: expected {} elements, got {}", rows * cols, values.len());
         Self {
             rows,
             cols,
@@ -90,7 +90,7 @@ where
         }
     }
 
-    /// Create from a function: M[i][j] = f(i, j).
+    /// Create from a function: M\[i\]\[j\] = f(i, j).
     pub fn from_fn(rows: usize, cols: usize, f: impl Fn(usize, usize) -> Fixed<S, F>) -> Self {
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
@@ -125,7 +125,7 @@ impl<S: Storage, const F: u32> FixedMatrix<Fixed<S, F>>
 where
     Fixed<S, F>: FixedNum<Storage = S>,
 {
-    /// Transpose: Aᵀ[i][j] = A[j][i].
+    /// Transpose: Aᵀ\[i\]\[j\] = A\[j\]\[i\].
     pub fn transpose(&self) -> Self {
         let mut data = Vec::with_capacity(self.rows * self.cols);
         for c in 0..self.cols {
@@ -140,7 +140,7 @@ where
     ///
     /// Panics if matrix is not square.
     pub fn trace(&self) -> Fixed<S, F> {
-        assert_eq!(self.rows, self.cols, "FixedMatrix::<Fixed<S, F>>::trace: matrix must be square");
+        assert_eq!(self.rows, self.cols, "FixedMatrix::trace: matrix must be square");
         let mut sum = Fixed::ZERO;
         for i in 0..self.rows {
             sum += self.get(i, i);
@@ -156,14 +156,14 @@ where
 
     /// Extract a row as a FixedVector<Fixed<S, F>>.
     pub fn row(&self, r: usize) -> FixedVector<Fixed<S, F>> {
-        assert!(r < self.rows, "FixedMatrix::<Fixed<S, F>>::row: index out of bounds");
+        assert!(r < self.rows, "FixedMatrix::row: index out of bounds");
         let start = r * self.cols;
         FixedVector::<Fixed<S, F>>::from_slice(&self.data[start..start + self.cols])
     }
 
     /// Extract a column as a FixedVector<Fixed<S, F>>.
     pub fn col(&self, c: usize) -> FixedVector<Fixed<S, F>> {
-        assert!(c < self.cols, "FixedMatrix::<Fixed<S, F>>::col: index out of bounds");
+        assert!(c < self.cols, "FixedMatrix::col: index out of bounds");
         let mut v = FixedVector::<Fixed<S, F>>::new(self.rows);
         for r in 0..self.rows {
             v[r] = self.get(r, c);
@@ -188,7 +188,7 @@ where
     /// Panics if `self.cols() != v.len()`.
     pub fn mul_vector(&self, v: &FixedVector<Fixed<S, F>>) -> FixedVector<Fixed<S, F>> {
         assert_eq!(self.cols, v.len(),
-            "FixedMatrix::<Fixed<S, F>>::mul_vector: cols ({}) != vector len ({})", self.cols, v.len());
+            "FixedMatrix::mul_vector: cols ({}) != vector len ({})", self.cols, v.len());
         let v_raw: Vec<S> = v.as_slice().iter().map(|fp| fp.raw()).collect();
         let mut result = FixedVector::<Fixed<S, F>>::new(self.rows);
         for r in 0..self.rows {
@@ -235,7 +235,7 @@ where
     Fixed<S, F>: FixedNum<Storage = S>,
 {
     assert_eq!(a.cols, b.rows,
-        "FixedMatrix::<Fixed<S, F>>::mul: A.cols ({}) != B.rows ({})", a.cols, b.rows);
+        "FixedMatrix::mul: A.cols ({}) != B.rows ({})", a.cols, b.rows);
     let k = a.cols;
     // Pre-extract B columns as raw storage for efficient repeated access
     let b_cols_raw: Vec<Vec<S>> = (0..b.cols)
@@ -266,7 +266,7 @@ where
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::<Fixed<S, F>>::add: dimension mismatch");
+            "FixedMatrix::add: dimension mismatch");
         Self {
             rows: self.rows,
             cols: self.cols,
@@ -283,7 +283,7 @@ where
     type Output = FixedMatrix<Fixed<S, F>>;
     fn add(self, rhs: &'b FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>> {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::<Fixed<S, F>>::add: dimension mismatch");
+            "FixedMatrix::add: dimension mismatch");
         FixedMatrix::<Fixed<S, F>> {
             rows: self.rows,
             cols: self.cols,
@@ -300,7 +300,7 @@ where
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::<Fixed<S, F>>::sub: dimension mismatch");
+            "FixedMatrix::sub: dimension mismatch");
         Self {
             rows: self.rows,
             cols: self.cols,
@@ -317,7 +317,7 @@ where
     type Output = FixedMatrix<Fixed<S, F>>;
     fn sub(self, rhs: &'b FixedMatrix<Fixed<S, F>>) -> FixedMatrix<Fixed<S, F>> {
         assert_eq!((self.rows, self.cols), (rhs.rows, rhs.cols),
-            "FixedMatrix::<Fixed<S, F>>::sub: dimension mismatch");
+            "FixedMatrix::sub: dimension mismatch");
         FixedMatrix::<Fixed<S, F>> {
             rows: self.rows,
             cols: self.cols,
@@ -413,7 +413,7 @@ where
     /// Panics if the submatrix extends beyond the matrix bounds.
     pub fn submatrix(&self, row: usize, col: usize, rows: usize, cols: usize) -> Self {
         assert!(row + rows <= self.rows && col + cols <= self.cols,
-            "FixedMatrix::<Fixed<S, F>>::submatrix: extends beyond bounds");
+            "FixedMatrix::submatrix: extends beyond bounds");
         Self::from_fn(rows, cols, |r, c| self.get(row + r, col + c))
     }
 
@@ -422,7 +422,7 @@ where
     /// Panics if the submatrix extends beyond the matrix bounds.
     pub fn set_submatrix(&mut self, row: usize, col: usize, sub: &FixedMatrix<Fixed<S, F>>) {
         assert!(row + sub.rows <= self.rows && col + sub.cols <= self.cols,
-            "FixedMatrix::<Fixed<S, F>>::set_submatrix: extends beyond bounds");
+            "FixedMatrix::set_submatrix: extends beyond bounds");
         for r in 0..sub.rows {
             for c in 0..sub.cols {
                 self.set(row + r, col + c, sub.get(r, c));
@@ -454,7 +454,7 @@ where
     /// Swap rows `i` and `j` in place. O(cols) time, zero allocation.
     pub fn swap_rows(&mut self, i: usize, j: usize) {
         if i == j { return; }
-        assert!(i < self.rows && j < self.rows, "FixedMatrix::<Fixed<S, F>>::swap_rows: index out of bounds");
+        assert!(i < self.rows && j < self.rows, "FixedMatrix::swap_rows: index out of bounds");
         for c in 0..self.cols {
             self.data.swap(i * self.cols + c, j * self.cols + c);
         }

@@ -47,7 +47,7 @@ where
     /// tier, the triple product and the sum above it) and rounded to storage
     /// once. Panics if an entry exceeds storage.
     pub fn reconstruct(&self) -> FixedMatrix<Fixed<S, F>> {
-        const OVERFLOW: &str = "TruncatedSVD::<Fixed<S, F>>::reconstruct: entry exceeds storage";
+        const OVERFLOW: &str = "TruncatedSVD::reconstruct: entry exceeds storage";
         let m = self.u.rows();
         let n = self.vt.cols();
         let k = self.sigma.len();
@@ -153,7 +153,7 @@ where
 pub struct TuckerDecomposition<T> {
     /// Core tensor of shape (r₁, r₂, ..., r_N) where r_n ≤ d_n.
     pub core: Tensor<T>,
-    /// Factor matrices: factors[n] is d_n × r_n.
+    /// Factor matrices: factors\[n\] is d_n × r_n.
     pub factors: Vec<FixedMatrix<T>>,
 }
 
@@ -177,7 +177,7 @@ where
             }
             to_storage_tensor(&data, &shape)
         };
-        chain().expect("TuckerDecomposition::<Fixed<S, F>>::reconstruct: entry exceeds the compute tier or storage")
+        chain().expect("TuckerDecomposition::reconstruct: entry exceeds the compute tier or storage")
     }
 
     /// Compression ratio: original_elements / (core + factor) elements.
@@ -193,7 +193,7 @@ where
 
 /// Compute Tucker decomposition via HOSVD.
 ///
-/// `ranks[n]` specifies the truncation rank for mode n. If ranks[n] >= d_n,
+/// `ranks[n]` specifies the truncation rank for mode n. If ranks\[n\] >= d_n,
 /// that mode is not compressed. The core `T ×₁ U₁ᵀ ... ×_N U_Nᵀ` stays at the
 /// compute tier across modes and is rounded to storage once.
 pub fn tucker_decompose<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, ranks: &[usize]) -> Result<TuckerDecomposition<Fixed<S, F>>, OverflowDetected>
@@ -235,7 +235,7 @@ where
 pub struct CPDecomposition<T> {
     /// Component weights (R values).
     pub weights: FixedVector<T>,
-    /// Factor matrices: factors[n] is d_n × R (columns are the rank-1 vectors).
+    /// Factor matrices: factors\[n\] is d_n × R (columns are the rank-1 vectors).
     pub factors: Vec<FixedMatrix<T>>,
 }
 
@@ -260,7 +260,7 @@ where
             add_rank1_to_flat(&mut data, shape, &self.factors, r, w);
         }
 
-        to_storage_tensor(&data, shape).expect("CPDecomposition::<Fixed<S, F>>::reconstruct: entry exceeds storage")
+        to_storage_tensor(&data, shape).expect("CPDecomposition::reconstruct: entry exceeds storage")
     }
 }
 
@@ -579,7 +579,7 @@ where
         let mut val = Fixed::<S, F>::upscale_to_compute(weight.raw());
         for n in 0..ndim {
             val = kernels::compute_product::<Fixed<S, F>>(val, Fixed::<S, F>::upscale_to_compute(factors[n].get(indices[n], r).raw()))
-                .expect("CPDecomposition::<Fixed<S, F>>::reconstruct: term exceeds the compute tier");
+                .expect("CPDecomposition::reconstruct: term exceeds the compute tier");
         }
         data[flat] = Fixed::<S, F>::compute_add(data[flat], val);
     }

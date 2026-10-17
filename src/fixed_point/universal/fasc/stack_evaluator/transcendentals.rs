@@ -26,7 +26,7 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::{RationalN
 /// on it (cosh/tanh adds, sinh halving) would produce a plausible-wrong
 /// value. The old `== compute_ceiling()` check missed the q64_64/q128_128
 /// engines' `i128::MAX`-at-storage-scale sentinel (0.5.0 item 2 find);
-/// the shared per-profile predicate covers every engine.
+/// the shared per-format predicate covers every engine.
 fn exp_at_compute_ceiling<T: FascFormat>(v: &StackValue<T>) -> bool {
     matches!(v, StackValue::BinaryCompute(_, val, _) if T::exp_sentinel_reached(val))
 }
@@ -225,7 +225,7 @@ impl<T: FascFormat> StackEvaluator<T> {
     }
 
     /// PATH: FASC (canonical) composed-transcendental machinery. Domain-agnostic
-    /// despite the legacy `binary` ancestry: the imperative `FixedPoint` /
+    /// despite the legacy `binary` ancestry: the imperative `Fixed` /
     /// `DecimalFixed` types do NOT use these helpers (they call the compute-tier
     /// engines directly).
     ///
@@ -425,7 +425,7 @@ impl<T: FascFormat> StackEvaluator<T> {
         let binary_val = self.to_binary_storage(&value)?;
         let one_binary = self.to_binary_storage(&self.make_binary_int(1))?;
 
-        // Check |x| >= 1 (profile-generic comparison since T::Storage implements Ord)
+        // Check |x| >= 1 (format-generic comparison since T::Storage implements Ord)
         let neg_one = -one_binary;
         if binary_val >= one_binary || binary_val <= neg_one {
             return Err(OverflowDetected::DomainError);
@@ -660,12 +660,12 @@ impl<T: FascFormat> StackEvaluator<T> {
     /// num/den → Q-format T::Storage: nearest, ties toward +∞, CHECKED
     /// (0.5.0 item 1): the old per-arm `(num << F) / den` shifted i128
     /// before any range check: a symbolic 1e20 coerced to binary on
-    /// embedded wrapped mod 2^64 and produced a plausible WRONG value.
+    /// the embedded profile wrapped mod 2^64 and produced a plausible WRONG value.
     fn rational_i128_to_storage_checked(num: i128, den: i128) -> Result<T::Storage, OverflowDetected> {
         T::rational_i128_to_storage_checked(num, den)
     }
 
-    /// Convert any StackValue<T> to profile-specific T::Storage format
+    /// Convert any StackValue<T> to the format's T::Storage
     pub(crate) fn to_binary_storage(&self, value: &StackValue<T>) -> Result<T::Storage, OverflowDetected> {
         match value {
             StackValue::Binary(_, val, _) => Ok(*val),
@@ -782,15 +782,15 @@ impl<T: FascFormat> StackEvaluator<T> {
         }
     }
 
-    /// Convert any StackValue<T> to Ternary domain using UGOD profile-aware tier selection
+    /// Convert any StackValue<T> to Ternary domain using UGOD format-aware tier selection
     ///
     /// Uses rational-based conversion: extract exact rational (num/den), then compute
-    /// `num * 3^frac_trits / den` at the profile-appropriate ternary tier.
+    /// `num * 3^frac_trits / den` at the format-appropriate ternary tier.
     ///
-    /// **UGOD STRATEGY**: Profile determines tier (matching convert_to_binary pattern):
-    ///   - Embedded → Tier 3 TQ40.40 (i128 arithmetic, 40 frac trits)
-    ///   - Balanced → Tier 4 TQ80.80 (I256 arithmetic, 80 frac trits)
-    ///   - Scientific → Tier 5 TQ160.160 (I512 arithmetic, 160 frac trits)
+    /// **UGOD STRATEGY**: The format determines the tier (matching convert_to_binary pattern):
+    ///   - Q64.64 → Tier 3 TQ40.40 (i128 arithmetic, 40 frac trits)
+    ///   - Q128.128 → Tier 4 TQ80.80 (I256 arithmetic, 80 frac trits)
+    ///   - Q256.256 → Tier 5 TQ160.160 (I512 arithmetic, 160 frac trits)
     /// (num * scale) / den rounded to nearest, ties toward +INF: the
     /// documented ternary conversion-boundary rule (0.5.0 unification;
     /// contract §5). All arms run wide (I256/I512) since the 0.5.0 tier
@@ -810,16 +810,16 @@ impl<T: FascFormat> StackEvaluator<T> {
                     let (t, bs) = wide?;
                     return Ok(StackValue::Ternary(t, bs, shadow));
                 }
-                // Other tiers: i128 extraction (sufficient for embedded/balanced)
+                // Other tiers: i128 extraction (sufficient for Q64.64 and Q128.128)
                 let num = rational.numerator_i128().ok_or(OverflowDetected::Overflow)?;
                 let den = rational.denominator_i128().ok_or(OverflowDetected::Overflow)?;
                 if den == 0 {
                     return Err(OverflowDetected::DivisionByZero);
                 }
                 match tier {
-                    // Tiers 1-3 — i128-storable raws at the PROFILE's own
+                    // Tiers 1-3: i128-storable raws at the FORMAT's own
                     // scale (3^10 / 3^20 / 3^40). Pre-resize the narrow
-                    // profiles borrowed the tier-3 arm, whose raws no longer
+                    // formats borrowed the tier-3 arm, whose raws no longer
                     // fit their storage (value·3^40 exceeds i64 for any
                     // |value| ≥ 1). The num·scale product can exceed i128
                     // (binary raws reach 2^64), so the multiply-divide runs
@@ -850,8 +850,8 @@ impl<T: FascFormat> StackEvaluator<T> {
                             return Err(OverflowDetected::TierOverflow);
                         }
                         let stored = q.as_i128();
-                        // Checked narrowing — the bare to_binary_storage cast
-                        // silently wrapped tier-3 raws on narrow profiles
+                        // Checked narrowing: the bare to_binary_storage cast
+                        // silently wrapped tier-3 raws on narrow formats
                         // (same class as the 0.4.33 ternary_to_storage fix).
                         let (t, bs) = T::ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(tier, TernaryRaw::Small(stored))?
@@ -937,7 +937,7 @@ impl<T: FascFormat> StackEvaluator<T> {
                         }
                         let stored = q.as_i128();
                         // Checked narrowing (see tier-3 arm above): on
-                        // realtime/compact a tier-3 raw beyond i32/i64 is a
+                        // the i32 and i64 words a tier-3 raw beyond i32/i64 is a
                         // loud TierOverflow, never a wrap.
                         let (t, bs) = T::ternary_to_storage(
                             &UniversalTernaryFixed::from_tier_raw(3, TernaryRaw::Small(stored))?

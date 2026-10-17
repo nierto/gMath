@@ -445,14 +445,14 @@ where
     /// Compose two Möbius transformations: (self ∘ other)(z) = self(other(z)).
     ///
     /// Composition corresponds to matrix multiplication:
-    ///   [[a,b],[c,d]] * [[a',b'],[c',d']]
+    ///   \[\[a,b\],\[c,d\]\] * \[\[a',b'\],\[c',d'\]\]
     /// Each coefficient is an exact pair sum at the compute tier, rounded once.
     ///
     /// Panics if a coefficient exceeds storage.
     pub fn compose(&self, other: &Moebius<Fixed<S, F>>) -> Moebius<Fixed<S, F>> {
         let pair = |p: Fixed<S, F>, q: Fixed<S, F>, r: Fixed<S, F>, s: Fixed<S, F>| {
             let sum = exact_signed_sum(&[(p.raw(), q.raw()), (r.raw(), s.raw())], &[])
-                .expect("Moebius::<Fixed<S, F>>::compose: coefficient exceeds the compute tier");
+                .expect("Moebius::compose: coefficient exceeds the compute tier");
             Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(sum))
         };
         Moebius {
@@ -480,11 +480,11 @@ where
     /// exceeds storage.
     pub fn determinant(&self) -> Fixed<S, F> {
         let det = exact_signed_sum(&[(self.a.raw(), self.d.raw())], &[(self.b.raw(), self.c.raw())])
-            .expect("Moebius::<Fixed<S, F>>::determinant exceeds the compute tier");
+            .expect("Moebius::determinant exceeds the compute tier");
         Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(det))
     }
 
-    /// Convert to the corresponding 2×2 projective matrix [[a,b],[c,d]].
+    /// Convert to the corresponding 2×2 projective matrix \[\[a,b\],\[c,d\]\].
     pub fn to_matrix(&self) -> FixedMatrix<Fixed<S, F>> {
         FixedMatrix::<Fixed<S, F>>::from_slice(2, 2, &[self.a, self.b, self.c, self.d])
     }
@@ -578,7 +578,7 @@ where
     pub fn compose(&self, other: &MoebiusComplex<Fixed<S, F>>) -> MoebiusComplex<Fixed<S, F>> {
         let term = |p: Complex<S, F>, q: Complex<S, F>, r: Complex<S, F>, s: Complex<S, F>| {
             let (re, im) = complex_mul_add_exact(p, q, r, s)
-                .expect("MoebiusComplex::<Fixed<S, F>>::compose: coefficient exceeds the compute tier");
+                .expect("MoebiusComplex::compose: coefficient exceeds the compute tier");
             (Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(re)), Fixed::from_raw(kernels::round_to_storage::<Fixed<S, F>>(im)))
         };
         MoebiusComplex {

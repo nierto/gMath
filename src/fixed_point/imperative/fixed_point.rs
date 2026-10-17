@@ -63,7 +63,7 @@ impl<S: Copy, const F: u32> Fixed<S, F> {
     /// View a slice of values as their raw storage integers, without copying.
     #[inline]
     pub fn raw_slice(values: &[Self]) -> &[S] {
-        // SAFETY: `FixedPoint` is `repr(transparent)` over `S`:
+        // SAFETY: `Fixed` is `repr(transparent)` over `S`:
         // same size, alignment and validity, so the slice layouts are equal.
         unsafe { std::slice::from_raw_parts(values.as_ptr() as *const S, values.len()) }
     }
@@ -108,18 +108,18 @@ where
 
     /// Create from an integer value.
     ///
-    /// Panics when `v` is outside the profile's integer range, which only the
-    /// realtime profile can reach (`|v| >= 2^(31 - GMATH_FRAC_BITS)`: 32768 at
+    /// Panics when `v` is outside the format's integer range, which only the
+    /// i32 formats can reach (`|v| >= 2^(31 - F)`: 32768 at
     /// Q16.16, 128 at Q8.24). Before 0.6.4 the shift wrapped silently.
     /// [`try_from_int`](Self::try_from_int) returns `Err(TierOverflow)` instead.
     #[inline]
     pub fn from_int(v: i32) -> Self {
-        Self::try_from_int(v).expect("FixedPoint::from_int: value outside the profile's range")
+        Self::try_from_int(v).expect("Fixed::from_int: value outside the format's range")
     }
 
     /// Create from an integer value, `Err(TierOverflow)` outside the range.
     ///
-    /// Only the realtime profile can refuse: every i32 fits the wider ones.
+    /// Only the i32 formats can refuse: every i32 fits the wider words.
     #[inline]
     pub fn try_from_int(v: i32) -> Result<Self, OverflowDetected> {
         <Self as FixedNum>::try_from_int(v).map(|raw| Self { raw })
@@ -129,20 +129,20 @@ where
     /// count need not fit the storage range), panics if the product does not.
     pub(crate) fn mul_count(self, n: usize) -> Self {
         let c = Self::compute_mul_div_int(Self::upscale_to_compute(self.raw), n as i64, 1)
-            .expect("FixedPoint::mul_count: product exceeds the compute tier");
-        Self { raw: Self::downscale_to_storage(c).expect("FixedPoint::mul_count: product exceeds storage") }
+            .expect("Fixed::mul_count: product exceeds the compute tier");
+        Self { raw: Self::downscale_to_storage(c).expect("Fixed::mul_count: product exceeds storage") }
     }
 
     /// `self / n` for a count or dimension `n > 0`: the storage division when
     /// `n` fits the storage range (bit-identical to `self / from_int(n)`),
-    /// the compute tier when it does not (a realtime count past 2^(31 - F)).
+    /// the compute tier when it does not (an i32-format count past 2^(31 - F)).
     pub(crate) fn div_count(self, n: usize) -> Self {
         match i32::try_from(n).ok().and_then(|n| Self::try_from_int(n).ok()) {
             Some(nf) => self / nf,
             None => {
                 let c = Self::compute_mul_div_int(Self::upscale_to_compute(self.raw), 1, n as i64)
-                    .expect("FixedPoint::div_count: n > 0");
-                Self { raw: Self::downscale_to_storage(c).expect("FixedPoint::div_count: quotient fits storage") }
+                    .expect("Fixed::div_count: n > 0");
+                Self { raw: Self::downscale_to_storage(c).expect("Fixed::div_count: quotient fits storage") }
             }
         }
     }
@@ -150,11 +150,11 @@ where
     /// Extract the integer part (floor toward negative infinity).
     ///
     /// Panics when the floor is outside the i32 range (`|x| >= 2^31`, reachable
-    /// on every profile but realtime); the cast wrapped silently before 0.6.4.
+    /// on every storage word but i32); the cast wrapped silently before 0.6.4.
     /// [`try_to_int`](Self::try_to_int) returns `Err(TierOverflow)` instead.
     #[inline]
     pub fn to_int(self) -> i32 {
-        self.try_to_int().expect("FixedPoint::to_int: integer part outside the i32 range")
+        self.try_to_int().expect("Fixed::to_int: integer part outside the i32 range")
     }
 
     /// The integer part (floor toward negative infinity), `Err(TierOverflow)`
@@ -186,19 +186,19 @@ where
     // f32/f64 conversions (user-convenience boundary only)
     // ========================================================================
 
-    /// Create from an f32 value, truncated toward zero to the profile's raw step.
+    /// Create from an f32 value, truncated toward zero to the format's raw step.
     ///
     /// Reads the IEEE 754 bits; no float arithmetic is performed. Panics on NaN,
-    /// infinity, or a value outside the profile's range; see
+    /// infinity, or a value outside the format's range; see
     /// [`try_from_f32`](Self::try_from_f32) for the fallible form.
     pub fn from_f32(v: f32) -> Self {
-        Self::try_from_f32(v).unwrap_or_else(|e| panic!("FixedPoint::from_f32: {}", Self::float_input_error(e)))
+        Self::try_from_f32(v).unwrap_or_else(|e| panic!("Fixed::from_f32: {}", Self::float_input_error(e)))
     }
 
     /// Create from an f32 value like `from_f32`, returning an error instead of panicking.
     ///
-    /// Truncates toward zero to the profile's raw step. `Err(InvalidInput)` for
-    /// NaN, `Err(TierOverflow)` for infinity or a value outside the profile's
+    /// Truncates toward zero to the format's raw step. `Err(InvalidInput)` for
+    /// NaN, `Err(TierOverflow)` for infinity or a value outside the format's
     /// range.
     pub fn try_from_f32(v: f32) -> Result<Self, OverflowDetected> {
         let bits = v.to_bits();
@@ -217,19 +217,19 @@ where
         Ok(Self { raw: <Self as FixedNum>::truncated_raw(mantissa, exp_offset + F as i32, negative)? })
     }
 
-    /// Create from an f64 value, truncated toward zero to the profile's raw step.
+    /// Create from an f64 value, truncated toward zero to the format's raw step.
     ///
     /// Reads the IEEE 754 bits; no float arithmetic is performed. Panics on NaN,
-    /// infinity, or a value outside the profile's range; see
+    /// infinity, or a value outside the format's range; see
     /// [`try_from_f64`](Self::try_from_f64) for the fallible form.
     pub fn from_f64(v: f64) -> Self {
-        Self::try_from_f64(v).unwrap_or_else(|e| panic!("FixedPoint::from_f64: {}", Self::float_input_error(e)))
+        Self::try_from_f64(v).unwrap_or_else(|e| panic!("Fixed::from_f64: {}", Self::float_input_error(e)))
     }
 
     /// Create from an f64 value like `from_f64`, returning an error instead of panicking.
     ///
-    /// Truncates toward zero to the profile's raw step. `Err(InvalidInput)` for
-    /// NaN, `Err(TierOverflow)` for infinity or a value outside the profile's
+    /// Truncates toward zero to the format's raw step. `Err(InvalidInput)` for
+    /// NaN, `Err(TierOverflow)` for infinity or a value outside the format's
     /// range.
     pub fn try_from_f64(v: f64) -> Result<Self, OverflowDetected> {
         let bits = v.to_bits();
@@ -251,14 +251,14 @@ where
     fn float_input_error(e: OverflowDetected) -> &'static str {
         match e {
             OverflowDetected::InvalidInput => "NaN",
-            _ => "infinity or value outside the profile's range",
+            _ => "infinity or value outside the format's range",
         }
     }
 
     /// Convert to f32: exact when the raw value fits 24 bits, else nearest-even.
     ///
     /// Below f32's normal range the result is subnormal or zero, and beyond its
-    /// range (scientific profile only) it is infinite. The f32 is assembled from
+    /// range (Q256.256 only) it is infinite. The f32 is assembled from
     /// the raw integer's bits; no float arithmetic is performed.
     ///
     /// For display and interop only: never decode a value for further
@@ -269,9 +269,9 @@ where
 
     /// Convert to f64: exact when the raw value fits 53 bits, else nearest-even.
     ///
-    /// Exact for every realtime value and for compact values below 2^21 in
+    /// Exact for every value of an i32 format and for Q32.32 values below 2^21 in
     /// magnitude, and exact conversions round trip:
-    /// `FixedPoint::from_f64(x.to_f64()) == x`. The f64 is assembled from the
+    /// `Fixed::from_f64(x.to_f64()) == x`. The f64 is assembled from the
     /// raw integer's bits; no float arithmetic is performed.
     ///
     /// Before 0.6.3 this printed a truncated decimal string and parsed it;
@@ -304,14 +304,6 @@ where
     #[inline]
     fn compute_divide_direct(a: Compute<Self>, b: Compute<Self>) -> Compute<Self> {
         Self::compute_divide(a, b).expect("division by zero in transcendental composition")
-    }
-
-    /// Upscale self.raw to compute tier, call engine, downscale result.
-    #[inline]
-    fn direct_unary<E: FnOnce(Compute<Self>) -> Compute<Self>>(self, f: E) -> Self {
-        let compute = Self::upscale_to_compute(self.raw);
-        let result = f(compute);
-        Self { raw: Self::downscale_to_storage(result).expect("transcendental overflow") }
     }
 
     /// Round a compute-tier result to storage when the engine's error cannot
@@ -358,7 +350,7 @@ where
     /// stays on its engine, 6.5 us against 147 us).
     const EXACT_SQRT: bool = S::BITS <= 256;
 
-    /// The engines' relative error bound in compute units, log2: the realtime
+    /// The engines' relative error bound in compute units, log2: the i32
     /// engines run the Q64.64 engines and round once to 2F bits (measured
     /// within half a unit at F = 6..28, sin and cos up to 2^20 included); the
     /// wider ones carry a few units relative (measured up to 2^4 for exp).
@@ -367,7 +359,7 @@ where
     pub(crate) fn engine_rel_bits() -> u32 { if S::BITS == 32 { 1 } else { 6 } }
 
     /// The extra margin of sin and cos: their error grows with the argument
-    /// on the wide engines, not on the realtime ones.
+    /// on the wide engines, not on the i32 ones.
     #[inline]
     fn trig_extra(self) -> u32 { if S::BITS == 32 { 0 } else { self.int_bits() + 4 } }
 
@@ -386,42 +378,34 @@ where
         (m.shr_bits(2 * F) + <Compute<Self> as WideInt>::one()).bit_length()
     }
 
-    /// Fallible version of direct_unary.
-    #[inline]
-    fn try_direct_unary<E: FnOnce(Compute<Self>) -> Compute<Self>>(self, f: E) -> Result<Self, OverflowDetected> {
-        let compute = Self::upscale_to_compute(self.raw);
-        let result = f(compute);
-        Ok(Self { raw: Self::downscale_to_storage(result)? })
-    }
-
     /// e^x
-    pub fn exp(self) -> Self { self.try_exp().expect("transcendental overflow") }
+    pub fn exp(self) -> Self { self.try_exp().expect("Fixed::exp") }
     /// ln(x), x > 0
-    pub fn ln(self) -> Self { self.try_ln().expect("transcendental overflow") }
+    pub fn ln(self) -> Self { self.try_ln().expect("Fixed::ln") }
     /// sqrt(x), x >= 0
-    pub fn sqrt(self) -> Self { self.try_sqrt().expect("transcendental overflow") }
+    pub fn sqrt(self) -> Self { self.try_sqrt().expect("Fixed::sqrt") }
     /// sin(x)
-    pub fn sin(self) -> Self { self.try_sin().expect("transcendental overflow") }
+    pub fn sin(self) -> Self { self.try_sin().expect("Fixed::sin") }
     /// cos(x)
-    pub fn cos(self) -> Self { self.try_cos().expect("transcendental overflow") }
+    pub fn cos(self) -> Self { self.try_cos().expect("Fixed::cos") }
     /// Fused (sin(x), cos(x)): single range reduction, ~2× faster than separate calls.
     pub fn sincos(self) -> (Self, Self) {
         self.try_sincos().expect("sincos: overflow or domain error")
     }
     /// tan(x) = sin(x) / cos(x): direct composition, no FASC
-    pub fn tan(self) -> Self { self.try_tan().expect("tan overflow") }
+    pub fn tan(self) -> Self { self.try_tan().expect("Fixed::tan") }
     /// atan(x)
-    pub fn atan(self) -> Self { self.try_atan().expect("transcendental overflow") }
+    pub fn atan(self) -> Self { self.try_atan().expect("Fixed::atan") }
     /// asin(x) = atan(x / sqrt(1 - x^2)), |x| <= 1: direct composition
-    pub fn asin(self) -> Self { self.try_asin().expect("asin overflow") }
+    pub fn asin(self) -> Self { self.try_asin().expect("Fixed::asin") }
     /// acos(x) = pi/2 - asin(x), |x| <= 1: direct composition
-    pub fn acos(self) -> Self { self.try_acos().expect("acos overflow") }
+    pub fn acos(self) -> Self { self.try_acos().expect("Fixed::acos") }
     /// sinh(x) = (exp(x) - exp(-x)) / 2, correctly rounded (panics where the
     /// result leaves storage; `try_sinh` returns the error)
-    pub fn sinh(self) -> Self { self.try_sinh().expect("sinh overflow") }
+    pub fn sinh(self) -> Self { self.try_sinh().expect("Fixed::sinh") }
     /// cosh(x) = (exp(x) + exp(-x)) / 2, correctly rounded (panics where the
     /// result leaves storage; `try_cosh` returns the error)
-    pub fn cosh(self) -> Self { self.try_cosh().expect("cosh overflow") }
+    pub fn cosh(self) -> Self { self.try_cosh().expect("Fixed::cosh") }
     /// Fused (sinh(x), cosh(x)): single shared exp-pair evaluation at compute tier.
     ///
     /// ~2× faster than separate `sinh` + `cosh` (2 exp calls instead of 4).
@@ -432,13 +416,13 @@ where
         self.try_sinhcosh().expect("sinhcosh: overflow or domain error")
     }
     /// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1): direct composition
-    pub fn tanh(self) -> Self { self.try_tanh().expect("tanh overflow") }
+    pub fn tanh(self) -> Self { self.try_tanh().expect("Fixed::tanh") }
     /// asinh(x) = ln(x + sqrt(x^2 + 1)): direct composition
-    pub fn asinh(self) -> Self { self.try_asinh().expect("asinh overflow") }
+    pub fn asinh(self) -> Self { self.try_asinh().expect("Fixed::asinh") }
     /// acosh(x) = ln(x + sqrt(x^2 - 1)), x >= 1: direct composition
-    pub fn acosh(self) -> Self { self.try_acosh().expect("acosh overflow") }
+    pub fn acosh(self) -> Self { self.try_acosh().expect("Fixed::acosh") }
     /// atanh(x) = ln((1+x)/(1-x)) / 2, |x| < 1: direct composition
-    pub fn atanh(self) -> Self { self.try_atanh().expect("atanh overflow") }
+    pub fn atanh(self) -> Self { self.try_atanh().expect("Fixed::atanh") }
 
     /// `x^y` for a positive base: the engine composition `exp(y ln x)`,
     /// decided by the sure path when it lands near a rounding boundary (the
@@ -464,17 +448,17 @@ where
 
     /// x^y = exp(y * ln(x)), correctly rounded for a positive base
     pub fn pow(self, exponent: Self) -> Self {
-        if let Some(r) = self.pow_positive_base(exponent) { return r.expect("pow overflow"); }
+        if let Some(r) = self.pow_positive_base(exponent) { return r.expect("Fixed::pow"); }
         let xc = Self::upscale_to_compute(self.raw);
         let yc = Self::upscale_to_compute(exponent.raw);
         let ln_x = Self::direct_ln(xc);
         let y_ln_x = Self::compute_multiply(yc, ln_x);
-        Self { raw: Self::downscale_to_storage(Self::direct_exp(y_ln_x)).expect("pow overflow") }
+        Self { raw: Self::downscale_to_storage(Self::direct_exp(y_ln_x)).expect("Fixed::pow: result outside the format") }
     }
 
     /// atan2(self=y, x): direct binary engine
     pub fn atan2(self, x: Self) -> Self {
-        self.atan2_settled(x).expect("atan2 overflow")
+        self.atan2_settled(x).expect("Fixed::atan2")
     }
 
     /// atan2 by the engine, decided by the sure path near a rounding
@@ -647,7 +631,7 @@ where
     }
     /// Fallible cosh(x) = (exp(x) + exp(-x)) / 2: `Err(TierOverflow)` when
     /// the result exceeds the storage tier (a ceiling exp means cosh already
-    /// has; the checked add alone cannot see it on wide profiles).
+    /// has; the checked add alone cannot see it on wide formats).
     pub fn try_cosh(self) -> Result<Self, OverflowDetected> {
         let c = Self::upscale_to_compute(self.raw);
         let ep = Self::direct_exp(c);
@@ -756,7 +740,7 @@ where
     ///
     /// Panics where [`try_from_str`](Self::try_from_str) returns an error.
     pub fn from_str(s: &str) -> Self {
-        Self::try_from_str(s).expect("FixedPoint::from_str: parse failed")
+        Self::try_from_str(s).expect("Fixed::from_str: parse failed")
     }
     /// Parse from a string without panicking.
     ///
@@ -844,12 +828,12 @@ impl<const F: u32> Fixed<i32, F> {
     ///
     /// The angle is a raw i64 in **Q32.32 fixed-point format** (32 integer bits,
     /// 32 fractional bits). This gives ±2.1 billion integer range regardless of
-    /// the profile's FRAC_BITS, covering all practical RoPE frequencies.
+    /// the format's F, covering all practical RoPE frequencies.
     ///
     /// Identical to [`sincos_wide_q64`](Self::sincos_wide_q64) of the angle
     /// shifted to Q64.64. Output sin/cos always fits in [-1, 1].
     pub fn sincos_wide(angle_q32_32: i64) -> (Self, Self) {
-        // Fixed Q32.32→Q64.64 upscale (always 32, independent of profile FRAC_BITS)
+        // Fixed Q32.32→Q64.64 upscale (always 32, independent of the format's F)
         Self::sincos_wide_q64((angle_q32_32 as i128) << 32)
     }
 
@@ -875,12 +859,12 @@ impl Fixed<i64, 32> {
     ///
     /// The angle is a raw i64 in **Q32.32 fixed-point format** (32 integer bits,
     /// 32 fractional bits). This gives ±2.1 billion integer range regardless of
-    /// the profile's FRAC_BITS, covering all practical RoPE frequencies.
+    /// the format's F, covering all practical RoPE frequencies.
     ///
     /// Identical to [`sincos_wide_q64`](Self::sincos_wide_q64) of the angle
     /// shifted to Q64.64. Output sin/cos always fits in [-1, 1].
     pub fn sincos_wide(angle_q32_32: i64) -> (Self, Self) {
-        // Fixed Q32.32→Q64.64 upscale (always 32, independent of profile FRAC_BITS)
+        // Fixed Q32.32→Q64.64 upscale (always 32, independent of the format's F)
         Self::sincos_wide_q64((angle_q32_32 as i128) << 32)
     }
 
@@ -943,7 +927,7 @@ where
         // cost a materialised enum per element in vector loops.
         match self.raw.checked_add_wide(rhs.raw) {
             Some(raw) => Self { raw },
-            None => panic!("FixedPoint: addition overflow"),
+            None => panic!("Fixed: addition overflow"),
         }
     }
 }
@@ -959,7 +943,7 @@ where
         // cost a materialised enum per element in vector loops.
         match self.raw.checked_sub_wide(rhs.raw) {
             Some(raw) => Self { raw },
-            None => panic!("FixedPoint: subtraction overflow"),
+            None => panic!("Fixed: subtraction overflow"),
         }
     }
 }
@@ -971,7 +955,7 @@ where
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        self.try_mul(rhs).expect("FixedPoint: multiplication overflow")
+        self.try_mul(rhs).expect("Fixed: multiplication overflow")
     }
 }
 
@@ -984,8 +968,8 @@ where
     fn div(self, rhs: Self) -> Self {
         match self.try_div(rhs) {
             Ok(v) => v,
-            Err(OverflowDetected::DivisionByZero) => panic!("FixedPoint: division by zero"),
-            Err(_) => panic!("FixedPoint: division overflow"),
+            Err(OverflowDetected::DivisionByZero) => panic!("Fixed: division by zero"),
+            Err(_) => panic!("Fixed: division overflow"),
         }
     }
 }
@@ -997,7 +981,7 @@ where
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        self.try_neg().expect("FixedPoint: negation overflow")
+        self.try_neg().expect("Fixed: negation overflow")
     }
 }
 
@@ -1082,7 +1066,7 @@ mod literal_parser_tests {
                 /// The exact parser agrees bit for bit with the canonical evaluator on
                 /// every plain decimal and integer literal, in range or not: any digit
                 /// count (before 0.6.4 the canonical parser truncated past 38 digits and
-                /// wrapped `value * 10^dp` into i32 decimal storage on realtime).
+                /// wrapped `value * 10^dp` into i32 decimal storage on the realtime profile).
                 #[test]
                 fn exact_parser_matches_the_canonical_path() {
                     let int_digits = (BITS - FRAC_BITS - 1) as u64 * 30103 / 100000 + 2;

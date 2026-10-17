@@ -7,7 +7,7 @@
 //! demo, which had nothing to do with g_math.
 //!
 //! Build:  cargo build --release --bin gmath
-//! Usage:  gmath <op> <args...>   (run `gmath help`)
+//! Usage: `gmath <op> <args...>` (run `gmath help`)
 
 use std::env;
 use std::process;
@@ -15,7 +15,7 @@ use std::process;
 use g_math::canonical::{evaluate, gmath_parse, LazyExpr};
 use g_math::fixed_point::Q64_64;
 
-/// The format the calculator computes in (the 0.6.x default profile).
+/// The format the calculator computes in (the format of the 0.6.x default profile).
 type Format = Q64_64;
 
 const USAGE: &str = "\

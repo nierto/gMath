@@ -13,7 +13,7 @@
 //! real eigenvalues and a bulge chase one step short in Schur, permutation
 //! matrices, and entries whose squares leave the storage range. Every
 //! decomposition must succeed on every case; the bounds are measured per
-//! profile, not derived.
+//! format, not derived.
 
 
 macro_rules! suite {
@@ -59,7 +59,7 @@ macro_rules! suite {
                     None => (false, s),
                 };
                 let (int_part, frac_part) = body.split_once('.').unwrap_or((body, ""));
-                // two-digit groups where 10^4 exceeds the storage range (realtime with
+                // two-digit groups where 10^4 exceeds the storage range (i32 with
                 // more than 17 fraction bits); the argument is the same
                 let digits = if FixedPoint::try_from_int(10_000).is_ok() { 4 } else { 2 };
                 let group_scale = FixedPoint::from_int(10i32.pow(digits as u32));
@@ -83,7 +83,7 @@ macro_rules! suite {
                 if negative { -magnitude } else { magnitude }
             }
 
-            /// The corpus fits Q16.16 (range 32768). On realtime splits with more than 16
+            /// The corpus fits Q16.16 (range 32768). On i32 splits with more than 16
             /// fraction bits the range is 2^(F-16) times smaller, so every case and every
             /// reference is divided by 2^(F-16): the stored raws are then exactly those
             /// of Q16.16, the same problem scaled by a power of two. Zero elsewhere.
@@ -212,7 +212,7 @@ macro_rules! suite {
             /// have split off). `schur_decompose` splits a block whose discriminant, formed
             /// at the compute tier from the stored entries, is non-negative.
             ///
-            /// On the narrow profiles the discriminant is formed exactly on the raws
+            /// On the narrow formats the discriminant is formed exactly on the raws
             /// (units of ulp², so that a block the decomposition left whole reads at most
             /// 2); on the wide ones at storage precision (two rounded products, at most 3
             /// ulps), where the corpus' entries are far from the range limit.
@@ -350,7 +350,7 @@ macro_rules! suite {
             }
 
             // ============================================================================
-            // Measured bounds (ulps), per profile
+            // Measured bounds (ulps), per format
             // ============================================================================
 
             struct Bounds {
@@ -374,8 +374,8 @@ macro_rules! suite {
             // The decompositions are deterministic, so the doubling is headroom for
             // deliberate algorithm changes, not for noise. Reconstruction and Schur
             // eigenvalue errors follow the relative deflation bound (2^-(2F/3) of the
-            // neighbouring magnitudes) and grow with the profile; spectrum errors of the
-            // symmetric problems stay at a few ulp. realtime covers GMATH_FRAC_BITS 16
+            // neighbouring magnitudes) and grow with the format; spectrum errors of the
+            // symmetric problems stay at a few ulp. The i32 word covers F = 16
             // and 10 (the configuration the SVD failure was reported on) in one set of
             // bounds (12 passes them too), and has its own below 10 and above 16.
 
@@ -495,7 +495,7 @@ macro_rules! suite {
             }
 
             /// The consumer's matvec through the SVD of their rank-6 matrix (reported at
-            /// realtime Q22.10: worst relative error 2.17 on 0.6.1, 0.146 on 0.4.x).
+            /// Q22.10: worst relative error 2.17 on 0.6.1, 0.146 on 0.4.x).
             #[test]
             fn consumer_matvec_through_the_svd() {
                 let (case, _) = &data::SVD[0];
@@ -613,11 +613,11 @@ macro_rules! suite {
 
             // Bounds are four times the largest value over calibration corpora drawn from
             // seeds 910001 to 910008 (512 cases per decomposition each, as many seeds as
-            // noted per profile; realtime at both GMATH_FRAC_BITS 16 and 10, and apart
+            // noted per format; the i32 word at both F = 16 and 10, and apart
             // at 8 and at 20 and 24), at least 8. Spectrum and reconstruction are per
             // unit of scale. Across seeds, a single 512-case corpus reached at most 2.5
             // times the largest value of all the others, except where a case deflates at
-            // the looser sqrt(quantum) bound (Schur on embedded and wider, entries of k/64:
+            // the looser sqrt(quantum) bound (Schur at Q64.64 and wider, entries of k/64:
             // 7.2 times), so those two Schur bounds carry sixteen times instead.
 
             // Measured random-corpus bounds per word (the 32-bit word by split).

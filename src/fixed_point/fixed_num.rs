@@ -8,8 +8,8 @@
 //! arithmetic, and the routing of each transcendental to the engine of its
 //! compute format. Everything above them is written once against the trait.
 //!
-//! Every body here is the code the matching build profile compiled before
-//! width became a type, moved without change, so each width returns the
+//! Every body here is the code the matching 0.6.x build profile compiled
+//! before width became a type, moved without change, so each width returns the
 //! integers it always did. All five impls compile in every build.
 //!
 //! Design: `docs/design/WIDTH_AS_TYPE.md`.
@@ -346,7 +346,7 @@ fn word_bits_from(words: &[u64], i: u32) -> u64 {
 // refuse).
 
 /// The 32-bit width's engine wrappers, generic over the split so that the
-/// upshift `64 - 2F` is an immediate, as the old per-profile constant was. A compute value is shifted up to Q64.64, the engine evaluated,
+/// upshift `64 - 2F` is an immediate, as the 0.6.x per-profile constant was. A compute value is shifted up to Q64.64, the engine evaluated,
 /// and the result rounded back (saturating, so an oversized result stays at
 /// the i64 ceiling for the storage downscale to refuse).
 mod c32 {

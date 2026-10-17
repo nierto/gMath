@@ -541,7 +541,7 @@ macro_rules! suite {
                 let s = format!("{}", result.unwrap());
                 let trimmed = s.trim_start_matches('-');
                 assert!(
-                    // Realtime's 4-digit display shows "0.00"; wider profiles "0.000…".
+                    // The i32 splits' 4-digit display shows "0.00"; wider formats "0.000…".
                     trimmed.starts_with("0.00"),
                     "sin(pi_approx) should be ~0, got '{}'",
                     s
@@ -555,7 +555,7 @@ macro_rules! suite {
                 assert!(result.is_ok(), "exp(ln2_approx) should succeed, got {:?}", result);
                 let s = format!("{}", result.unwrap());
                 assert!(
-                    // Realtime displays "2.00" (trimmed); pre-0.5.0 the truncating
+                    // Q16.16 displays "2.00" (trimmed); pre-0.5.0 the truncating
                     // display divide showed "1.9999" here. Both are ~2.0.
                     s.starts_with("2.0") || s.starts_with("1.99"),
                     "exp(ln2_approx) should be ~2.0, got '{}'",

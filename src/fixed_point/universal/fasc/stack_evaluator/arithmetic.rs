@@ -101,8 +101,8 @@ impl<T: FascFormat> StackEvaluator<T> {
                     let binary_a = T::binary_from_storage(*t1, v1)?;
                     let binary_b = T::binary_from_storage(*t2, v2)?;
                     // Ladder top (0.5.0 item 1): if the promoted result
-                    // cannot fit the profile storage — or the UGOD ladder
-                    // itself overflows — fall back to the exact rational
+                    // cannot fit the format's storage (or the UGOD ladder
+                    // itself overflows), fall back to the exact rational
                     // path instead of erroring (and never wrapping; the
                     // storage conversion is checked now).
                     match binary_a.add(&binary_b).and_then(|r| T::binary_to_storage(&r)) {
@@ -304,8 +304,8 @@ impl<T: FascFormat> StackEvaluator<T> {
                     let binary_a = T::binary_from_storage(*t1, v1)?;
                     let binary_b = T::binary_from_storage(*t2, v2)?;
                     // Ladder top (0.5.0 item 1): if the promoted result
-                    // cannot fit the profile storage — or the UGOD ladder
-                    // itself overflows — fall back to the exact rational
+                    // cannot fit the format's storage (or the UGOD ladder
+                    // itself overflows), fall back to the exact rational
                     // path instead of erroring (and never wrapping; the
                     // storage conversion is checked now).
                     match binary_a.multiply_with_tier1_frac(&binary_b, T::TIER1_FRAC_BITS).and_then(|r| T::binary_to_storage(&r)) {
@@ -321,12 +321,12 @@ impl<T: FascFormat> StackEvaluator<T> {
                 (StackValue::Decimal(d1, v1, s1), StackValue::Decimal(d2, v2, s2)) => {
                     let dp_result = *d1 as u16 + *d2 as u16;
                     if dp_result > T::DECIMAL_DP_PROMOTION_THRESHOLD {
-                        // Decimal places would exceed profile precision — promote to Symbolic.
+                        // Decimal places would exceed the format's precision: promote to Symbolic.
                         // Rational representation is always exact: (a/10^dp_a) × (b/10^dp_b)
                         // = (a×b) / (10^(dp_a+dp_b)). No rounding, no ULP error.
                         return self.multiply_via_rational(left, right);
                     }
-                    // dp fits within profile precision — normal decimal multiply
+                    // dp fits within the format's precision: normal decimal multiply
                     // On overflow (storage or arithmetic), fall through to rational
                     match (T::decimal_from_storage(*d1, v1), T::decimal_from_storage(*d2, v2)) {
                         (Ok(decimal_a), Ok(decimal_b)) => {
@@ -540,7 +540,7 @@ impl<T: FascFormat> StackEvaluator<T> {
                 // Add/Sub of 3-adic values (denominator 3^k) — exact in
                 // ternary, replaces the rational-pair fallback. Coercion is
                 // exact for this class (num·3^F/den divides evenly). On
-                // narrow profiles a large value can overflow ternary
+                // narrow formats a large value can overflow ternary
                 // storage: `.ok()?` makes that a silent fall-through to the
                 // rational path, so routing can never introduce a failure
                 // (docs/design/TERNARY_ROUTING_COLUMN.md, Decision 2).
@@ -583,23 +583,23 @@ impl<T: FascFormat> StackEvaluator<T> {
     // TRANSCENDENTAL FUNCTION EVALUATION
     // ============================================================================
 
-    /// Get the maximum binary tier for the current deployment profile
+    /// Get the maximum binary tier for the evaluation format
     ///
-    /// **ARCHITECTURE**: Transcendentals always use profile-max tier (not overflow-based)
+    /// **ARCHITECTURE**: Transcendentals always use the format's max tier (not overflow-based)
     /// **RATIONALE**: exp/ln/sin/cos benefit from maximum precision upfront
     /// **CONTRAST**: Basic ops (add/mul/sub/div) promote on overflow detection
     pub(crate) fn profile_max_binary_tier(&self) -> u8 {
         T::MAX_BINARY_TIER
     }
 
-    /// Get the maximum ternary tier for the current deployment profile
+    /// Get the maximum ternary tier for the evaluation format
     ///
     /// **ARCHITECTURE**: Mirrors profile_max_binary_tier() for ternary domain.
-    /// Maps each profile to the ternary tier whose storage type matches the profile's native type.
+    /// Maps each format to the ternary tier whose storage type matches the format's storage word.
     /// **TIER MAPPING**:
-    ///   - Embedded (i128) → Tier 3 TQ40.40 (i128, 32 frac trits ≈ 15 decimals)
-    ///   - Balanced (I256)             → Tier 4 TQ80.80 (I256, 64 frac trits ≈ 30 decimals)
-    ///   - Scientific (I512)           → Tier 5 TQ160.160 (I512, 128 frac trits ≈ 61 decimals)
+    ///   - Q64.64 (i128) → Tier 3 TQ40.40 (i128, 32 frac trits ≈ 15 decimals)
+    ///   - Q128.128 (I256)             → Tier 4 TQ80.80 (I256, 64 frac trits ≈ 30 decimals)
+    ///   - Q256.256 (I512)           → Tier 5 TQ160.160 (I512, 128 frac trits ≈ 61 decimals)
     pub(crate) fn profile_max_ternary_tier(&self) -> u8 {
         T::MAX_TERNARY_TIER
     }

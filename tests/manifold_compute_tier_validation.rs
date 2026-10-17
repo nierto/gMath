@@ -10,7 +10,7 @@
 //! are ideal points written with 100 decimals, rounded at the build's split
 //! by the parser, and the generator evaluates the references on the stored
 //! values for each split (8, 10, 12, 16, 20, 24 fraction bits and the four
-//! wide profiles). Every error below is in storage units against the
+//! wide formats). Every error below is in storage units against the
 //! reference parsed at the build's split. "close" cases are points within
 //! 0.001 to 0.03 of each other, where the angle used to come from acos or
 //! acosh of a value rounded to storage.
@@ -282,7 +282,7 @@ macro_rules! suite {
                 println!("stiefel distance per case: {dist:?}");
                 check("stiefel log_map", *log.iter().max().unwrap(), 0);
                 // before 0.6.4 distance returned sqrt(||Delta||_F): 64 units at Q24.8,
-                // 2^40+ on the wide profiles
+                // 2^40+ at the wide formats
                 check("stiefel distance", *dist.iter().max().unwrap(), 0);
             }
 

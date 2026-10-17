@@ -1,4 +1,4 @@
-//! Q16.16 Realtime Profile ULP Validation
+//! Q16.16 ULP Validation (the i32 word at F = 16)
 //!
 //! Validates all transcendental functions against mpmath 50-digit reference values.
 //! Run with: cargo test --test transcendentals realtime_profile_validation:: -- --nocapture

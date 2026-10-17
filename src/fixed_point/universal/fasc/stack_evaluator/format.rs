@@ -1,9 +1,8 @@
 //! The evaluator's format-dependent pieces as a trait: the decimal digit
 //! budgets, the tier-raw widenings and narrowings, the decimal and symbolic
 //! conversions to the compute tier, the decimal formatter and the rational
-//! roundings, one implementation per format. The bodies are the profile arms
-//! of 0.6.7, transplanted; the evaluator reaches them through the profile's
-//! format until it is generic itself.
+//! roundings, one implementation per format. The bodies are the 0.6.7 profile
+//! arms, transplanted; the generic evaluator reaches them through its format.
 
 #![allow(clippy::all, unused_braces)]
 
@@ -171,8 +170,8 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
         let overflow = OverflowDetected::TierOverflow;
 
         // 0.5.0 rounding unification: the RESULT domain is binary, so this
-        // coercion rounds nearest, ties toward +∞ on every profile (was:
-        // truncation on four arms, add-half on q16_16 — per-profile drift).
+        // coercion rounds nearest, ties toward +∞ in every format (was:
+        // truncation on four arms, add-half on q16_16: per-profile drift in 0.4.x).
         {
             let frac_bits = F as usize;
             let ten_pow = super::formatting::pow10_i256(dp);
@@ -314,7 +313,7 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
 
         match tier {
             1..=4 => {
-                // UGOD: on wider profiles, the i32 (I256/I512) may exceed i128
+                // UGOD: in wider formats, the i32 (I256/I512) may exceed i128
                 // even when tier_for_decimal_places suggests tiers 1-4 based on dp alone.
                 // Check actual value magnitude and promote to tier 5/6 if needed.
 
@@ -521,7 +520,7 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
         {
             // i64 = i64. I256 intermediate: num << 2F can pass i128.
             // Range-checked: the bare `as i64` wrapped a symbolic value beyond
-            // the realtime compute range (atan(999999999) at 24 fraction bits
+            // the i64 compute range (atan(999999999) at 24 fraction bits
             // came out as -pi/2; before 0.6.4).
             let n = I256::from_i128(num) << ((2 * F) as usize);
             let q = n / I256::from_i128(den);
@@ -579,7 +578,7 @@ impl<const F: u32> FascFormat for Fixed<i32, F> {
         }
     }
     fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected> {
-        // Try i128 extraction (works for all profiles ≤ Q128.128 and reduced rationals)
+        // Try i128 extraction (works for all formats ≤ Q128.128 and reduced rationals)
         if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
             return super::transcendentals::rational_to_decimal_components_i128(num, den);
         }
@@ -670,8 +669,8 @@ impl FascFormat for Fixed<i64, 32> {
         let overflow = OverflowDetected::TierOverflow;
 
         // 0.5.0 rounding unification: the RESULT domain is binary, so this
-        // coercion rounds nearest, ties toward +∞ on every profile (was:
-        // truncation on four arms, add-half on q16_16 — per-profile drift).
+        // coercion rounds nearest, ties toward +∞ in every format (was:
+        // truncation on four arms, add-half on q16_16: per-profile drift in 0.4.x).
         {
             let frac_bits = 32usize;
             let ten_pow = super::formatting::pow10_i256(dp);
@@ -820,7 +819,7 @@ impl FascFormat for Fixed<i64, 32> {
 
         match tier {
             1..=4 => {
-                // UGOD: on wider profiles, the i64 (I256/I512) may exceed i128
+                // UGOD: in wider formats, the i64 (I256/I512) may exceed i128
                 // even when tier_for_decimal_places suggests tiers 1-4 based on dp alone.
                 // Check actual value magnitude and promote to tier 5/6 if needed.
 
@@ -1078,7 +1077,7 @@ impl FascFormat for Fixed<i64, 32> {
         }
     }
     fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected> {
-        // Try i128 extraction (works for all profiles ≤ Q128.128 and reduced rationals)
+        // Try i128 extraction (works for all formats ≤ Q128.128 and reduced rationals)
         if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
             return super::transcendentals::rational_to_decimal_components_i128(num, den);
         }
@@ -1169,8 +1168,8 @@ impl FascFormat for Fixed<i128, 64> {
         let overflow = OverflowDetected::TierOverflow;
 
         // 0.5.0 rounding unification: the RESULT domain is binary, so this
-        // coercion rounds nearest, ties toward +∞ on every profile (was:
-        // truncation on four arms, add-half on q16_16 — per-profile drift).
+        // coercion rounds nearest, ties toward +∞ in every format (was:
+        // truncation on four arms, add-half on q16_16: per-profile drift in 0.4.x).
         {
             let frac_bits = 64usize;
             let ten_pow = super::formatting::pow10_i256(dp);
@@ -1319,7 +1318,7 @@ impl FascFormat for Fixed<i128, 64> {
 
         match tier {
             1..=4 => {
-                // UGOD: on wider profiles, the i128 (I256/I512) may exceed i128
+                // UGOD: in wider formats, the i128 (I256/I512) may exceed i128
                 // even when tier_for_decimal_places suggests tiers 1-4 based on dp alone.
                 // Check actual value magnitude and promote to tier 5/6 if needed.
 
@@ -1575,7 +1574,7 @@ impl FascFormat for Fixed<i128, 64> {
         }
     }
     fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected> {
-        // Try i128 extraction (works for all profiles ≤ Q128.128 and reduced rationals)
+        // Try i128 extraction (works for all formats ≤ Q128.128 and reduced rationals)
         if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
             return super::transcendentals::rational_to_decimal_components_i128(num, den);
         }
@@ -1604,7 +1603,7 @@ impl FascFormat for Fixed<i128, 64> {
         // Out-of-range integers fall back to the Symbolic domain — the
         // UGOD ladder top never fails (0.5.0 item 0: parse used to
         // error with Overflow here, so e.g. evaluate("1000000" * ...)
-        // failed on narrow profiles while succeeding everywhere else).
+        // failed on narrow formats while succeeding everywhere else).
         if value > i64::MAX as i128 || value < i64::MIN as i128 {
             return None;
         }
@@ -1670,8 +1669,8 @@ impl FascFormat for Fixed<I256, 128> {
         let overflow = OverflowDetected::TierOverflow;
 
         // 0.5.0 rounding unification: the RESULT domain is binary, so this
-        // coercion rounds nearest, ties toward +∞ on every profile (was:
-        // truncation on four arms, add-half on q16_16 — per-profile drift).
+        // coercion rounds nearest, ties toward +∞ in every format (was:
+        // truncation on four arms, add-half on q16_16: per-profile drift in 0.4.x).
         {
             let ten_pow = super::formatting::pow10_i256(dp);
             let num = I512::from_i256(scaled) << 128;
@@ -1842,7 +1841,7 @@ impl FascFormat for Fixed<I256, 128> {
 
         match tier {
             1..=4 => {
-                // UGOD: on wider profiles, the I256 (I256/I512) may exceed i128
+                // UGOD: in wider formats, the I256 (I256/I512) may exceed i128
                 // even when tier_for_decimal_places suggests tiers 1-4 based on dp alone.
                 // Check actual value magnitude and promote to tier 5/6 if needed.
                 {
@@ -2101,7 +2100,7 @@ impl FascFormat for Fixed<I256, 128> {
         }
     }
     fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected> {
-        // Try i128 extraction (works for all profiles ≤ Q128.128 and reduced rationals)
+        // Try i128 extraction (works for all formats ≤ Q128.128 and reduced rationals)
         if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
             return super::transcendentals::rational_to_decimal_components_i128(num, den);
         }
@@ -2199,8 +2198,8 @@ impl FascFormat for Fixed<I512, 256> {
         let overflow = OverflowDetected::TierOverflow;
 
         // 0.5.0 rounding unification: the RESULT domain is binary, so this
-        // coercion rounds nearest, ties toward +∞ on every profile (was:
-        // truncation on four arms, add-half on q16_16 — per-profile drift).
+        // coercion rounds nearest, ties toward +∞ in every format (was:
+        // truncation on four arms, add-half on q16_16: per-profile drift in 0.4.x).
         {
             let ten_pow = I1024::from_i512(super::formatting::pow10_i512(dp));
             let num = I1024::from_i512(scaled) << 256;
@@ -2376,7 +2375,7 @@ impl FascFormat for Fixed<I512, 256> {
 
         match tier {
             1..=4 => {
-                // UGOD: on wider profiles, the I512 (I256/I512) may exceed i128
+                // UGOD: in wider formats, the I512 (I256/I512) may exceed i128
                 // even when tier_for_decimal_places suggests tiers 1-4 based on dp alone.
                 // Check actual value magnitude and promote to tier 5/6 if needed.
                 {
@@ -2663,7 +2662,7 @@ impl FascFormat for Fixed<I512, 256> {
         }
     }
     fn rational_to_decimal_components(rational: &RationalNumber) -> Result<(u8, i128), OverflowDetected> {
-        // Try i128 extraction (works for all profiles ≤ Q128.128 and reduced rationals)
+        // Try i128 extraction (works for all formats ≤ Q128.128 and reduced rationals)
         if let (Some(num), Some(den)) = (rational.numerator_i128(), rational.denominator_i128()) {
             return super::transcendentals::rational_to_decimal_components_i128(num, den);
         }

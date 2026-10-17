@@ -15,8 +15,8 @@
 //! trit dots built on the packing have their own suite in the
 //! `g_math_inference` crate.
 //!
-//! Profile-independent: Tier 1/2 ternary functions are plain integer ops
-//! with no `table_format` gating. Runs under every profile and feature set.
+//! Format-independent: Tier 1/2 ternary functions are plain integer ops
+//! with no width gating. Runs in every build and feature set.
 
 use g_math::fixed_point::domains::balanced_ternary::{
     add_ternary_tq10_10, divide_ternary_tq10_10, multiply_ternary_tq10_10,

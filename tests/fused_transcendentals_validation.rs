@@ -31,7 +31,7 @@ macro_rules! suite {
                     _ => {
                         // Binary-materializable values: take the stored raw directly. The
                         // Display string carries only as many digits as the split
-                        // resolves (2 at GMATH_FRAC_BITS=8), so re-parsing it adds up to
+                        // resolves (2 at F = 8), so re-parsing it adds up to
                         // ~1.3 units of error of its own.
                         if let Some(raw) = sv.as_binary_storage() {
                             return FixedPoint::from_raw(raw);
@@ -47,7 +47,7 @@ macro_rules! suite {
                 if BITS == 32 { fp("0.01") } else if BITS == 64 { fp("0.0001") } else { fp("0.000000001") }
             }
 
-            /// `k` storage units (k * 2^-FRAC_BITS) for the build's split.
+            /// `k` storage units (k * 2^-FRAC_BITS) for the suite's split.
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }
@@ -210,7 +210,7 @@ macro_rules! suite {
                 let result = evaluate(&expr).unwrap();
                 let r = sv_to_fp(&result);
                 // exp(ln(2) + ln(3)) = exp(ln(6)) = 6
-                // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
+                // 0.001 is 0 raw at F = 8: at least 1 unit (exact) there
                 assert_fp(r, fp("6"), at_least(fp("0.001"), 1), "exp(ln(2)+ln(3)) = 6");
             }
         }

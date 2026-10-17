@@ -24,7 +24,7 @@ macro_rules! suite {
 
             #[test]
             fn test_fixedpoint_serialization_roundtrip() {
-                // literals outside a coarse realtime split's range (12345.6789 at Q8.24)
+                // literals outside a coarse i32 split's range (12345.6789 at Q8.24)
                 // are refused by the parser now instead of wrapping: skip them
                 let values: Vec<FixedPoint> = ["0", "1", "-1", "3.14159265358979323846", "0.5", "-0.333333333333333", "12345.6789"]
                     .iter()
@@ -115,7 +115,7 @@ macro_rules! suite {
             #[test]
             fn test_serialization_byte_sizes() {
                 let raw_len = FixedPoint::raw_byte_len();
-                // Profile-dependent: 4 (Q16.16), 8 (Q32.32), 16 (Q64.64), 32 (Q128.128), or 64 (Q256.256)
+                // Format-dependent: 4 (Q16.16), 8 (Q32.32), 16 (Q64.64), 32 (Q128.128), or 64 (Q256.256)
                 assert!(raw_len == 4 || raw_len == 8 || raw_len == 16 || raw_len == 32 || raw_len == 64,
                     "unexpected raw_byte_len: {}", raw_len);
 
@@ -446,7 +446,7 @@ macro_rules! suite {
                 // [1 2 3] * [1 2]   = [1*1+2*3+3*5  1*2+2*4+3*6]   = [22 28]
                 // [4 5 6]   [3 4]     [4*1+5*3+6*5  4*2+5*4+6*6]     [49 64]
                 //           [5 6]
-                // (entries kept below 128 so the product fits Q8.24, GMATH_FRAC_BITS=24)
+                // (entries kept below 128 so the product fits Q8.24, the i32 split F = 24)
                 let a = FixedMatrix::from_slice(2, 3, &[fp("1"), fp("2"), fp("3"), fp("4"), fp("5"), fp("6")]);
                 let b = FixedMatrix::from_slice(3, 2, &[fp("1"), fp("2"), fp("3"), fp("4"), fp("5"), fp("6")]);
                 let c = &a * &b;
@@ -667,7 +667,7 @@ macro_rules! suite {
                 }
             }
 
-            /// Q16.16/Q32.32: exp(43) ≈ 4.73e18 far exceeds both profiles' range.
+            /// Q16.16/Q32.32: exp(43) ≈ 4.73e18 far exceeds both formats' range.
             #[test]
             fn test_try_exp_near_boundary_succeeds() {
                 if !(!((BITS == 32 || BITS == 64))) { return; }
@@ -677,8 +677,8 @@ macro_rules! suite {
                 assert!(result.is_ok(), "exp(43) should fit in Q64.64, got {:?}", result);
             }
 
-            /// The wrapping `downscale_q64_to_q32` made exp non-monotone on realtime
-            /// profiles: past the wrap threshold (x ≳ 29.8 at FRAC_BITS=10), huge results
+            /// Up to 0.4.28 the wrapping `downscale_q64_to_q32` made exp non-monotone on the
+            /// realtime profile: past the wrap threshold (x ≳ 29.8 at FRAC_BITS=10), huge results
             /// wrapped into small values that could materialize as Ok(garbage).
             /// Property: over an ascending integer grid, Ok values never decrease, and
             /// once storage overflow begins no larger input may succeed again.
@@ -708,7 +708,7 @@ macro_rules! suite {
             /// (2x > 40), plus sign symmetry.
             #[test]
             fn test_tanh_saturating_region_is_one() {
-                // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
+                // 0.001 is 0 raw at F = 8: at least 1 unit (exact) there
                 let tol = if BITS == 32 { at_least(fp("0.001"), 1) } else { fp("0.000000001") };
                 for s in ["20", "25", "60"] {
                     let t = fp(s).tanh();
@@ -720,11 +720,11 @@ macro_rules! suite {
 
             /// FASC-path twins of the saturation guards: try_tanh must return Ok(1),
             /// try_cosh must fail loud with TierOverflow (cosh(30) exceeds both narrow
-            /// profiles' storage range), never wrap.
+            /// formats' storage range), never wrap.
             #[test]
             fn test_try_tanh_try_cosh_saturating_region() {
                 if !((BITS == 32 || BITS == 64)) { return; }
-                // 0.001 is 0 raw at GMATH_FRAC_BITS=8: at least 1 unit (exact) there
+                // 0.001 is 0 raw at F = 8: at least 1 unit (exact) there
                 let tol = if BITS == 32 { at_least(fp("0.001"), 1) } else { fp("0.000000001") };
                 let t = fp("20").try_tanh().expect("tanh(20) must not error");
                 assert!((t - fp("1")).abs() < tol, "try_tanh(20) = {}, expected 1", t);

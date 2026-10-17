@@ -6,7 +6,7 @@
 //! **PRECISION**: ~4.3 decimal digits (uniform): beats fp16's ~3.3 variable digits
 //! **RANGE**: ±1.5 (exact: ±29524/19683 ≈ ±1.49987)
 //!
-//! Standalone type with conversion bridge to FixedPoint. NOT a deployment profile.
+//! Standalone type with a conversion bridge to `Fixed<S, F>`. Not a binary format.
 //! UGOD-aware: promotes to TernaryTier1 (i32/TQ8.8) on overflow.
 //!
 //! Designed for ternary neural network weight storage where values

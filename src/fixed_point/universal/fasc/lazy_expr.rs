@@ -218,7 +218,7 @@ impl<T: FascFormat> LazyExpr<T> {
     ///
     /// **ARCHITECTURE**: Lazy evaluation - builds expression tree without computation
     /// **EVALUATION**: Deferred until display or explicit evaluation
-    /// **PRECISION**: Profile-aware tier selection (Q64.64, Q128.128, or Q256.256)
+    /// **PRECISION**: Tier N+1 of the evaluation format (e.g. Q128.128 for Q64.64)
     pub fn exp(self) -> Self {
         LazyExpr::Exp(Box::new(self))
     }
@@ -227,7 +227,7 @@ impl<T: FascFormat> LazyExpr<T> {
     ///
     /// **ARCHITECTURE**: Lazy evaluation - builds expression tree without computation
     /// **EVALUATION**: Deferred until display or explicit evaluation
-    /// **PRECISION**: Profile-aware tier selection (Q64.64, Q128.128, or Q256.256)
+    /// **PRECISION**: Tier N+1 of the evaluation format (e.g. Q128.128 for Q64.64)
     /// **DOMAIN**: x > 0 (returns error for x <= 0)
     pub fn ln(self) -> Self {
         LazyExpr::Ln(Box::new(self))

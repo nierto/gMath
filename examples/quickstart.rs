@@ -1,4 +1,4 @@
-//! gMath Quickstart — Zero-float fixed-point arithmetic
+//! g_math quickstart: zero-float fixed-point arithmetic
 //!
 //! Run: cargo run --example quickstart
 
@@ -10,7 +10,7 @@ type Q = Q64_64;
 
 fn main() {
     // ── Basic arithmetic ────────────────────────────────────────────────
-    // gmath() builds lazy expression trees — no computation until evaluate()
+    // gmath() builds lazy expression trees; nothing is computed until evaluate()
     let sum = gmath("1.5") + gmath("2.5");
     let product = gmath("7") * gmath("6");
     let compound = (gmath("100") + gmath("50")) / gmath("3");
@@ -19,7 +19,7 @@ fn main() {
     println!("7 * 6      = {}", evaluate::<Q>(&product).unwrap());
     println!("150 / 3    = {}", evaluate::<Q>(&compound).unwrap());
 
-    // ── Transcendental functions (18 total, tier N+1 computation) ───────
+    // ── Transcendental functions (17 functions, correctly rounded) ───────
     let e       = evaluate::<Q>(&gmath("1").exp()).unwrap();       // e^1
     let ln2     = evaluate::<Q>(&gmath("2").ln()).unwrap();        // ln(2)
     let sqrt2   = evaluate::<Q>(&gmath("2").sqrt()).unwrap();      // sqrt(2)
@@ -35,7 +35,7 @@ fn main() {
     println!("atan(1)    = {}", atan_1);
 
     // ── Chaining expressions ────────────────────────────────────────────
-    // Compose transcendentals — BinaryCompute keeps full precision through the chain
+    // Compose transcendentals: the whole chain is rounded once, from its exact value
     let chain = gmath("2").ln().exp();  // exp(ln(2)) = 2
     println!("\nexp(ln(2)) = {}", evaluate::<Q>(&chain).unwrap());
 
@@ -43,7 +43,7 @@ fn main() {
     println!("sin^2 + cos^2 = {}", evaluate::<Q>(&sin_cos).unwrap());  // = 1
 
     // ── Runtime string parsing ──────────────────────────────────────────
-    // gmath_parse() accepts runtime &str — same precision, eager parse
+    // gmath_parse() accepts a runtime &str: same precision, eager parse
     let user_input = "3.14159265358979323846";
     let parsed = gmath_parse::<Q>(user_input).unwrap();
     let result = evaluate::<Q>(&(parsed * gmath("2"))).unwrap();

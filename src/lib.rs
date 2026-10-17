@@ -1,31 +1,48 @@
-//! # gMath: Multi-Domain Fixed-Point Arithmetic Library
+//! # g_math: multi-domain fixed-point arithmetic
 //!
-//! Zero-float, pure-Rust, consensus-safe fixed-point arithmetic with
-//! 18 transcendental functions computed at tier N+1 for full storage-tier precision.
+//! Zero-float, pure-Rust, deterministic fixed-point arithmetic. The format is
+//! a type, `Fixed<S, F>` (storage word `S`, `F` fraction bits), and any number
+//! of formats coexist in one build. The 17 transcendental functions, canonical
+//! expression trees and closed-form geometry maps are correctly rounded:
+//! computed one tier wider than storage and, where that result lies too close
+//! to a rounding boundary, decided at about 1000 bits.
 //!
-//! Upgrading from 0.4.x: 0.5.0 is more accurate, and as a side effect some
-//! results end in a different final digit. This matters only if you store,
-//! hash, or compare results across versions. See CHANGELOG.md.
-//!
-//! ## Canonical API (FASC Pipeline)
-//!
-//! ```rust,no_run
-//! use g_math::canonical::{gmath, evaluate};
-//! use g_math::fixed_point::Q64_64;
-//!
-//! let result = evaluate::<Q64_64>(&(gmath("1.5") + gmath("2.5")));
-//! let exp_result = evaluate::<Q64_64>(&gmath("1.0").exp());
-//! ```
+//! Upgrading from 0.6: see `docs/UPGRADING_0.7.md` in the repository (the
+//! profiles became types; `FixedPoint` became a format such as `Q64_64` or
+//! `Fixed<i32, 10>`). Every change is in CHANGELOG.md.
 //!
 //! ## Formats
 //!
-//! The format is a type, `Fixed<S, F>`, chosen per value; any number of
-//! formats coexist in one build:
-//! - `Fixed<i32, F>` for `2 <= F <= 30` (`Q16_16` is `F = 16`)
-//! - `Q32_32`: 9 decimals
-//! - `Q64_64`: 19 decimals
-//! - `Q128_128`: 38 decimals
-//! - `Q256_256`: 77 decimals
+//! - `Fixed<i32, F>` for `2 <= F <= 30` (`Q16_16` is `F = 16`; `Fixed<i32, 10>` is Q22.10)
+//! - `Q32_32` = `Fixed<i64, 32>`: about 9 decimals
+//! - `Q64_64` = `Fixed<i128, 64>`: about 19 decimals
+//! - `Q128_128` = `Fixed<I256, 128>`: about 38 decimals
+//! - `Q256_256` = `Fixed<I512, 256>`: about 77 decimals
+//!
+//! ## Canonical layer (routing, one rounding per tree)
+//!
+//! ```rust
+//! use g_math::canonical::{gmath, evaluate};
+//! use g_math::fixed_point::Q64_64;
+//!
+//! let sum = evaluate::<Q64_64>(&(gmath("1.5") + gmath("2.5"))).unwrap();
+//! assert_eq!(sum.to_string(), "4.0");
+//! let e = evaluate::<Q64_64>(&gmath("1").exp()).unwrap();
+//! assert!(e.to_string().starts_with("2.718281828459045235"));
+//! ```
+//!
+//! ## Imperative layer (direct, `Copy`)
+//!
+//! ```rust
+//! use g_math::fixed_point::{Fixed, FixedVector, Q64_64};
+//!
+//! type Q = Fixed<i32, 10>; // Q22.10
+//! let x = Q::from_str("2").sqrt();
+//! assert_eq!(x.raw(), 1448); // 1.4140625, the nearest of sqrt(2) at 10 fraction bits
+//!
+//! let v: FixedVector<Q64_64> = FixedVector::from_slice(&[Q64_64::from_int(3), Q64_64::from_int(4)]);
+//! assert_eq!(v.length(), Q64_64::from_int(5));
+//! ```
 
 // Internal modules
 /// Unit-test helpers: a suite written once is instantiated at six formats
@@ -76,3 +93,32 @@ pub use fixed_point::wide;
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// The examples in the README and the guides are compiled and run as doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/UPGRADING_0.7.md")]
+struct UpgradingExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_IMPERATIVE.md")]
+struct ImperativeGuideExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_PRECISION.md")]
+struct PrecisionGuideExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_ROUTING.md")]
+struct RoutingGuideExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_TRANSCENDENTALS.md")]
+struct TranscendentalsGuideExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_FUSED.md")]
+struct FusedGuideExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_LINALG.md")]
+struct LinalgGuideExamples;
+#[cfg(doctest)]
+#[doc = include_str!("../docs/README_GEOMETRY.md")]
+struct GeometryGuideExamples;

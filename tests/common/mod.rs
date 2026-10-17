@@ -18,7 +18,7 @@ macro_rules! for_each_format {
         $suite!(q64_64, i128, 64);
         $suite!(q128_128, g_math::fixed_point::I256, 128);
         $suite!(q256_256, g_math::fixed_point::I512, 256);
-        // the realtime splits the suite gates (RUSTFLAGS="--cfg gmath_all_splits")
+        // the i32 splits the suite gates (RUSTFLAGS="--cfg gmath_all_splits")
         #[cfg(gmath_all_splits)] $suite!(split_q24_8, i32, 8);
         #[cfg(gmath_all_splits)] $suite!(split_q20_12, i32, 12);
         #[cfg(gmath_all_splits)] $suite!(split_q12_20, i32, 20);

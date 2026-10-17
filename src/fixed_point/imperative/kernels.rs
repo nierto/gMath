@@ -7,9 +7,9 @@
 //! Every function here is generic over a format `T: FixedNum` and works on
 //! raw words: `T::Storage`, the compute word `Compute<T>` (twice as wide, `2F`
 //! fractional bits) and the accumulator `Orient<T>` (twice as wide again).
-//! Each body is the code the profile-bound functions in `linalg` and
+//! Each body is the code the 0.6.x profile-bound functions in `linalg` and
 //! `wide_acc` carried per profile, written once; those functions now
-//! delegate here with the profile's format, so each width returns the
+//! delegate here with the caller's format, so each width returns the
 //! integers it always did.
 
 use super::FixedMatrix;
@@ -459,7 +459,7 @@ where
 mod narrowing_tests {
     //! The three narrowings and the storage-nearest division on the exact
     //! quadratic form, on every format in one build (these were the tests of
-    //! the former `wide_acc` module, which was bound to the build's profile).
+    //! the former `wide_acc` module, which was bound to the 0.6.x build's profile).
     use super::*;
     use crate::fixed_point::{I256, I512};
 

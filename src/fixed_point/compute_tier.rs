@@ -9,21 +9,21 @@
 //! A `Compute<T>` value represents `raw / 2^(2F)`. Wide accumulators at
 //! that scale (for example the `matvec_q2f` outputs of the separate
 //! `g_math_inference` crate) feed these functions with no conversion. Use
-//! [`from_fixed`]/[`to_fixed`] to cross between storage and the compute
+//! [`from_fixed`](crate::fixed_point::compute_tier::from_fixed)/[`to_fixed`](crate::fixed_point::compute_tier::to_fixed) to cross between storage and the compute
 //! tier; a chain of calls at the compute tier rounds once at the final
-//! [`to_fixed`], not once per step.
+//! [`to_fixed`](crate::fixed_point::compute_tier::to_fixed), not once per step.
 //!
 //! ## Contract
 //!
 //! - Same engines, same rounding as the canonical and imperative paths;
 //!   results are path-independent with the rest of the crate.
-//! - `exp` **saturates** at [`ceiling`] when the true result exceeds the
+//! - `exp` **saturates** at [`ceiling`](crate::fixed_point::compute_tier::ceiling) when the true result exceeds the
 //!   compute tier's range; it never wraps. Detect saturation by comparing
-//!   against [`ceiling`].
+//!   against [`ceiling`](crate::fixed_point::compute_tier::ceiling).
 //! - `ln`, `sqrt`, and `ln1p` **panic** on domain violations (`x <= 0`,
 //!   `x < 0`, `x <= -1` respectively) rather than return sentinel values.
-//! - [`to_fixed`] **panics** if the value does not fit storage;
-//!   [`try_to_fixed`] returns `None` instead. Nothing here wraps silently.
+//! - [`to_fixed`](crate::fixed_point::compute_tier::to_fixed) **panics** if the value does not fit storage;
+//!   [`try_to_fixed`](crate::fixed_point::compute_tier::try_to_fixed) returns `None` instead. Nothing here wraps silently.
 //!
 //! ## Example (any format)
 //!

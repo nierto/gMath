@@ -132,7 +132,7 @@ where
     Ok(sqrt_c(kernels::narrow_product_to_compute::<Fixed<S, F>>(S::widen_product(a, b).add_exact(-S::widen_product(c, d))?)?))
 }
 
-/// atan2(y, x) at the compute tier (the profile's engine).
+/// atan2(y, x) at the compute tier (the format's engine).
 fn atan2_c<S: Storage, const F: u32>(y: C<S, F>, x: C<S, F>) -> C<S, F>
 where
     Fixed<S, F>: FixedNum<Storage = S> + MatrixFunctions,
@@ -142,7 +142,7 @@ where
 
 /// (sinh x, cosh x) at the compute tier from one exp pair; `Err(TierOverflow)`
 /// when an exp reaches its overflow sentinel (the result already exceeds
-/// storage, and on some profiles the sentinel would narrow to a plausible
+/// storage, and in some formats the sentinel would narrow to a plausible
 /// maximum instead of failing).
 fn sinhcosh_c<S: Storage, const F: u32>(x: C<S, F>) -> Result<(C<S, F>, C<S, F>), OverflowDetected>
 where
@@ -1119,7 +1119,7 @@ where
         Ok(Self::mat_to_vec(&down_matrix(&term1.add(&term2))?))
     }
 
-    /// `U diag(theta) Aᵀ` from [`Grassmannian::log_parts`], one rounding per entry.
+    /// `U diag(theta) Aᵀ` from the shared principal-angle step, one rounding per entry.
     fn log_map(
         &self,
         base: &FixedVector<Fixed<S, F>>,
@@ -1133,7 +1133,7 @@ where
     }
 
     /// `sqrt(sum theta_i^2)` of the principal angles of
-    /// [`Grassmannian::log_parts`]: sum exact, root at the compute tier, one rounding.
+    /// the shared principal-angle step: sum exact, root at the compute tier, one rounding.
     fn distance(
         &self,
         p: &FixedVector<Fixed<S, F>>,
@@ -1147,7 +1147,7 @@ where
 
     /// Transport along the geodesic with `log_Q1(Q2) = U Θ Aᵀ`:
     /// `PT(Δ) = Δ - Q1 A sin(Θ) Uᵀ Δ + U (cos(Θ) - I) Uᵀ Δ`, the factors from
-    /// [`Grassmannian::log_parts`] and the products at the compute tier, one
+    /// the shared principal-angle step and the products at the compute tier, one
     /// rounding per entry. (Before 0.6.4 it took a second SVD of the rounded
     /// log map, whose angles were paired wrongly for k >= 2.)
     fn parallel_transport(
@@ -1380,9 +1380,9 @@ where
 pub struct ProductManifold<T> {
     m1: Box<dyn Manifold<T>>,
     m2: Box<dyn Manifold<T>>,
-    /// Embedding dimension (FixedVector<T> length) for points on M₁.
+    /// Embedding dimension (`FixedVector<T>` length) for points on M₁.
     dim1_embed: usize,
-    /// Embedding dimension (FixedVector<T> length) for points on M₂.
+    /// Embedding dimension (`FixedVector<T>` length) for points on M₂.
     dim2_embed: usize,
 }
 
@@ -1442,8 +1442,8 @@ where
         // a sum beyond storage panics instead of wrapping
         let first = Fixed::<S, F>::upscale_to_compute(self.m1.inner_product(&b1, &u1, &v1).raw());
         let second = Fixed::<S, F>::upscale_to_compute(self.m2.inner_product(&b2, &u2, &v2).raw());
-        down(c_add(first, second).expect("ProductManifold::<Fixed<S, F>>::inner_product exceeds the compute tier"))
-            .expect("ProductManifold::<Fixed<S, F>>::inner_product exceeds the storage range")
+        down(c_add(first, second).expect("ProductManifold::inner_product exceeds the compute tier"))
+            .expect("ProductManifold::inner_product exceeds the storage range")
     }
 
     /// `sqrt(||v1||^2 + ||v2||^2)` of the component norms: squares exact,
@@ -1452,7 +1452,7 @@ where
         let (b1, b2) = self.split(base);
         let (v1, v2) = self.split(v);
         let parts = [self.m1.norm(&b1, &v1).raw(), self.m2.norm(&b2, &v2).raw()];
-        Fixed::from_raw(kernels::sqrt_dot::<Fixed<S, F>>(&parts, &parts).expect("ProductManifold::<Fixed<S, F>>::norm exceeds the storage range"))
+        Fixed::from_raw(kernels::sqrt_dot::<Fixed<S, F>>(&parts, &parts).expect("ProductManifold::norm exceeds the storage range"))
     }
 
     fn exp_map(

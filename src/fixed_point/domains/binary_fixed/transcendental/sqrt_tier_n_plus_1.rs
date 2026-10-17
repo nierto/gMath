@@ -37,7 +37,7 @@ use crate::fixed_point::i512::I512;
 use crate::fixed_point::i1024::I1024;
 
 // Reuse upscale/downscale helpers from exp_tier_n_plus_1
-// (not all are used in every profile, hence allow)
+// (not all are used by every format, hence allow)
 #[allow(unused_imports)]
 use super::exp_tier_n_plus_1::{
     upscale_q64_to_q128, upscale_q128_to_q256, upscale_q64_to_q256,
@@ -243,7 +243,7 @@ pub fn sqrt_q256_256_native(x: I512) -> I512 {
     x_n.as_i512()
 }
 
-/// Square root at Q512.512 (tier N+1 for the scientific profile).
+/// Square root at Q512.512 (tier N+1 of Q256.256).
 ///
 /// **ALGORITHM**: normalise the input to m in [1, 4) by an exact power-of-two
 /// shift, run reciprocal-square-root Newton on m at full precision, certify
@@ -308,7 +308,7 @@ pub fn sqrt_q512_512_native(x: I1024) -> I1024 {
     // sqrt(m) = m * y at Q512.512, then certify it at the normalised scale:
     // r must be exactly floor(sqrt(m * 2^512)), i.e. r^2 <= m * 2^512 < (r+1)^2
     // in exact 2048-bit integers. The Newton result is within a few units
-    // (measured: at most 4 on 3220 inputs spanning the profile's range), so
+    // (measured: at most 4 on 3220 inputs spanning the Q256.256 range), so
     // the correction is bounded and any excursion beyond it is a defect that
     // must panic rather than return an unverified value.
     let mut r = multiply_i1024_q512_512_signed(m, y_n);
@@ -342,7 +342,7 @@ pub fn sqrt_q512_512_native(x: I1024) -> I1024 {
 ///
 /// 0.5.0 audit history: this was `multiply_i1024_q512_512` (shadowing the
 /// sign-safe ln helper), assumed positive-by-construction and asserted as
-/// such, and the assert then FIRED on scientific SPD-distance inputs:
+/// such, and the assert then FIRED on Q256.256 SPD-distance inputs:
 /// the Newton factor `3 − S·y²` goes NEGATIVE when the seed overshoots,
 /// so the raw unsigned `mul_to_i2048` here was a real latent corruption
 /// path for overshooting inputs. Now sign-wrapped. Magnitude truncation
@@ -361,16 +361,13 @@ pub(crate) fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
 }
 
 // ============================================================================
-// PROFILE-AWARE WRAPPERS (provide all functions for all profiles)
+// The 0.6.x per-profile wrappers that stood here were removed in 0.7.0;
+// a caller names the engine of the format it computes in.
 // ============================================================================
 
-// For scientific profile (Q256.256), provide wrappers for lower tiers
 
-// For balanced profile (Q128.128), provide wrappers
 
-// For performance/embedded profile (Q64.64), provide wrappers
 
-// I1024 sqrt for scientific profile tier N+1 computation
 
 
 // ============================================================================

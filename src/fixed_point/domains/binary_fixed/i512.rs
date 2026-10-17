@@ -732,7 +732,7 @@ impl I512 {
 /// PERFORMANCE: O(512) bit-by-bit division
 /// CORRECTNESS: Mirrors proven I256 divmod_i256_by_i256 implementation
 ///
-/// This is the PRODUCTION implementation required for scientific profile Q256.256
+/// This is the PRODUCTION implementation required for Q256.256
 /// fractional parsing. Without this, from_decimal_string() returns zero for all
 /// fractional parts, causing exp(0.5) → exp(0), exp(1.5) → exp(1), etc.
 ///

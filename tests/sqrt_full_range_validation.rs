@@ -1,11 +1,11 @@
 //! Scalar square root across the whole storage range, against independent
 //! references: the permanent gate for the large-argument defect.
 //!
-//! The published validation of `sqrt` covered `[0.0001, 10000]`. On the
-//! scientific profile the Q512.512 engine lost about 250 bits of relative
+//! The published validation of `sqrt` covered `[0.0001, 10000]`. Up to
+//! 0.5.0, on the scientific profile, the Q512.512 engine lost about 250 bits of relative
 //! precision above roughly `2^200` (up to `2^124` ulp at `2^254`), which no
-//! test in that range could see. This gate checks `FixedPoint::sqrt` on every
-//! profile against `floor` / `ceil` references computed independently
+//! test in that range could see. This gate checks `FixedPoint::sqrt` at every
+//! format against `floor` / `ceil` references computed independently
 //! (`scripts/generate_certified_geometry_refs.py`: Python `isqrt`,
 //! cross-checked against mpmath at 300 digits), including inputs within a
 //! factor of four of the storage maximum and the maximum itself. The scalar

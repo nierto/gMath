@@ -29,7 +29,7 @@ macro_rules! suite {
                 }
             }
 
-            /// Minimum representable tolerance per profile.
+            /// Minimum representable tolerance per format.
             /// Tolerances below this round to zero and make all assertions trivially fail.
             fn min_tol() -> FixedPoint {
                 if BITS == 64 { fp("0.1") } else { FixedPoint::ZERO }

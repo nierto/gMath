@@ -9,7 +9,7 @@
 //! 6. Möbius inverse roundtrip
 //! 7. mpmath-validated reference values
 //!
-//! All tests run on the active profile (embedded/balanced/scientific).
+//! All tests run at every format the suite macro instantiates.
 
 
 macro_rules! suite {
@@ -37,8 +37,8 @@ macro_rules! suite {
                 if BITS == 32 { fp("0.01") } else if BITS == 64 { fp("0.0001") } else { fp("0.000000001") }
             }
 
-            /// `k` units in the last place of this build's storage (realtime follows
-            /// GMATH_FRAC_BITS: one unit is 2^-8 at Q24.8, 256x coarser than Q16.16).
+            /// `k` units in the last place of this format's storage (on the i32 word it
+            /// follows the split: one unit is 2^-8 at Q24.8, 256x coarser than Q16.16).
             fn ulps(k: i32) -> FixedPoint {
                 let mut u = FixedPoint::one();
                 for _ in 0..FRAC_BITS { u = u / FixedPoint::from_int(2); }

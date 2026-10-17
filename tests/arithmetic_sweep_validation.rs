@@ -173,7 +173,7 @@ macro_rules! shared_items {
             }
 
             // ════════════════════════════════════════════════════════════════════
-            // Detect active profile
+            // Name the active format
             // ════════════════════════════════════════════════════════════════════
 
             const ACTIVE_PROFILE: &str = if BITS == 32 { "Q16.16" } else if BITS == 64 { "Q32.32" } else if BITS == 128 { "Q64.64" } else if BITS == 256 { "Q128.128" } else { "Q256.256" };
@@ -330,7 +330,7 @@ macro_rules! suite {
             }
 
             // ════════════════════════════════════════════════════════════════════
-            // Binary domain validation — profile-specific
+            // Binary domain validation, format-specific
             // ════════════════════════════════════════════════════════════════════
 
             /// Maximum allowed ULP for binary fixed-point arithmetic.

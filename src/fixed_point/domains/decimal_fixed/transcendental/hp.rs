@@ -1,6 +1,6 @@
 //! Wide decimal working precision shared by the decimal exp and sin/cos
 //! reductions: non-negative values at `C::HP_DP` decimal places in `C::Hp`, the
-//! integer tier above the compute tier (I256 on realtime and compact).
+//! integer tier above the compute tier (I256 for the i64 and i128 compute words).
 //!
 //! Word-level helpers only (scalar multiply and divide by u64, shifts,
 //! products of two values below 2 at `C::HP_DP`); every narrowing is checked.
@@ -15,7 +15,7 @@ use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDe
 
 /// Working decimal precision of the engine. Products of two values below 2
 /// at this dp fit `C::Hp`; the storage result needs (result digits + storage
-/// dp): realtime 10 + 4, compact 20 + 9, embedded 20 + 19, balanced 39 + 38,
+/// dp), per 0.6.x profile: realtime 10 + 4, compact 20 + 9, embedded 20 + 19, balanced 39 + 38,
 /// scientific 77 + 77.
 
 /// Bits of `C::Hp`.

@@ -5,7 +5,7 @@
 //! engines' ranges, or touching a domain edge goes to `Mpf`.
 //!
 //! The engines' bounds are the imperative ladder's margins (`Fixed::settle`):
-//! `((|r| + 1) 2^(rel + extra) + 2^2)` compute units, `rel` 1 on the realtime
+//! `((|r| + 1) 2^(rel + extra) + 2^2)` compute units, `rel` 1 on the 32-bit
 //! word and 6 on the wider ones, `extra` 0 for exp, 2 for ln and sqrt, 4 for
 //! atan and atan2, and for sin and cos the argument's integer bits plus 4 on
 //! the wider words. They are measured, not proven: the evidence is the

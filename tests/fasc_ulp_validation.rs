@@ -102,7 +102,7 @@ macro_rules! shared_items {
             use std::time::Instant;
 
             // ════════════════════════════════════════════════════════════════════
-            // Shared infrastructure (all profiles)
+            // Shared infrastructure (all formats)
             // ════════════════════════════════════════════════════════════════════
 
             /// Build a LazyExpr from an input string, correctly handling negative values.
@@ -125,7 +125,7 @@ macro_rules! shared_items {
                 }
             }
 
-            /// ULP statistics tracker (using u128 for all profiles).
+            /// ULP statistics tracker (using u128 for all formats).
             #[allow(dead_code)]
             struct UlpStats {
                 name: &'static str,
@@ -235,17 +235,17 @@ macro_rules! shared_items {
 
 
             // ════════════════════════════════════════════════════════════════════
-            // Q64.64 Profile (embedded / performance)
+            // Q64.64
             // ════════════════════════════════════════════════════════════════════
 
 
             // ════════════════════════════════════════════════════════════════════
-            // Q128.128 Profile (balanced)
+            // Q128.128
             // ════════════════════════════════════════════════════════════════════
 
 
             // ════════════════════════════════════════════════════════════════════
-            // Q256.256 Profile (scientific)
+            // Q256.256
             // ════════════════════════════════════════════════════════════════════
     };
 }

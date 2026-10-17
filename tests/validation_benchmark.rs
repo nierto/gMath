@@ -530,7 +530,7 @@ macro_rules! suite {
             use std::time::Instant;
 
             // ════════════════════════════════════════════════════════════════════
-            // Profile detection
+            // Format detection
             // ════════════════════════════════════════════════════════════════════
 
             const ACTIVE_PROFILE: &str = if BITS == 32 { "realtime (Q32-F.F, F = GMATH_FRAC_BITS)" } else if BITS == 64 { "Q32.32 (compact)" } else if BITS == 128 { "Q64.64 (embedded)" } else if BITS == 256 { "Q128.128 (balanced)" } else { "Q256.256 (scientific)" };
@@ -782,7 +782,7 @@ macro_rules! suite {
             // Include reference data (all via include! — zero new Python generation)
             // ════════════════════════════════════════════════════════════════════
 
-            // Rational domain references (profile-independent)
+            // Rational domain references (format-independent)
             include!("data/topology_sweep_decimal.rs");
             include!("data/topology_sweep_symbolic.rs");
             include!("data/topology_sweep_cross.rs");
@@ -843,7 +843,7 @@ macro_rules! suite {
                 let mut result = ValidationResult::new(name);
                 let mut exact_count = 0usize;
                 let mut approx_count = 0usize;
-                // Ternary tolerance as rational: 1/10^N (generous, profile-aware)
+                // Ternary tolerance as rational: 1/10^N (generous, per format)
                 let tol_den: i128 = match FRAC_BITS {
                     64 => 1_000_000_000_000,                // 10^12 — generous for 19-digit precision
                     128 => 1_000_000_000_000_000_000_000,   // 10^21 — generous for 38-digit precision
@@ -941,7 +941,7 @@ macro_rules! suite {
                 lossy: usize,  // domain limitations, not bugs — proves auto:auto superiority
             }
 
-            /// Mode routing tolerance as rational 1/tol_den (profile-aware)
+            /// Mode routing tolerance as rational 1/tol_den (per format)
             fn mode_tolerance_den() -> i128 {
                 match FRAC_BITS {
                     64 => 1_000_000_000_000,                // 10^12
@@ -1139,7 +1139,7 @@ macro_rules! suite {
                     for f in &r.failures { eprintln!("║    FAIL: {}  ║", f); }
                 }
 
-                // ── Binary domain (profile-specific) ──
+                // ── Binary domain (format-specific) ──
                 let binary_results = run_binary_arithmetic_validation();
                 for br in &binary_results {
                     let min = if br.min_ns == u64::MAX { 0 } else { br.min_ns };
@@ -1200,7 +1200,7 @@ macro_rules! suite {
             #[allow(dead_code)]
             const MAX_ARITHMETIC_ULP: u128 = 1;
 
-            // Profile-specific binary arithmetic validation
+            // Format-specific binary arithmetic validation
             $word!();
 
 
@@ -1281,16 +1281,16 @@ macro_rules! suite {
                 pub max_allowed_errors: usize,
             }
 
-            // Profile-specific transcendental validation
+            // Format-specific transcendental validation
 
 
 
 
 
 
-            // ── Q32.32 compact profile transcendentals ──
+            // ── Q32.32 transcendentals ──
 
-            // ── Q16.16 realtime profile transcendentals ──
+            // ── Q16.16 transcendentals (i32 word) ──
 
             // ── Binary arithmetic stubs for compact/realtime (no topology sweep ref data) ──
 

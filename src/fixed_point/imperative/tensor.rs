@@ -50,7 +50,7 @@ where
     /// Panics if `data.len() != product(shape)`.
     pub fn from_data(shape: &[usize], data: &[Fixed<S, F>]) -> Self {
         let total: usize = shape.iter().product();
-        assert_eq!(data.len(), total, "Tensor::<Fixed<S, F>>::from_data: shape/data mismatch");
+        assert_eq!(data.len(), total, "Tensor::from_data: shape/data mismatch");
         let strides = Self::compute_strides(shape);
         Self {
             shape: shape.to_vec(),
@@ -179,7 +179,7 @@ where
     ///
     /// Panics if rank != 2.
     pub fn to_matrix(&self) -> FixedMatrix<Fixed<S, F>> {
-        assert_eq!(self.rank(), 2, "Tensor::<Fixed<S, F>>::to_matrix: rank must be 2");
+        assert_eq!(self.rank(), 2, "Tensor::to_matrix: rank must be 2");
         let (rows, cols) = (self.shape[0], self.shape[1]);
         FixedMatrix::<Fixed<S, F>>::from_fn(rows, cols, |r, c| self.get(&[r, c]))
     }
@@ -188,7 +188,7 @@ where
     ///
     /// Panics if rank != 1.
     pub fn to_vector(&self) -> FixedVector<Fixed<S, F>> {
-        assert_eq!(self.rank(), 1, "Tensor::<Fixed<S, F>>::to_vector: rank must be 1");
+        assert_eq!(self.rank(), 1, "Tensor::to_vector: rank must be 1");
         FixedVector::<Fixed<S, F>>::from_slice(&self.data)
     }
 
@@ -196,7 +196,7 @@ where
     ///
     /// Panics if rank != 0.
     pub fn to_scalar(&self) -> Fixed<S, F> {
-        assert_eq!(self.rank(), 0, "Tensor::<Fixed<S, F>>::to_scalar: rank must be 0");
+        assert_eq!(self.rank(), 0, "Tensor::to_scalar: rank must be 0");
         self.data[0]
     }
 }
@@ -366,7 +366,7 @@ where
 // Index operations
 // ============================================================================
 
-/// Transpose (reorder indices): T'_{perm[0], perm[1], ...} = T_{0, 1, ...}.
+/// Transpose (reorder indices): T'_{perm\[0\], perm\[1\], ...} = T_{0, 1, ...}.
 ///
 /// `perm` is a permutation of `0..rank`.
 pub fn transpose<S: Storage, const F: u32>(t: &Tensor<Fixed<S, F>>, perm: &[usize]) -> Tensor<Fixed<S, F>>

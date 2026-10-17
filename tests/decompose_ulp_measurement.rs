@@ -193,7 +193,7 @@ macro_rules! suite {
                     // The classic Golub matrix has column-norm² ≈ 31,066 — 95% of
                     // Q16.16's ±32,767 range. Under 0.5.0 nearest rounding an internal
                     // materialization legitimately crosses the storage ceiling on
-                    // realtime (fail-loud round_to_storage), so the realtime report
+                    // the i32 word (fail-loud round_to_storage), so the i32 report
                     // measures a dyadically scaled copy (÷8: same orthogonality
                     // structure, norms² ÷64) instead of a value at the range cliff.
                     let a = if BITS == 32 { FixedMatrix::from_slice(3, 3, &[
@@ -251,7 +251,7 @@ macro_rules! suite {
                         FixedPoint::one() / FixedPoint::from_int((i + j + 1) as i32)
                     });
                     // x = [-4, 60, -180, 140] for b = 1. Where 180 exceeds the storage
-                    // range (realtime with more than 23 fraction bits: +-128 at 24) the
+                    // range (i32 with more than 23 fraction bits: +-128 at 24) the
                     // right-hand side is halved, which halves x exactly: the same system.
                     let (b_entry, x_ref): (&str, [&str; 4]) = if FixedPoint::try_from_str("180").is_ok() {
                         ("1", ["-4", "60", "-180", "140"])

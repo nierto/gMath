@@ -67,22 +67,22 @@ pub struct TernaryTier4 {
     pub(crate) value: I256,
 }
 
-/// Tier 5: TQ160.160 - Balanced Profile Precision (128 integer + 128 fractional trits)
+/// Tier 5: TQ160.160, Q128.128-class precision (128 integer + 128 fractional trits)
 ///
 /// **STORAGE**: I512 (512 bits for ~405.7 bits of information)
 /// **RANGE**: ±(3^160-1)/2 ≈ ±1.1×10^76
-/// **USE CASE**: Cross-domain operations matching balanced profile (38 decimals)
+/// **USE CASE**: Cross-domain operations matching Q128.128 (38 decimals)
 #[derive(Debug, Clone)]
 pub struct TernaryTier5 {
     /// Raw value: actual_value × 3^160
     pub(crate) value: I512,
 }
 
-/// Tier 6: TQ320.320 - Scientific Profile Precision (256 integer + 256 fractional trits)
+/// Tier 6: TQ320.320, Q256.256-class precision (256 integer + 256 fractional trits)
 ///
 /// **STORAGE**: I1024 (1024 bits for ~811.4 bits of information)
 /// **RANGE**: ±(3^320-1)/2 ≈ ±2.4×10^152
-/// **USE CASE**: Cross-domain operations matching scientific profile (77 decimals)
+/// **USE CASE**: Cross-domain operations matching Q256.256 (77 decimals)
 #[derive(Debug, Clone)]
 pub struct TernaryTier6 {
     /// Raw value: actual_value × 3^320

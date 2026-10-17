@@ -6,7 +6,7 @@
 //!
 //! Overflow-safe: all arithmetic returns `Result<T, OverflowDetected>` for UGOD tier promotion.
 //! Thread-safe: immutable operations, deterministic across platforms.
-//! Profile-aware: deployment profiles constrain maximum tier for precision-performance tradeoffs.
+//! Tier ceiling: Ultra (I512), or Infinite (BigInt) with the `infinite-precision` feature.
 
 #[cfg(feature = "infinite-precision")]
 use num_bigint::BigInt;
@@ -44,7 +44,7 @@ use crate::fixed_point::symbolic::symbolic_arithmetic::{
 /// 
 /// MEMORY PROFILE: 6-60 bytes (10x improvement over legacy 48+ bytes)
 /// PERFORMANCE: Sub-100ns operation latency with AVX2 SIMD acceleration  
-/// PRECISION: Automatic tier promotion with deployment profile constraints
+/// PRECISION: Automatic tier promotion up to the tier ceiling
 #[derive(Debug, Clone)]
 pub struct RationalNumber {
     /// Tiered storage: 2-48 bytes depending on precision requirements
@@ -232,7 +232,7 @@ impl RationalParts {
 // ================================================================================================
 
 impl RationalStorage {
-    /// Get maximum tier level available in current compilation profile
+    /// Get maximum tier level available in this build (8 with `infinite-precision`, else 7)
     #[allow(unreachable_code)]
     pub fn max_tier_for_profile() -> u8 {
         #[cfg(feature = "infinite-precision")] { return 8; }
@@ -255,7 +255,7 @@ impl RationalStorage {
         }
     }
     
-    /// Get storage tier level (1-8, depending on compilation profile)
+    /// Get storage tier level (1-8; 8 only with `infinite-precision`)
     pub fn tier_level(&self) -> u8 {
         match self {
             RationalStorage::Tiny { .. }     => 1,
@@ -289,9 +289,9 @@ impl RationalNumber {
 
     /// Create from I256 numerator/denominator pair (Tier 6: Massive)
     ///
-    /// **USE CASE**: Balanced/Scientific profiles (38 decimal precision)
+    /// **USE CASE**: 38-decimal precision (Q128.128 and wider)
     /// **PRECISION**: 10^38 denominators, ~126 bits of precision
-    /// **FEATURE GATE**: Only available for non-embedded profiles
+    /// **AVAILABILITY**: Always available (unconditional)
     pub fn from_i256_pair(numerator: I256, denominator: I256) -> Self {
         // Verify denominator is not zero
         assert!(!denominator.is_zero(), "RationalNumber: Denominator cannot be zero");
@@ -310,7 +310,7 @@ impl RationalNumber {
 
     /// Create from I512 numerator/denominator pair (Tier 7: Ultra)
     ///
-    /// **USE CASE**: Scientific profile (77 decimal precision)
+    /// **USE CASE**: 77-decimal precision (Q256.256)
     /// **PRECISION**: 10^77 denominators, ~256 bits of precision
     /// **AVAILABILITY**: Always available (unconditional)
     pub fn from_i512_pair(numerator: I512, denominator: I512) -> Self {
@@ -333,7 +333,7 @@ impl RationalNumber {
     fn optimal_storage_tier(numerator: i128, denominator: u128) -> RationalStorage {
         let max_val = numerator.abs().max(denominator as i128);
         
-        // Apply deployment profile constraints
+        // Apply the tier ceiling
         let max_tier = RationalStorage::max_tier_for_profile();
         
         let optimal_tier = match max_val {
@@ -377,7 +377,7 @@ impl RationalNumber {
             },
             #[cfg(not(feature = "infinite-precision"))]
             _ => {
-                // Input is (i128, u128) — always fits in Huge tier regardless of profile
+                // Input is (i128, u128) , so it always fits in the Huge tier
                 RationalStorage::Huge {
                     num: numerator,
                     den: denominator,
@@ -604,7 +604,7 @@ impl RationalNumber {
     pub fn try_multiply(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let result_tier = Self::predict_multiplication_tier(&self.storage, &other.storage);
         
-        // Check deployment profile constraints  
+        // Check the tier ceiling
         let max_allowed_tier = RationalStorage::max_tier_for_profile();
         
         if result_tier > max_allowed_tier {
@@ -759,7 +759,7 @@ impl RationalNumber {
         let other_tier = other.storage.tier_level();
         let target_tier = self_tier.max(other_tier);
         
-        // Check profile limits
+        // Check the tier ceiling
         if target_tier > RationalStorage::max_tier_for_profile() {
             return Err(OverflowDetected::PrecisionLimit);
         }
@@ -786,7 +786,7 @@ impl RationalNumber {
         let other_tier = other.storage.tier_level();
         let target_tier = self_tier.max(other_tier);
         
-        // Check profile limits
+        // Check the tier ceiling
         if target_tier > RationalStorage::max_tier_for_profile() {
             return Err(OverflowDetected::PrecisionLimit);
         }
@@ -974,7 +974,7 @@ impl RationalNumber {
             return Ok(self.clone()); // Already at or above target tier
         }
 
-        // Check if target tier is allowed by deployment profile
+        // Check if target tier is within the tier ceiling
         let max_allowed_tier = RationalStorage::max_tier_for_profile();
         if target_tier > max_allowed_tier {
             return Err(OverflowDetected::PrecisionLimit);
@@ -1490,7 +1490,7 @@ impl RationalNumber {
     pub fn try_subtract(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let result_tier = Self::predict_subtraction_tier(&self.storage, &other.storage);
         
-        // Check deployment profile constraints  
+        // Check the tier ceiling
         let max_allowed_tier = RationalStorage::max_tier_for_profile();
         
         if result_tier > max_allowed_tier {
@@ -1566,7 +1566,7 @@ impl RationalNumber {
     pub fn try_divide(&self, other: &Self) -> Result<Self, OverflowDetected> {
         let result_tier = Self::predict_division_tier(&self.storage, &other.storage);
         
-        // Check deployment profile constraints  
+        // Check the tier ceiling
         let max_allowed_tier = RationalStorage::max_tier_for_profile();
         
         if result_tier > max_allowed_tier {

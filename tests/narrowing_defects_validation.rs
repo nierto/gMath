@@ -3,7 +3,7 @@
 //! rounding is half to even wherever it occurs, and compute-tier division
 //! rounds to nearest (ties toward +infinity) like every binary result.
 //!
-//! One regression per defect (cfg-gated where the defect is profile
+//! One regression per defect (gated by storage width where the defect is width
 //! specific), the loud paths, and in-range bit identity. Reference values:
 //! mpmath at 80 digits (`scripts/generate_narrowing_defects_refs.py`) or exact
 //! integer arithmetic. No floats.
@@ -43,7 +43,7 @@ macro_rules! suite {
             /// e^30 and e^40 at 19 decimals. mpmath: 106864745815244621469904686507414
             /// and 2353852668370199854078999107490348045. Embedded (38 compute decimals)
             /// returned ...042 for e^40 (3 units low) until the 0.6.4 exp rework; every
-            /// profile is now exact (full-range gate: tests/decimal_exp_range_validation.rs).
+            /// format is now exact (full-range gate: tests/decimal_exp_range_validation.rs).
             #[test]
             fn decimal_exp_in_range_is_unchanged() {
                 if !((BITS == 128 || BITS == 256 || BITS == 512)) { return; }
@@ -52,7 +52,7 @@ macro_rules! suite {
                 assert_eq!(r, 2353852668370199854078999107490348045);
             }
 
-            /// e^3 at the profile's largest storage dp (mpmath 20.0855369231876677409285...).
+            /// e^3 at the largest storage dp of the word (mpmath 20.0855369231876677409285...).
             #[test]
             fn decimal_exp_small_is_unchanged() {
                 if BITS == 32 {
@@ -122,7 +122,7 @@ macro_rules! suite {
             /// 10^20 at 0 decimals exceeded the realtime (i64 at 9 dp) and compact
             /// (i128 at 19 dp) compute tiers up to 0.6.7; `DecimalFixed` now computes on
             /// the word `D` selects (I256 at 38 digits up to D = 19), which every i128
-            /// raw fits, so the engine helper on the profile's word is what still
+            /// raw fits, so the engine helper on the narrow word is what still
             /// reports the overflow.
             #[test]
             fn narrow_profile_upscale_reports_overflow() {
@@ -151,7 +151,7 @@ macro_rules! suite {
             }
 
             // ============================================================================
-            // Item 3: DecimalFixed <-> Q256.256 (profile independent)
+            // Item 3: DecimalFixed <-> Q256.256 (independent of the format)
             // ============================================================================
 
 
@@ -432,9 +432,9 @@ macro_rules! suite {
             }
 
             #[test]
-            #[should_panic(expected = "FixedPoint::to_int: integer part outside the i32 range")]
+            #[should_panic(expected = "Fixed::to_int: integer part outside the i32 range")]
             fn to_int_beyond_i32_panics() {
-                if !((BITS == 128 || BITS == 256 || BITS == 512)) { panic!("FixedPoint::to_int: integer part outside the i32 range (not this format)"); }
+                if !((BITS == 128 || BITS == 256 || BITS == 512)) { panic!("Fixed::to_int: integer part outside the i32 range (not this format)"); }
                 let _ = FixedPoint::from_str("3000000000").to_int();
             }
 
