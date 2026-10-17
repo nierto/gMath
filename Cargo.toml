@@ -14,6 +14,9 @@ documentation = "https://docs.rs/g_math"
 keywords = ["fixed-point", "arithmetic", "precision", "mathematics", "no-float"]
 categories = ["mathematics", "algorithms"]
 build = "build.rs"
+# The test suite and its reference tables (about 30 MB) stay in the
+# repository; the published crate carries the library, docs and examples.
+exclude = ["tests/", "differential/", "scripts/", ".github/"]
 
 [build-dependencies]
 # Pure Rust BigInt for build-time table generation
