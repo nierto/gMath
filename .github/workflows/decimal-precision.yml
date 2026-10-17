@@ -48,4 +48,5 @@ jobs:
       - name: Decimal contract validation (oracle #1 + oracle #2)
         env:
           GMATH_DECIMAL_SCALED_GOLDEN: ${{ runner.temp }}/decimal-scaled
-        run: cargo test --release --test decimal_canonical decimal_contract_validation:: -- --test-threads=1 --nocapture
+        run: |
+          cargo test --release --test decimal_canonical decimal_contract_validation:: -- --test-threads=1 --nocapture
