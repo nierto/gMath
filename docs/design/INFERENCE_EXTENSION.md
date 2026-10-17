@@ -214,8 +214,9 @@ their open licences.
   `Compute<T>` and `I256` .. `I2048` (they were hidden); nothing else.
 - Differences from the proposal: `rayon` is a plain dependency (every
   consumer uses the parallel forms; no `par` feature); the crate is
-  `publish = false` until the owner publishes it with 0.7.0, with a
-  placeholder licence file until the owner's text replaces it; it depends on
+  `publish = false` until the owner publishes it, under a proprietary
+  licence (copyright Niels Erik Toren; licensing enquiries to
+  niels@nierto.com); it depends on
   the core by path during development and on `g_math = "0.7"` at release.
 - Tests moved with the module and match their counts in the core: 195 unit
   tests; tq19 138, tq5 18, weight_bits 48, batch_into 23, bench 30

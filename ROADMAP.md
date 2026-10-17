@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.7.0** (unreleased; last published 0.6.7, deprecation release 0.6.8 prepared)
+Current version: **0.7.0** (2026-10-17)
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise; this is a working list for a solo-maintained project.
 
@@ -532,7 +532,7 @@ crate `g_math_inference` with 0.7.0.
 
 ### v0.7.0: The format is a type; correct rounding; inference extracted
 
-**Unreleased.** `Fixed<S, F>` replaces the build profiles: every format, from
+**Release 2026-10-17.** `Fixed<S, F>` replaces the build profiles: every format, from
 `Fixed<i32, 2>` to Q256.256, is compiled into every build and chosen per
 value by its type; `GMATH_PROFILE`, `GMATH_FRAC_BITS`, the profile features
 and `FixedPoint` are gone, and every layer (containers, linear algebra,
