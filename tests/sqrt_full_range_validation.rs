@@ -15,8 +15,6 @@
 //! Uses only `FixedPoint` and the reference data, so it runs unchanged on the
 //! 0.5.1 patch line as well as on 0.6.0.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

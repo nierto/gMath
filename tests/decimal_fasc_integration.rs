@@ -10,11 +10,9 @@
 //! # Running
 //!
 //! ```bash
-//! cargo test --test decimal_fasc_integration -- --nocapture
+//! cargo test --test decimal_canonical decimal_fasc_integration:: -- --nocapture
 //! ```
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

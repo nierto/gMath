@@ -17,8 +17,6 @@
 //! the build's split, so it is the correctly rounded result, and every error
 //! below is in storage units (2^-FRAC_BITS).
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

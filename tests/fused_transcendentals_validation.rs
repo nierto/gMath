@@ -6,8 +6,6 @@
 //!
 //! Reference values from mpmath at 50+ decimal digits.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

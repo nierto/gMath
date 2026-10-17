@@ -5,8 +5,6 @@
 //! on those inputs, rounded once (nearest, ties toward +infinity): no
 //! tolerance. The tally per format is printed with `--nocapture`.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

@@ -5,8 +5,6 @@
 //! storage (nearest, ties toward +infinity). The tally per format is printed
 //! with `--nocapture`.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

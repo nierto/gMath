@@ -4,8 +4,6 @@
 //!
 //! mpmath-validated where applicable. All 3 profiles.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

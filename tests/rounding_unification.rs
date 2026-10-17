@@ -11,8 +11,6 @@
 //! imperative vs canonical, compact) must be ZERO now — asserted here on
 //! every profile, including constructed exact-tie inputs.
 
-#[macro_use]
-mod common;
 
 macro_rules! shared_items {
     ($S:ty, $F:literal) => {

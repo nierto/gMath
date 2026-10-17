@@ -4,8 +4,6 @@
 //! eager evaluation, and that chains like exp(A)*B stay at compute tier
 //! without intermediate materializations.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

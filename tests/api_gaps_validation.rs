@@ -16,8 +16,6 @@
 //! on every format; each reference is parsed at the build's split, so it is
 //! the correctly rounded result and every error below is in storage units.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {
@@ -112,7 +110,7 @@ macro_rules! suite {
                     for i in 0..*rank { worst = worst.max(units(t.sigma[i], fp(sigma[i]))); }
                     let t = truncated_svd_auto(&a, Some(fp("0.125"))).expect("svd");
                     assert_eq!(t.sigma.len(), *rank, "rank with a threshold");
-                    let t = truncated_svd_auto(&a, Some(fp("1000"))).expect("svd");
+                    let t = truncated_svd_auto(&a, Some(fp("100"))).expect("svd"); // above every sigma, inside Q8.24
                     assert_eq!(t.sigma.len(), 1, "at least rank 1");
                 }
                 check("truncated_svd_auto sigma", worst, 0);

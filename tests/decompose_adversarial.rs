@@ -8,8 +8,6 @@
 //! values like 1e-8 round to zero, Hilbert κ≈28375 exceeds representable precision,
 //! and 1e6 overflows the integer range. These tests require ≥Q32.32.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

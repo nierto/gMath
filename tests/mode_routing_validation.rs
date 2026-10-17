@@ -14,10 +14,8 @@
 //! Only Q64.64 (embedded) and Q256.256 (scientific) pass all mode routing tests.
 //!
 //! Run:
-//!   cargo test --test mode_routing_validation -- --nocapture
+//!   cargo test --test decimal_canonical mode_routing_validation:: -- --nocapture
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

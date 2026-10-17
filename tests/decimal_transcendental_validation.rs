@@ -14,7 +14,7 @@
 //! # Running
 //!
 //! ```bash
-//! cargo test --test decimal_transcendental_validation -- --nocapture
+//! cargo test --test decimal_canonical decimal_transcendental_validation:: -- --nocapture
 //! ```
 //!
 //! # ULP semantics
@@ -22,8 +22,6 @@
 //! All references are scaled integers at the profile's `DECIMAL_COMPUTE_DP`, so
 //! ULP = `|actual_int - expected_int|`. One ULP equals `10^-compute_dp` in actual value.
 
-#[macro_use]
-mod common;
 
 // Helper macros of the suite, at file level (an inner macro_rules! cannot live
 // inside the suite macro: its metavariables would be read by the outer one).

@@ -6,8 +6,6 @@
 //! 3. Mixed-domain operations (cross-domain via rational)
 //! 4. Symbolic matrices (exact rational arithmetic)
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

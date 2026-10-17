@@ -1,13 +1,11 @@
 //! Q8.24 realtime profile validation — mpmath 50-digit references.
 //!
-//! Run: cargo test --test q8_24_validation -- --nocapture
+//! Run: cargo test --test transcendentals q8_24_validation:: -- --nocapture
 //!
 //! Validates:
 //! 1. Core transcendentals at Q8.24 precision (exact-match target)
 //! 2. sincos_wide for RoPE-class wide-angle inputs (Blocker 1)
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {
@@ -77,7 +75,7 @@ macro_rules! suite {
                 let one_raw = one.raw();
                 if one_raw != 1i32 << 24 {
                     println!("SKIP: FRAC_BITS is not 24 (one.raw() = {}, expected {})", one_raw, 1i32 << 24);
-                    println!("Run with: cargo test --test q8_24_validation");
+                    println!("Run with: cargo test --test transcendentals q8_24_validation::");
                     return; // Skip gracefully — don't fail, just not the right config
                 }
 

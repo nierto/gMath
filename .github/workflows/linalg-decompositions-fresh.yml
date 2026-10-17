@@ -44,4 +44,4 @@ jobs:
 
       - name: Randomized decomposition gate
         run: |
-          cargo test --release --no-fail-fast --test decomposition_convergence_validation random_corpus -- --nocapture
+          cargo test --release --no-fail-fast --test linalg random_corpus -- --nocapture

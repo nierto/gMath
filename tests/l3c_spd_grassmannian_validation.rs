@@ -12,8 +12,6 @@
 //! decomposition, and multi-step geodesic computation. These accumulate far
 //! beyond Q16.16's 16-bit fractional precision.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

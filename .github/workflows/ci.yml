@@ -76,6 +76,5 @@ jobs:
         env:
           RUSTFLAGS: "--cfg gmath_edge_splits"
         run: >
-          cargo test --release --no-fail-fast
-          --test wide_q64_validation --test ugod_promotion_validation
-          --test float_boundary_validation --test operator_overflow_validation
+          cargo test --release --no-fail-fast --test transcendentals --test decimal_canonical --
+          wide_q64_validation:: ugod_promotion_validation:: float_boundary_validation:: operator_overflow_validation::

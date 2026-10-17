@@ -11,8 +11,6 @@
 //! every error below is in storage units. An `Err` where the exact result
 //! exists counts as `FAILED` (a large sentinel).
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

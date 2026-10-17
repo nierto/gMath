@@ -8,8 +8,6 @@
 //! 5. Adversarial: rank-deficient, near-singular, Hilbert, mixed-scale
 //! 6. SVD-dependent derived ops: pseudoinverse, rank, condition_number_2, nullspace
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

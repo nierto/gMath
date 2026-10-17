@@ -3,8 +3,6 @@
 //! All reference values from mpmath at 60-digit precision.
 //! Tests verify both correctness and precision advantage over unfused paths.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

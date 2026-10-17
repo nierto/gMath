@@ -14,8 +14,6 @@
 //! Every comparison here is on bit patterns and raw integers; no float
 //! arithmetic is performed.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

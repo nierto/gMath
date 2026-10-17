@@ -8,8 +8,6 @@
 //! 5. Determinant consistency
 //! 6. Error detection: singular matrices, non-SPD inputs
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

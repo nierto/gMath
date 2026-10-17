@@ -7,8 +7,6 @@
 //! exact `fractions.Fraction` for the literals). Errors are compared on raw
 //! integers; no float arithmetic is performed.
 
-#[macro_use]
-mod common;
 
 macro_rules! shared_items {
     ($S:ty, $F:literal) => {

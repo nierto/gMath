@@ -20,8 +20,6 @@
 //!   the nearest of references computed on values with exact rationals;
 //! - decimal sqrt, product and quotient endpoints equal the references.
 
-#[macro_use]
-mod common;
 
 macro_rules! shared_items {
     ($S:ty, $F:literal) => {

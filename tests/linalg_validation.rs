@@ -5,8 +5,6 @@
 //! 2. Known-value tests (manually computed reference values)
 //! 3. Compute-tier precision tests (verify accumulation advantage)
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

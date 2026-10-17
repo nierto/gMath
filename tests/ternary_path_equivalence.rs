@@ -16,8 +16,6 @@
 //! Profile-independent (UGOD tiers 1–3 are plain integer ops; FASC display
 //! comparisons avoid profile-specific raw layouts).
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

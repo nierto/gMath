@@ -19,8 +19,6 @@
 //! - Geodesic integrators where intermediate manifold coordinates blow up
 //! - Future LazyMatrixExpr chains (matrix analog of BinaryCompute)
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

@@ -21,10 +21,8 @@
 //! Balanced profile only: `DecimalFixed<28>` needs a compute dp wider than 28
 //! for guard digits (balanced = 77). Run with:
 //!   rm -rf target/debug/incremental/
-//!   cargo test --test decimal_contract_validation -- --nocapture
+//!   cargo test --test decimal_canonical decimal_contract_validation:: -- --nocapture
 
-#[macro_use]
-mod common;
 
 // Helper macros of the suite, at file level (an inner macro_rules! cannot use
 // repetitions inside the suite macro).
@@ -261,7 +259,7 @@ macro_rules! suite {
             //
             // Run (single-threaded so the panic-hook swap doesn't race):
             //   GMATH_DECIMAL_SCALED_GOLDEN=~/gh/decimal-scaled \
-            //     cargo test --test decimal_contract_validation oracle2 -- --nocapture --test-threads=1
+            //     cargo test --test decimal_canonical oracle2 -- --nocapture --test-threads=1
             // ============================================================================
 
             fn oracle2_dir() -> Option<PathBuf> {

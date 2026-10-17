@@ -7,8 +7,6 @@
 //! ULP is measured as: |gmath_raw - reference_raw| where both are in Q-format
 //! raw storage representation. 1 ULP = the smallest representable difference.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

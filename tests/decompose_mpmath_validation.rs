@@ -10,8 +10,6 @@
 //! This complements decompose_validation.rs (algebraic identity tests) with
 //! concrete numerical verification against an independent high-precision source.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

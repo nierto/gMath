@@ -9,8 +9,6 @@
 //!
 //! All tests are pure Rust, no external dependencies, no rebuild required.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

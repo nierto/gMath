@@ -14,8 +14,6 @@
 //!
 //! The circle predicates are not compiled on the scientific profile.
 
-#[macro_use]
-mod common;
 
 macro_rules! shared_items {
     ($S:ty, $F:literal) => {

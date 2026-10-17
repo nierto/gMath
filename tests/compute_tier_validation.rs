@@ -14,8 +14,6 @@
 //! - domain-violation panics and saturation behavior
 //!
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

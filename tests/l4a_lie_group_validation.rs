@@ -1,8 +1,6 @@
 //! L4A: Lie group validation tests — SO(3), SE(3), SO(n).
 //! Rodrigues exp/log, orthogonality, determinant, roundtrips, singularities.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

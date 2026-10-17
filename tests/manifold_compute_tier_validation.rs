@@ -15,8 +15,6 @@
 //! 0.001 to 0.03 of each other, where the angle used to come from acos or
 //! acosh of a value rounded to storage.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

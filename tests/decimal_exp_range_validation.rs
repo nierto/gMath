@@ -23,11 +23,9 @@
 //! embedded `exp(44)` at 19 decimals was 198 units low.
 //!
 //! ```bash
-//! cargo test --test decimal_exp_range_validation -- --nocapture
+//! cargo test --test decimal_canonical decimal_exp_range_validation:: -- --nocapture
 //! ```
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

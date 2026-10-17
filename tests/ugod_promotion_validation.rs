@@ -17,8 +17,6 @@
 //! returns the EXACT value (possibly via a wider tier or the symbolic
 //! domain) or fails LOUD — never a silent wrap.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

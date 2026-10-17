@@ -8,8 +8,6 @@
 //! top bit, the unit from FRAC_BITS), so the gate holds on every profile and
 //! every realtime split.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

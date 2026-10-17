@@ -8,8 +8,6 @@
 //! 5. Metric raise/lower
 //! 6. mpmath reference values for specific contractions
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

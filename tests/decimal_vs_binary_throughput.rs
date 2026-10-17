@@ -12,11 +12,9 @@
 //! # Running
 //!
 //! ```bash
-//! cargo test --release --test decimal_vs_binary_throughput -- --nocapture
+//! cargo test --release --test decimal_canonical decimal_vs_binary_throughput:: -- --nocapture
 //! ```
 
-#[macro_use]
-mod common;
 
 // Helper macros of the suite, at file level (an inner macro_rules! cannot live
 // inside the suite macro: its metavariables would be read by the outer one).

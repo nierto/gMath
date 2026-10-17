@@ -12,10 +12,8 @@
 //! output values.
 //!
 //! Run with:
-//!   cargo test --test sinhcosh_validation -- --nocapture
+//!   cargo test --test transcendentals sinhcosh_validation:: -- --nocapture
 
-#[macro_use]
-mod common;
 
 /// The 32-bit word's suites (the references are per split).
 macro_rules! realtime_suite {

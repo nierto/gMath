@@ -18,8 +18,6 @@
 //!
 //! Overflow and domain errors are typed, never wrapped.
 
-#[macro_use]
-mod common;
 
 macro_rules! shared_items {
     ($S:ty, $F:literal) => {

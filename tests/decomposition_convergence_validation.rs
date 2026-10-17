@@ -15,8 +15,6 @@
 //! decomposition must succeed on every case; the bounds are measured per
 //! profile, not derived.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

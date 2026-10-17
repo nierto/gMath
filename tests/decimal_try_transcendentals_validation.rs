@@ -28,11 +28,9 @@
 //! against mpmath pi (`mp.dps = 80`, digits embedded below).
 //!
 //! ```bash
-//! cargo test --test decimal_try_transcendentals_validation
+//! cargo test --test decimal_canonical decimal_try_transcendentals_validation::
 //! ```
 
-#[macro_use]
-mod common;
 
 // Helper macros of the suite, at file level (an inner macro_rules! cannot live
 // inside the suite macro: its metavariables would be read by the outer one).

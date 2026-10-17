@@ -24,8 +24,6 @@
 //!   geodesic H2 (96 steps)           2..10 -> 0..1
 //!   transport H2 (64 segments)  5..1536 -> 0..1 (1536 at 10 fraction bits)
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

@@ -28,8 +28,6 @@
 //! #    = (-2)(-2)/((-3)(-1)) = 4/3 = 1.33333333333333333...
 //! ```
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

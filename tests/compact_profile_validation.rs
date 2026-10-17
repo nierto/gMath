@@ -1,10 +1,8 @@
 //! Q32.32 Compact Profile ULP Validation
 //!
 //! Validates all transcendental functions against mpmath 50-digit reference values.
-//! Run with: cargo test --test compact_profile_validation -- --nocapture
+//! Run with: cargo test --test transcendentals compact_profile_validation:: -- --nocapture
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

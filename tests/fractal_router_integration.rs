@@ -7,8 +7,6 @@
 //! domain (not Symbolic/rational fallback), because 0.1 is decimal-exact
 //! and 255 is decimal-exact (integer = exact in all domains).
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

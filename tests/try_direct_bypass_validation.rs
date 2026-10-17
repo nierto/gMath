@@ -16,8 +16,6 @@
 //! 4. Boundary values: asin(±1) = ±π/2, acos(1) = 0 — no division by
 //!    sqrt(0) on the way.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

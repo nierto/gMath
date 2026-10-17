@@ -9,8 +9,6 @@
 //! every gated build; each reference is parsed at the build's split, so it is
 //! the correctly rounded result, and every error below is in storage units.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

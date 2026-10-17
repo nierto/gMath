@@ -1,7 +1,5 @@
 //! L4A Lie group validation against mpmath 50-digit reference values.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

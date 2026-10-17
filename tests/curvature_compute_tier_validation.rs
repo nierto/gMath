@@ -26,8 +26,6 @@
 //!     contraction was R^l_ijk u^i v^j v^k, zero in exact arithmetic: the
 //!     results were rounding noise, not the curvature.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

@@ -10,10 +10,8 @@
 //! gmath_safe, rational_exact_equal, build_arith_expr) without modifying them.
 //!
 //! Run (every format in one build):
-//!   cargo test --test validation_benchmark -- --nocapture --test-threads=1
+//!   cargo test --test transcendentals validation_benchmark:: -- --nocapture --test-threads=1
 
-#[macro_use]
-mod common;
 
 // The q16_16 word's reference modules and dispatchers.
 macro_rules! word_items_q16_16 {

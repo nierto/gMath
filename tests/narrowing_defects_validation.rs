@@ -8,8 +8,6 @@
 //! mpmath at 80 digits (`scripts/generate_narrowing_defects_refs.py`) or exact
 //! integer arithmetic. No floats.
 
-#[macro_use]
-mod common;
 
 macro_rules! shared_items {
     ($S:ty, $F:literal) => {

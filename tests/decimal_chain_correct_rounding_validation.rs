@@ -4,8 +4,6 @@
 //! be the exact value rounded once, half to even, at the format's storage
 //! decimal places. The tally per format is printed with `--nocapture`.
 
-#[macro_use]
-mod common;
 
 use num_bigint::BigInt;
 

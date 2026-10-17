@@ -11,8 +11,6 @@
 //!
 //! References: `scripts/generate_gate_refs.py`. Integer arithmetic only.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

@@ -2,12 +2,14 @@
 name = "g_math"
 version = "0.6.7"
 edition = "2021"
+# integration tests are four group binaries (tests/<group>.rs), not one per file
+autotests = false
 description = "Multi-domain fixed-point arithmetic with geometric extension: Lie groups, manifolds, ODE solvers, tensors, fiber bundles — pure Rust, zero-float, deterministic"
 authors = ["Niels Erik Toren"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/nierto/gMath"
-homepage = "https://github.com/nierto/gMath"
+repository = "https://github.com/nierto/g_math"
+homepage = "https://github.com/nierto/g_math"
 documentation = "https://docs.rs/g_math"
 keywords = ["fixed-point", "arithmetic", "precision", "mathematics", "no-float"]
 categories = ["mathematics", "algorithms"]
@@ -68,3 +70,19 @@ opt-level = 3
 debug = true
 lto = true
 opt-level = 3
+
+[[test]]
+name = "transcendentals"
+path = "tests/transcendentals.rs"
+
+[[test]]
+name = "decimal_canonical"
+path = "tests/decimal_canonical.rs"
+
+[[test]]
+name = "linalg"
+path = "tests/linalg.rs"
+
+[[test]]
+name = "geometry"
+path = "tests/geometry.rs"

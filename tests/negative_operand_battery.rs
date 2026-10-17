@@ -9,8 +9,6 @@
 //! the odd/even symmetries that corruption would break first. Most
 //! valuable on q128_128/q256_256 (the wide-kernel profiles), runs on all.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

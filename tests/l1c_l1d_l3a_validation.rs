@@ -1,8 +1,6 @@
 //! Validation tests for L1C (Derived Ops), L1D (Matrix Functions), L3A (Manifolds).
 //! All reference values from mpmath 50-digit precision.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

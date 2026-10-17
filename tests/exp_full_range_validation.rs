@@ -7,8 +7,6 @@
 //! storage value (ties toward +infinity); the tally per function is printed
 //! with `--nocapture`.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

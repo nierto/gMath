@@ -1,7 +1,5 @@
 //! ULP measurement for L1D matrix functions and L3A manifold operations.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {

@@ -2,8 +2,6 @@
 //! `FixedVector::rotate_pairs`. Values stay small so the suite holds on every
 //! profile and realtime split it runs at.
 
-#[macro_use]
-mod common;
 
 macro_rules! suite {
     ($m:ident, $S:ty, $F:literal) => {
